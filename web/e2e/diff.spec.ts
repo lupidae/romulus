@@ -174,7 +174,7 @@ test("two versions compared: from the history, a change picked, identical versio
   await expect(page.getByText("1 table added, 2 changed")).toBeVisible();
   await page.getByRole("button", { name: "Swap sides" }).click();
   await expect(page).toHaveURL(/\/diff\/3\.\.\.1/);
-  await expect(page.getByText("1 table removed, 2 changed")).toBeVisible();
+  await expect(page.getByText("2 tables changed, 1 removed")).toBeVisible();
   await expect(change(page, "invoices")).toContainText("invoices");
 
   // For review: dark, and a phone.
