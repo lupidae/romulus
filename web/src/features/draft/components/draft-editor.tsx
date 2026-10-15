@@ -296,7 +296,9 @@ export function Workspace({
   const toNextConflict = () => {
     if (view) nextConflict(view);
   };
-  const runUpdate = () =>
+  const runUpdate = () => {
+    // This tab asked for the rewrite: its undo history goes without a word.
+    session?.expectRewrite();
     update.mutate(undefined, {
       onSuccess: (result) => {
         if (result.conflicts > 0) {
@@ -317,6 +319,7 @@ export function Workspace({
           error instanceof ApiError && error.code === "draft_has_errors"
             ? ((error.details as { diagnostics?: Diagnostic[] } | undefined)?.diagnostics ?? [])
             : [];
+        session?.expectRewrite(false);
         toast.error("Could not update the draft", {
           description: error instanceof ApiError ? error.message : "Check your connection.",
         });
@@ -324,6 +327,7 @@ export function Workspace({
         if (first) requestAnimationFrame(() => jump(first));
       },
     });
+  };
   const group = () => {
     if (!session || picked.length === 0) return;
     const id = session.createGroup(picked);
