@@ -27,14 +27,23 @@ interface SigninSearch {
 
 // Messages for the codes the auth callback sends back. Unknown codes fall back
 // to a generic line: the page never shows a raw identifier.
-const errors: Record<string, { title: string; body: string }> = {
+interface SigninMessage {
+  title: string;
+  body: string;
+  /** Not a failure (an expired session, a cancel): shown as information. */
+  neutral?: boolean;
+}
+
+const errors: Record<string, SigninMessage> = {
   access_denied: {
     title: "Sign-in was cancelled",
     body: "Nothing was changed. Try again when you are ready.",
+    neutral: true,
   },
   session_expired: {
     title: "Your session expired",
     body: "Sign in again to pick up where you left off.",
+    neutral: true,
   },
   email_unverified: {
     title: "Verify your email first",
@@ -49,7 +58,7 @@ const errors: Record<string, { title: string; body: string }> = {
     body: "romulus could not reach your identity provider. Try again in a moment.",
   },
 };
-const fallbackError = {
+const fallbackError: SigninMessage = {
   title: "Sign-in did not complete",
   body: "Something went wrong between romulus and your identity provider. Try again.",
 };
@@ -95,7 +104,7 @@ function SignIn() {
 
             <div className="mt-8 grid gap-3">
               {failure && (
-                <Alert variant="destructive" title={failure.title}>
+                <Alert variant={failure.neutral ? "info" : "destructive"} title={failure.title}>
                   {failure.body}
                 </Alert>
               )}
