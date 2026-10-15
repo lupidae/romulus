@@ -282,6 +282,29 @@ export function foreignKeyName(schema: Schema, table: RelationRef, column: strin
   }
 }
 
+/**
+ * The other relations of a schema, which share one namespace with its tables
+ * (`pg_class`): indexes (constraint-backed ones are named after their
+ * constraint) and sequences (an identity column's, `nextval('…')` defaults').
+ */
+function otherRelations(schema: Schema, namespace: string): Map<string, "index" | "sequence"> {
+  const out = new Map<string, "index" | "sequence">();
+  for (const e of schema.entities ?? []) {
+    if (e.schema !== namespace) continue;
+    for (const index of e.indexes ?? []) out.set(index.name, "index");
+    for (const c of e.constraints ?? [])
+      if (c.kind === "p" || c.kind === "u" || c.kind === "x") out.set(c.name, "index");
+    for (const column of e.columns ?? []) {
+      if (column.identity) out.set(makeObjectName(e.name, column.name, "seq"), "sequence");
+      const sequence = /^nextval\('(?:(?:"[^"]+"|[^'".]+)\.)?("?)([^'"]+)\1'::regclass\)$/.exec(
+        column.default ?? "",
+      );
+      if (sequence) out.set(sequence[2]!, "sequence");
+    }
+  }
+  return out;
+}
+
 /** Why a relation cannot be named this in its schema, or null. */
 export function relationNameTaken(schema: Schema, namespace: string, name: string): string | null {
   const clash =
@@ -294,11 +317,25 @@ export function relationNameTaken(schema: Schema, namespace: string, name: strin
     ...(schema.composites ?? []),
   ].find((t) => t.schema === namespace && t.name === name);
   if (type) return `A type named ${name} already exists in ${namespace}.`;
+  const other = otherRelations(schema, namespace).get(name);
+  if (other)
+    return `${namespace} has ${other === "index" ? "an index" : "a sequence"} named ${name}.`;
   return null;
 }
 
+/** Names Postgres keeps for the system columns of every table. */
+export const SYSTEM_COLUMNS: ReadonlySet<string> = new Set([
+  "tableoid",
+  "xmin",
+  "cmin",
+  "xmax",
+  "cmax",
+  "ctid",
+]);
+
 /** Why a column cannot be named this in its table, or null. */
 export function columnNameTaken(entity: Entity, name: string): string | null {
+  if (SYSTEM_COLUMNS.has(name)) return `${name} is a system column: Postgres keeps the name.`;
   return (entity.columns ?? []).some((c) => c.name === name)
     ? `${entity.name} already has a column ${name}.`
     : null;

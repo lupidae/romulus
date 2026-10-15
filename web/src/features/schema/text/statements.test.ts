@@ -106,4 +106,26 @@ describe("findStatements", () => {
     expect(targets).toEqual(["People", "People", "orders", "People", "People", "orders"]);
     expect(findStatements(sql).every((s) => !("renamedTo" in s))).toBe(true);
   });
+
+  test("renames of views, materialized views and foreign tables are followed too", () => {
+    const sql = [
+      "CREATE VIEW v AS SELECT 1;",
+      "CREATE MATERIALIZED VIEW m AS SELECT 1;",
+      "CREATE FOREIGN TABLE f (id int) SERVER s;",
+      "ALTER VIEW public.v RENAME TO v2;",
+      "ALTER MATERIALIZED VIEW IF EXISTS public.m RENAME TO m2;",
+      "ALTER FOREIGN TABLE public.f RENAME TO f2;",
+      // A column renamed is not the table renamed.
+      "ALTER TABLE public.f2 RENAME COLUMN id TO key;",
+    ].join("\n");
+    expect(findStatements(sql).map((s) => s.target?.name)).toEqual([
+      "v2",
+      "m2",
+      "f2",
+      "v2",
+      "m2",
+      "f2",
+      "f2",
+    ]);
+  });
 });

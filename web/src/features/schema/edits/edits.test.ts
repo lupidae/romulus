@@ -1,7 +1,7 @@
 import { appendTo, MARKER } from "./append";
 import { describe as describeEdit, type GraphEdit, sqlFor, type Target } from "./edits";
 import { QUOTED_KEYWORDS } from "./keywords";
-import { nameProblem, qualified, quoteIdent, quoteLiteral } from "./quote";
+import { expressionProblem, nameProblem, qualified, quoteIdent, quoteLiteral } from "./quote";
 import { COMMON_TYPES, customType, type TypeChoice } from "./types";
 
 const users: Target = { schema: "public", name: "users", kind: "r" };
@@ -77,6 +77,36 @@ describe("nameProblem", () => {
     // Bytes, not characters: 32 two-byte letters are 64 bytes.
     expect(nameProblem("é".repeat(32))).toMatch(/63 bytes/);
     expect(nameProblem("a\u0000b")).toMatch(/NUL/);
+  });
+});
+
+describe("expressionProblem", () => {
+  test("takes one expression, its strings read as Postgres reads them", () => {
+    for (const ok of [
+      "now()",
+      "'draft'",
+      "'it''s'",
+      "E'it\\'s'",
+      "e'a\\\\b'",
+      "'a;b -- c /* d */'",
+      "E'semi\\';colon'",
+      "$$a;b$$",
+      "$x$it's; fine$x$",
+      '"weird;name"',
+      "(1 + 2) * 3",
+      "jsonb_build_object('a', 1)",
+    ])
+      expect(expressionProblem(ok), ok).toBeNull();
+    expect(expressionProblem("0; DROP TABLE users")).toMatch(/semicolons/);
+    expect(expressionProblem("'a'; DROP")).toMatch(/semicolons/);
+    expect(expressionProblem("1 -- one")).toMatch(/comments/);
+    expect(expressionProblem("'open")).toMatch(/quote/);
+    // Without the E, a backslash escapes nothing: the quote ends the string.
+    expect(expressionProblem("'it\\'s'")).toMatch(/quote/);
+    expect(expressionProblem("E'it\\'s")).toMatch(/quote/);
+    expect(expressionProblem("$$open")).toMatch(/\$-quoted/);
+    expect(expressionProblem("(1")).toMatch(/left open/);
+    expect(expressionProblem("1)")).toMatch(/never opened/);
   });
 });
 

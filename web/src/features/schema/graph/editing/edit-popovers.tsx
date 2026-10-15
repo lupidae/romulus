@@ -26,7 +26,7 @@ import {
   referenceableColumns,
 } from "../../edits/inspect";
 import { dropColumn, dropTable, foreignKey, setType, targetOf } from "../../edits/plan";
-import { nameProblem } from "../../edits/quote";
+import { expressionProblem, nameProblem } from "../../edits/quote";
 import { baseType, comparable, typeFromText } from "../../edits/types";
 import { type Column, type Entity, isView, type ReferentialActionCode } from "../../model";
 import { useMediaQuery } from "../../viewer/use-preference";
@@ -166,28 +166,6 @@ function Name({ children }: { children: React.ReactNode }) {
 
 function Footer({ children }: { children: React.ReactNode }) {
   return <div className="flex items-center justify-end gap-2 pt-1">{children}</div>;
-}
-
-/** Why a default expression cannot be written as is (it would end the statement), or null. */
-function expressionProblem(text: string): string | null {
-  let quote: string | null = null;
-  let depth = 0;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (quote) {
-      if (ch === quote) quote = text[i + 1] === quote ? (i++, quote) : null;
-      continue;
-    }
-    if (ch === "'" || ch === '"') quote = ch;
-    else if (ch === "(") depth++;
-    else if (ch === ")" && --depth < 0) return "A parenthesis closes that never opened.";
-    else if (ch === ";") return "A default is one expression: no semicolons.";
-    else if ((ch === "-" && text[i + 1] === "-") || (ch === "/" && text[i + 1] === "*"))
-      return "Leave comments out of the default.";
-  }
-  if (quote) return "A quote is left open.";
-  if (depth > 0) return "A parenthesis is left open.";
-  return null;
 }
 
 // ---- Add a column -------------------------------------------------------------

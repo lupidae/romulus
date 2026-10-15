@@ -5,6 +5,7 @@ import type { GraphEdit, Target } from "./edits";
 import {
   checkForeignKey,
   columnDependents,
+  columnNameTaken,
   foreignKeyName,
   freshTableName,
   indexColumns,
@@ -158,7 +159,18 @@ describe("types", () => {
     expect(customType("public.mood[]")?.isArray).toBe(true);
     expect(customType('"My Type"')?.sql).toBe('"My Type"');
     expect(customType("double precision")?.display).toBe("double precision");
+    expect(customType("interval day to second")?.sql).toBe("interval day to second");
+    expect(customType("national character varying(10)")?.sql).toBe(
+      "national character varying(10)",
+    );
+    expect(customType("bit varying(8)[]")?.isArray).toBe(true);
     for (const bad of [
+      // Words after a type are not part of it.
+      "integer PRIMARY KEY",
+      "text NOT NULL",
+      "varchar(80) default 'x'",
+      "double precision references users",
+      "timestamp with time zone not null",
       "text; DROP TABLE users",
       "text -- x",
       "'x'",
@@ -207,9 +219,41 @@ describe("names", () => {
     expect(relationNameTaken(blog, "public", "users")).toMatch(/already exists/);
     expect(relationNameTaken(blog, "public", "post_status")).toMatch(/type/);
     expect(relationNameTaken(blog, "other", "users")).toBeNull();
+    // Indexes and sequences share the namespace with tables.
+    expect(relationNameTaken(blog, "public", "users_pkey")).toBe(
+      "public has an index named users_pkey.",
+    );
+    expect(relationNameTaken(blog, "public", "posts_author_idx")).toMatch(/index/);
+    expect(relationNameTaken(blog, "public", "users_id_seq")).toBe(
+      "public has a sequence named users_id_seq.",
+    );
+    const serial = applyEdit(blog, {
+      kind: "addColumn",
+      table: t("tags"),
+      column: {
+        name: "n",
+        type: customType("integer")!,
+        notNull: true,
+        default: "nextval('public.tag_numbers'::regclass)",
+      },
+    });
+    expect(relationNameTaken(serial, "public", "tag_numbers")).toMatch(/sequence/);
     expect(freshTableName(blog, "public")).toBe("new_table");
     const once = applyEdit(blog, { kind: "addTable", table: t("new_table") });
     expect(freshTableName(once, "public")).toBe("new_table_2");
+  });
+});
+
+describe("column names", () => {
+  test("system columns and existing names are refused", () => {
+    const users = blog.entities!.find((e) => e.name === "users")!;
+    expect(columnNameTaken(users, "xmin")).toBe(
+      "xmin is a system column: Postgres keeps the name.",
+    );
+    expect(columnNameTaken(users, "ctid")).toMatch(/system column/);
+    expect(columnNameTaken(users, "email")).toBe("users already has a column email.");
+    expect(columnNameTaken(users, "oid")).toBeNull();
+    expect(columnNameTaken(users, "nickname")).toBeNull();
   });
 });
 

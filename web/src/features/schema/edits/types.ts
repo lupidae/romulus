@@ -95,12 +95,22 @@ export function modelTypes(schema: Schema): TypeChoice[] {
   return out.sort((a, b) => a.label.localeCompare(b.label));
 }
 
-// A type name as Postgres's grammar takes it: words (`double precision`,
-// `character varying`), a schema-qualified or quoted name, a modifier list of
-// numbers, `with[out] time zone`, array brackets. Nothing that could end the
+// A type name as Postgres's grammar takes it: one name, schema-qualified or
+// quoted, or one of the few built-ins spelled in several words (`double
+// precision`, `character varying`, `interval day to second`…); a modifier
+// list of numbers, `with[out] time zone`, array brackets. No other word
+// (`integer PRIMARY KEY` is not a type), nothing that could end the
 // statement, open a string or a comment.
 const WORD = String.raw`(?:[A-Za-z_][A-Za-z0-9_$]*|"(?:[^"]|"")+")`;
-const NAME = String.raw`${WORD}(?:\s*\.\s*${WORD})?(?:\s+[A-Za-z_][A-Za-z0-9_]*)*`;
+const FIELD = String.raw`(?:year|month|day|hour|minute|second)`;
+const SEVERAL_WORDS = [
+  String.raw`double\s+precision`,
+  String.raw`(?:national\s+)?(?:character|char)(?:\s+varying)?`,
+  String.raw`nchar(?:\s+varying)?`,
+  String.raw`bit\s+varying`,
+  String.raw`interval(?:\s+${FIELD}(?:\s+to\s+${FIELD})?)?`,
+].join("|");
+const NAME = String.raw`(?:${SEVERAL_WORDS}|${WORD}(?:\s*\.\s*${WORD})?)`;
 const MODIFIERS = String.raw`(?:\s*\(\s*\d+\s*(?:,\s*-?\d+\s*)?\))?`;
 const ZONE = String.raw`(?:\s+with(?:out)?\s+time\s+zone)?`;
 const ARRAY = String.raw`(?:\s*\[\s*\d*\s*\])*`;

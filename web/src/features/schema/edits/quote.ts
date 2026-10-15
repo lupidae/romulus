@@ -50,3 +50,61 @@ export function nameProblem(name: string): string | null {
     return `Postgres keeps ${MAX_IDENTIFIER_BYTES} bytes of a name: make it shorter.`;
   return null;
 }
+
+/**
+ * Why an expression typed by hand (a default) cannot be written into a
+ * statement as is, or null: it must stay one expression, so no `;`, no
+ * comment, every quote and parenthesis closed. Strings are skipped as
+ * Postgres reads them: `'…'` (`''` inside), `E'…'` (backslash escapes),
+ * `$tag$…$tag$`, and `"…"` identifiers.
+ */
+export function expressionProblem(text: string): string | null {
+  let depth = 0;
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i]!;
+    if (ch === "'" || ch === '"') {
+      // E'…' (or e'…'), not part of a longer word: backslash escapes.
+      const escapes =
+        ch === "'" && /[Ee]/.test(text[i - 1] ?? "") && !/[A-Za-z0-9_$]/.test(text[i - 2] ?? "");
+      i++;
+      let closed = false;
+      while (i < n) {
+        if (escapes && text[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (text[i] === ch) {
+          if (text[i + 1] === ch) {
+            i += 2;
+            continue;
+          }
+          closed = true;
+          i++;
+          break;
+        }
+        i++;
+      }
+      if (!closed) return "A quote is left open.";
+      continue;
+    }
+    if (ch === "$") {
+      const tag = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
+      if (tag && !/[A-Za-z0-9_]/.test(text[i - 1] ?? "")) {
+        const end = text.indexOf(tag[0], i + tag[0].length);
+        if (end < 0) return "A $-quoted string is left open.";
+        i = end + tag[0].length;
+        continue;
+      }
+    }
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth < 0) return "A parenthesis closes that never opened.";
+    else if (ch === ";") return "A default is one expression: no semicolons.";
+    else if ((ch === "-" && text[i + 1] === "-") || (ch === "/" && text[i + 1] === "*"))
+      return "Leave comments out of the default.";
+    i++;
+  }
+  if (depth > 0) return "A parenthesis is left open.";
+  return null;
+}
