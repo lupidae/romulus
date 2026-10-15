@@ -152,27 +152,36 @@
                 <div class="l"><span class="ln">3</span><span class="lc"></span></div>
                 <div class="l"><span class="ln">4</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">customers</span> <span class="p">(</span></span></div>
                 <div class="l"><span class="ln">5</span><span class="lc">  <span class="i">id</span>    <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
-                <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">citext</span> <span class="k">NOT NULL UNIQUE</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">text</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
                 <div class="l"><span class="ln">7</span><span class="lc">  <span class="i">name</span>  <span class="t">text</span> <span class="k">NOT NULL</span></span></div>
                 <div class="l"><span class="ln">8</span><span class="lc"><span class="p">);</span></span></div>
-                <div class="l"><span class="ln">9</span><span class="lc"></span></div>
-                <div class="l"><span class="ln">10</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">invoices</span> <span class="p">(</span></span></div>
-                <div class="l"><span class="ln">11</span><span class="lc">  <span class="i">id</span>          <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
-                <div class="l active-line"><span class="ln">12</span><span class="lc">  <span class="typed"><span class="i">customer_id</span> <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">customers</span><span class="p">,</span></span><span class="caret c1"><span class="flag">Ada</span></span></span></div>
-                <div class="l"><span class="ln">13</span><span class="lc">  <span class="i">status</span>      <span class="t">invoice_status</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
-                <div class="l"><span class="ln">14</span><span class="lc">  <span class="i">total_cents</span> <span class="t">bigint</span> <span class="k">CHECK</span> <span class="p">(</span><span class="i">total_cents</span> <span class="p">&gt;=</span> <span class="n">0</span><span class="p">),</span></span></div>
-                <div class="l"><span class="ln">15</span><span class="lc">  <span class="i">issued_at</span>   <span class="t">timestamptz</span></span></div>
-                <div class="l"><span class="ln">16</span><span class="lc"><span class="p">);</span></span></div>
-                <div class="l"><span class="ln">17</span><span class="lc"></span></div>
-                <div class="l"><span class="ln">18</span><span class="lc"><span class="k">COMMENT ON COLUMN</span> <span class="sel c4"><span class="i">invoices</span><span class="p">.</span><span class="i">total_cents</span></span><span class="caret c4 still"><span class="flag">Lin</span></span></span></div>
-                <div class="l"><span class="ln">19</span><span class="lc">  <span class="k">IS</span> <span class="s">'Sum of the lines, in cents'</span><span class="p">;</span></span></div>
-                <div class="l"><span class="ln">20</span><span class="lc"></span></div>
-                <div class="l"><span class="ln">21</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">payments</span> <span class="p">(</span></span></div>
-                <div class="l"><span class="ln">22</span><span class="lc">  <span class="i">id</span>         <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
-                <div class="l"><span class="ln">23</span><span class="lc">  <span class="i">invoice_id</span> <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">invoices</span><span class="p">,</span></span></div>
-                <div class="l"><span class="ln">24</span><span class="lc">  <span class="i">amount</span>     <span class="t">numeric</span><span class="p">(</span><span class="n">12</span><span class="p">,</span> <span class="n">2</span><span class="p">)</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
-                <div class="l"><span class="ln">25</span><span class="lc">  <span class="i">paid_at</span>    <span class="t">timestamptz</span> <span class="k">DEFAULT</span> <span class="i">now</span><span class="p">()</span></span></div>
-                <div class="l"><span class="ln">26</span><span class="lc"><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">9</span><span class="lc"><span class="k">CREATE INDEX</span> <span class="i">customers_email_idx</span></span></div>
+                <div class="l"><span class="ln">10</span><span class="lc">  <span class="k">ON</span> <span class="i">customers</span> <span class="p">(</span><span class="i">email</span><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">11</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">12</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">invoices</span> <span class="p">(</span></span></div>
+                <div class="l"><span class="ln">13</span><span class="lc">  <span class="i">id</span>          <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+                <div class="l active-line"><span class="ln">14</span><span class="lc">  <span class="typed"><span class="i">customer_id</span> <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">customers</span><span class="p">,</span></span><span class="caret c1"><span class="flag">Ada</span></span></span></div>
+                <div class="l"><span class="ln">15</span><span class="lc">  <span class="i">status</span>      <span class="t">invoice_status</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">16</span><span class="lc">  <span class="i">total_cents</span> <span class="t">bigint</span> <span class="k">CHECK</span> <span class="p">(</span><span class="i">total_cents</span> <span class="p">&gt;=</span> <span class="n">0</span><span class="p">),</span></span></div>
+                <div class="l"><span class="ln">17</span><span class="lc">  <span class="i">issued_at</span>   <span class="t">timestamptz</span></span></div>
+                <div class="l"><span class="ln">18</span><span class="lc"><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">19</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">20</span><span class="lc"><span class="k">COMMENT ON COLUMN</span> <span class="sel c4"><span class="i">invoices</span><span class="p">.</span><span class="i">total_cents</span></span><span class="caret c4 still"><span class="flag">Lin</span></span></span></div>
+                <div class="l"><span class="ln">21</span><span class="lc">  <span class="k">IS</span> <span class="s">'Sum of the lines, in cents'</span><span class="p">;</span></span></div>
+                <div class="l"><span class="ln">22</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">23</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">invoice_lines</span> <span class="p">(</span></span></div>
+                <div class="l"><span class="ln">24</span><span class="lc">  <span class="i">id</span>          <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">25</span><span class="lc">  <span class="i">invoice_id</span>  <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">invoices</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">26</span><span class="lc">  <span class="i">description</span> <span class="t">text</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">27</span><span class="lc">  <span class="i">amount</span>      <span class="t">numeric</span><span class="p">(</span><span class="n">12</span><span class="p">,</span> <span class="n">2</span><span class="p">)</span> <span class="k">NOT NULL</span></span></div>
+                <div class="l"><span class="ln">28</span><span class="lc"><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">29</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">30</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">payments</span> <span class="p">(</span></span></div>
+                <div class="l"><span class="ln">31</span><span class="lc">  <span class="i">id</span>         <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">32</span><span class="lc">  <span class="i">invoice_id</span> <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">invoices</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">33</span><span class="lc">  <span class="i">amount</span>     <span class="t">numeric</span><span class="p">(</span><span class="n">12</span><span class="p">,</span> <span class="n">2</span><span class="p">)</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">34</span><span class="lc">  <span class="i">paid_at</span>    <span class="t">timestamptz</span> <span class="k">DEFAULT</span> <span class="f">now</span><span class="p">()</span></span></div>
+                <div class="l"><span class="ln">35</span><span class="lc"><span class="p">);</span></span></div>
               </div>
             </div>
           </div>
@@ -200,7 +209,7 @@
                 <div class="node" style="--x:24;--y:32">
                   <div class="node-head"><span class="node-dot"></span>customers</div>
                   <div class="row"><span>id</span><b class="key pk">PK</b><i>uuid</i></div>
-                  <div class="row"><span>email</span><i>citext</i></div>
+                  <div class="row"><span>email</span><i>text</i></div>
                   <div class="row"><span>name</span><i>text</i></div>
                 </div>
 
@@ -209,7 +218,7 @@
                   <div class="row"><span>id</span><b class="key pk">PK</b><i>uuid</i></div>
                   <div class="row row-new"><span>customer_id</span><b class="key fk">FK</b><i>uuid</i></div>
                   <div class="rows-after">
-                    <div class="row"><span>status</span><i>invoice_status</i></div>
+                    <div class="row"><span>status</span><i class="enum-type">invoice_status</i></div>
                     <div class="row"><span>total_cents</span><i>bigint</i></div>
                     <div class="row"><span>issued_at</span><i>timestamptz</i></div>
                   </div>
@@ -265,7 +274,7 @@
       </ul>
     </div>
 
-    <div class="visual card versions" role="img" aria-label="The billing database's versions: v14 pushed from CI, v13 published from a draft by Ada, v12 uploaded by Sam. The diff from v12 to v14 lists four additions, two changes and one removal.">
+    <div class="visual card versions" role="img" aria-label="The billing database's versions: v14 pushed from CI, v13 published from a draft by Ada, v12 uploaded by Sam. The diff from v12 to v14 lists five additions, one change and one removal.">
       <div class="versions-list">
         <div class="vlist-head">Versions</div>
         <div class="vrow is-to"><span class="vnum">v14</span><span class="vmeta"><span class="vtitle">Pushed from CI</span><span class="vsub">main, 2 hours ago</span></span><span class="vpin">to</span></div>
@@ -276,15 +285,15 @@
       <div class="diff">
         <div class="diff-head">
           <span class="diff-range">v12 <svg class="icon"><use href="#i-arrow-right"/></svg> v14</span>
-          <span class="diff-counts"><span class="count add">4 added</span><span class="count change">2 changed</span><span class="count remove">1 removed</span></span>
+          <span class="diff-counts"><span class="count add">5 added</span><span class="count change">1 changed</span><span class="count remove">1 removed</span></span>
         </div>
         <ul class="changes">
+          <li class="add"><span class="badge">Added</span><span class="obj">enum <b>invoice_status</b></span></li>
           <li class="add"><span class="badge">Added</span><span class="obj">table <b>invoices</b></span></li>
-          <li class="add"><span class="badge">Added</span><span class="obj">column <b>invoices.customer_id</b> <i>uuid</i></span></li>
-          <li class="add"><span class="badge">Added</span><span class="obj">foreign key <b>invoices → customers</b></span></li>
-          <li class="change"><span class="badge">Changed</span><span class="obj">column <b>customers.email</b> <i>text → citext</i></span></li>
-          <li class="change"><span class="badge">Changed</span><span class="obj">enum <b>invoice_status</b> <i>+ 'void'</i></span></li>
+          <li class="add"><span class="badge">Added</span><span class="obj">table <b>invoice_lines</b></span></li>
+          <li class="add"><span class="badge">Added</span><span class="obj">table <b>payments</b></span></li>
           <li class="add"><span class="badge">Added</span><span class="obj">policy <b>invoices_by_org</b> <i>on invoices</i></span></li>
+          <li class="change"><span class="badge">Changed</span><span class="obj">column <b>customers.email</b> <i>text → citext</i></span></li>
           <li class="remove"><span class="badge">Removed</span><span class="obj">index <b>customers_email_idx</b></span></li>
         </ul>
       </div>
@@ -304,7 +313,7 @@
       </ul>
     </div>
 
-    <div class="visual card merge" role="img" aria-label="Updating a draft after CI pushed v14: one statement changed on both sides and is shown as a conflict with Keep mine and Keep theirs buttons. Publishing waits until it is resolved.">
+    <div class="visual card merge" role="img" aria-label="Updating a draft after CI pushed v14. The new type v14 gave customers.email merges in on its own. The index the draft made unique was dropped in v14, so it is a conflict with Keep mine and Keep theirs buttons. Publishing waits until it is resolved.">
       <div class="merge-head">
         <span class="merge-title"><svg class="icon"><use href="#i-refresh"/></svg>Update draft</span>
         <span class="merge-sub">v14 was pushed while you worked<span class="conflict-count">1 conflict</span></span>
@@ -312,20 +321,21 @@
       <div class="code-block">
         <div class="l"><span class="ln">4</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">customers</span> <span class="p">(</span></span></div>
         <div class="l"><span class="ln">5</span><span class="lc">  <span class="i">id</span>    <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+        <div class="l merged"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">citext</span> <span class="k">NOT NULL UNIQUE</span><span class="p">,</span></span><span class="merged-tag">from v14</span></div>
+        <div class="l"><span class="ln">7</span><span class="lc">  <span class="i">name</span>  <span class="t">text</span> <span class="k">NOT NULL</span></span></div>
+        <div class="l"><span class="ln">8</span><span class="lc"><span class="p">);</span></span></div>
         <div class="conflict">
           <div class="side mine">
             <div class="side-label">Yours</div>
-            <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">citext</span> <span class="k">NOT NULL UNIQUE</span><span class="p">,</span></span></div>
+            <div class="l"><span class="ln">9</span><span class="lc"><span class="k">CREATE UNIQUE INDEX</span> <span class="i">customers_email_idx</span></span></div>
+            <div class="l"><span class="ln">10</span><span class="lc">  <span class="k">ON</span> <span class="i">customers</span> <span class="p">(</span><span class="i">email</span><span class="p">);</span></span></div>
           </div>
           <div class="side theirs">
             <div class="side-label">v14, pushed from CI</div>
-            <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">text</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+            <div class="l"><span class="ln"></span><span class="lc dropped">Dropped this index</span></div>
           </div>
           <div class="conflict-actions"><span class="fake-button small">Keep mine</span><span class="fake-button small">Keep theirs</span></div>
         </div>
-        <div class="l"><span class="ln">7</span><span class="lc">  <span class="i">name</span>  <span class="t">text</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
-        <div class="l merged"><span class="ln">8</span><span class="lc">  <span class="i">phone</span> <span class="t">text</span></span><span class="merged-tag">from v14</span></div>
-        <div class="l"><span class="ln">9</span><span class="lc"><span class="p">);</span></span></div>
       </div>
       <div class="merge-foot"><span class="dot-warn" aria-hidden="true"></span>Publishing waits until every conflict is resolved.</div>
     </div>
@@ -348,11 +358,11 @@
         <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>In CI, after your migrations</span></span>
         <button class="copy-button" type="button" data-copy="#push-snippet" aria-label="Copy the push command"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span data-copy-label>Copy</span></button>
       </div>
-<pre class="terminal-body" tabindex="0" role="region" aria-label="Push command"><code id="push-snippet">remus -u <span class="ts">"$DATABASE_URL"</span> -f json \
-  | curl -fsS --data-binary @- \
-      -H <span class="ts">"Authorization: Bearer $ROMULUS_TOKEN"</span> \
-      -H <span class="ts">"Content-Type: application/json"</span> \
-      <span class="ts">"$ROMULUS_URL/api/orgs/acme/databases/billing/versions"</span></code></pre>
+<pre class="terminal-body"><code id="push-snippet"><span class="cl">remus -u <span class="ts">"$DATABASE_URL"</span> -f <span class="nw">json \</span></span><!--
+--><span class="cl">  | curl -fsS --data-binary <span class="nw">@- \</span></span><!--
+--><span class="cl">      -H <span class="ts">"Authorization: Bearer </span><span class="nw"><span class="ts">$ROMULUS_TOKEN"</span> \</span></span><!--
+--><span class="cl">      -H <span class="ts">"Content-Type: </span><span class="nw"><span class="ts">application/json"</span> \</span></span><!--
+--><span class="cl">      <span class="ts">"$ROMULUS_URL/<wbr>api/<wbr>databases/<wbr>$ROMULUS_DATABASE_ID/<wbr>versions"</span></span></code></pre>
       <div class="terminal-out">
         <div><span class="status ok">201</span><span>Created v14</span><span class="out-dim">3 changes since v13</span></div>
         <div><span class="status same">200</span><span>Unchanged</span><span class="out-dim">nothing new to keep</span></div>

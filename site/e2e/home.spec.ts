@@ -60,11 +60,33 @@ test("the push command copies to the clipboard", async ({ page, context }) => {
   await button.click();
   await expect(button).toContainText("Copied");
   const copied = await page.evaluate(() => navigator.clipboard.readText());
-  expect(copied).toContain('remus -u "$DATABASE_URL" -f json');
-  expect(copied).toContain('-H "Authorization: Bearer $ROMULUS_TOKEN"');
-  expect(copied).toContain('"$ROMULUS_URL/api/orgs/acme/databases/billing/versions"');
+  // The spec's push: POST /api/databases/<id>/versions with the database's
+  // bearer token. Five shell lines, whatever wrapped on screen.
+  expect(copied).toBe(
+    [
+      'remus -u "$DATABASE_URL" -f json \\',
+      "  | curl -fsS --data-binary @- \\",
+      '      -H "Authorization: Bearer $ROMULUS_TOKEN" \\',
+      '      -H "Content-Type: application/json" \\',
+      '      "$ROMULUS_URL/api/databases/$ROMULUS_DATABASE_ID/versions"',
+      "",
+    ].join("\n"),
+  );
   await expect(button).toContainText("Copy", { timeout: 4000 });
 });
+
+for (const width of [360, 390]) {
+  test(`the push command wraps instead of clipping at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/#ci");
+    const pre = page.locator(".terminal-body");
+    const { scroll, client } = await pre.evaluate((el) => ({
+      scroll: el.scrollWidth,
+      client: el.clientWidth,
+    }));
+    expect(scroll).toBeLessThanOrEqual(client);
+  });
+}
 
 test("the theme choice applies at once and is shared with the app", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });

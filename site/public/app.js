@@ -43,7 +43,9 @@ if (product) {
   }
 }
 
-// Copy buttons: the text of the element named by data-copy.
+// Copy buttons: the text of the element named by data-copy, line by line as
+// rendered (innerText: each block is a line, a wrap on a phone is not).
+const isMac = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? "");
 for (const button of document.querySelectorAll("[data-copy]")) {
   const label = button.querySelector("[data-copy-label]");
   let reset;
@@ -51,11 +53,12 @@ for (const button of document.querySelectorAll("[data-copy]")) {
     const source = document.querySelector(button.dataset.copy);
     if (!source) return;
     try {
-      await navigator.clipboard.writeText(source.textContent.trim() + "\n");
+      await navigator.clipboard.writeText(source.innerText.trim() + "\n");
       button.setAttribute("data-copied", "");
       if (label) label.textContent = "Copied";
     } catch {
-      if (label) label.textContent = "Press ⌘C";
+      // No clipboard access: select the text and say how to copy it here.
+      if (label) label.textContent = isMac ? "Press ⌘C" : "Press Ctrl+C";
       const range = document.createRange();
       range.selectNodeContents(source);
       getSelection()?.removeAllRanges();

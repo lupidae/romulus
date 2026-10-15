@@ -594,7 +594,7 @@ p a:hover,
   font-size: var(--code-size);
   line-height: 1.6;
   /* On a phone the editor is scrolled to the table being edited. */
-  transform: translateY(-8lh);
+  transform: translateY(-11lh);
 }
 .l {
   display: flex;
@@ -605,7 +605,10 @@ p a:hover,
   padding-right: 1.5ch;
   color: var(--faint-foreground);
   text-align: right;
-  opacity: 0.7;
+}
+/* On a tinted conflict side the faint tone falls under AA. */
+.conflict .ln {
+  color: var(--muted-foreground);
 }
 .lc {
   position: relative;
@@ -613,20 +616,24 @@ p a:hover,
   min-width: 0;
   white-space: pre;
 }
+/* The viewer's code colors (--syntax-*, the same tokens CodeMirror uses). */
 .k {
-  color: var(--primary);
+  color: var(--syntax-keyword);
 }
 .t {
-  color: var(--info);
+  color: var(--syntax-type);
 }
 .s {
-  color: var(--success);
+  color: var(--syntax-string);
 }
 .n {
-  color: var(--presence-2);
+  color: var(--syntax-number);
+}
+.f {
+  color: var(--syntax-function);
 }
 .p {
-  color: var(--muted-foreground);
+  color: var(--syntax-punctuation);
 }
 .i {
   color: var(--foreground);
@@ -792,6 +799,11 @@ p a:hover,
 .row i {
   color: var(--faint-foreground);
   font-style: normal;
+}
+.row .enum-type {
+  color: var(--syntax-type);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.15em;
 }
 .key {
   padding: 0 calc(3 * var(--u));
@@ -1392,6 +1404,11 @@ code {
   align-items: center;
   background: color-mix(in oklab, var(--success) 7%, transparent);
 }
+.lc.dropped {
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
 .merged-tag {
   --tone: var(--success);
   --tone-text: color-mix(in oklab, var(--tone) 68%, var(--foreground));
@@ -1488,19 +1505,32 @@ code {
 .terminal-body {
   margin: 0;
   padding: 1.125rem 1.25rem;
-  overflow-x: auto;
   font-size: clamp(0.71875rem, 0.66rem + 0.25vw, 0.8125rem);
   line-height: 1.75;
-  scrollbar-width: thin;
 }
 .terminal-body code {
   font-size: inherit;
 }
+/* One block per shell line. On a phone a long line wraps (at spaces, or at
+   the URL's slashes) and its continuation hangs two characters deeper than
+   any line's own indent, so it never reads as a new line. Nothing is clipped,
+   and copying still gives the five lines as written. */
+/* A line's last word keeps its "\": a continuation never wraps alone. */
+.nw {
+  white-space: nowrap;
+}
+.cl {
+  display: block;
+  padding-left: 8ch;
+  text-indent: -8ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .tc {
-  color: var(--faint-foreground);
+  color: var(--syntax-comment);
 }
 .ts {
-  color: var(--primary);
+  color: var(--syntax-string);
 }
 .terminal-out {
   display: grid;
