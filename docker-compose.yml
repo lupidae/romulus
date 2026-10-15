@@ -38,12 +38,26 @@ services:
       POSTGRES_USER: sandbox_admin
       POSTGRES_PASSWORD: sandbox_admin
       POSTGRES_DB: postgres
-    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off,
+      PG_OOM_ADJUST_FILE: /proc/self/oom_score_adj
+      PG_OOM_ADJUST_VALUE: "1000"
+    # fsync stays on (unlike the app database): this data lives on a volume,
+    # and an unclean stop with fsync off corrupts it. Compiles never commit,
+    # so it costs nothing in practice.
+    command: [postgres, -c, synchronous_commit=off,
               -c, wal_level=minimal, -c, max_wal_senders=0, -c, max_wal_size=128MB,
               -c, min_wal_size=32MB, -c, checkpoint_timeout=60s,
               -c, shared_buffers=32MB, -c, work_mem=4MB, -c, maintenance_work_mem=32MB,
-              -c, max_connections=60]
+              -c, max_connections=60, -c, max_locks_per_transaction=2048]
+    # Memory, in depth (deploy/sandbox/README.md): every process may allocate
+    # at most 128 MB of private memory, so an oversized value fails with an
+    # ordinary "out of memory" error instead of growing; past the container
+    # limit the kernel kills a backend (OOM score 1000), never the postmaster
+    # (-1000), which then restarts its backends while the pool reconnects.
     mem_limit: 768m
+    ulimits:
+      data: 134217728
+    oom_score_adj: -1000
+    restart: unless-stopped
     ports:
       - 127.0.0.1:${ROMULUS_SANDBOX_PORT:?run scripts/dev-env}:5432
     volumes:

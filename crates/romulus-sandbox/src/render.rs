@@ -28,6 +28,10 @@ enum Move {
 /// - a unique index goes before the foreign keys (remus-sql writes them
 ///   after, and a foreign key may reference a unique index).
 ///
+/// All three are remus#16 (fixed upstream for the next remus release):
+/// remove these workarounds, and their tests, once the workspace depends on
+/// it.
+///
 /// Everything else is remus-sql's output, byte for byte. Known gaps of
 /// remus 0.2 this does not paper over: `NOT VALID` CHECKs are written
 /// inline (so they come back validated), and stand-alone range types are
@@ -82,7 +86,7 @@ pub fn render_sql(schema: &Schema) -> String {
         return sql;
     }
 
-    // Rebuild the text: each statement's extent, in the new order, with the
+    // remus#16: index order. Rebuild the text: each statement's extent, in the new order, with the
     // original gaps (blank lines, comments) kept where they were.
     let moved_statements: Vec<usize> = moves.iter().map(|(i, _)| *i).collect();
     let text = |i: usize| {
@@ -121,6 +125,7 @@ pub fn render_sql(schema: &Schema) -> String {
 }
 
 /// The model with its policy expressions parenthesized, if any needs it.
+/// Workaround for remus#16.
 fn fixed(schema: &Schema) -> Option<Schema> {
     let needs_parens = schema
         .entities

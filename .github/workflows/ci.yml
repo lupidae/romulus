@@ -69,9 +69,13 @@ jobs:
       - name: Start the sandbox Postgres
         run: |
           docker build -t romulus-sandbox deploy/sandbox
+          # The memory settings of docker-compose.yml (deploy/sandbox/README.md).
           docker run -d --name sandbox -p 5433:5432 \
+            --memory 768m --ulimit data=134217728 --oom-score-adj -1000 \
+            -e PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj -e PG_OOM_ADJUST_VALUE=1000 \
             -e POSTGRES_USER=sandbox_admin -e POSTGRES_PASSWORD=sandbox_admin -e POSTGRES_DB=postgres \
-            romulus-sandbox postgres -c fsync=off -c wal_level=minimal -c max_wal_senders=0
+            romulus-sandbox postgres -c synchronous_commit=off -c wal_level=minimal -c max_wal_senders=0 \
+            -c shared_buffers=32MB -c max_connections=60 -c max_locks_per_transaction=2048
           for _ in $(seq 60); do docker exec sandbox pg_isready -U sandbox_admin -d postgres && exit 0; sleep 1; done
           docker logs sandbox; exit 1
 

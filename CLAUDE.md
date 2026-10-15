@@ -318,8 +318,13 @@ stable `code` and a `Span` in bytes, UTF-16 (CodeMirror/Yjs) and line/column.
 - **Tests**: `just sandbox` starts only the sandbox (no Zitadel); the
   integration tests read `ROMULUS_SANDBOX_URL` from `.env` and are skipped,
   loudly, without it. CI starts the image itself.
+- **Operating the sandbox** (memory caps, OOM behaviour, why the extensions
+  are trusted): `deploy/sandbox/README.md`. Wire `Compiler::check_admin` into
+  the API's health check: `PrefixInUse` there means another process took the
+  pool and this one has stopped compiling.
 - Known remus gaps (documented on `render_sql`): `NOT VALID` CHECKs come back
-  validated, stand-alone range types are not modelled.
+  validated, stand-alone range types are not modelled; its other workarounds
+  go away with the remus release fixing remus#16.
 
 ## Testing
 

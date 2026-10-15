@@ -18,11 +18,24 @@
 //!   across restarts (nothing is ever committed in them) unless their pool
 //!   version comment is stale.
 //! - **Catalog**: built-in function names, and what each allowlisted
-//!   extension creates, measured by installing them all into one pool
-//!   database in a transaction that is rolled back.
+//!   extension creates, measured by installing them all, in a transaction
+//!   that is rolled back, into `<prefix>_probe`: a database only the admin
+//!   can connect to. Extension scripts run there as superuser, so never in a
+//!   pool database, whose `public` schema an untrusted role owns.
 //!
-//! A session advisory lock on the prefix, held by the admin connection for
-//! the compiler's lifetime, stops two processes from sharing a pool.
+//! **One process per prefix.** The admin connection always lives in the
+//! `postgres` database ([`LOCK_DATABASE`]; advisory locks are per database)
+//! and holds a session advisory lock on the prefix for the compiler's
+//! lifetime: a second process with the same prefix fails to start
+//! (`PrefixInUse`). The lock goes with the session, and Postgres drops every
+//! session when it restarts its backends (after a backend is OOM-killed, for
+//! instance), so the compiler checks its admin connection every
+//! `admin_check_interval` (and before terminating a backend), reconnects and
+//! takes the lock again. If another process took the prefix in the
+//! meantime, this compiler stops compiling for good (`PrefixInUse`); for the
+//! seconds in between, both could have compiled in the same databases,
+//! which only ever produces wrong errors for those compiles, never a
+//! committed change.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -60,16 +73,13 @@ pub(crate) async fn bootstrap(
     options: &PgConnectOptions,
 ) -> Result<Bootstrapped, SandboxError> {
     validate(config)?;
-    let mut admin = PgConnection::connect_with(options)
+    let mut admin = connect_admin(options, &config.prefix)
         .await
         .map_err(|e| SandboxError::Unavailable(e.to_string()))?;
-
-    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtext($1))")
-        .bind(format!("romulus_sandbox:{}", config.prefix))
-        .fetch_one(&mut admin)
+    if !lock_prefix(&mut admin, &config.prefix)
         .await
-        .map_err(bootstrap_error)?;
-    if !locked {
+        .map_err(bootstrap_error)?
+    {
         return Err(SandboxError::PrefixInUse(config.prefix.clone()));
     }
 
@@ -103,17 +113,19 @@ pub(crate) async fn bootstrap(
         });
     }
 
-    let first = slots
-        .first()
-        .ok_or_else(|| SandboxError::Bootstrap("the pool needs at least one database".into()))?;
     // The catalog depends only on the sandbox image: measured once per
-    // process and server (installing PostGIS takes a while, and memory).
+    // process and server (installing PostGIS takes a while, and memory), in
+    // a database of its own that no compile role can reach: the probe runs
+    // extension scripts as superuser, which must never happen where an
+    // untrusted role owns a schema.
     let cache_key = format!("{}\0{server_version}", config.admin_url);
     let cached = lock_catalogs().get(&cache_key).cloned();
     let catalog = if let Some(catalog) = cached {
         catalog
     } else {
-        let catalog = probe_catalog(options, &first.database).await?;
+        let probe = format!("{}_probe", config.prefix);
+        ensure_admin_database(&mut admin, &probe).await?;
+        let catalog = probe_catalog(options, &probe).await?;
         lock_catalogs().insert(cache_key, catalog.clone());
         catalog
     };
@@ -132,6 +144,39 @@ fn lock_catalogs() -> std::sync::MutexGuard<'static, BTreeMap<String, Catalog>> 
     CATALOGS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The database the admin connection (and so the prefix lock) lives in.
+/// Advisory locks are per database: two processes must take theirs in the
+/// same one, whatever database `admin_url` names. Every cluster has it.
+pub(crate) const LOCK_DATABASE: &str = "postgres";
+
+/// The admin connection: superuser, in [`LOCK_DATABASE`], named after the
+/// prefix so it can be told apart in `pg_stat_activity`.
+pub(crate) async fn connect_admin(
+    options: &PgConnectOptions,
+    prefix: &str,
+) -> Result<PgConnection, sqlx::Error> {
+    let options = options
+        .clone()
+        .database(LOCK_DATABASE)
+        .application_name(&format!("romulus-sandbox-admin:{prefix}"));
+    PgConnection::connect_with(&options).await
+}
+
+/// Take the session advisory lock that makes the prefix this process's.
+/// Held for as long as the connection lives; `false` when another session
+/// holds it.
+pub(crate) async fn lock_prefix(
+    admin: &mut PgConnection,
+    prefix: &str,
+) -> Result<bool, sqlx::Error> {
+    // Two-key form, with a class of its own ('romu'), so it cannot collide
+    // with another application's single-key advisory locks.
+    sqlx::query_scalar("SELECT pg_try_advisory_lock(1919905141, hashtext($1))")
+        .bind(prefix)
+        .fetch_one(admin)
+        .await
 }
 
 fn validate(config: &SandboxConfig) -> Result<(), SandboxError> {
@@ -234,6 +279,10 @@ async fn ensure_role(
              ALTER ROLE {name} SET temp_file_limit = '64MB';
              ALTER ROLE {name} SET work_mem = '4MB';
              ALTER ROLE {name} SET maintenance_work_mem = '16MB';
+             ALTER ROLE {name} SET hash_mem_multiplier = 1;
+             ALTER ROLE {name} SET max_parallel_workers_per_gather = 0;
+             ALTER ROLE {name} SET max_parallel_maintenance_workers = 0;
+             ALTER ROLE {name} SET jit = off;
              ALTER ROLE {name} SET timezone = 'UTC';
              ALTER ROLE {name} SET datestyle = 'ISO, MDY';
              ALTER ROLE {name} SET intervalstyle = 'postgres';
@@ -297,6 +346,25 @@ async fn ensure_database(
     )
     .await?;
     db.close().await.map_err(bootstrap_error)
+}
+
+/// A database for the admin alone (the catalog probe): no role but the
+/// superuser can connect, and the admin owns its `public` schema.
+async fn ensure_admin_database(admin: &mut PgConnection, name: &str) -> Result<(), SandboxError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(name)
+            .fetch_one(&mut *admin)
+            .await
+            .map_err(bootstrap_error)?;
+    if !exists {
+        exec(
+            admin,
+            format!("CREATE DATABASE {name} TEMPLATE template0 ENCODING 'UTF8'"),
+        )
+        .await?;
+    }
+    exec(admin, format!("REVOKE ALL ON DATABASE {name} FROM PUBLIC")).await
 }
 
 #[derive(Deserialize)]
@@ -369,8 +437,11 @@ async fn probe_catalog(
                 installed.insert(name.clone());
             }
             Err(err) => {
-                tracing::warn!(extension = %name, error = %err, "extension cannot be installed in the sandbox");
-                exec(&mut conn, "ROLLBACK TO SAVEPOINT probe".to_owned()).await?;
+                // An incomplete catalog would stub the extension's functions
+                // and break every compile using it: refuse to start.
+                return Err(SandboxError::Bootstrap(format!(
+                    "extension {name} cannot be installed in the sandbox: {err}"
+                )));
             }
         }
     }

@@ -175,9 +175,9 @@ fn a_slow_statement_hits_the_statement_timeout() {
             ..config(url, "romulus_test_timeout")
         },
         |compiler| async move {
-            // Installing PostGIS and its raster support takes far longer
-            // than 100 ms; a CREATE TABLE far less.
-            let sql = "CREATE TABLE a (id int);\nCREATE EXTENSION postgis_raster CASCADE;\nCREATE TABLE b (id int);";
+            // Installing PostGIS and its topology takes far longer than
+            // 100 ms; a CREATE TABLE far less.
+            let sql = "CREATE TABLE a (id int);\nCREATE EXTENSION postgis_topology CASCADE;\nCREATE TABLE b (id int);";
             let compilation = compiler.compile(sql).await.expect("the sandbox runs");
             let error = compilation.errors().next().expect("a timeout");
             assert_eq!(error.code, Code::Timeout, "{}", explain(sql, &compilation));
@@ -200,9 +200,13 @@ fn the_compile_deadline_terminates_the_backend_and_the_slot_recovers() {
             ..config(url, "romulus_test_deadline")
         },
         |compiler| async move {
-            // Many PostGIS-sized statements: each under statement_timeout,
+            // Thousands of statements: each under statement_timeout,
             // together far over the deadline.
-            let sql = "CREATE EXTENSION postgis; DROP EXTENSION postgis CASCADE;\n".repeat(20);
+            let sql = (0..2_000).fold(String::new(), |mut sql, i| {
+                use std::fmt::Write;
+                let _ = writeln!(sql, "CREATE TABLE t{i} (id int PRIMARY KEY, label text);");
+                sql
+            });
             let started = Instant::now();
             let compilation = compiler.compile(&sql).await.expect("the sandbox runs");
             assert_eq!(
@@ -212,7 +216,9 @@ fn the_compile_deadline_terminates_the_backend_and_the_slot_recovers() {
                 explain(&sql, &compilation)
             );
             assert!(
-                started.elapsed() < Duration::from_secs(4),
+                // Parsing and checking 2 000 statements (a debug build) comes
+                // first; then the 1 s deadline and the 2 s grace to stop.
+                started.elapsed() < Duration::from_secs(15),
                 "{:?}",
                 started.elapsed()
             );
@@ -238,4 +244,87 @@ fn rand_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos())
+}
+
+/// Defence in depth, below the allowlist: every sandbox process may
+/// allocate at most 128 MB of private memory (docker-compose.yml and CI), so
+/// a value too large fails as an ordinary error, the server stays up, and
+/// compiles go on. Even a superuser query cannot get past it.
+#[test]
+fn the_server_caps_each_backends_memory() {
+    with_compiler(|compiler| async move {
+        use sqlx::Connection;
+        let url = crate::admin_url().expect("the sandbox URL");
+        let mut admin = sqlx::PgConnection::connect(&url).await.expect("admin");
+        let error = sqlx::query("SELECT length(repeat('x', 300000000))")
+            .execute(&mut admin)
+            .await
+            .expect_err("a 300 MB value");
+        assert!(error.to_string().contains("out of memory"), "{error}");
+        let still: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&mut admin)
+            .await
+            .expect("up");
+        assert_eq!(still, 1);
+        let sql = "CREATE TABLE after_the_bomb (id int)";
+        assert!(
+            compiler
+                .compile(sql)
+                .await
+                .expect("the sandbox runs")
+                .is_ok()
+        );
+    });
+}
+
+/// A backend killed in the middle of a compile (by an operator, or by the
+/// OOM killer, which spares the postmaster) costs a retry on a fresh
+/// connection, not the compile; the pool carries on.
+#[test]
+fn a_backend_killed_mid_compile_is_retried_and_the_pool_recovers() {
+    with_own_compiler(
+        |url| SandboxConfig {
+            pool_size: 1,
+            ..config(url, "romulus_test_kill")
+        },
+        |compiler| async move {
+            use sqlx::Connection;
+            let sql = "CREATE EXTENSION postgis;\nCREATE EXTENSION postgis_topology;\n\
+                       CREATE TABLE survived (id int);"
+                .to_owned();
+            let running = {
+                let compiler = compiler.clone();
+                let sql = sql.clone();
+                tokio::spawn(async move { compiler.compile(&sql).await })
+            };
+            let url = crate::admin_url().expect("the sandbox URL");
+            let mut admin = sqlx::PgConnection::connect(&url).await.expect("admin");
+            let mut killed = false;
+            for _ in 0..500 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                let n: i64 = sqlx::query_scalar(
+                    "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity \
+                     WHERE usename = 'romulus_test_kill_0' AND state = 'active'",
+                )
+                .fetch_one(&mut admin)
+                .await
+                .expect("terminate");
+                if n > 0 {
+                    killed = true;
+                    break;
+                }
+            }
+            assert!(killed, "the compile never showed up as active");
+            let compilation = running
+                .await
+                .expect("the task")
+                .expect("retried, not unavailable");
+            assert!(compilation.is_ok(), "{}", explain(&sql, &compilation));
+            let after = compiler
+                .compile("CREATE TABLE next_one (id int)")
+                .await
+                .expect("the pool recovered");
+            assert!(after.is_ok());
+        },
+    );
 }
