@@ -66,6 +66,10 @@ pub enum ConfigError {
     Invalid { var: &'static str, reason: String },
     #[error("ROMULUS_DEV_SIGNIN is only allowed when ROMULUS_PUBLIC_URL is local, not {0}")]
     DevSigninNotLocal(String),
+    #[error(
+        "ROMULUS_DEV_SIGNIN is only allowed when the API listens on a loopback address, not {0}"
+    )]
+    DevSigninNotLoopbackAddr(SocketAddr),
 }
 
 impl Config {
@@ -145,6 +149,11 @@ impl Config {
         };
         if dev_signin && !is_loopback(&public_url) {
             return Err(ConfigError::DevSigninNotLocal(public_url.to_string()));
+        }
+        // A loopback public URL says nothing about who can reach the port:
+        // listening on 0.0.0.0 would hand the dev sign-in to the whole LAN.
+        if dev_signin && !api_addr.ip().is_loopback() {
+            return Err(ConfigError::DevSigninNotLoopbackAddr(api_addr));
         }
 
         Ok(Self {
@@ -246,6 +255,23 @@ mod tests {
             config(&vars),
             Err(ConfigError::DevSigninNotLocal(_))
         ));
+    }
+
+    #[test]
+    fn dev_signin_is_refused_when_the_api_listens_beyond_loopback() {
+        for addr in ["0.0.0.0:41001", "192.168.1.20:41001", "[::]:41001"] {
+            let mut vars = BASE.to_vec();
+            vars.push(("ROMULUS_DEV_SIGNIN", "true"));
+            vars.push(("ROMULUS_API_ADDR", addr));
+            assert!(
+                matches!(config(&vars), Err(ConfigError::DevSigninNotLoopbackAddr(_))),
+                "{addr}"
+            );
+        }
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_DEV_SIGNIN", "true"));
+        vars.push(("ROMULUS_API_ADDR", "[::1]:41001"));
+        assert!(config(&vars).unwrap().dev_signin);
     }
 
     #[test]
