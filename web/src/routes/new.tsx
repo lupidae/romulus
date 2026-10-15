@@ -62,6 +62,9 @@ function NewOrganization() {
         <header className="flex h-8 items-center gap-4 pr-12 lg:pr-0">
           <div className="flex min-w-0 items-center gap-3">
             <LogoMark className="size-8" />
+            <span className="text-sm text-muted-foreground tabular">
+              Step {created ? 2 : 1} of 2
+            </span>
             {back && !created && (
               <Button variant="ghost" size="sm" asChild>
                 <Link to="/$org" params={{ org: back.slug }}>
@@ -79,14 +82,10 @@ function NewOrganization() {
               <InviteStep slug={created.slug} name={created.name} />
             ) : (
               <>
-                <p className="text-sm text-muted-foreground tabular">Step 1 of 2</p>
-                <h1 className="mt-2 text-2xl font-semibold text-foreground">
-                  Create your organization
-                </h1>
+                <h1 className="text-2xl font-semibold text-foreground">Create your organization</h1>
                 <p className="mt-2 text-base text-muted-foreground">
                   {orgs.length === 0 && `Welcome to romulus, ${me.name.split(/\s+/)[0]}. `}
-                  An organization holds your team&rsquo;s databases, their versions and drafts. You
-                  invite the team next.
+                  An organization holds your team&rsquo;s databases, versions and drafts.
                 </p>
                 <div className="mt-8">
                   <CreateOrgForm
@@ -98,8 +97,7 @@ function NewOrganization() {
                   />
                 </div>
                 <p className="mt-6 text-sm text-muted-foreground">
-                  Joining a team that already uses romulus? Open the invitation link an admin sent
-                  you instead.
+                  Joining a team? Open the invitation link you were sent instead.
                 </p>
               </>
             )}
@@ -126,19 +124,20 @@ function InviteStep({ slug, name }: { slug: string; name: string }) {
 
   return (
     <>
-      <p className="flex items-center gap-1.5 text-sm text-success">
-        <CheckCircleIcon className="size-4" />
-        {name} is ready
-      </p>
-      <p className="mt-6 text-sm text-muted-foreground tabular">Step 2 of 2</p>
       <h1
         ref={heading}
         tabIndex={-1}
-        className="mt-2 text-2xl font-semibold text-foreground outline-none"
+        className="text-2xl font-semibold text-foreground outline-none"
       >
         Invite your team
       </h1>
-      <p className="mt-2 text-base text-muted-foreground">
+      <p className="mt-2 flex items-start gap-1.5 text-base text-success">
+        <CheckCircleIcon className="mt-1 size-4 shrink-0" />
+        <span>
+          <span className="font-medium">{name}</span> is ready.
+        </span>
+      </p>
+      <p className="mt-1 text-base text-muted-foreground">
         Each person gets a link that works once, for their email address only, for 7 days. Send it
         however you like.
       </p>

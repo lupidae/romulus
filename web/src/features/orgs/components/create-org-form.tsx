@@ -86,11 +86,7 @@ export function CreateOrgForm({ urlPrefix, onChange, onCreated }: CreateOrgFormP
           onChange={(e) => update({ name: e.target.value })}
         />
       </Field>
-      <Field
-        label="URL"
-        error={errors.slug}
-        description="Lowercase letters, digits and hyphens. You can change it later."
-      >
+      <Field label="URL" error={errors.slug} description="You can change it later.">
         <Input
           ref={slugRef}
           prefix={urlPrefix}

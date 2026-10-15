@@ -159,7 +159,7 @@ export function MembersTable({ org, members, myId }: MembersTableProps) {
                 <TableCell className="hidden whitespace-nowrap text-muted-foreground tabular sm:table-cell">
                   {formatDate(member.joined_at)}
                 </TableCell>
-                <TableCell className="pr-2 align-top sm:align-middle">
+                <TableCell className="pt-3 pr-2 align-top sm:pt-0 sm:align-middle">
                   {(admin || me) && (
                     <RowMenu
                       member={member}

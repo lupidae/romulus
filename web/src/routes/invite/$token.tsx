@@ -146,10 +146,13 @@ function Invitation({ token, invitation }: { token: string; invitation: Invitati
             {withArticle(role)}.
           </p>
         </div>
-        <p className="flex items-start gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
-          <InfoCircleIcon className="mt-0.5 size-4 shrink-0" />
-          <span>{roleAbilities[role]}</span>
-        </p>
+        {/* What the role allows helps decide; once the account is wrong, it is noise. */}
+        {(status === "sign_in_required" || status === "ready") && (
+          <p className="flex items-start gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+            <InfoCircleIcon className="mt-0.5 size-4 shrink-0" />
+            <span>{roleAbilities[role]}</span>
+          </p>
+        )}
       </div>
       {status === "sign_in_required" && (
         <SignInToAccept here={here} email={email} expiresAt={invitation.expires_at} />
@@ -279,9 +282,10 @@ function WrongAccount({ here, email }: { here: string; email: string }) {
 
   return (
     <div className="grid gap-3">
-      <Alert variant="warning" title="You are signed in with another account">
-        This invitation is for {email}
-        {me.data ? `, and you are signed in as ${me.data.email}` : ""}. Switch account to accept it.
+      <Alert variant="warning" title={`This invitation is for ${email}`}>
+        {me.data
+          ? `You are signed in as ${me.data.email}.`
+          : "You are signed in with another account."}
       </Alert>
       <Button
         variant="primary"

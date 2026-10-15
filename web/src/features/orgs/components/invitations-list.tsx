@@ -96,8 +96,8 @@ export function InvitationsList({
                   <span className="truncate font-medium text-foreground">{invitation.email}</span>
                   {/* On phones the role and the link's state move under the address. */}
                   <span className="truncate text-muted-foreground sm:hidden">
-                    {roleLabel[invitation.role]} ·{" "}
-                    {invitation.expired ? "Expired" : `Expires ${fromNow(invitation.expires_at)}`}
+                    {roleLabel[invitation.role]},{" "}
+                    {invitation.expired ? "expired" : `expires ${fromNow(invitation.expires_at)}`}
                   </span>
                 </div>
               </TableCell>
@@ -115,12 +115,15 @@ export function InvitationsList({
                   </span>
                 )}
               </TableCell>
-              <TableCell className="hidden whitespace-nowrap text-muted-foreground md:table-cell">
-                {invitation.invited_by?.name ?? "A former member"}
-                <span className="text-faint-foreground">
-                  {" "}
-                  · {formatDate(invitation.created_at)}
-                </span>
+              <TableCell className="hidden whitespace-nowrap md:table-cell">
+                <div className="grid">
+                  <span className="text-foreground">
+                    {invitation.invited_by?.name ?? "A former member"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatDate(invitation.created_at)}
+                  </span>
+                </div>
               </TableCell>
               <TableCell className="pr-2">
                 <Menu>
