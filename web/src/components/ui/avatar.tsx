@@ -109,7 +109,7 @@ export function AvatarStack({ people, max = 4, size = "md", className }: AvatarS
           <span
             tabIndex={-1}
             className={cn(
-              "inline-flex items-center justify-center rounded-full bg-muted font-medium text-muted-foreground ring-2 ring-card tabular",
+              "inline-flex items-center justify-center rounded-full bg-muted font-medium text-muted-foreground tabular ring-2 ring-card",
               sizes[size],
             )}
           >

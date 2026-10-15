@@ -47,7 +47,7 @@ export function DialogContent({
         className={cn(
           "fixed top-[min(20vh,10rem)] left-1/2 z-(--z-overlay) grid w-[calc(100%-2rem)] max-w-md -translate-x-1/2 gap-4",
           "rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-dialog outline-none",
-          "duration-(--duration-base) data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=open]:slide-in-from-top-2",
+          "duration-(--duration-base) data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-2 data-[state=open]:zoom-in-[0.97]",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97]",
           className,
         )}
@@ -56,7 +56,12 @@ export function DialogContent({
         {children}
         {!hideClose && (
           <DialogPrimitive.Close asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Close" className="absolute top-3 right-3">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close"
+              className="absolute top-3 right-3"
+            >
               <XmarkIcon />
             </Button>
           </DialogPrimitive.Close>

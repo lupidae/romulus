@@ -1,6 +1,11 @@
 import { Toaster as Sonner, toast } from "sonner";
 
-import { CheckCircleIcon, InfoCircleIcon, WarningTriangleIcon, XmarkCircleIcon } from "@/components/icons";
+import {
+  CheckCircleIcon,
+  InfoCircleIcon,
+  WarningTriangleIcon,
+  XmarkCircleIcon,
+} from "@/components/icons";
 import { Spinner } from "@/components/ui/spinner";
 import { useTheme } from "@/lib/theme";
 
@@ -42,8 +47,7 @@ export function Toaster() {
             "ml-2 h-7 shrink-0 cursor-pointer self-center rounded-md bg-primary px-2.5 text-sm font-medium text-primary-foreground hover:bg-primary-hover",
           cancelButton:
             "ml-2 h-7 shrink-0 cursor-pointer self-center rounded-md px-2.5 text-sm text-muted-foreground hover:bg-accent",
-          closeButton:
-            "border-border! bg-popover! text-muted-foreground! hover:text-foreground!",
+          closeButton: "border-border! bg-popover! text-muted-foreground! hover:text-foreground!",
         },
       }}
     />

@@ -35,7 +35,10 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetch);
     await api.GET("/api/health");
     // No mutating endpoint exists yet: send a raw POST through the same client.
-    await (api.POST as unknown as (path: string, init: object) => Promise<unknown>)("/api/health", {});
+    await (api.POST as unknown as (path: string, init: object) => Promise<unknown>)(
+      "/api/health",
+      {},
+    );
     const [get, post] = fetch.mock.calls.map(([request]) => request);
     expect(get?.headers.get("X-Romulus-Csrf")).toBeNull();
     expect(post?.headers.get("X-Romulus-Csrf")).toBe("1");

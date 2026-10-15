@@ -16,7 +16,10 @@ export function Card({ className, ...props }: React.ComponentProps<"section">) {
 export function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("flex items-start justify-between gap-4 border-b border-border px-4 py-3", className)}
+      className={cn(
+        "flex items-start justify-between gap-4 border-b border-border px-4 py-3",
+        className,
+      )}
       {...props}
     />
   );

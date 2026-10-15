@@ -17,7 +17,11 @@ describe("Field", () => {
 
   it("marks the control invalid and announces the error instead of the description", () => {
     render(
-      <Field label="Email" description="Work address." error="Enter an address like name@company.com.">
+      <Field
+        label="Email"
+        description="Work address."
+        error="Enter an address like name@company.com."
+      >
         <Input />
       </Field>,
     );

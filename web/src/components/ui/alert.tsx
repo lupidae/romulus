@@ -1,7 +1,12 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
 
-import { CheckCircleIcon, InfoCircleIcon, WarningTriangleIcon, XmarkCircleIcon } from "@/components/icons";
+import {
+  CheckCircleIcon,
+  InfoCircleIcon,
+  WarningTriangleIcon,
+  XmarkCircleIcon,
+} from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 const alertVariants = cva(

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: just check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: romulus
+          POSTGRES_PASSWORD: romulus
+          POSTGRES_DB: romulus
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U romulus -d romulus"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      # The query macros check against this database, and #[sqlx::test]
+      # creates its throwaway databases on the same server.
+      DATABASE_URL: postgres://romulus:romulus@localhost:5432/romulus
+    steps:
+      - uses: actions/checkout@v5
+
+      # rust-toolchain.toml pins stable; rustfmt.toml needs nightly rustfmt.
+      - run: rustup toolchain install
+      - run: rustup toolchain install nightly --profile minimal --component rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Install sqlx-cli
+        run: cargo sqlx --version 2>/dev/null || cargo install sqlx-cli --no-default-features --features postgres,rustls
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+
+      - run: cargo sqlx migrate run --source migrations
+      - run: just check
+
+  e2e:
+    name: end-to-end
+    # Manual for now: it boots the whole stack, Zitadel included.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npx --prefix web playwright install --with-deps chromium
+      - run: just up
+      - run: scripts/check-oidc
+      - run: just e2e
+        env:
+          SQLX_OFFLINE: "true"
+      - if: failure()
+        run: docker compose logs --tail 200
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          if-no-files-found: ignore

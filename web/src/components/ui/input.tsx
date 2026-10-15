@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 // 16px text below `sm`: iOS zooms into any focused field smaller than that.
 export const controlClasses = cn(
   "w-full min-w-0 rounded-md border border-input bg-card text-foreground shadow-control",
-  "text-lg sm:text-base placeholder:text-faint-foreground",
+  "text-lg placeholder:text-faint-foreground sm:text-base",
   "transition-[border-color,box-shadow] outline-none",
   "hover:border-border-strong",
   "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/20",

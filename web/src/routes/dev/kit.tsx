@@ -153,9 +153,21 @@ function Kit() {
   );
 }
 
-function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+function Section({
+  id,
+  title,
+  children,
+}: {
+  id: string;
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
-    <section id={id} aria-labelledby={`${id}-title`} className="grid scroll-mt-20 grid-cols-1 gap-4">
+    <section
+      id={id}
+      aria-labelledby={`${id}-title`}
+      className="grid scroll-mt-20 grid-cols-1 gap-4"
+    >
       <h2 id={`${id}-title`} className="text-lg font-semibold">
         {title}
       </h2>
@@ -268,7 +280,9 @@ function TypeScale() {
         ))}
         <div className="flex items-baseline gap-4 px-4 py-3">
           <span className="w-36 shrink-0 font-mono text-xs text-faint-foreground">font-mono</span>
-          <code className="truncate text-sm">ALTER TABLE users ADD COLUMN email_verified boolean;</code>
+          <code className="truncate text-sm">
+            ALTER TABLE users ADD COLUMN email_verified boolean;
+          </code>
         </div>
       </Card>
     </Section>
@@ -386,7 +400,11 @@ function Forms() {
         <Field label="Disabled">
           <Input disabled defaultValue="read-only value" />
         </Field>
-        <Field label="Message" description="Shown in the version history." className="sm:col-span-2">
+        <Field
+          label="Message"
+          description="Shown in the version history."
+          className="sm:col-span-2"
+        >
           <Textarea placeholder="Add billing tables" />
         </Field>
       </Card>
@@ -594,7 +612,11 @@ function Feedback() {
         <Alert variant="info" title="This draft is behind v13">
           Update it to bring in the latest version before publishing.
         </Alert>
-        <Alert variant="warning" title="2 unresolved conflicts" action={<Button size="sm">Review</Button>}>
+        <Alert
+          variant="warning"
+          title="2 unresolved conflicts"
+          action={<Button size="sm">Review</Button>}
+        >
           Publishing is paused until each one is resolved.
         </Alert>
         <Alert variant="destructive" title="Compile failed at line 12">

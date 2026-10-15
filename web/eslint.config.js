@@ -35,7 +35,8 @@ const designSystem = [
     message: "Labels are sentence case, never letter-spaced capitals.",
   },
   {
-    selector: "JSXAttribute[name.name='style'] Property[key.name=/^(color|background|backgroundColor|borderColor)$/]",
+    selector:
+      "JSXAttribute[name.name='style'] Property[key.name=/^(color|background|backgroundColor|borderColor)$/]",
     message: "No inline colors: use token classes.",
   },
 ];

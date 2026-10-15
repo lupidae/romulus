@@ -116,7 +116,7 @@ const tone = {
 export function SchemaPreview() {
   return (
     <div className="absolute inset-0">
-      <div className="absolute inset-0 bg-[radial-gradient(var(--color-border-strong)_1px,transparent_1px)] bg-size-[1.375rem_1.375rem] [mask-image:radial-gradient(ellipse_at_center,black_35%,transparent_80%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(var(--color-border-strong)_1px,transparent_1px)] [mask-image:radial-gradient(ellipse_at_center,black_35%,transparent_80%)] bg-size-[1.375rem_1.375rem]" />
 
       <div className="absolute top-1/2 left-1/2 h-[30rem] w-[36rem] -translate-x-1/2 -translate-y-1/2">
         <svg
@@ -167,7 +167,9 @@ export function SchemaPreview() {
             <span className="size-1.5 rounded-full bg-border-strong" />
             <span className="size-1.5 rounded-full bg-border-strong" />
             <span className="size-1.5 rounded-full bg-border-strong" />
-            <span className="ml-2 font-mono text-[0.6875rem] text-faint-foreground">schema.sql</span>
+            <span className="ml-2 font-mono text-[0.6875rem] text-faint-foreground">
+              schema.sql
+            </span>
           </div>
           <pre className="px-3 py-2.5 font-mono text-xs leading-5 whitespace-pre">
             {sql.map(([kind, text], i) => (

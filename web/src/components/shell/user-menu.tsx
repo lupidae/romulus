@@ -1,9 +1,4 @@
-import {
-  ComputerIcon,
-  HalfMoonIcon,
-  LogOutIcon,
-  SunLightIcon,
-} from "@/components/icons";
+import { ComputerIcon, HalfMoonIcon, LogOutIcon, SunLightIcon } from "@/components/icons";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {

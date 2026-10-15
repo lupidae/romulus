@@ -10,14 +10,15 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsr generate && tsc -b",
+    "typecheck": "NODE_NO_WARNINGS=1 tsr generate && tsc -b",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "gen": "openapi-typescript src/api/openapi.json -o src/api/schema.gen.ts && prettier --write src/api/schema.gen.ts"
+    "gen": "openapi-typescript src/api/openapi.json -o src/api/schema.gen.ts && prettier --write src/api/schema.gen.ts",
+    "icons:add": "node scripts/add-icon.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

@@ -9,6 +9,9 @@
 # clone sees it and nothing is committed.
 #
 #   slot N  →  ports 41000 + 10·N … +9   (see the table in CLAUDE.md)
+#
+#   scripts/dev-env            write .env (idempotent)
+#   scripts/dev-env --release  give this worktree's slot back (teardown)
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -42,6 +45,14 @@ acquire_lock() {
     done
     trap 'rmdir "$lock" 2>/dev/null || true' EXIT
 }
+
+if [ "${1:-}" = --release ]; then
+    acquire_lock
+    touch "$registry"
+    awk -v p="$root" '$2 != p' "$registry" > "$registry.tmp" && mv "$registry.tmp" "$registry"
+    echo "dev-env: released the slot of $root"
+    exit 0
+fi
 
 slot="${ROMULUS_SLOT:-}"
 if [ -z "$slot" ] && [ -f .env ]; then

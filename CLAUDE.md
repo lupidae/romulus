@@ -1,0 +1,240 @@
+# romulus
+
+DBA as a service: an organization keeps its Postgres schemas here, versions
+them, reviews diffs and designs the next version together (SQL and table graph,
+live cursors). The spec is [docs/MVP.md](docs/MVP.md); read it before a feature.
+remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
+
+## Repo map
+
+```
+crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
+crates/romulus-diff/  model diff, no I/O (joins the workspace via crates/*)
+migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
+web/                  Vite + React SPA served under /app (see "Web" below)
+deploy/zitadel/       the provisioner that sets Zitadel up on `just up`
+scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
+docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner
+.superset/            workspace setup/teardown (Superset worktrees boot configured)
+```
+
+## Run it
+
+Needs: rustup, Docker, Node 24 + npm, `just`, `cargo install sqlx-cli
+--no-default-features --features postgres,rustls`, nightly rustfmt
+(`rustup toolchain install nightly --component rustfmt`).
+
+```bash
+just up          # .env if missing, then the stack; Zitadel provisioned (~15 s from scratch)
+just dev         # up + API (cargo run) + web (vite); open $ROMULUS_PUBLIC_URL/app/
+just check       # the CI gate: fmt, clippy, tests, sqlx prepare --check, gen-check, web checks, build
+just e2e         # Playwright against a production build + the real API (needs `just up`)
+just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
+just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
+scripts/check-oidc   # discovery, client secret, full PKCE login as alice
+```
+
+Test users (Zitadel, `.dev/zitadel/users.json`): `alice@romulus.test`,
+`bob@romulus.test`, password `RomulusDev1!`, emails verified. Zitadel console:
+`http://localhost:$ROMULUS_ZITADEL_PORT/ui/console`, `admin@romulus.localhost`,
+same password.
+
+## Ports and worktrees
+
+Several worktrees run their own stacks at once, so **nothing is a fixed port**.
+`scripts/dev-env` gives each worktree a slot N (registry in the git common
+dir, `romulus-slots`) and writes `.env` (gitignored) with:
+
+| offset | variable | what |
+|---|---|---|
+| +0 | `ROMULUS_WEB_PORT` | Vite; the only origin the browser uses (`ROMULUS_PUBLIC_URL`) |
+| +1 | `ROMULUS_API_PORT` | the API (`ROMULUS_API_ADDR`) |
+| +2 | `ROMULUS_POSTGRES_PORT` | app database (`DATABASE_URL`) |
+| +3 | `ROMULUS_SANDBOX_PORT` | sandbox Postgres (`ROMULUS_SANDBOX_URL`, superuser) |
+| +4 | `ROMULUS_ZITADEL_PORT` | Zitadel, issuer `http://localhost:<port>` |
+| +5 | `ROMULUS_PREVIEW_PORT` | `vite preview` for Playwright |
+
+Base port is `41000 + 10·N`; the compose project is `romulus-<worktree dir>`.
+`ROMULUS_SLOT=<n> scripts/dev-env` moves a worktree; `scripts/dev-env
+--release` frees its slot (Superset teardown does it). Never write a port
+literal anywhere: read the variable.
+
+## Decisions already made
+
+Product and architecture: **docs/MVP.md, "Decided"** (SQL text is canonical,
+graph edits append SQL with Tidy, Zitadel is identity only, one API instance,
+copy-link invitations…). Change one with a reason, in MVP.md first.
+
+Made in the skeleton (S0):
+
+- **One origin.** Production: the API serves the homepage at `/`, the SPA at
+  `/app`, itself at `/api`. Dev mirrors it: Vite serves `/app` (base and router
+  `basepath`) and proxies `/api` (REST and websockets) without rewriting `Host`,
+  so cookies are first-party and the API sees the real `Origin`.
+- **Sandbox Postgres is 17**, because `pg_query` 6.2.1 bundles libpg_query
+  built from PostgreSQL 17.7. Bump both together. The app database is 18
+  (`uuidv7()` ids).
+- **Zitadel v4.19.4 with its built-in login (v1)**, one container, no proxy.
+  Login v1 disappears in v5: upgrading means adding the `zitadel-login`
+  container and a path-routing proxy. The OIDC callback is
+  `$ROMULUS_PUBLIC_URL/api/auth/callback` (and the API port's, for direct
+  testing); post-logout URIs are `/app/signin`, `/app/` and `/`.
+- **Dev sign-in**: `ROMULUS_DEV_SIGNIN=true` (on in `.env`) enables the
+  dev-only sign-in the auth module adds (see `src/auth/mod.rs`); config
+  refuses to start with it unless `ROMULUS_PUBLIC_URL` is loopback.
+- **Invariants live in Postgres**: last admin (trigger, constraint
+  `organization_needs_an_admin` → 409 `last_admin`), immutable versions,
+  remus JSON only from pushes, drafts based on their own database's versions.
+- **Deviations from MVP.md's data model**: `UNIQUE (org_id, slug)` on
+  databases only among live rows (a deleted database frees its slug);
+  `drafts.base_version_id` may be NULL (a database with no version yet);
+  added `users.email_verified` and `versions.created_by_token`.
+- **Design system**: Tailwind v4 + Radix primitives, owned components in
+  `web/src/components/ui` (shadcn-style, not a dependency). Chosen because
+  every agent already knows the idiom, tokens are plain CSS variables, and
+  removing Tailwind's palette makes off-system colors impossible rather than
+  discouraged. Tokens were generated with better-design from remus's palette
+  (warm stone neutrals, terracotta accent: the twins look related).
+
+## API conventions (`crates/romulus-api`)
+
+- **Modules**: one directory per feature, `pub fn router() ->
+  OpenApiRouter<AppState>` with paths relative to `/api`, handlers annotated
+  with `#[utoipa::path]` and added with `.routes(routes!(handler))`. `lib.rs`
+  already merges every module; you never edit it to add an endpoint. Each
+  module's doc comment lists its planned endpoints and tables: keep it true.
+- **API naming**: plural nouns, slugs in paths (`/orgs/{org}/databases/{db}`),
+  JSON in snake_case, `POST` to create, `PATCH` to update, `DELETE` to remove;
+  actions that are not CRUD are sub-resources (`POST …/drafts/{id}/publish`).
+- **Errors**: handlers return `ApiResult<T>`. Every error is JSON
+  `{"code", "message", "details"?}`; `code` is stable and the web app branches
+  on it. Use the `ApiError` variants (`BadRequest`, `Validation` (422),
+  `Unauthorized`, `Forbidden`, `NotFound`, `Conflict { code, message }`,
+  `PayloadTooLarge`); `?` on a `sqlx::Error` is a logged 500 with a generic
+  message. `db::constraint(&err)` / `db::is_unique_violation(&err)` map
+  constraint errors to a 409 with your own code. `thiserror`, no `anyhow`.
+- **State**: `AppState { db, config }` derives `FromRef`: take `State<PgPool>`
+  or `State<Arc<Config>>` directly.
+- **CSRF** is global middleware: every non-GET request needs
+  `X-Romulus-Csrf: 1` and an `Origin` equal to `ROMULUS_PUBLIC_URL`, unless it
+  carries `Authorization: Bearer` (API tokens). Bearer requests must never fall
+  back to the cookie. Websocket upgrades check `Origin` in `collab`.
+- **Shared types**: `domain.rs` maps every Postgres enum (`Role`,
+  `SourceKind`, `VersionOrigin`, `DraftStatus`, `TokenScope`) and re-exports
+  `remus_core::Schema`. Don't redefine them in a module.
+- **Config** comes from the environment only (`config.rs`); `main` loads `.env`
+  and `.dev/zitadel/oidc.env` first, real env always wins. A new setting is a
+  field + a test there, and a line in `scripts/dev-env` if dev needs it.
+- **Graceful shutdown** waits for open connections: anything long-lived
+  (websockets) must close on the shutdown signal.
+
+## SQL and migrations
+
+- New migration: `cargo sqlx migrate add -r <name> --source migrations`
+  (timestamp names, so parallel branches don't collide). Never edit an applied
+  one. Then `just migrate` and `cargo sqlx prepare --workspace -- --all-targets`,
+  and commit `.sqlx/`.
+- Style: lowercase SQL keywords are fine but be consistent within a file;
+  `uuid DEFAULT uuidv7()` ids, `timestamptz`, `NOT NULL` unless absence means
+  something, an index on every FK you query by, `COMMENT ON` for anything
+  non-obvious, enums as Postgres enums (mapped in `domain.rs`).
+- Queries: the `query!` / `query_as!` macros only (checked against the
+  database at compile time). Custom enums need an annotation:
+  `SELECT role AS "role: Role"`, bind with `role as Role`.
+- With `.env` present the macros check online: with the stack down, build
+  with `SQLX_OFFLINE=true`.
+
+## Web conventions (`web/`)
+
+```
+src/routes/              TanStack file routes (only route + page code); -prefixed files are ignored
+src/components/ui/       the kit: Button, Input/Textarea, Field, Select, Dialog, Sheet, Menu,
+                         Toaster/toast, Avatar/AvatarStack, Badge, Tabs, EmptyState, Skeleton,
+                         Tooltip, Kbd, Alert, Card, Separator, Spinner, Sidebar*
+src/components/shell/    AppShell (top bar, org switcher, user menu, nav, panel), PageHeader,
+                         PageBody, status pages (404/500), the sign-in preview
+src/components/icons/    Iconoir only, generated: `npm --prefix web run icons:add -- <name>`
+src/features/<module>/   per-feature code: queries (queryOptions), mutations, components
+src/api/                 client.ts (typed openapi-fetch + CSRF header), generated types
+src/styles/globals.css   every token; the only file with raw colors
+```
+
+- **Routes** live under `/app`. Org pages will be `/app/$org/…`, so slugs
+  must not collide with top-level routes: reserve `signin`, `new`, `invite`,
+  `dev`, `settings`, `api`, `app`. A signed-in layout route renders
+  `<AppShell>`; pages render `<PageBody>` + `<PageHeader>` inside it (see
+  `routes/dev/shell*.tsx`, which is the template). `/app/dev/kit` and
+  `/app/dev/shell` exist in dev builds only.
+- **Data**: TanStack Query owns server state. Export `queryOptions` from
+  `features/<module>/`, call `api.GET/POST(...)` through `unwrap` (throws
+  `ApiError` with the API's `code`). Never hand-write an API type: change the
+  Rust, `just gen`. Loaders use `context.queryClient.ensureQueryData`.
+- **Design system rules** (lint enforces most; review the rest):
+  - Use the kit. No raw `<button>/<input>/<select>/<textarea>` outside
+    `components/ui`; extend the kit when it lacks something, don't fork a
+    one-off. New primitive: build on Radix (`radix-ui`), style with tokens,
+    show it on `/app/dev/kit`.
+  - Tokens only: semantic classes (`bg-card`, `text-muted-foreground`,
+    `border-border`, `bg-primary`, `text-destructive`, `shadow-popover`…).
+    Tailwind's palette is removed, so `bg-blue-500` silently does nothing; hex,
+    `rgb()`, inline color styles and `dark:` variants are lint errors (tokens
+    already switch theme). Lengths in rem or the spacing scale.
+  - Type scale is app-sized: `text-sm` (13px) for dense UI, `text-base` (14px)
+    body, `text-xl` page titles. Sentence case, never spaced capitals.
+  - One primary action per view (`variant="primary"`); `secondary` is the
+    default. Status color always comes with a word or icon.
+  - Every list has its loading (Skeleton of the real shape), empty
+    (EmptyState with the action that fills it) and error states. Mutations
+    confirm with `toast`, never only with a toast for important information.
+  - Keyboard: everything reachable and visibly focused; icon-only buttons get
+    an `aria-label` and usually a `Tooltip`; dialogs need a `DialogTitle`.
+  - Check your screen in light and dark, at 1440 and 390 px, before you call
+    it done.
+- **Collaborator colors**: `presenceIndex(userId)` (FNV-1a, 1–8) picks the
+  `presence-N` token for avatars and cursors; the server can compute the same.
+
+## Testing
+
+- API: integration tests in `crates/romulus-api/tests/api/<module>.rs` (add a
+  `mod` line in `main.rs`), `#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]`
+  with `db: PgPool`, `TestApp::new(db)` → `.get`, `.post_json` (adds CSRF
+  header and Origin), `.send`; responses have `.status`, `.json()`, `.code()`.
+  Fixtures: `harness::{user, org, member, database}`. Unit tests inline in
+  `#[cfg(test)] mod tests`, named as assertions.
+- Web: Vitest + Testing Library next to the code (`*.test.tsx`) for behaviour;
+  Playwright in `web/e2e/` for flows, against the production build. Prefer
+  role/label queries; they double as an accessibility check.
+- Every feature PR: its endpoints tested (happy path, permission denied per
+  role, validation), its screens with at least one Playwright path. `just check`
+  green before pushing.
+
+## Pitfalls
+
+- Cookies are not port-scoped: two stacks on localhost share cookies. The
+  session cookie name carries the slot (`ROMULUS_SESSION_COOKIE`); Zitadel's own
+  cookies collide anyway, so use separate browser profiles (or Playwright
+  contexts) to sign in to two stacks at once.
+- Zitadel routes by `Host` and the issuer must match exactly
+  (`http://localhost:$ROMULUS_ZITADEL_PORT`, not 127.0.0.1). A container
+  calling it uses `http://zitadel:8080` with `Host: localhost:<port>`; a
+  containerised API (CI e2e later) can't use the issuer URL as is. Refresh
+  tokens need the `offline_access` scope.
+- `docker compose up --wait` returns while the one-shot provisioner still
+  runs; `just up` waits on it. If `.dev/zitadel` is deleted but the volumes
+  kept, `just up` regenerates the client secret; if the PAT volume is lost,
+  `just nuke`.
+- React StrictMode mounts effects twice: anything owning a resource (Yjs
+  provider, CodeMirror view, websocket) is created in an effect with cleanup,
+  never in `useMemo`/render. A provider rebuilt in render silently stops syncing.
+- React Flow: the multi-select key comes from keydown events, so handle
+  selection in `onNodeClick`; controlled nodes need explicit `width`/`height`
+  or the minimap draws nothing; don't name a node type `group` (built-in
+  styles); drag stop can fire before React re-renders, so read drag moves from
+  a ref.
+- CodeMirror block widgets must come from a `StateField`, not a view plugin.
+  Adding npm deps while Vite runs can load `@codemirror/state` twice
+  ("Unrecognized extension value"): restart with `npx vite --force`.
+- `openapi-fetch` must resolve `fetch` per call (it does in `client.ts`), or
+  test stubs and mocks are ignored.
+- TypeScript stays on 5.x until typescript-eslint and openapi-typescript
+  support 7; ESLint stays on 9 for jsx-a11y.

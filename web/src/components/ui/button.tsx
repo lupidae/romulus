@@ -43,8 +43,7 @@ export const buttonVariants = cva(
 );
 
 export interface ButtonProps
-  extends React.ComponentProps<"button">,
-    VariantProps<typeof buttonVariants> {
+  extends React.ComponentProps<"button">, VariantProps<typeof buttonVariants> {
   /** Render the child (a Link, an <a>) with button styling instead of a <button>. */
   asChild?: boolean;
   /** Shows a spinner over the label and blocks clicks; the width does not change. */

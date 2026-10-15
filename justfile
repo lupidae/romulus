@@ -53,12 +53,28 @@ gen:
     cargo run -q -p romulus-api -- openapi > web/src/api/openapi.json
     npm --prefix web run gen
 
+# fail when the committed web API types lag behind the Rust OpenAPI document
+gen-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cargo run -q -p romulus-api -- openapi > "$tmp/openapi.json"
+    cd web
+    npx openapi-typescript "$tmp/openapi.json" -o "$tmp/schema.gen.ts" >/dev/null 2>&1
+    npx prettier --stdin-filepath src/api/schema.gen.ts < "$tmp/schema.gen.ts" > "$tmp/schema.fmt.ts"
+    if ! diff -q "$tmp/openapi.json" src/api/openapi.json >/dev/null || ! diff -q "$tmp/schema.fmt.ts" src/api/schema.gen.ts >/dev/null; then
+        echo "gen-check: web/src/api is stale, run \`just gen\` and commit" >&2
+        exit 1
+    fi
+
 # the full gate, as CI runs it (needs DATABASE_URL on a migrated database)
 check:
     cargo +nightly fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo sqlx prepare --workspace --check -- --all-targets
+    just gen-check
     npm --prefix web run typecheck
     npm --prefix web run lint
     npm --prefix web run format:check

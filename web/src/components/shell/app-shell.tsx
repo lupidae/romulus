@@ -65,7 +65,12 @@ export function AppShell({
         <div className="flex min-w-0 items-center gap-1.5">
           <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Open navigation" className="md:hidden">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Open navigation"
+                className="md:hidden"
+              >
                 <MenuIcon />
               </Button>
             </SheetTrigger>
@@ -102,7 +107,10 @@ export function AppShell({
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside aria-label="Primary" className="hidden w-56 shrink-0 overflow-y-auto px-2 py-2 md:block">
+        <aside
+          aria-label="Primary"
+          className="hidden w-56 shrink-0 overflow-y-auto px-2 py-2 md:block"
+        >
           {nav}
         </aside>
         <main
