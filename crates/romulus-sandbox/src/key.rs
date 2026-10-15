@@ -7,6 +7,7 @@
 //! |---|---|
 //! | `CREATE TABLE users (…)` | `table:public.users` |
 //! | `CREATE INDEX ON users (lower(email))` | `index:public.users_lower_idx` |
+//! | `ALTER TABLE t ADD CHECK (x > 0)` (a second one) | `constraint:public.t.t_x_check1` |
 //! | `ALTER TABLE orders ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY …` | `fk:public.orders.orders_user_id_fkey` |
 //! | `ALTER TABLE users ADD COLUMN bio text` | `column:public.users.bio` |
 //! | `ALTER TABLE users ENABLE ROW LEVEL SECURITY` | `rls:public.users` |
@@ -18,23 +19,61 @@
 //! | `SET search_path TO app` | `set:search_path` |
 //! | `INSERT INTO …` (not allowed, still keyed) | `statement:insert` |
 //!
-//! Unqualified names resolve against the `search_path` the text has set so
-//! far (`public` by default). Path parts are quoted like SQL identifiers when
-//! needed (`table:public."Order.Items"`), so a key string is unambiguous and
-//! [`Key::from_str`](std::str::FromStr) reads it back. Unnamed indexes and
-//! constraints get the name Postgres would most likely choose
-//! (`<table>_<columns>_idx`, `_key`, `_pkey`, `_fkey`, `_check`, `_excl`);
-//! that only has to be stable, not exact. Two statements can share a key (two
-//! `ALTER TABLE users …`); [`crate::Statement::occurrence`] tells them apart.
+//! # Identity rules
+//!
+//! - **Names, never positions.** A key is the object's qualified name.
+//!   Unqualified names resolve against the `search_path` the text has set
+//!   so far (`public` by default); `CREATE SCHEMA s CREATE TABLE t …` puts
+//!   `t` in `s`.
+//! - **Unnamed objects get Postgres's own name.** The keyer replays the
+//!   text's names the way Postgres records them, and names an unnamed
+//!   index or constraint exactly as Postgres would: `<table>_<columns>_idx`
+//!   (`_key`, `_pkey`, `_excl`, `_fkey`, `_check`), the names truncated to
+//!   63 bytes like `makeObjectName`, expression columns named like
+//!   `FigureColname` (`lower`, `expr`…), a CHECK named after its column
+//!   only when it mentions exactly one, and a number appended on conflict
+//!   (`t_x_check1`, `t_x_idx2`), counting what the text created, renamed
+//!   and dropped before (partitions' copies of their parent's indexes
+//!   included). So a key matches the name in the compiled model, and the
+//!   same object gets the same key in two texts that create the same
+//!   names in the same order (an integration test checks the names
+//!   against the sandbox).
+//! - **One key per object.** [`crate::Statement::keys`] lists every object
+//!   a statement defines or changes: a multi-command `ALTER TABLE` keys as
+//!   the table, then one key per command (`column:…`, `constraint:…`,
+//!   `fk:…`); `DROP a, b` keys each; `CREATE SCHEMA` keys the schema, then
+//!   each element. [`crate::Statement::key`] is the first.
+//! - **Path parts are quoted like SQL identifiers** when needed
+//!   (`table:public."Order.Items"`), so a key string is unambiguous and
+//!   [`Key::from_str`](std::str::FromStr) reads it back. Setting names and
+//!   statement kinds are words, written as they are (`set:app.tenant`).
+//!
+//! Limits:
+//!
+//! - Statements that change the same object without naming a new one
+//!   share a key (two `COMMENT ON COLUMN t.c`, two `ALTER COLUMN … SET
+//!   DEFAULT`, `ENABLE` then `DISABLE ROW LEVEL SECURITY`):
+//!   [`crate::Statement::occurrence`] tells them apart by order, which a
+//!   merge must treat as "the n-th change to that object".
+//! - Default names depend on what exists: the keyer only knows what the
+//!   text created. An unnamed object that, on the real database, would
+//!   collide with something the text does not create (a table of another
+//!   migration) gets a different suffix there.
+//! - Objects defined inline in `CREATE TABLE` (its constraints, serial
+//!   sequences) belong to the table's key; they get names, for later
+//!   defaults, but no keys of their own.
+//! - `ALTER TABLE … DROP CONSTRAINT x` keys as `drop:constraint:…` whatever
+//!   kind `x` was (`fk:` or `constraint:` when created).
 
-use std::{fmt, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    str::FromStr,
+};
 
 use pg_query::{
     NodeEnum,
-    protobuf::{
-        AlterTableCmd, AlterTableType, ConstrType, Constraint, IndexElem, Node, ObjectType,
-        RangeVar,
-    },
+    protobuf::{AlterTableCmd, AlterTableType, ConstrType, Constraint, Node, ObjectType, RangeVar},
 };
 use serde::{Serialize, Serializer};
 
@@ -234,7 +273,13 @@ impl FromStr for Key {
             None => (Action::Create, first, rest),
         };
         let kind = ObjectKind::parse(kind).ok_or_else(err)?;
-        let path = split_path(path).ok_or_else(err)?;
+        // Setting names (`app.tenant`) and statement kinds are written as
+        // they are, not as identifiers.
+        let path = if matches!(kind, ObjectKind::Setting | ObjectKind::Statement) {
+            vec![path.to_owned()]
+        } else {
+            split_path(path).ok_or_else(err)?
+        };
         Ok(Self { action, kind, path })
     }
 }
@@ -275,241 +320,997 @@ fn split_path(path: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The key of one statement, resolving unqualified names against `path`.
-#[allow(clippy::too_many_lines)] // one arm per statement kind
-pub(crate) fn key_of(node: &NodeEnum, path: &SearchPath) -> Key {
-    let k = |action, kind, parts: Vec<String>| Key::new(action, kind, parts);
-    let rel = |rv: &Option<RangeVar>| -> Vec<String> {
-        rv.as_ref().map_or_else(Vec::new, |rv| {
-            let (schema, name) = QualifiedName::from_range_var(rv).resolve(path);
-            vec![schema, name]
-        })
-    };
-    let list = |nodes: &[Node]| -> Vec<String> {
-        QualifiedName::from_list(nodes).map_or_else(Vec::new, |q| {
-            let (schema, name) = q.resolve(path);
-            vec![schema, name]
-        })
-    };
-    match node {
-        NodeEnum::CreateSchemaStmt(s) => {
-            let name = if s.schemaname.is_empty() {
-                s.authrole
-                    .as_ref()
-                    .map(|r| r.rolename.clone())
-                    .unwrap_or_default()
+/// Postgres's `NAMEDATALEN - 1`: identifiers are at most 63 bytes.
+const MAX_IDENTIFIER: usize = 63;
+
+/// Keys statements one after the other, simulating the names Postgres
+/// gives what a text leaves unnamed (see the module documentation).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Keyer {
+    /// Relation names (tables, views, indexes, sequences, composite types)
+    /// and constraint names per schema: what default names must avoid.
+    namespaces: HashMap<String, Namespace>,
+    /// Tables created so far, by schema and name.
+    tables: HashMap<(String, String), Table>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Namespace {
+    relations: HashSet<String>,
+    constraints: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Table {
+    /// Indexes (and the sequences of serial and identity columns), which
+    /// go when the table goes.
+    relations: Vec<String>,
+    /// Constraints by name, with whether an index of the same name backs
+    /// them (primary keys, unique and exclusion constraints).
+    constraints: Vec<(String, bool)>,
+    /// Indexes every partition gets a copy of: column names and label.
+    templates: Vec<(Vec<String>, &'static str, bool)>,
+    /// Partitions, by schema and name.
+    partitions: Vec<(String, String)>,
+}
+
+impl Keyer {
+    fn namespace(&mut self, schema: &str) -> &mut Namespace {
+        self.namespaces.entry(schema.to_owned()).or_default()
+    }
+
+    fn table(&mut self, schema: &str, name: &str) -> &mut Table {
+        self.tables
+            .entry((schema.to_owned(), name.to_owned()))
+            .or_default()
+    }
+
+    /// `ChooseRelationName`: `name1_name2_label`, then `label1`, `label2`…
+    /// until no relation (and, for a constraint's index, no constraint) of
+    /// the schema has the name. The name is taken.
+    fn choose_relation_name(
+        &mut self,
+        schema: &str,
+        name1: &str,
+        name2: Option<&str>,
+        label: &str,
+        constraint: bool,
+    ) -> String {
+        let namespace = self.namespace(schema);
+        let mut pass = 0;
+        loop {
+            let label = if pass == 0 {
+                label.to_owned()
             } else {
-                s.schemaname.clone()
+                format!("{label}{pass}")
             };
-            k(Action::Create, ObjectKind::Schema, vec![name])
+            let name = make_object_name(name1, name2, &label);
+            let taken = namespace.relations.contains(&name)
+                || (constraint && namespace.constraints.contains(&name));
+            if !taken {
+                namespace.relations.insert(name.clone());
+                if constraint {
+                    namespace.constraints.insert(name.clone());
+                }
+                return name;
+            }
+            pass += 1;
         }
-        NodeEnum::CreateExtensionStmt(s) => k(
-            Action::Create,
-            ObjectKind::Extension,
-            vec![s.extname.clone()],
-        ),
-        NodeEnum::CreateStmt(s) => k(Action::Create, ObjectKind::Table, rel(&s.relation)),
-        NodeEnum::CreateForeignTableStmt(s) => k(
-            Action::Create,
-            ObjectKind::ForeignTable,
-            rel(&s.base_stmt.as_ref().and_then(|b| b.relation.clone())),
-        ),
-        NodeEnum::ViewStmt(s) => k(Action::Create, ObjectKind::View, rel(&s.view)),
-        NodeEnum::CreateTableAsStmt(s) => {
-            let kind = if s.objtype() == ObjectType::ObjectMatview {
-                ObjectKind::MaterializedView
+    }
+
+    /// `ChooseConstraintName`: like relations, against the schema's
+    /// constraint names. The name is taken.
+    fn choose_constraint_name(
+        &mut self,
+        schema: &str,
+        name1: &str,
+        name2: Option<&str>,
+        label: &str,
+    ) -> String {
+        let namespace = self.namespace(schema);
+        let mut pass = 0;
+        loop {
+            let label = if pass == 0 {
+                label.to_owned()
             } else {
-                ObjectKind::Table
+                format!("{label}{pass}")
             };
-            k(
-                Action::Create,
-                kind,
-                rel(&s.into.as_ref().and_then(|i| i.rel.clone())),
-            )
+            let name = make_object_name(name1, name2, &label);
+            if namespace.constraints.insert(name.clone()) {
+                return name;
+            }
+            pass += 1;
         }
-        NodeEnum::IndexStmt(s) => {
-            let table = rel(&s.relation);
-            let schema = table.first().cloned().unwrap_or_default();
-            let name = if s.idxname.is_empty() {
-                let table = table.get(1).map_or("", String::as_str);
-                let suffix = if s.primary {
-                    "pkey"
-                } else if !s.exclude_op_names.is_empty() {
-                    "excl"
+    }
+
+    /// Every key of one statement, the main one first, resolving
+    /// unqualified names against `path`; and the simulated namespaces
+    /// updated with what it creates, renames or drops.
+    #[allow(clippy::too_many_lines)] // one arm per statement kind
+    pub(crate) fn keys(&mut self, node: &NodeEnum, path: &SearchPath) -> Vec<Key> {
+        let k = |action, kind, parts: Vec<String>| Key::new(action, kind, parts);
+        let rel = |rv: &Option<RangeVar>| -> Option<(String, String)> {
+            rv.as_ref()
+                .map(|rv| QualifiedName::from_range_var(rv).resolve(path))
+        };
+        let list = |nodes: &[Node]| -> Vec<String> {
+            QualifiedName::from_list(nodes).map_or_else(Vec::new, |q| {
+                let (schema, name) = q.resolve(path);
+                vec![schema, name]
+            })
+        };
+        let pair = |r: Option<(String, String)>| r.map_or_else(Vec::new, |(s, n)| vec![s, n]);
+        match node {
+            NodeEnum::CreateSchemaStmt(s) => {
+                let name = if s.schemaname.is_empty() {
+                    s.authrole
+                        .as_ref()
+                        .map(|r| r.rolename.clone())
+                        .unwrap_or_default()
                 } else {
-                    "idx"
+                    s.schemaname.clone()
                 };
-                default_name(table, &index_columns(&s.index_params), suffix)
-            } else {
-                s.idxname.clone()
-            };
-            k(Action::Create, ObjectKind::Index, vec![schema, name])
-        }
-        NodeEnum::CreateSeqStmt(s) => k(Action::Create, ObjectKind::Sequence, rel(&s.sequence)),
-        NodeEnum::AlterSeqStmt(s) => k(Action::Alter, ObjectKind::Sequence, rel(&s.sequence)),
-        NodeEnum::CreateEnumStmt(s) => k(Action::Create, ObjectKind::Enum, list(&s.type_name)),
-        NodeEnum::AlterEnumStmt(s) => k(Action::Alter, ObjectKind::Enum, list(&s.type_name)),
-        NodeEnum::CompositeTypeStmt(s) => k(Action::Create, ObjectKind::Type, rel(&s.typevar)),
-        NodeEnum::CreateRangeStmt(s) => k(Action::Create, ObjectKind::Type, list(&s.type_name)),
-        NodeEnum::CreateDomainStmt(s) => k(Action::Create, ObjectKind::Domain, list(&s.domainname)),
-        NodeEnum::AlterDomainStmt(s) => k(Action::Alter, ObjectKind::Domain, list(&s.type_name)),
-        NodeEnum::CreatePolicyStmt(s) => {
-            let mut parts = rel(&s.table);
-            parts.push(s.policy_name.clone());
-            k(Action::Create, ObjectKind::Policy, parts)
-        }
-        NodeEnum::AlterPolicyStmt(s) => {
-            let mut parts = rel(&s.table);
-            parts.push(s.policy_name.clone());
-            k(Action::Alter, ObjectKind::Policy, parts)
-        }
-        NodeEnum::CreateTrigStmt(s) => {
-            let mut parts = rel(&s.relation);
-            parts.push(s.trigname.clone());
-            k(Action::Create, ObjectKind::Trigger, parts)
-        }
-        NodeEnum::RuleStmt(s) => {
-            let mut parts = rel(&s.relation);
-            parts.push(s.rulename.clone());
-            k(Action::Create, ObjectKind::Rule, parts)
-        }
-        NodeEnum::CreateFunctionStmt(s) => {
-            k(Action::Create, ObjectKind::Function, list(&s.funcname))
-        }
-        NodeEnum::CreateStatsStmt(s) => {
-            k(Action::Create, ObjectKind::Statistics, list(&s.defnames))
-        }
-        NodeEnum::DefineStmt(s) => {
-            let kind = match s.kind() {
-                ObjectType::ObjectCollation => ObjectKind::Collation,
-                ObjectType::ObjectType => ObjectKind::Type,
-                ObjectType::ObjectAggregate => ObjectKind::Function,
-                _ => return statement_key(node),
-            };
-            k(Action::Create, kind, list(&s.defnames))
-        }
-        NodeEnum::VariableSetStmt(s) => {
-            let name = if s.name.is_empty() {
-                "all".to_owned()
-            } else {
-                s.name.to_ascii_lowercase()
-            };
-            k(Action::Create, ObjectKind::Setting, vec![name])
-        }
-        NodeEnum::AlterTableStmt(s) => alter_table_key(s, path),
-        NodeEnum::CommentStmt(s) => object_key(
-            Action::Comment,
-            s.objtype(),
-            s.object.as_deref(),
-            None,
-            None,
-            path,
-        )
-        .unwrap_or_else(|| statement_key(node)),
-        NodeEnum::RenameStmt(s) => object_key(
-            Action::Rename,
-            s.rename_type(),
-            s.object.as_deref(),
-            s.relation.as_ref(),
-            Some(&s.subname),
-            path,
-        )
-        .unwrap_or_else(|| statement_key(node)),
-        NodeEnum::AlterObjectSchemaStmt(s) => object_key(
-            Action::Alter,
-            s.object_type(),
-            s.object.as_deref(),
-            s.relation.as_ref(),
-            None,
-            path,
-        )
-        .unwrap_or_else(|| statement_key(node)),
-        NodeEnum::DropStmt(s) => s
-            .objects
-            .first()
-            .and_then(|object| {
+                let mut keys = vec![k(Action::Create, ObjectKind::Schema, vec![name.clone()])];
+                // `CREATE SCHEMA s CREATE TABLE t …` creates its elements in s.
+                let inner = SearchPath::only(&name);
+                for element in &s.schema_elts {
+                    if let Some(element) = element.node.as_ref() {
+                        keys.extend(self.keys(element, &inner));
+                    }
+                }
+                keys
+            }
+            NodeEnum::CreateExtensionStmt(s) => {
+                vec![k(
+                    Action::Create,
+                    ObjectKind::Extension,
+                    vec![s.extname.clone()],
+                )]
+            }
+            NodeEnum::CreateStmt(s) => {
+                let Some((schema, name)) = rel(&s.relation) else {
+                    return vec![statement_key(node)];
+                };
+                self.create_table(&schema, &name, s, path);
+                vec![k(Action::Create, ObjectKind::Table, vec![schema, name])]
+            }
+            NodeEnum::CreateForeignTableStmt(s) => {
+                let table = rel(&s.base_stmt.as_ref().and_then(|b| b.relation.clone()));
+                if let Some((schema, name)) = &table {
+                    self.namespace(schema).relations.insert(name.clone());
+                }
+                vec![k(Action::Create, ObjectKind::ForeignTable, pair(table))]
+            }
+            NodeEnum::ViewStmt(s) => {
+                let view = rel(&s.view);
+                if let Some((schema, name)) = &view {
+                    self.namespace(schema).relations.insert(name.clone());
+                }
+                vec![k(Action::Create, ObjectKind::View, pair(view))]
+            }
+            NodeEnum::CreateTableAsStmt(s) => {
+                let kind = if s.objtype() == ObjectType::ObjectMatview {
+                    ObjectKind::MaterializedView
+                } else {
+                    ObjectKind::Table
+                };
+                let target = rel(&s.into.as_ref().and_then(|i| i.rel.clone()));
+                if let Some((schema, name)) = &target {
+                    self.namespace(schema).relations.insert(name.clone());
+                    self.table(schema, name);
+                }
+                vec![k(Action::Create, kind, pair(target))]
+            }
+            NodeEnum::IndexStmt(s) => {
+                let Some((schema, table)) = rel(&s.relation) else {
+                    return vec![statement_key(node)];
+                };
+                let name = self.create_index(&schema, &table, s);
+                vec![k(Action::Create, ObjectKind::Index, vec![schema, name])]
+            }
+            NodeEnum::CreateSeqStmt(s) => {
+                let sequence = rel(&s.sequence);
+                if let Some((schema, name)) = &sequence {
+                    self.namespace(schema).relations.insert(name.clone());
+                }
+                vec![k(Action::Create, ObjectKind::Sequence, pair(sequence))]
+            }
+            NodeEnum::AlterSeqStmt(s) => {
+                vec![k(
+                    Action::Alter,
+                    ObjectKind::Sequence,
+                    pair(rel(&s.sequence)),
+                )]
+            }
+            NodeEnum::CreateEnumStmt(s) => {
+                vec![k(Action::Create, ObjectKind::Enum, list(&s.type_name))]
+            }
+            NodeEnum::AlterEnumStmt(s) => {
+                vec![k(Action::Alter, ObjectKind::Enum, list(&s.type_name))]
+            }
+            NodeEnum::CompositeTypeStmt(s) => {
+                // A composite type has a relation (pg_class) of its name.
+                let typ = rel(&s.typevar);
+                if let Some((schema, name)) = &typ {
+                    self.namespace(schema).relations.insert(name.clone());
+                }
+                vec![k(Action::Create, ObjectKind::Type, pair(typ))]
+            }
+            NodeEnum::CreateRangeStmt(s) => {
+                vec![k(Action::Create, ObjectKind::Type, list(&s.type_name))]
+            }
+            NodeEnum::CreateDomainStmt(s) => {
+                let domain = list(&s.domainname);
+                if let [schema, name] = domain.as_slice() {
+                    self.domain_constraints(schema, name, &s.constraints);
+                }
+                vec![k(Action::Create, ObjectKind::Domain, domain)]
+            }
+            NodeEnum::AlterDomainStmt(s) => {
+                let domain = list(&s.type_name);
+                if let ([schema, name], "C", Some(def)) =
+                    (domain.as_slice(), s.subtype.as_str(), s.def.as_deref())
+                {
+                    self.domain_constraints(schema, name, std::slice::from_ref(def));
+                }
+                vec![k(Action::Alter, ObjectKind::Domain, domain)]
+            }
+            NodeEnum::CreatePolicyStmt(s) => {
+                let mut parts = pair(rel(&s.table));
+                parts.push(s.policy_name.clone());
+                vec![k(Action::Create, ObjectKind::Policy, parts)]
+            }
+            NodeEnum::AlterPolicyStmt(s) => {
+                let mut parts = pair(rel(&s.table));
+                parts.push(s.policy_name.clone());
+                vec![k(Action::Alter, ObjectKind::Policy, parts)]
+            }
+            NodeEnum::CreateTrigStmt(s) => {
+                let mut parts = pair(rel(&s.relation));
+                parts.push(s.trigname.clone());
+                vec![k(Action::Create, ObjectKind::Trigger, parts)]
+            }
+            NodeEnum::RuleStmt(s) => {
+                let mut parts = pair(rel(&s.relation));
+                parts.push(s.rulename.clone());
+                vec![k(Action::Create, ObjectKind::Rule, parts)]
+            }
+            NodeEnum::CreateFunctionStmt(s) => {
+                vec![k(Action::Create, ObjectKind::Function, list(&s.funcname))]
+            }
+            NodeEnum::CreateStatsStmt(s) => {
+                vec![k(Action::Create, ObjectKind::Statistics, list(&s.defnames))]
+            }
+            NodeEnum::DefineStmt(s) => {
+                let kind = match s.kind() {
+                    ObjectType::ObjectCollation => ObjectKind::Collation,
+                    ObjectType::ObjectType => ObjectKind::Type,
+                    ObjectType::ObjectAggregate => ObjectKind::Function,
+                    _ => return vec![statement_key(node)],
+                };
+                vec![k(Action::Create, kind, list(&s.defnames))]
+            }
+            NodeEnum::VariableSetStmt(s) => {
+                let name = if s.name.is_empty() {
+                    "all".to_owned()
+                } else {
+                    s.name.to_ascii_lowercase()
+                };
+                vec![k(Action::Create, ObjectKind::Setting, vec![name])]
+            }
+            NodeEnum::AlterTableStmt(s) => self.alter_table(s, path),
+            NodeEnum::CommentStmt(s) => vec![
                 object_key(
-                    Action::Drop,
-                    s.remove_type(),
-                    Some(object),
+                    Action::Comment,
+                    s.objtype(),
+                    s.object.as_deref(),
                     None,
                     None,
                     path,
                 )
+                .unwrap_or_else(|| statement_key(node)),
+            ],
+            NodeEnum::RenameStmt(s) => {
+                let key = object_key(
+                    Action::Rename,
+                    s.rename_type(),
+                    s.object.as_deref(),
+                    s.relation.as_ref(),
+                    Some(&s.subname),
+                    path,
+                )
+                .unwrap_or_else(|| statement_key(node));
+                self.rename(s, &key);
+                vec![key]
+            }
+            NodeEnum::AlterObjectSchemaStmt(s) => {
+                let key = object_key(
+                    Action::Alter,
+                    s.object_type(),
+                    s.object.as_deref(),
+                    s.relation.as_ref(),
+                    None,
+                    path,
+                )
+                .unwrap_or_else(|| statement_key(node));
+                if let (
+                    ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView,
+                    [schema, name],
+                ) = (key.kind(), key.path())
+                {
+                    self.move_table(schema, name, &s.newschema);
+                }
+                vec![key]
+            }
+            NodeEnum::DropStmt(s) => {
+                let keys: Vec<Key> = s
+                    .objects
+                    .iter()
+                    .filter_map(|object| {
+                        object_key(
+                            Action::Drop,
+                            s.remove_type(),
+                            Some(object),
+                            None,
+                            None,
+                            path,
+                        )
+                    })
+                    .collect();
+                for key in &keys {
+                    self.drop(key);
+                }
+                if keys.is_empty() {
+                    vec![statement_key(node)]
+                } else {
+                    keys
+                }
+            }
+            _ => vec![statement_key(node)],
+        }
+    }
+
+    /// A table, with the names Postgres gives what it leaves unnamed, in
+    /// Postgres's order: sequences of serial and identity columns, CHECKs,
+    /// then the indexes of primary keys, unique and exclusion constraints,
+    /// then foreign keys.
+    fn create_table(
+        &mut self,
+        schema: &str,
+        name: &str,
+        s: &pg_query::protobuf::CreateStmt,
+        path: &SearchPath,
+    ) {
+        self.namespace(schema).relations.insert(name.to_owned());
+        self.table(schema, name);
+        let mut constraints: Vec<(Option<String>, &Constraint)> = Vec::new();
+        for element in &s.table_elts {
+            match element.node.as_ref() {
+                Some(NodeEnum::ColumnDef(column)) => {
+                    self.column_sequence(schema, name, column);
+                    for c in &column.constraints {
+                        if let Some(NodeEnum::Constraint(c)) = c.node.as_ref() {
+                            constraints.push((Some(column.colname.clone()), c));
+                        }
+                    }
+                }
+                Some(NodeEnum::Constraint(c)) => constraints.push((None, c)),
+                _ => {}
+            }
+        }
+        for c in &s.constraints {
+            if let Some(NodeEnum::Constraint(c)) = c.node.as_ref() {
+                constraints.push((None, c));
+            }
+        }
+        self.add_constraints(schema, name, &constraints);
+        if let Some(parent) = s
+            .inh_relations
+            .first()
+            .and_then(|p| match p.node.as_ref()? {
+                NodeEnum::RangeVar(rv) => Some(QualifiedName::from_range_var(rv).resolve(path)),
+                _ => None,
             })
-            .unwrap_or_else(|| statement_key(node)),
-        _ => statement_key(node),
+            .filter(|_| s.partbound.is_some())
+        {
+            self.attach_partition(&parent, &(schema.to_owned(), name.to_owned()));
+        }
+    }
+
+    /// The sequence a serial or identity column creates.
+    fn column_sequence(
+        &mut self,
+        schema: &str,
+        table: &str,
+        column: &pg_query::protobuf::ColumnDef,
+    ) {
+        let serial = column.type_name.as_ref().is_some_and(|t| {
+            matches!(
+                strings(&t.names).as_slice(),
+                [n] if matches!(n.as_str(), "serial" | "serial4" | "bigserial" | "serial8" | "smallserial" | "serial2")
+            )
+        });
+        let identity = column.constraints.iter().any(|c| {
+            matches!(c.node.as_ref(), Some(NodeEnum::Constraint(c)) if c.contype() == ConstrType::ConstrIdentity)
+        });
+        if serial || identity {
+            let sequence =
+                self.choose_relation_name(schema, table, Some(&column.colname), "seq", false);
+            self.table(schema, table).relations.push(sequence);
+        }
+    }
+
+    /// Name the constraints of a table (inline or added), in Postgres's
+    /// order. Returns the name of each, in the order given.
+    fn add_constraints(
+        &mut self,
+        schema: &str,
+        table: &str,
+        constraints: &[(Option<String>, &Constraint)],
+    ) -> Vec<Option<String>> {
+        let mut names: Vec<Option<String>> = vec![None; constraints.len()];
+        let explicit = |c: &Constraint| (!c.conname.is_empty()).then(|| c.conname.clone());
+        // Explicit names first: they are taken whatever the order.
+        for (i, (_, c)) in constraints.iter().enumerate() {
+            if let Some(name) = explicit(c) {
+                let backed = matches!(
+                    c.contype(),
+                    ConstrType::ConstrPrimary
+                        | ConstrType::ConstrUnique
+                        | ConstrType::ConstrExclusion
+                );
+                let namespace = self.namespace(schema);
+                namespace.constraints.insert(name.clone());
+                if backed {
+                    namespace.relations.insert(name.clone());
+                }
+                self.table(schema, table)
+                    .constraints
+                    .push((name.clone(), backed));
+                names[i] = Some(name);
+            }
+        }
+        let phases: [&[ConstrType]; 3] = [
+            &[ConstrType::ConstrCheck],
+            &[
+                ConstrType::ConstrPrimary,
+                ConstrType::ConstrUnique,
+                ConstrType::ConstrExclusion,
+            ],
+            &[ConstrType::ConstrForeign],
+        ];
+        for phase in phases {
+            for (i, (column, c)) in constraints.iter().enumerate() {
+                if names[i].is_some() || !phase.contains(&c.contype()) {
+                    continue;
+                }
+                let column = column.as_deref();
+                let name = match c.contype() {
+                    ConstrType::ConstrCheck => {
+                        let single = column.map(str::to_owned).or_else(|| {
+                            let columns =
+                                c.raw_expr.as_deref().map(column_refs).unwrap_or_default();
+                            (columns.len() == 1).then(|| columns[0].clone())
+                        });
+                        self.choose_constraint_name(schema, table, single.as_deref(), "check")
+                    }
+                    ConstrType::ConstrForeign => {
+                        let columns = strings(&c.fk_attrs);
+                        let columns = if columns.is_empty() {
+                            column.map(|c| vec![c.to_owned()]).unwrap_or_default()
+                        } else {
+                            columns
+                        };
+                        let addition = name_addition(&columns);
+                        self.choose_constraint_name(schema, table, Some(&addition), "fkey")
+                    }
+                    kind => {
+                        let (columns, label) = match kind {
+                            ConstrType::ConstrPrimary => (Vec::new(), "pkey"),
+                            ConstrType::ConstrExclusion => (exclusion_columns(c), "excl"),
+                            _ => {
+                                let keys = strings(&c.keys);
+                                let keys = if keys.is_empty() {
+                                    column.map(|c| vec![c.to_owned()]).unwrap_or_default()
+                                } else {
+                                    keys
+                                };
+                                let mut all = keys;
+                                all.extend(strings(&c.including));
+                                (all, "key")
+                            }
+                        };
+                        let addition = (!columns.is_empty()).then(|| name_addition(&columns));
+                        let name = self.choose_relation_name(
+                            schema,
+                            table,
+                            addition.as_deref(),
+                            label,
+                            true,
+                        );
+                        self.table(schema, table)
+                            .templates
+                            .push((columns, label, true));
+                        name
+                    }
+                };
+                let backed = !matches!(
+                    c.contype(),
+                    ConstrType::ConstrCheck | ConstrType::ConstrForeign
+                );
+                self.table(schema, table)
+                    .constraints
+                    .push((name.clone(), backed));
+                names[i] = Some(name);
+            }
+        }
+        names
+    }
+
+    /// `CREATE DOMAIN d … CHECK …` names its checks `d_check`.
+    fn domain_constraints(&mut self, schema: &str, domain: &str, constraints: &[Node]) {
+        for c in constraints {
+            let Some(NodeEnum::Constraint(c)) = c.node.as_ref() else {
+                continue;
+            };
+            if c.contype() != ConstrType::ConstrCheck {
+                continue;
+            }
+            if c.conname.is_empty() {
+                self.choose_constraint_name(schema, domain, None, "check");
+            } else {
+                self.namespace(schema).constraints.insert(c.conname.clone());
+            }
+        }
+    }
+
+    /// An index's name, chosen like `ChooseIndexName` when not given; and
+    /// the copy every partition of the table gets.
+    fn create_index(
+        &mut self,
+        schema: &str,
+        table: &str,
+        s: &pg_query::protobuf::IndexStmt,
+    ) -> String {
+        let columns = index_column_names(s.index_params.iter().chain(&s.index_including_params));
+        let label = if s.primary {
+            "pkey"
+        } else if !s.exclude_op_names.is_empty() {
+            "excl"
+        } else {
+            "idx"
+        };
+        let name = if s.idxname.is_empty() {
+            let addition = (label != "pkey").then(|| name_addition(&columns));
+            self.choose_relation_name(schema, table, addition.as_deref(), label, false)
+        } else {
+            self.namespace(schema).relations.insert(s.idxname.clone());
+            s.idxname.clone()
+        };
+        let info = self.table(schema, table);
+        info.relations.push(name.clone());
+        info.templates.push((columns.clone(), label, false));
+        let partitions = info.partitions.clone();
+        for (child_schema, child) in partitions {
+            self.copy_index(&child_schema, &child, &columns, label, false);
+        }
+        name
+    }
+
+    /// The copy of a partitioned table's index a partition gets, down its
+    /// own partitions.
+    fn copy_index(
+        &mut self,
+        schema: &str,
+        table: &str,
+        columns: &[String],
+        label: &'static str,
+        constraint: bool,
+    ) {
+        let addition = (label != "pkey").then(|| name_addition(columns));
+        let name = self.choose_relation_name(schema, table, addition.as_deref(), label, constraint);
+        let info = self.table(schema, table);
+        info.relations.push(name);
+        info.templates.push((columns.to_vec(), label, constraint));
+        for (child_schema, child) in info.partitions.clone() {
+            self.copy_index(&child_schema, &child, columns, label, constraint);
+        }
+    }
+
+    fn attach_partition(&mut self, parent: &(String, String), child: &(String, String)) {
+        let templates = self.table(&parent.0, &parent.1).templates.clone();
+        self.table(&parent.0, &parent.1)
+            .partitions
+            .push(child.clone());
+        for (columns, label, constraint) in templates {
+            self.copy_index(&child.0, &child.1, &columns, label, constraint);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn alter_table(
+        &mut self,
+        s: &pg_query::protobuf::AlterTableStmt,
+        path: &SearchPath,
+    ) -> Vec<Key> {
+        let Some((schema, name)) = s
+            .relation
+            .as_ref()
+            .map(|rv| QualifiedName::from_range_var(rv).resolve(path))
+        else {
+            return Vec::new();
+        };
+        let object_kind = match s.objtype() {
+            ObjectType::ObjectView => ObjectKind::View,
+            ObjectType::ObjectMatview => ObjectKind::MaterializedView,
+            ObjectType::ObjectIndex => ObjectKind::Index,
+            ObjectType::ObjectSequence => ObjectKind::Sequence,
+            ObjectType::ObjectForeignTable => ObjectKind::ForeignTable,
+            ObjectType::ObjectType => ObjectKind::Type,
+            _ => ObjectKind::Table,
+        };
+        let table = vec![schema.clone(), name.clone()];
+        let whole = Key::new(Action::Alter, object_kind, table.clone());
+        let with = |sub: &str| {
+            let mut parts = table.clone();
+            parts.push(sub.to_owned());
+            parts
+        };
+        let mut keys = Vec::new();
+        for cmd in &s.cmds {
+            let Some(NodeEnum::AlterTableCmd(cmd)) = cmd.node.as_ref() else {
+                continue;
+            };
+            let key = match (cmd.subtype(), def(cmd)) {
+                (AlterTableType::AtAddColumn, Some(NodeEnum::ColumnDef(column))) => {
+                    self.column_sequence(&schema, &name, column);
+                    let constraints: Vec<(Option<String>, &Constraint)> = column
+                        .constraints
+                        .iter()
+                        .filter_map(|c| match c.node.as_ref()? {
+                            NodeEnum::Constraint(c) => Some((Some(column.colname.clone()), &**c)),
+                            _ => None,
+                        })
+                        .collect();
+                    self.add_constraints(&schema, &name, &constraints);
+                    Key::new(Action::Create, ObjectKind::Column, with(&column.colname))
+                }
+                (AlterTableType::AtAddConstraint, Some(NodeEnum::Constraint(c))) => {
+                    let constraint_name = self
+                        .add_constraints(&schema, &name, &[(None, c)])
+                        .pop()
+                        .flatten()
+                        .unwrap_or_default();
+                    let kind = if c.contype() == ConstrType::ConstrForeign {
+                        ObjectKind::ForeignKey
+                    } else {
+                        ObjectKind::Constraint
+                    };
+                    Key::new(Action::Create, kind, with(&constraint_name))
+                }
+                (AlterTableType::AtAttachPartition, Some(NodeEnum::PartitionCmd(p))) => {
+                    if let Some(child) = p.name.as_ref() {
+                        let child = QualifiedName::from_range_var(child).resolve(path);
+                        self.attach_partition(&(schema.clone(), name.clone()), &child);
+                    }
+                    whole.clone()
+                }
+                (AlterTableType::AtEnableRowSecurity | AlterTableType::AtDisableRowSecurity, _) => {
+                    Key::new(Action::Create, ObjectKind::RowSecurity, table.clone())
+                }
+                (AlterTableType::AtForceRowSecurity | AlterTableType::AtNoForceRowSecurity, _) => {
+                    Key::new(Action::Create, ObjectKind::ForceRowSecurity, table.clone())
+                }
+                (AlterTableType::AtDropColumn, _) => {
+                    Key::new(Action::Drop, ObjectKind::Column, with(&cmd.name))
+                }
+                (AlterTableType::AtDropConstraint, _) => {
+                    self.drop_constraint(&schema, &name, &cmd.name);
+                    Key::new(Action::Drop, ObjectKind::Constraint, with(&cmd.name))
+                }
+                (subtype, _) if !cmd.name.is_empty() && is_column_command(subtype) => {
+                    Key::new(Action::Alter, ObjectKind::Column, with(&cmd.name))
+                }
+                _ => whole.clone(),
+            };
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        // One command: its own key. Several: the table's, then each one's.
+        match keys.len() {
+            0 => vec![whole],
+            1 => keys,
+            _ => {
+                keys.retain(|k| *k != whole);
+                keys.insert(0, whole);
+                keys
+            }
+        }
+    }
+
+    fn drop_constraint(&mut self, schema: &str, table: &str, constraint: &str) {
+        let info = self.table(schema, table);
+        let backed = info
+            .constraints
+            .iter()
+            .find(|(n, _)| n == constraint)
+            .is_some_and(|(_, backed)| *backed);
+        info.constraints.retain(|(n, _)| n != constraint);
+        let namespace = self.namespace(schema);
+        namespace.constraints.remove(constraint);
+        if backed {
+            namespace.relations.remove(constraint);
+        }
+    }
+
+    fn drop(&mut self, key: &Key) {
+        match (key.kind(), key.path()) {
+            (
+                ObjectKind::Table
+                | ObjectKind::View
+                | ObjectKind::MaterializedView
+                | ObjectKind::ForeignTable,
+                [schema, name],
+            ) => {
+                self.drop_table(schema, name);
+            }
+            (ObjectKind::Index | ObjectKind::Sequence | ObjectKind::Type, [schema, name]) => {
+                self.namespace(schema).relations.remove(name);
+            }
+            _ => {}
+        }
+    }
+
+    fn drop_table(&mut self, schema: &str, name: &str) {
+        let info = self
+            .tables
+            .remove(&(schema.to_owned(), name.to_owned()))
+            .unwrap_or_default();
+        let namespace = self.namespace(schema);
+        namespace.relations.remove(name);
+        for relation in &info.relations {
+            namespace.relations.remove(relation);
+        }
+        for (constraint, _) in &info.constraints {
+            namespace.constraints.remove(constraint);
+        }
+        for (child_schema, child) in info.partitions {
+            self.drop_table(&child_schema, &child);
+        }
+    }
+
+    fn rename(&mut self, s: &pg_query::protobuf::RenameStmt, key: &Key) {
+        use ObjectType as O;
+        match (s.rename_type(), key.path()) {
+            (
+                O::ObjectTable | O::ObjectView | O::ObjectMatview | O::ObjectForeignTable,
+                [schema, name],
+            ) => {
+                let namespace = self.namespace(schema);
+                namespace.relations.remove(name);
+                namespace.relations.insert(s.newname.clone());
+                if let Some(info) = self.tables.remove(&(schema.clone(), name.clone())) {
+                    self.tables
+                        .insert((schema.clone(), s.newname.clone()), info);
+                }
+            }
+            (O::ObjectIndex | O::ObjectSequence, [schema, name]) => {
+                let namespace = self.namespace(schema);
+                if namespace.relations.remove(name) {
+                    namespace.relations.insert(s.newname.clone());
+                }
+                // Renaming a constraint's index renames the constraint.
+                if namespace.constraints.remove(name) {
+                    namespace.constraints.insert(s.newname.clone());
+                }
+            }
+            (O::ObjectTabconstraint, [schema, table, constraint]) => {
+                let info = self.table(schema, table);
+                let backed = info
+                    .constraints
+                    .iter_mut()
+                    .find(|(n, _)| n == constraint)
+                    .is_some_and(|(n, backed)| {
+                        n.clone_from(&s.newname);
+                        *backed
+                    });
+                let namespace = self.namespace(schema);
+                namespace.constraints.remove(constraint);
+                namespace.constraints.insert(s.newname.clone());
+                if backed {
+                    namespace.relations.remove(constraint);
+                    namespace.relations.insert(s.newname.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `ALTER TABLE … SET SCHEMA`: the table, its indexes, sequences and
+    /// constraints move.
+    fn move_table(&mut self, schema: &str, name: &str, to: &str) {
+        let info = self
+            .tables
+            .remove(&(schema.to_owned(), name.to_owned()))
+            .unwrap_or_default();
+        let from = self.namespace(schema);
+        from.relations.remove(name);
+        for relation in &info.relations {
+            from.relations.remove(relation);
+        }
+        for (constraint, _) in &info.constraints {
+            from.constraints.remove(constraint);
+        }
+        let target = self.namespace(to);
+        target.relations.insert(name.to_owned());
+        target.relations.extend(info.relations.iter().cloned());
+        target
+            .constraints
+            .extend(info.constraints.iter().map(|(n, _)| n.clone()));
+        self.tables.insert((to.to_owned(), name.to_owned()), info);
     }
 }
 
-fn alter_table_key(s: &pg_query::protobuf::AlterTableStmt, path: &SearchPath) -> Key {
-    let table = s.relation.as_ref().map_or_else(Vec::new, |rv| {
-        let (schema, name) = QualifiedName::from_range_var(rv).resolve(path);
-        vec![schema, name]
-    });
-    let object_kind = match s.objtype() {
-        ObjectType::ObjectView => ObjectKind::View,
-        ObjectType::ObjectMatview => ObjectKind::MaterializedView,
-        ObjectType::ObjectIndex => ObjectKind::Index,
-        ObjectType::ObjectSequence => ObjectKind::Sequence,
-        ObjectType::ObjectForeignTable => ObjectKind::ForeignTable,
-        ObjectType::ObjectType => ObjectKind::Type,
-        _ => ObjectKind::Table,
-    };
-    let whole = || Key::new(Action::Alter, object_kind, table.clone());
-    let [cmd] = s.cmds.as_slice() else {
-        return whole();
-    };
-    let Some(NodeEnum::AlterTableCmd(cmd)) = cmd.node.as_ref() else {
-        return whole();
-    };
-    let with = |name: String| {
-        let mut parts = table.clone();
-        parts.push(name);
-        parts
-    };
-    let table_name = table.get(1).map_or("", String::as_str);
-    match cmd.subtype() {
-        AlterTableType::AtAddColumn => match def(cmd) {
-            Some(NodeEnum::ColumnDef(column)) => Key::new(
-                Action::Create,
-                ObjectKind::Column,
-                with(column.colname.clone()),
-            ),
-            _ => whole(),
-        },
-        AlterTableType::AtAddConstraint => match def(cmd) {
-            Some(NodeEnum::Constraint(c)) => {
-                let kind = if c.contype() == ConstrType::ConstrForeign {
-                    ObjectKind::ForeignKey
-                } else {
-                    ObjectKind::Constraint
-                };
-                Key::new(
-                    Action::Create,
-                    kind,
-                    with(constraint_name(c, table_name, None)),
-                )
-            }
-            _ => whole(),
-        },
-        AlterTableType::AtEnableRowSecurity | AlterTableType::AtDisableRowSecurity => {
-            Key::new(Action::Create, ObjectKind::RowSecurity, table.clone())
+/// `makeObjectName`: `name1[_name2][_label]`, truncating the longer of
+/// `name1` and `name2` (by whole characters) to fit 63 bytes.
+fn make_object_name(name1: &str, name2: Option<&str>, label: &str) -> String {
+    let overhead =
+        usize::from(name2.is_some()) + if label.is_empty() { 0 } else { label.len() + 1 };
+    let available = MAX_IDENTIFIER.saturating_sub(overhead);
+    let (mut n1, mut n2) = (name1.len(), name2.map_or(0, str::len));
+    while n1 + n2 > available {
+        if n1 > n2 {
+            n1 -= 1;
+        } else {
+            n2 -= 1;
         }
-        AlterTableType::AtForceRowSecurity | AlterTableType::AtNoForceRowSecurity => {
-            Key::new(Action::Create, ObjectKind::ForceRowSecurity, table.clone())
-        }
-        AlterTableType::AtDropColumn => {
-            Key::new(Action::Drop, ObjectKind::Column, with(cmd.name.clone()))
-        }
-        AlterTableType::AtDropConstraint => {
-            Key::new(Action::Drop, ObjectKind::Constraint, with(cmd.name.clone()))
-        }
-        _ if !cmd.name.is_empty() && is_column_command(cmd.subtype()) => {
-            Key::new(Action::Alter, ObjectKind::Column, with(cmd.name.clone()))
-        }
-        _ => whole(),
     }
+    let clip = |s: &str, n: usize| crate::source::floor_char_boundary(s, n).min(s.len());
+    let mut name = name1[..clip(name1, n1)].to_owned();
+    if let Some(name2) = name2 {
+        name.push('_');
+        name.push_str(&name2[..clip(name2, n2)]);
+    }
+    if !label.is_empty() {
+        name.push('_');
+        name.push_str(label);
+    }
+    name
+}
+
+/// `ChooseIndexNameAddition`: names joined by `_`, stopping once past
+/// the identifier limit.
+fn name_addition(names: &[String]) -> String {
+    let mut addition = String::new();
+    for name in names {
+        if !addition.is_empty() {
+            addition.push('_');
+        }
+        let clipped = &name[..crate::source::floor_char_boundary(name, MAX_IDENTIFIER)];
+        addition.push_str(clipped);
+        if addition.len() > MAX_IDENTIFIER {
+            break;
+        }
+    }
+    addition
+}
+
+/// `ChooseIndexColumnNames`: each element's name (the column, or what an
+/// expression is called, else `expr`), made unique with a number.
+fn index_column_names<'a>(params: impl Iterator<Item = &'a Node>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for param in params {
+        let Some(NodeEnum::IndexElem(e)) = param.node.as_ref() else {
+            continue;
+        };
+        let original = if !e.indexcolname.is_empty() {
+            e.indexcolname.clone()
+        } else if !e.name.is_empty() {
+            e.name.clone()
+        } else {
+            e.expr
+                .as_deref()
+                .and_then(figure_column_name)
+                .unwrap_or_else(|| "expr".to_owned())
+        };
+        let mut name = original.clone();
+        let mut i = 1;
+        while names.contains(&name) {
+            let suffix = i.to_string();
+            let keep = crate::source::floor_char_boundary(&original, MAX_IDENTIFIER - suffix.len());
+            name = format!("{}{suffix}", &original[..keep]);
+            i += 1;
+        }
+        names.push(name);
+    }
+    names
+}
+
+/// `FigureColname` for an index expression: a function's name, a column's,
+/// a cast's subject (or its type), and the keyword names of a few forms.
+fn figure_column_name(node: &Node) -> Option<String> {
+    use pg_query::protobuf::{MinMaxOp, SqlValueFunctionOp as Svf};
+    match node.node.as_ref()? {
+        NodeEnum::FuncCall(f) => strings(&f.funcname).pop(),
+        NodeEnum::ColumnRef(c) => strings(&c.fields).pop(),
+        NodeEnum::AIndirection(i) => i
+            .indirection
+            .iter()
+            .rev()
+            .find_map(|n| string(n).map(str::to_owned))
+            .or_else(|| i.arg.as_deref().and_then(figure_column_name)),
+        NodeEnum::TypeCast(c) => c
+            .arg
+            .as_deref()
+            .and_then(figure_column_name)
+            .or_else(|| c.type_name.as_ref().and_then(|t| strings(&t.names).pop())),
+        NodeEnum::CollateClause(c) => c.arg.as_deref().and_then(figure_column_name),
+        NodeEnum::CaseExpr(_) => Some("case".to_owned()),
+        NodeEnum::AArrayExpr(_) => Some("array".to_owned()),
+        NodeEnum::RowExpr(_) => Some("row".to_owned()),
+        NodeEnum::CoalesceExpr(_) => Some("coalesce".to_owned()),
+        NodeEnum::NullIfExpr(_) => Some("nullif".to_owned()),
+        NodeEnum::MinMaxExpr(m) => Some(
+            if m.op() == MinMaxOp::IsGreatest {
+                "greatest"
+            } else {
+                "least"
+            }
+            .to_owned(),
+        ),
+        NodeEnum::SqlvalueFunction(f) => Some(
+            match f.op() {
+                Svf::SvfopCurrentDate => "current_date",
+                Svf::SvfopCurrentTime | Svf::SvfopCurrentTimeN => "current_time",
+                Svf::SvfopCurrentTimestamp | Svf::SvfopCurrentTimestampN => "current_timestamp",
+                Svf::SvfopLocaltime | Svf::SvfopLocaltimeN => "localtime",
+                Svf::SvfopLocaltimestamp | Svf::SvfopLocaltimestampN => "localtimestamp",
+                Svf::SvfopCurrentRole => "current_role",
+                Svf::SvfopCurrentUser => "current_user",
+                Svf::SvfopUser => "user",
+                Svf::SvfopSessionUser => "session_user",
+                Svf::SvfopCurrentCatalog => "current_catalog",
+                Svf::SvfopCurrentSchema => "current_schema",
+                Svf::SqlvalueFunctionOpUndefined => return None,
+            }
+            .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
+/// The columns an exclusion constraint's elements name.
+fn exclusion_columns(c: &Constraint) -> Vec<String> {
+    let elements: Vec<&Node> = c
+        .exclusions
+        .iter()
+        .filter_map(|pair| match pair.node.as_ref()? {
+            NodeEnum::List(l) => l.items.first(),
+            _ => None,
+        })
+        .collect();
+    index_column_names(elements.into_iter())
+}
+
+/// The distinct columns an expression mentions, in order.
+fn column_refs(node: &Node) -> Vec<String> {
+    let Ok(value) = serde_json::to_value(node) else {
+        return Vec::new();
+    };
+    let mut columns = Vec::new();
+    crate::walk::visit(&value, &mut |kind, inner| {
+        if kind == "ColumnRef"
+            && let Some(name) = inner["fields"]
+                .as_array()
+                .and_then(|fields| fields.last())
+                .and_then(|f| f["node"]["String"]["sval"].as_str())
+            && !columns.iter().any(|c: &String| c == name)
+        {
+            columns.push(name.to_owned());
+        }
+    });
+    columns
 }
 
 fn def(cmd: &AlterTableCmd) -> Option<&NodeEnum> {
@@ -675,123 +1476,6 @@ pub(crate) fn statement_kind(node: &NodeEnum) -> String {
         }
     }
     snake
-}
-
-/// The name of a constraint, or the one Postgres would give it.
-pub(crate) fn constraint_name(c: &Constraint, table: &str, column: Option<&str>) -> String {
-    if !c.conname.is_empty() {
-        return c.conname.clone();
-    }
-    let keys = |nodes: &[Node]| strings(nodes);
-    let (columns, suffix) = match c.contype() {
-        ConstrType::ConstrPrimary => return format!("{table}_pkey"),
-        ConstrType::ConstrForeign => {
-            let columns = keys(&c.fk_attrs);
-            let columns = if columns.is_empty() {
-                column.map(|c| vec![c.to_owned()]).unwrap_or_default()
-            } else {
-                columns
-            };
-            (columns, "fkey")
-        }
-        ConstrType::ConstrUnique => {
-            let columns = keys(&c.keys);
-            let columns = if columns.is_empty() {
-                column.map(|c| vec![c.to_owned()]).unwrap_or_default()
-            } else {
-                columns
-            };
-            (columns, "key")
-        }
-        ConstrType::ConstrExclusion => {
-            let columns = c
-                .exclusions
-                .iter()
-                .filter_map(|pair| match pair.node.as_ref()? {
-                    NodeEnum::List(l) => match l.items.first()?.node.as_ref()? {
-                        NodeEnum::IndexElem(e) => Some(index_column(e)),
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect();
-            (columns, "excl")
-        }
-        ConstrType::ConstrCheck => {
-            let first = column
-                .map(str::to_owned)
-                .or_else(|| c.raw_expr.as_deref().and_then(first_column_ref));
-            (first.into_iter().collect(), "check")
-        }
-        _ => (
-            column.map(|c| vec![c.to_owned()]).unwrap_or_default(),
-            "not_null",
-        ),
-    };
-    default_name(table, &columns, suffix)
-}
-
-/// `<table>_<col>_<col>_<suffix>`, Postgres's `ChooseRelationName` minus the
-/// truncation and de-duplication.
-fn default_name(table: &str, columns: &[String], suffix: &str) -> String {
-    let mut name = table.to_owned();
-    for column in columns {
-        name.push('_');
-        name.push_str(column);
-    }
-    name.push('_');
-    name.push_str(suffix);
-    name
-}
-
-fn index_columns(params: &[Node]) -> Vec<String> {
-    params
-        .iter()
-        .filter_map(|p| match p.node.as_ref()? {
-            NodeEnum::IndexElem(e) => Some(index_column(e)),
-            _ => None,
-        })
-        .collect()
-}
-
-/// What Postgres names an index column: the column, or the function an
-/// expression calls, else `expr`.
-fn index_column(e: &IndexElem) -> String {
-    if !e.name.is_empty() {
-        return e.name.clone();
-    }
-    if !e.indexcolname.is_empty() {
-        return e.indexcolname.clone();
-    }
-    let mut expr = e.expr.as_deref().and_then(|n| n.node.as_ref());
-    while let Some(NodeEnum::TypeCast(cast)) = expr {
-        expr = cast.arg.as_deref().and_then(|n| n.node.as_ref());
-    }
-    match expr {
-        Some(NodeEnum::FuncCall(f)) => strings(&f.funcname)
-            .pop()
-            .unwrap_or_else(|| "expr".to_owned()),
-        Some(NodeEnum::ColumnRef(c)) => strings(&c.fields)
-            .pop()
-            .unwrap_or_else(|| "expr".to_owned()),
-        _ => "expr".to_owned(),
-    }
-}
-
-/// The first column an expression mentions, for a CHECK's default name.
-fn first_column_ref(node: &Node) -> Option<String> {
-    let value = serde_json::to_value(node).ok()?;
-    let mut found = None;
-    crate::walk::visit(&value, &mut |kind, inner| {
-        if found.is_none() && kind == "ColumnRef" {
-            found = inner["fields"]
-                .as_array()
-                .and_then(|fields| fields.last())
-                .and_then(|f| f["node"]["String"]["sval"].as_str())
-                .map(str::to_owned);
-        }
-    });
-    found
 }
 
 #[cfg(test)]
@@ -1009,6 +1693,134 @@ mod tests {
                 "trigger:public.t.trg",
             ]
         );
+    }
+
+    fn all_keys(sql: &str) -> Vec<Vec<String>> {
+        let parsed = parse(sql);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        parsed
+            .statements
+            .iter()
+            .map(|s| s.keys.iter().map(ToString::to_string).collect())
+            .collect()
+    }
+
+    #[test]
+    fn unnamed_objects_get_postgres_s_names_with_its_numeric_suffixes() {
+        assert_eq!(
+            keys(
+                "CREATE TABLE t (x int CHECK (x > 0), y int, z int);
+                 ALTER TABLE t ADD CHECK (x < 9);
+                 ALTER TABLE t ADD CHECK (x <> 5);
+                 ALTER TABLE t ADD CHECK (x > y);
+                 ALTER TABLE t ADD CHECK (y > z);
+                 CREATE INDEX ON t (x);
+                 CREATE INDEX ON t USING hash (x);
+                 CREATE UNIQUE INDEX ON t (lower(x::text), lower(y::text));
+                 CREATE INDEX ON t ((x || y));
+                 CREATE INDEX t_y_key ON t (y);
+                 ALTER TABLE t ADD UNIQUE (y);
+                 ALTER TABLE t ADD FOREIGN KEY (x) REFERENCES u;
+                 ALTER TABLE t ADD FOREIGN KEY (x) REFERENCES v;
+                 ALTER TABLE t DROP CONSTRAINT t_x_check1;
+                 ALTER TABLE t ADD CHECK (x < 100);"
+            ),
+            [
+                "table:public.t",
+                "constraint:public.t.t_x_check1",
+                "constraint:public.t.t_x_check2",
+                "constraint:public.t.t_check",
+                "constraint:public.t.t_check1",
+                "index:public.t_x_idx",
+                "index:public.t_x_idx1",
+                "index:public.t_lower_lower1_idx",
+                "index:public.t_expr_idx",
+                "index:public.t_y_key",
+                // t_y_key is an index already: the constraint gets a suffix.
+                "constraint:public.t.t_y_key1",
+                "fk:public.t.t_x_fkey",
+                "fk:public.t.t_x_fkey1",
+                "drop:constraint:public.t.t_x_check1",
+                // Dropped: the name is free again.
+                "constraint:public.t.t_x_check1",
+            ]
+        );
+    }
+
+    #[test]
+    fn default_names_are_truncated_like_postgres_does() {
+        let table = "a".repeat(60);
+        let column = "b".repeat(30);
+        let sql =
+            format!("CREATE TABLE {table} ({column} int); CREATE INDEX ON {table} ({column});");
+        let keys = keys(&sql);
+        // 63 bytes: the longer name is cut until both fit with `_` and `_idx`.
+        let expected = format!("index:public.{}_{}_idx", "a".repeat(29), "b".repeat(29));
+        assert_eq!(keys[1], expected);
+        assert_eq!(expected.len() - "index:public.".len(), 63);
+    }
+
+    #[test]
+    fn partitions_get_a_copy_of_their_parent_s_indexes() {
+        assert_eq!(
+            keys(
+                "CREATE TABLE p (x int) PARTITION BY RANGE (x);
+                 CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (1) TO (10);
+                 CREATE INDEX ON p (x);
+                 CREATE INDEX ON p1 (x);
+                 CREATE TABLE p2 PARTITION OF p FOR VALUES FROM (10) TO (20);
+                 CREATE INDEX ON p2 (x);"
+            ),
+            [
+                "table:public.p",
+                "table:public.p1",
+                "index:public.p_x_idx",
+                // p1 got p1_x_idx from its parent's index.
+                "index:public.p1_x_idx1",
+                "table:public.p2",
+                "index:public.p2_x_idx1",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_statement_has_a_key_per_object_it_defines() {
+        assert_eq!(
+            all_keys(
+                "ALTER TABLE t ADD CONSTRAINT a UNIQUE (x), ADD CONSTRAINT b CHECK (x > 0), ADD COLUMN y int;
+                 DROP TABLE a, b;
+                 DROP INDEX i1, app.i2;
+                 CREATE SCHEMA s CREATE TABLE t (id int) CREATE INDEX ON t (id) CREATE VIEW v AS SELECT 1;"
+            ),
+            [
+                vec![
+                    "alter:table:public.t",
+                    "constraint:public.t.a",
+                    "constraint:public.t.b",
+                    "column:public.t.y",
+                ],
+                vec!["drop:table:public.a", "drop:table:public.b"],
+                vec!["drop:index:public.i1", "drop:index:app.i2"],
+                vec!["schema:s", "table:s.t", "index:s.t_id_idx", "view:s.v"],
+            ]
+        );
+    }
+
+    #[test]
+    fn every_key_reads_back_from_its_string() {
+        let parsed = parse(
+            "CREATE TABLE \"x:y\" (\"a\"\"b\" int);
+             SET app.tenant = 'x';
+             CREATE TABLE \"a.b\".c (id int);
+             COMMENT ON COLUMN \"x:y\".\"a\"\"b\" IS 'q';
+             INSERT INTO t VALUES (1);",
+        );
+        for statement in &parsed.statements {
+            for key in &statement.keys {
+                assert_eq!(Key::from_str(&key.to_string()).as_ref(), Ok(key), "{key}");
+            }
+        }
+        assert_eq!(parsed.statements[1].key.to_string(), "set:app.tenant");
     }
 
     #[test]

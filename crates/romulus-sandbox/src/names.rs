@@ -201,6 +201,13 @@ impl Default for SearchPath {
 }
 
 impl SearchPath {
+    /// A path of one schema (the elements of `CREATE SCHEMA s CREATE …`).
+    pub fn only(schema: &str) -> Self {
+        Self {
+            schemas: vec![schema.to_owned()],
+        }
+    }
+
     /// Where an unqualified `CREATE` goes: the first schema on the path,
     /// `$user` aside (the sandbox role never has a schema of its name).
     pub fn creation_schema(&self) -> &str {

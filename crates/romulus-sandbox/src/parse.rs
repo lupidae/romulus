@@ -10,7 +10,7 @@ use pg_query::{NodeEnum, protobuf, protobuf::Token as TokenKind};
 
 use crate::{
     diagnostic::{Code, Diagnostic},
-    key::{Key, key_of},
+    key::{Key, Keyer},
     names::SearchPath,
     source::{LineIndex, Span, location},
 };
@@ -32,9 +32,15 @@ pub struct ParsedSql {
 pub struct Statement {
     /// Position in [`ParsedSql::statements`].
     pub index: usize,
-    /// The object it defines or changes (see [`crate::key`]).
+    /// The object it defines or changes (see [`crate::key`]); the first of
+    /// [`Statement::keys`].
     pub key: Key,
-    /// How many earlier statements have the same key: `(key, occurrence)`
+    /// Every object it defines or changes: one for most statements; for an
+    /// `ALTER TABLE` of several commands, the table then each command's
+    /// object; for `DROP a, b`, each; for `CREATE SCHEMA s CREATE …`, the
+    /// schema then each element.
+    pub keys: Vec<Key>,
+    /// How many earlier statements have the same `key`: `(key, occurrence)`
     /// identifies a statement within a text.
     pub occurrence: usize,
     /// The statement itself, first token to last, without its `;`.
@@ -157,6 +163,7 @@ pub fn parse(sql: &str) -> ParsedSql {
     let mut statements: Vec<Statement> = Vec::new();
     if let Some(parsed) = raw {
         let mut path = SearchPath::default();
+        let mut keyer = Keyer::default();
         for raw in parsed.protobuf.stmts {
             let Some(node) = raw.stmt.and_then(|s| s.node) else {
                 continue;
@@ -171,7 +178,8 @@ pub fn parse(sql: &str) -> ParsedSql {
             };
             let span = tokens[first].start..tokens[last].end;
             let extent = extent(text, &tokens, first, last);
-            let key = key_of(&node, &path);
+            let keys = keyer.keys(&node, &path);
+            let key = keys[0].clone();
             let occurrence = statements.iter().filter(|s| s.key == key).count();
             let search_path = path.clone();
             if let NodeEnum::VariableSetStmt(set) = &node {
@@ -180,6 +188,7 @@ pub fn parse(sql: &str) -> ParsedSql {
             statements.push(Statement {
                 index: statements.len(),
                 key,
+                keys,
                 occurrence,
                 span: lines.span(sql, span),
                 extent: lines.span(sql, extent),

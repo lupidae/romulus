@@ -10,6 +10,7 @@
 mod concurrency;
 mod corpus;
 mod errors;
+mod keys;
 mod malicious;
 
 use std::{future::Future, sync::LazyLock, time::Duration};
