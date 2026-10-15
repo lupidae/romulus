@@ -648,14 +648,14 @@ function GraphCanvas({
     requestAnimationFrame(() => wrapper.current?.focus({ preventScroll: true }));
   }, []);
   const center = useCallback(() => {
-    const el = wrapper.current;
-    const { x, y, zoom } = flow.getViewport();
-    if (!el) return { x: 0, y: 0 };
+    // React Flow's measure of the pane, not the element's (no forced layout).
+    const { width, height, transform } = flowStore.getState();
+    const [x, y, zoom] = transform;
     return {
-      x: (el.clientWidth / 2 - x) / zoom - NODE.minWidth / 2,
-      y: (el.clientHeight / 2 - y) / zoom - NODE.header,
+      x: (width / 2 - x) / zoom - NODE.minWidth / 2,
+      y: (height / 2 - y) / zoom - NODE.header,
     };
-  }, [flow]);
+  }, [flowStore]);
   const startEditing = useCallback(
     (asked: Editing) => {
       setMenu(null);
@@ -685,21 +685,20 @@ function GraphCanvas({
           });
         } else if (box) {
           // Only if some of it is off screen: a table in view stays put.
-          const el = wrapper.current;
+          const { width, height } = flowStore.getState();
           const left = box.x * zoom + flow.getViewport().x;
           const top = box.y * zoom + flow.getViewport().y;
           const visible =
-            !!el &&
             left >= 0 &&
             top >= 0 &&
-            left + box.width * zoom <= el.clientWidth &&
-            top + Math.min(box.height, 320) * zoom <= el.clientHeight;
+            left + box.width * zoom <= width &&
+            top + Math.min(box.height, 320) * zoom <= height;
           if (!visible) reveal(editing.table);
         }
       }
       store.set({ editing });
     },
-    [store, select, boxOf, flow, reveal, graph],
+    [store, select, boxOf, flow, flowStore, reveal, graph],
   );
   const stopEditing = useCallback(() => {
     store.set({ editing: null });
