@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as DevKitRouteImport } from './routes/dev/kit'
 import { Route as DevShellRouteImport } from './routes/dev/shell'
+import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as DevShellIndexRouteImport } from './routes/dev/shell/index'
 import { Route as DevShellMembersRouteImport } from './routes/dev/shell/members'
 import { Route as DevShellSettingsRouteImport } from './routes/dev/shell/settings'
@@ -37,6 +38,11 @@ const DevShellRoute = DevShellRouteImport.update({
   path: '/dev/shell',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DevViewerRoute = DevViewerRouteImport.update({
+  id: '/dev/viewer',
+  path: '/dev/viewer',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DevShellIndexRoute = DevShellIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -58,6 +64,7 @@ export interface FileRoutesByFullPath {
   '/signin': typeof SigninRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
+  '/dev/viewer': typeof DevViewerRoute
   '/dev/shell/members': typeof DevShellMembersRoute
   '/dev/shell/settings': typeof DevShellSettingsRoute
   '/dev/shell/': typeof DevShellIndexRoute
@@ -66,6 +73,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/signin': typeof SigninRoute
   '/dev/kit': typeof DevKitRoute
+  '/dev/viewer': typeof DevViewerRoute
   '/dev/shell/members': typeof DevShellMembersRoute
   '/dev/shell/settings': typeof DevShellSettingsRoute
   '/dev/shell': typeof DevShellIndexRoute
@@ -76,6 +84,7 @@ export interface FileRoutesById {
   '/signin': typeof SigninRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
+  '/dev/viewer': typeof DevViewerRoute
   '/dev/shell/members': typeof DevShellMembersRoute
   '/dev/shell/settings': typeof DevShellSettingsRoute
   '/dev/shell/': typeof DevShellIndexRoute
@@ -87,6 +96,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/dev/kit'
     | '/dev/shell'
+    | '/dev/viewer'
     | '/dev/shell/members'
     | '/dev/shell/settings'
     | '/dev/shell/'
@@ -95,6 +105,7 @@ export interface FileRouteTypes {
     | '/'
     | '/signin'
     | '/dev/kit'
+    | '/dev/viewer'
     | '/dev/shell/members'
     | '/dev/shell/settings'
     | '/dev/shell'
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/dev/kit'
     | '/dev/shell'
+    | '/dev/viewer'
     | '/dev/shell/members'
     | '/dev/shell/settings'
     | '/dev/shell/'
@@ -114,6 +126,7 @@ export interface RootRouteChildren {
   SigninRoute: typeof SigninRoute
   DevKitRoute: typeof DevKitRoute
   DevShellRoute: typeof DevShellRouteWithChildren
+  DevViewerRoute: typeof DevViewerRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -144,6 +157,13 @@ declare module '@tanstack/react-router' {
       path: '/dev/shell'
       fullPath: '/dev/shell'
       preLoaderRoute: typeof DevShellRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev/viewer': {
+      id: '/dev/viewer'
+      path: '/dev/viewer'
+      fullPath: '/dev/viewer'
+      preLoaderRoute: typeof DevViewerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dev/shell/': {
@@ -191,6 +211,7 @@ const rootRouteChildren: RootRouteChildren = {
   SigninRoute: SigninRoute,
   DevKitRoute: DevKitRoute,
   DevShellRoute: DevShellRouteWithChildren,
+  DevViewerRoute: DevViewerRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
