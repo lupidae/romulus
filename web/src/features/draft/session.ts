@@ -85,6 +85,8 @@ export interface SessionState {
   tooLarge: boolean;
   /** The server could not store some edits. */
   saveFailed: boolean;
+  /** The last "Update draft" while this tab was open. */
+  updated: { version: number; by: string; conflicts: number } | null;
   /** Edits made here while disconnected, not on the server yet. */
   unsynced: boolean;
   /** Schema edits made from the graph in this tab, oldest first (see graph-edits.ts). */
@@ -127,6 +129,10 @@ export function eventPatch(
       return { versionCreated: event.number };
     case "save_failed":
       return { saveFailed: true };
+    case "updated":
+      return {
+        updated: { version: event.version, by: event.by, conflicts: event.conflicts },
+      };
   }
 }
 
@@ -237,6 +243,7 @@ export class DraftSession {
     signedOut: false,
     tooLarge: false,
     saveFailed: false,
+    updated: null,
     unsynced: false,
     edits: [],
     historyCleared: null,

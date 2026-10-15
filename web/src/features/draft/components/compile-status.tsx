@@ -22,6 +22,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  */
 export function CompileStatus({ compile, onJump }: CompileStatusProps) {
   const errors = compile.diagnostics.filter((d) => d.severity === "error");
+  const problems = errorCount(errors);
   const notes = compile.diagnostics.filter((d) => d.severity === "info");
   const busy = compile.stale || compile.state === "waiting" || compile.state === "pending";
 
@@ -37,7 +38,7 @@ export function CompileStatus({ compile, onJump }: CompileStatusProps) {
     ) : (
       <WarningTriangleIcon className="text-destructive" />
     );
-    label = busy ? "Compiling…" : plural(errors.length || 1, "error", "errors");
+    label = busy ? "Compiling…" : problems;
     tone = busy ? tone : "text-destructive";
   } else if (compile.state === "unavailable") {
     icon = <WarningTriangleIcon className="text-warning" />;
@@ -102,13 +103,7 @@ function Details({
   }
   return (
     <>
-      <Explain
-        title={
-          busy
-            ? "Compiling your latest edits"
-            : `${plural(errors.length || 1, "error", "errors")} in the SQL`
-        }
-      >
+      <Explain title={busy ? "Compiling your latest edits" : `${errorCount(errors)} in the SQL`}>
         Until it compiles, the graph shows the last version that did.
       </Explain>
       <List items={errors} onJump={onJump} />
@@ -162,4 +157,12 @@ function List({
       ))}
     </ul>
   );
+}
+
+/** "2 errors", or "1 conflict" when what stops the compile is conflict blocks only. */
+function errorCount(errors: Diagnostic[]) {
+  const n = errors.length || 1;
+  return errors.length > 0 && errors.every((d) => d.code === "conflict")
+    ? plural(n, "conflict", "conflicts")
+    : plural(n, "error", "errors");
 }

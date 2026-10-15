@@ -21,6 +21,7 @@ const initial: SessionState = {
   signedOut: false,
   tooLarge: false,
   saveFailed: false,
+  updated: null,
   unsynced: false,
   edits: [],
   historyCleared: null,
@@ -60,6 +61,22 @@ describe("a draft session's state", () => {
     );
     expect(mayEdit(published)).toBe(false);
     expect(published).toMatchObject({ statusBy: "Alice", publishedVersion: 4 });
+  });
+
+  it("is read-only while someone updates it, and says who did", () => {
+    const updating = apply(
+      initial,
+      { type: "welcome", role: "developer", read_only: false, status: "open" },
+      { type: "status", status: "updating", by: "Bob", version: null },
+    );
+    expect(mayEdit(updating)).toBe(false);
+    const done = apply(
+      updating,
+      { type: "updated", version: 3, by: "Bob", conflicts: 2 },
+      { type: "status", status: "open", by: null, version: null },
+    );
+    expect(mayEdit(done)).toBe(true);
+    expect(done.updated).toEqual({ version: 3, by: "Bob", conflicts: 2 });
   });
 
   it("says when the server could not save", () => {

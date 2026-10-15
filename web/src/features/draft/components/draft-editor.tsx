@@ -16,7 +16,9 @@ import type { Schema } from "@/features/schema/model";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
 
-import { draftExtensions, jumpTo, showDiagnostics } from "../collab";
+import { draftExtensions, jumpTo, nextConflict, showDiagnostics } from "../collab";
+import { findConflicts } from "../conflicts";
+import { useUpdateDraft } from "../mutations";
 import { type Diagnostic, type Draft, draftKeys, draftQuery } from "../queries";
 import { type DraftSession, mayEdit, type SessionState } from "../session";
 import { useGraphEdits } from "../use-graph-edits";
@@ -90,6 +92,18 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
     if (versionCreated)
       void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
   }, [versionCreated, queryClient, org, db, draftId]);
+  // Someone updated the draft to a newer version: its base moved.
+  const updated = state?.updated ?? null;
+  React.useEffect(() => {
+    if (!updated) return;
+    void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
+    void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) });
+    // Whoever clicked hears it from their own request.
+    if (updated.by !== me.name)
+      toast.info(`${updated.by} updated the draft to v${updated.version}`, {
+        description: conflictsSentence(updated.conflicts),
+      });
+  }, [updated, queryClient, org, db, draftId, me.name]);
   // The server sees another role than this page thought: a role changed.
   // Catch up.
   const serverRole = state?.role ?? null;
@@ -197,6 +211,8 @@ export function Workspace({
   const [groupsOpen, setGroupsOpen] = React.useState(false);
   const [focusGroup, setFocusGroup] = React.useState<string | null>(null);
   const [publishing, setPublishing] = React.useState(false);
+  const conflicts = React.useMemo(() => findConflicts(sql), [sql]);
+  const update = useUpdateDraft(org, db, draft.id);
 
   const status = state?.status ?? "open";
   const canEdit =
@@ -277,6 +293,37 @@ export function Workspace({
   const jump = (diagnostic: Diagnostic) => {
     if (view) jumpTo(view, diagnostic);
   };
+  const toNextConflict = () => {
+    if (view) nextConflict(view);
+  };
+  const runUpdate = () =>
+    update.mutate(undefined, {
+      onSuccess: (result) => {
+        if (result.conflicts > 0) {
+          toast.warning(`Updated to v${result.base_version}`, {
+            description: conflictsSentence(result.conflicts),
+          });
+          requestAnimationFrame(toNextConflict);
+        } else {
+          toast.success(`Updated to v${result.base_version}`, {
+            description: result.changed
+              ? "Everything merged. Publishing is open again."
+              : "It already had everything.",
+          });
+        }
+      },
+      onError: (error) => {
+        const diagnostics =
+          error instanceof ApiError && error.code === "draft_has_errors"
+            ? ((error.details as { diagnostics?: Diagnostic[] } | undefined)?.diagnostics ?? [])
+            : [];
+        toast.error("Could not update the draft", {
+          description: error instanceof ApiError ? error.message : "Check your connection.",
+        });
+        const first = diagnostics[0];
+        if (first) requestAnimationFrame(() => jump(first));
+      },
+    });
   const group = () => {
     if (!session || picked.length === 0) return;
     const id = session.createGroup(picked);
@@ -308,9 +355,22 @@ export function Workspace({
         onRewrite={(expected) => session?.expectRewrite(expected)}
         onJump={jump}
         onPublish={() => setPublishing(true)}
+        conflicts={conflicts.length}
+        onNextConflict={toNextConflict}
+        onUpdate={runUpdate}
+        updating={update.isPending}
         onDeleted={onDeleted}
       />
-      <Notice org={org} db={db} draft={draft} state={state} isWriter={isWriter} />
+      <Notice
+        org={org}
+        db={db}
+        draft={draft}
+        state={state}
+        isWriter={isWriter}
+        conflicts={conflicts.length}
+        conflictsWith={conflicts[0]?.label ?? null}
+        onNextConflict={toNextConflict}
+      />
       <main className="min-h-0 flex-1">
         {session && state?.synced ? (
           <SchemaViewer
@@ -404,6 +464,11 @@ export function Workspace({
   );
 }
 
+function conflictsSentence(conflicts: number) {
+  if (conflicts === 0) return "Nothing conflicted.";
+  return `${conflicts === 1 ? "One conflict" : `${conflicts} conflicts`} to resolve in the SQL before publishing.`;
+}
+
 /** One line under the bar when something about the draft needs saying. */
 function Notice({
   org,
@@ -411,12 +476,18 @@ function Notice({
   draft,
   state,
   isWriter,
+  conflicts,
+  conflictsWith,
+  onNextConflict,
 }: {
   org: string;
   db: string;
   draft: Draft;
   state: SessionState | null;
   isWriter: boolean;
+  conflicts: number;
+  conflictsWith: string | null;
+  onNextConflict: () => void;
 }) {
   const strip = "rounded-none border-x-0 border-t-0 px-4 py-2 md:px-5";
   if (state?.tooLarge) {
@@ -454,6 +525,46 @@ function Notice({
       >
         This draft is closed.
       </Alert>
+    );
+  }
+  if (state?.status === "updating") {
+    return (
+      <Alert
+        variant="info"
+        className={strip}
+        title={
+          <>
+            {state.statusBy ?? "Someone"} is updating this draft to v{draft.latest_version}.{" "}
+            <span className="font-normal text-muted-foreground">
+              Edits are paused for a moment.
+            </span>
+          </>
+        }
+      />
+    );
+  }
+  if (conflicts > 0) {
+    return (
+      <Alert
+        variant="warning"
+        className={strip}
+        title={
+          <>
+            {conflicts === 1 ? "One conflict" : `${conflicts} conflicts`}
+            {conflictsWith ? ` with ${conflictsWith}` : ""}.{" "}
+            <span className="font-normal text-muted-foreground">
+              {isWriter
+                ? "Keep yours or theirs on each block in the SQL. Publishing waits until none is left."
+                : "A developer or admin resolves them before publishing."}
+            </span>
+          </>
+        }
+        action={
+          <Button size="sm" onClick={onNextConflict}>
+            Next conflict
+          </Button>
+        }
+      />
     );
   }
   if (state?.status === "publishing") {
@@ -497,7 +608,7 @@ function Notice({
           <>
             v{draft.latest_version} was published after this draft started.{" "}
             <span className="font-normal text-muted-foreground">
-              Publishing waits until drafts can take in a newer version, in the next release.
+              Update the draft to bring v{draft.latest_version} in, then publish.
             </span>
           </>
         }

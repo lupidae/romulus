@@ -64,6 +64,24 @@ export function useDeleteDraft(org: string, db: string, id: string) {
   });
 }
 
+/** "Update draft": brings the latest version in (conflicts left as blocks). */
+export function useUpdateDraft(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/update", {
+          params: { path: { org, db, id } },
+        }),
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, id) });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, id) });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
+    },
+  });
+}
+
 export function usePublishDraft(org: string, db: string, id: string) {
   const queryClient = useQueryClient();
   return useMutation({

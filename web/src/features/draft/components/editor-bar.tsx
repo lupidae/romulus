@@ -24,7 +24,6 @@ import {
   MenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
@@ -60,6 +59,11 @@ interface EditorBarProps {
   onRewrite?: (expected: boolean) => void;
   onJump: (diagnostic: Diagnostic) => void;
   onPublish: () => void;
+  /** Conflict blocks left in the SQL: publishing waits for none. */
+  conflicts: number;
+  onNextConflict: () => void;
+  onUpdate: () => void;
+  updating: boolean;
   onDeleted: () => void;
 }
 
@@ -168,7 +172,16 @@ export function EditorBar(props: EditorBarProps) {
             </MenuContent>
           </Menu>
         )}
-        {isWriter && open && <PublishButton draft={draft} onPublish={props.onPublish} />}
+        {isWriter && open && (
+          <PublishButton
+            draft={draft}
+            conflicts={props.conflicts}
+            updating={props.updating}
+            onPublish={props.onPublish}
+            onUpdate={props.onUpdate}
+            onNextConflict={props.onNextConflict}
+          />
+        )}
       </div>
 
       <ConfirmDialog
@@ -247,22 +260,51 @@ function tidyFailure(error: unknown): string {
   }
 }
 
-function PublishButton({ draft, onPublish }: { draft: Draft; onPublish: () => void }) {
+/**
+ * What comes next: bring in a newer version first, then resolve what
+ * conflicts, then publish.
+ */
+function PublishButton({
+  draft,
+  conflicts,
+  updating,
+  onPublish,
+  onUpdate,
+  onNextConflict,
+}: {
+  draft: Draft;
+  conflicts: number;
+  updating: boolean;
+  onPublish: () => void;
+  onUpdate: () => void;
+  onNextConflict: () => void;
+}) {
   const next = (draft.latest_version ?? 0) + 1;
   if (draft.stale) {
     return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button>Update draft</Button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="grid w-80 gap-1">
-          <p className="text-sm font-semibold text-foreground">v{draft.latest_version} is out</p>
-          <p className="text-sm text-muted-foreground">
-            Drafts learn to take in a newer version in the next release. Until then this one cannot
-            be published.
-          </p>
-        </PopoverContent>
-      </Popover>
+      <Button
+        variant="primary"
+        loading={updating}
+        onClick={onUpdate}
+        aria-label={`Update draft (v${draft.latest_version} is out)`}
+      >
+        <span className="sm:hidden">Update</span>
+        <span className="max-sm:hidden">
+          Update draft{" "}
+          <span className="font-normal opacity-80">(v{draft.latest_version} is out)</span>
+        </span>
+      </Button>
+    );
+  }
+  if (conflicts > 0) {
+    const label = `Resolve ${conflicts} conflict${conflicts === 1 ? "" : "s"}`;
+    return (
+      <Tooltip content="Publishing waits until no conflict is left. Shows the next one.">
+        <Button onClick={onNextConflict} aria-label={label}>
+          <span className="sm:hidden">{conflicts} left</span>
+          <span className="max-sm:hidden">{label}</span>
+        </Button>
+      </Tooltip>
     );
   }
   return (

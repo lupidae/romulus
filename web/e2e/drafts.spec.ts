@@ -255,3 +255,90 @@ test("signing out in another tab sends an open draft to sign-in", async ({ brows
   await expect(alice.page).toHaveURL(/\/app\/signin/);
   await expect(alice.page.getByText("Your session expired")).toBeVisible();
 });
+
+test("updating a draft brings in a version pushed meanwhile, conflicts and all", async ({
+  browser,
+  request,
+}) => {
+  test.slow();
+  const { slug, alice, carol } = await team(browser);
+  await openDraft(slug, alice, carol);
+
+  // Alice adds a column to each table.
+  const typeAtEndOf = async (p: Person, line: string, text: string) => {
+    await sqlOf(p).locator(".cm-line", { hasText: line }).click();
+    await p.page.keyboard.press("End");
+    await p.page.keyboard.type(text, { delay: 10 });
+  };
+  await typeAtEndOf(alice, "email text NOT NULL UNIQUE", ", nickname text");
+  await typeAtEndOf(alice, "user_id bigint NOT NULL REFERENCES users (id)", ", note text");
+  await expect(alice.page.getByTestId("compile-status")).toHaveText("Compiled");
+
+  // Meanwhile CI pushes v2 as remus JSON: v1's model, users with a plan.
+  const database = (await call(carol.page, "GET", `/api/orgs/${slug}/databases/shop`)) as {
+    id: string;
+  };
+  const v1 = (await call(carol.page, "GET", `/api/orgs/${slug}/databases/shop/versions/1`)) as {
+    model: { entities: { name: string; columns: Record<string, unknown>[] }[] };
+  };
+  const users = v1.model.entities.find((e) => e.name === "users")!;
+  const email = users.columns.find((c) => c.name === "email")!;
+  users.columns.push({ ...email, name: "plan", not_null: false });
+  const token = (await call(carol.page, "POST", `/api/orgs/${slug}/databases/shop/tokens`, {
+    name: "CI",
+    scope: "push",
+  })) as { secret: string };
+  const push = await request.post(`/api/databases/${database.id}/versions`, {
+    headers: { Authorization: `Bearer ${token.secret}`, "Content-Type": "application/json" },
+    data: JSON.stringify(v1.model),
+  });
+  expect(push.status(), await push.text()).toBe(201);
+
+  // Alice brings it in: orders merges, users conflicts.
+  const update = alice.page.getByRole("button", { name: "Update draft (v2 is out)" });
+  await expect(update).toBeVisible();
+  await update.click();
+  await expect(alice.page.getByText("One conflict with v2.")).toBeVisible();
+  for (const p of [alice, carol]) {
+    await expect(p.page.getByRole("group", { name: "Conflict with v2" })).toBeVisible();
+  }
+  expect(await docText(alice)).toContain("note text");
+  await expect(alice.page.getByRole("button", { name: "Resolve 1 conflict" })).toBeVisible();
+  // For review: the conflict as everyone sees it, light and dark, desktop and phone.
+  for (const [name, colorScheme, width] of [
+    ["light-1440", "light", 1440],
+    ["dark-1440", "dark", 1440],
+    ["light-390", "light", 390],
+  ] as const) {
+    await alice.page.emulateMedia({ colorScheme });
+    await alice.page.setViewportSize({ width, height: 900 });
+    // Phones show one pane at a time.
+    const sqlTab = alice.page.getByRole("tab", { name: "SQL", exact: true });
+    if (await sqlTab.isVisible()) await sqlTab.click();
+    await alice.page.getByRole("group", { name: "Conflict with v2" }).scrollIntoViewIfNeeded();
+    await test.info().attach(`conflict-${name}`, {
+      body: await alice.page.screenshot(),
+      contentType: "image/png",
+    });
+  }
+  await alice.page.emulateMedia({ colorScheme: "light" });
+  await alice.page.setViewportSize({ width: 1440, height: 900 });
+
+  // Theirs for users; the draft can be published again.
+  await alice.page
+    .getByRole("group", { name: "Conflict with v2" })
+    .getByRole("button", { name: "Keep theirs" })
+    .click();
+  await expect(alice.page.getByRole("group", { name: "Conflict with v2" })).toHaveCount(0);
+  await expect(carol.page.getByRole("group", { name: "Conflict with v2" })).toHaveCount(0);
+  const text = await docText(alice);
+  expect(text).toContain("plan text");
+  expect(text).not.toContain("nickname");
+  expect(text).toContain("note text");
+  await expect(alice.page.getByTestId("compile-status")).toHaveText("Compiled");
+
+  await alice.page.getByRole("button", { name: "Publish v3" }).click();
+  const dialog = alice.page.getByRole("dialog", { name: "Publish v3" });
+  await dialog.getByRole("button", { name: "Publish v3" }).click();
+  await expect(alice.page.getByText("Published v3")).toBeVisible();
+});

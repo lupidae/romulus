@@ -1805,6 +1805,102 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/update": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Brings the latest version into the draft: see the module documentation.",
+        "operationId": "update_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedDraft"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reviewers cannot update drafts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_published`, `draft_busy` (being published or updated), `draft_changed` (rewritten meanwhile, try again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`draft_has_errors`: the SQL does not parse (`details.diagnostics`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The draft could not be loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/tokens": {
       "get": {
         "tags": [
@@ -2985,7 +3081,8 @@
           "sql",
           "timeout",
           "unavailable",
-          "provided_by_extension"
+          "provided_by_extension",
+          "conflict"
         ]
       },
       "ColumnChange": {
@@ -4919,6 +5016,7 @@
         "enum": [
           "open",
           "publishing",
+          "updating",
           "published",
           "deleted"
         ]
@@ -5782,6 +5880,36 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "The draft was updated to a newer version (\"Update draft\"): its base\nis now `version`; `conflicts` blocks are left to resolve.",
+            "required": [
+              "version",
+              "by",
+              "conflicts",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "type": "string"
+              },
+              "conflicts": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "updated"
+                ]
+              },
+              "version": {
+                "type": "integer",
+                "format": "int32"
+              }
+            }
           }
         ],
         "description": "A message only the server sends (tag 100 on the websocket), as JSON."
@@ -6126,6 +6254,34 @@
               "null"
             ],
             "description": "Changing it changes every link to the organization."
+          }
+        }
+      },
+      "UpdatedDraft": {
+        "type": "object",
+        "description": "What \"Update draft\" did.",
+        "required": [
+          "conflicts",
+          "changed"
+        ],
+        "properties": {
+          "base_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version the draft is based on now (`null`: the database has\nnone)."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Whether anything changed (already on the latest version: nothing)."
+          },
+          "conflicts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Conflict blocks in its SQL now: publishing waits until none is left.",
+            "minimum": 0
           }
         }
       },

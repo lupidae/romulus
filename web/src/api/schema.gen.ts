@@ -388,6 +388,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/update": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Brings the latest version into the draft: see the module documentation. */
+    post: operations["update_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/tokens": {
     parameters: {
       query?: never;
@@ -702,7 +719,8 @@ export interface components {
       | "sql"
       | "timeout"
       | "unavailable"
-      | "provided_by_extension";
+      | "provided_by_extension"
+      | "conflict";
     /**
      * @description A change to one column.
      *
@@ -1352,7 +1370,7 @@ export interface components {
      * @description Where a draft is in its life, as the people in it see it.
      * @enum {string}
      */
-    LiveStatus: "open" | "publishing" | "published" | "deleted";
+    LiveStatus: "open" | "publishing" | "updating" | "published" | "deleted";
     /** @description An organization, as one of its members sees it. */
     Org: {
       /** Format: uuid */
@@ -1660,6 +1678,15 @@ export interface components {
       | {
           /** @enum {string} */
           type: "save_failed";
+        }
+      | {
+          by: string;
+          /** Format: int32 */
+          conflicts: number;
+          /** @enum {string} */
+          type: "updated";
+          /** Format: int32 */
+          version: number;
         };
     /** @enum {string} */
     Severity: "error" | "info";
@@ -1803,6 +1830,22 @@ export interface components {
       name?: string | null;
       /** @description Changing it changes every link to the organization. */
       slug?: string | null;
+    };
+    /** @description What "Update draft" did. */
+    UpdatedDraft: {
+      /**
+       * Format: int32
+       * @description The version the draft is based on now (`null`: the database has
+       *     none).
+       */
+      base_version?: number | null;
+      /** @description Whether anything changed (already on the latest version: nothing). */
+      changed: boolean;
+      /**
+       * Format: int32
+       * @description Conflict blocks in its SQL now: publishing waits until none is left.
+       */
+      conflicts: number;
     };
     UploadSql: {
       /** @description What changed, in a line (at most 1000 characters). */
@@ -3209,6 +3252,73 @@ export interface operations {
         };
       };
       /** @description The compiler is unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  update_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UpdatedDraft"];
+        };
+      };
+      /** @description Reviewers cannot update drafts */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_published`, `draft_busy` (being published or updated), `draft_changed` (rewritten meanwhile, try again) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_has_errors`: the SQL does not parse (`details.diagnostics`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The draft could not be loaded */
       503: {
         headers: {
           [name: string]: unknown;

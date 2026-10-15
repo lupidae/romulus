@@ -1,10 +1,18 @@
 // The SQL editor of a draft: CodeMirror bound to the doc's `sql` Y.Text
 // (y-codemirror.next), with everyone's carets and selections, one undo
-// history shared with the graph (the session's Y.UndoManager), and the
-// compile's diagnostics. Loaded with the editor chunk.
+// history shared with the graph (the session's Y.UndoManager), the
+// compile's diagnostics, and "Update draft"'s conflict blocks with their
+// buttons. Loaded with the editor chunk.
 
 import { type Diagnostic as CmDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
-import { type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
+import {
+  type EditorState,
+  type Extension,
+  Prec,
+  type Range,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -12,6 +20,7 @@ import {
   keymap,
   placeholder,
   ViewPlugin,
+  WidgetType,
 } from "@codemirror/view";
 import {
   yCollab,
@@ -23,6 +32,9 @@ import {
 
 import type * as Y from "yjs";
 
+import { buttonVariants } from "@/components/ui/button";
+
+import { type Choice, type ConflictBlock, findConflicts, resolution } from "./conflicts";
 import type { Diagnostic } from "./queries";
 import type { DraftSession } from "./session";
 
@@ -85,6 +97,32 @@ const theme = EditorView.theme({
     "0%, 50%": { backgroundColor: "color-mix(in oklab, var(--color-primary) 16%, transparent)" },
     "100%": { backgroundColor: "transparent" },
   },
+  // Conflict blocks: a bar above each, yours and theirs tinted apart, the
+  // marker lines quiet.
+  ".cm-conflict-bar": {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: "0.375rem",
+    margin: "0.375rem 0 0.125rem",
+    padding: "0.375rem 0.5rem",
+    border: "0.0625rem solid color-mix(in oklab, var(--color-warning) 40%, transparent)",
+    borderRadius: "var(--radius-md)",
+    backgroundColor: "color-mix(in oklab, var(--color-warning) 10%, var(--color-card))",
+    fontFamily: "var(--font-sans)",
+    fontSize: "var(--text-sm)",
+    lineHeight: "1.25rem",
+    whiteSpace: "normal",
+  },
+  ".cm-conflict-title": { fontWeight: "600", color: "var(--color-foreground)" },
+  ".cm-conflict-hint": { color: "var(--color-muted-foreground)", marginRight: "auto" },
+  ".cm-conflict-marker": { color: "var(--color-faint-foreground)" },
+  ".cm-conflict-yours": {
+    backgroundColor: "color-mix(in oklab, var(--color-info) 9%, transparent)",
+  },
+  ".cm-conflict-theirs": {
+    backgroundColor: "color-mix(in oklab, var(--color-success) 9%, transparent)",
+  },
 });
 
 const flash = StateEffect.define<{ from: number; to: number } | null>();
@@ -105,6 +143,123 @@ const flashed = StateField.define<DecorationSet>({
     }
     return next;
   },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+const CHOICES: { choice: Choice; label: string }[] = [
+  { choice: "yours", label: "Keep yours" },
+  { choice: "theirs", label: "Keep theirs" },
+  { choice: "both", label: "Keep both" },
+];
+
+/** The bar above a conflict block: what it is, and how to resolve it. */
+class ConflictBar extends WidgetType {
+  readonly block: ConflictBlock;
+  readonly readOnly: boolean;
+
+  constructor(block: ConflictBlock, readOnly: boolean) {
+    super();
+    this.block = block;
+    this.readOnly = readOnly;
+  }
+
+  override eq(other: ConflictBar) {
+    return (
+      other.block.from === this.block.from &&
+      other.block.label === this.block.label &&
+      other.block.both === this.block.both &&
+      other.readOnly === this.readOnly
+    );
+  }
+
+  override toDOM(view: EditorView) {
+    const bar = document.createElement("div");
+    bar.className = "cm-conflict-bar";
+    bar.setAttribute("role", "group");
+    bar.setAttribute("aria-label", `Conflict with ${this.block.label}`);
+    const title = document.createElement("span");
+    title.className = "cm-conflict-title";
+    title.textContent = `Conflict with ${this.block.label}`;
+    const hint = document.createElement("span");
+    hint.className = "cm-conflict-hint";
+    hint.textContent = this.readOnly
+      ? "A developer or admin resolves it."
+      : `Yours first, then ${this.block.label}’s.`;
+    bar.append(title, hint);
+    if (!this.readOnly) {
+      for (const { choice, label } of CHOICES) {
+        if (choice === "both" && !this.block.both) continue;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = buttonVariants({ size: "sm" });
+        button.textContent = label;
+        button.addEventListener("click", () => resolveAt(view, view.posAtDOM(bar), choice));
+        bar.append(button);
+      }
+    }
+    return bar;
+  }
+
+  override ignoreEvent() {
+    return true;
+  }
+}
+
+/**
+ * Resolves the block at `pos` as the person chose: one change in the
+ * editor, which the binding sends as theirs (undoable like typing).
+ */
+function resolveAt(view: EditorView, pos: number, choice: Choice) {
+  if (view.state.readOnly) return;
+  const text = view.state.doc.toString();
+  const block = findConflicts(text).find((b) => b.from <= pos && pos <= b.to);
+  if (!block) return;
+  const change = resolution(text, block, choice);
+  view.dispatch({
+    changes: change,
+    selection: { anchor: change.from },
+    userEvent: "input.resolve",
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+function conflictDecorations(state: EditorState): DecorationSet {
+  const text = state.doc.toString();
+  const ranges: Range<Decoration>[] = [];
+  const line = (pos: number, cls: string) =>
+    ranges.push(Decoration.line({ class: cls }).range(state.doc.lineAt(pos).from));
+  for (const block of findConflicts(text)) {
+    ranges.push(
+      Decoration.widget({
+        widget: new ConflictBar(block, state.readOnly),
+        block: true,
+        side: -1,
+      }).range(block.from),
+    );
+    for (let pos = block.from; pos <= block.to;) {
+      const current = state.doc.lineAt(pos);
+      const inside = (side: { from: number; to: number }) =>
+        side.from < side.to && current.from >= side.from && current.from <= side.to;
+      line(
+        pos,
+        inside(block.yours)
+          ? "cm-conflict-yours"
+          : inside(block.theirs)
+            ? "cm-conflict-theirs"
+            : "cm-conflict-marker",
+      );
+      pos = current.to + 1;
+    }
+  }
+  return Decoration.set(ranges, true);
+}
+
+/** Conflict blocks, drawn: recomputed when the text or the editability changes. */
+const conflictField = StateField.define<DecorationSet>({
+  create: conflictDecorations,
+  update: (decorations, tr) =>
+    tr.docChanged || tr.reconfigured ? conflictDecorations(tr.state) : decorations,
   provide: (field) => EditorView.decorations.from(field),
 });
 
@@ -144,6 +299,7 @@ export function draftExtensions(
     seedGuard(session.sql),
     Prec.high(keymap.of(yUndoManagerKeymap)),
     lintGutter(),
+    conflictField,
     flashed,
     // The SQL pane is narrow next to the graph: long lines wrap.
     EditorView.lineWrapping,
@@ -170,6 +326,19 @@ export function showDiagnostics(view: EditorView, diagnostics: Diagnostic[]) {
     };
   });
   view.dispatch(setDiagnostics(view.state, found));
+}
+
+/** Brings the first conflict block after the caret (or the first) into view. */
+export function nextConflict(view: EditorView) {
+  const blocks = findConflicts(view.state.doc.toString());
+  const head = view.state.selection.main.head;
+  const block = blocks.find((b) => b.from > head) ?? blocks[0];
+  if (!block) return;
+  view.dispatch({
+    selection: { anchor: block.yours.from },
+    effects: EditorView.scrollIntoView(block.from, { y: "center" }),
+  });
+  view.focus();
 }
 
 /** Puts the caret on a diagnostic and brings it into view. */

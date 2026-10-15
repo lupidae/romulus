@@ -42,6 +42,19 @@ describe("CompileStatus", () => {
       />,
     );
     expect(screen.getByTestId("compile-status")).toHaveTextContent("2 errors");
+    // Conflict blocks from "Update draft" are called what they are.
+    rerender(
+      <CompileStatus
+        compile={view({
+          state: "failed",
+          diagnostics: [
+            { ...error, code: "conflict", message: "Conflict with v2: keep yours or theirs." },
+          ],
+        })}
+        onJump={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("compile-status")).toHaveTextContent("1 conflict");
     rerender(<CompileStatus compile={view({ state: "unavailable" })} onJump={() => {}} />);
     expect(screen.getByTestId("compile-status")).toHaveTextContent("Not checked");
   });
