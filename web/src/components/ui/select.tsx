@@ -1,0 +1,106 @@
+import { Select as SelectPrimitive } from "radix-ui";
+import type * as React from "react";
+
+import { CheckIcon, NavArrowDownIcon } from "@/components/icons";
+import { cn } from "@/lib/utils";
+
+import { controlClasses } from "./input";
+
+export const Select = SelectPrimitive.Root;
+export const SelectGroup = SelectPrimitive.Group;
+export const SelectValue = SelectPrimitive.Value;
+
+export function SelectTrigger({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+  return (
+    <SelectPrimitive.Trigger
+      data-slot="select-trigger"
+      className={cn(
+        controlClasses,
+        "flex h-9 cursor-pointer items-center justify-between gap-2 px-2.5 text-left sm:h-8",
+        "data-placeholder:text-faint-foreground [&>span]:truncate",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <SelectPrimitive.Icon asChild>
+        <NavArrowDownIcon className="size-4 shrink-0 text-muted-foreground" />
+      </SelectPrimitive.Icon>
+    </SelectPrimitive.Trigger>
+  );
+}
+
+export function SelectContent({
+  className,
+  children,
+  position = "popper",
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  return (
+    <SelectPrimitive.Portal>
+      <SelectPrimitive.Content
+        data-slot="select-content"
+        position={position}
+        sideOffset={4}
+        className={cn(
+          "relative z-(--z-popover) max-h-(--radix-select-content-available-height) min-w-32 overflow-hidden",
+          "rounded-lg border border-border bg-popover text-popover-foreground shadow-popover",
+          "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98]",
+          "data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+          position === "popper" && "w-full min-w-(--radix-select-trigger-width)",
+          className,
+        )}
+        {...props}
+      >
+        <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
+      </SelectPrimitive.Content>
+    </SelectPrimitive.Portal>
+  );
+}
+
+export function SelectLabel({
+  className,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Label>) {
+  return (
+    <SelectPrimitive.Label
+      className={cn("px-2 pt-1.5 pb-1 text-xs text-muted-foreground", className)}
+      {...props}
+    />
+  );
+}
+
+export function SelectItem({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Item>) {
+  return (
+    <SelectPrimitive.Item
+      data-slot="select-item"
+      className={cn(
+        "relative flex h-8 cursor-pointer items-center rounded-md pr-8 pl-2 text-sm outline-none select-none",
+        "data-highlighted:bg-accent data-highlighted:text-accent-foreground",
+        "data-disabled:pointer-events-none data-disabled:opacity-45",
+        className,
+      )}
+      {...props}
+    >
+      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemIndicator className="absolute right-2 flex items-center">
+        <CheckIcon className="size-4 text-primary" />
+      </SelectPrimitive.ItemIndicator>
+    </SelectPrimitive.Item>
+  );
+}
+
+export function SelectSeparator({
+  className,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Separator>) {
+  return <SelectPrimitive.Separator className={cn("-mx-1 my-1 h-px bg-border", className)} {...props} />;
+}

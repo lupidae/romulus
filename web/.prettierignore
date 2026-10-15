@@ -1,0 +1,7 @@
+dist
+node_modules
+test-results
+playwright-report
+src/routeTree.gen.ts
+src/api/openapi.json
+src/components/icons

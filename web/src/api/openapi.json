@@ -1,0 +1,91 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "romulus",
+    "description": "DBA as a service: versioned Postgres schemas, diffs and collaborative drafts.",
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness and database reachability, for compose healthchecks and CI.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "The API and its database are up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "description": "The body of every error response.\n\n`code` is stable and machine-readable (the web app switches on it);\n`message` is for people and may change.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "e.g. `not_found`, `validation`, `csrf`, `last_admin`."
+          },
+          "details": {
+            "description": "Structured context, e.g. per-field validation messages."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "database",
+          "version"
+        ],
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "`ok` when a query round-trips."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always `ok` in a 200."
+          },
+          "version": {
+            "type": "string",
+            "description": "The API's crate version."
+          }
+        }
+      }
+    }
+  }
+}
