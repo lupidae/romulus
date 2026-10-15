@@ -21,6 +21,8 @@ const queryClient = new QueryClient({
 
 const router = createRouter({
   routeTree,
+  // Matches `base` in vite.config.ts: the SPA lives under /app.
+  basepath: "/app",
   context: { queryClient },
   defaultPreload: "intent",
   // Loaders read through TanStack Query, which owns caching.

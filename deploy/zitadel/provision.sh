@@ -23,7 +23,8 @@ DEV_PASSWORD=${DEV_PASSWORD:-RomulusDev1!}
 issuer="http://$ZITADEL_HOST"
 redirect_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg api "http://localhost:$ROMULUS_API_PORT" \
     '[$web + "/api/auth/callback", $api + "/api/auth/callback"]')
-post_logout_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" '[$web + "/signin", $web + "/"]')
+# The SPA lives under /app (the API serves the homepage at / in production).
+post_logout_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" '[$web + "/app/signin", $web + "/app/", $web + "/"]')
 
 log() { echo "zitadel-provision: $*" >&2; }
 

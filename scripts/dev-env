@@ -100,7 +100,8 @@ ROMULUS_SANDBOX_PORT=$sandbox
 ROMULUS_ZITADEL_PORT=$zitadel
 ROMULUS_PREVIEW_PORT=$preview
 
-# The browser only ever talks to the web origin; Vite proxies /api to the API.
+# The browser only ever talks to the web origin: the SPA lives under /app and
+# Vite proxies /api to the API, as the API itself will serve both in production.
 ROMULUS_PUBLIC_URL=http://localhost:$web
 ROMULUS_API_ADDR=127.0.0.1:$api
 DATABASE_URL=postgres://romulus:romulus@127.0.0.1:$postgres/romulus
@@ -108,6 +109,9 @@ ROMULUS_SANDBOX_URL=postgres://sandbox_admin:sandbox_admin@127.0.0.1:$sandbox/po
 ROMULUS_OIDC_ISSUER=http://localhost:$zitadel
 # Cookies are not port-scoped: two stacks on localhost would share one cookie.
 ROMULUS_SESSION_COOKIE=romulus_session_$slot
+# Dev-only sign-in without Zitadel's UI (QA, Playwright). The API refuses to
+# start with it unless ROMULUS_PUBLIC_URL is a loopback address.
+ROMULUS_DEV_SIGNIN=true
 
 # Files the Zitadel provisioner writes into .dev/ belong to this user.
 ROMULUS_UID=$(id -u)

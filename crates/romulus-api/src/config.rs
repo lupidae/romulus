@@ -24,6 +24,11 @@ pub struct Config {
     /// `ROMULUS_SESSION_COOKIE`: per stack, because cookies are not
     /// port-scoped and every worktree's stack lives on localhost.
     pub session_cookie: String,
+    /// `ROMULUS_DEV_SIGNIN=true`: the dev-only sign-in bypass (the auth
+    /// module's route), so QA and end-to-end tests do not drive Zitadel's UI.
+    /// Refused at startup unless `public_url` is a loopback host, so a
+    /// deployed instance can never be started with it.
+    pub dev_signin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +64,8 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("{var} is invalid: {reason}")]
     Invalid { var: &'static str, reason: String },
+    #[error("ROMULUS_DEV_SIGNIN is only allowed when ROMULUS_PUBLIC_URL is local, not {0}")]
+    DevSigninNotLocal(String),
 }
 
 impl Config {
@@ -75,6 +82,7 @@ impl Config {
             sandbox_url: None,
             oidc: None,
             session_cookie: "romulus_session".to_owned(),
+            dev_signin: false,
         }
     }
 
@@ -123,15 +131,42 @@ impl Config {
             (_, _, None) => return Err(ConfigError::Missing("ROMULUS_OIDC_CLIENT_SECRET")),
         };
 
+        let public_url = url("ROMULUS_PUBLIC_URL", &required("ROMULUS_PUBLIC_URL")?)?;
+
+        let dev_signin = match get("ROMULUS_DEV_SIGNIN").as_deref() {
+            None | Some("false" | "0") => false,
+            Some("true" | "1") => true,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_DEV_SIGNIN",
+                    reason: format!("expected true or false, got {other:?}"),
+                });
+            }
+        };
+        if dev_signin && !is_loopback(&public_url) {
+            return Err(ConfigError::DevSigninNotLocal(public_url.to_string()));
+        }
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             api_addr,
-            public_url: url("ROMULUS_PUBLIC_URL", &required("ROMULUS_PUBLIC_URL")?)?,
+            public_url,
             sandbox_url: get("ROMULUS_SANDBOX_URL"),
             oidc,
             session_cookie: get("ROMULUS_SESSION_COOKIE")
                 .unwrap_or_else(|| "romulus_session".to_owned()),
+            dev_signin,
         })
+    }
+}
+
+/// `localhost`, `*.localhost` or a loopback IP: a URL only this machine reaches.
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => domain == "localhost" || domain.ends_with(".localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
@@ -190,6 +225,43 @@ mod tests {
         let config = config(&vars).unwrap();
         assert!(!format!("{config:?}").contains("hunter2"));
         assert_eq!(config.oidc.unwrap().client_secret.expose(), "hunter2");
+    }
+
+    #[test]
+    fn dev_signin_is_off_unless_asked_for() {
+        assert!(!config(&BASE).unwrap().dev_signin);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_DEV_SIGNIN", "true"));
+        assert!(config(&vars).unwrap().dev_signin);
+    }
+
+    #[test]
+    fn dev_signin_is_refused_on_a_public_url() {
+        let vars = [
+            BASE[0],
+            ("ROMULUS_PUBLIC_URL", "https://app.romulus.dev"),
+            ("ROMULUS_DEV_SIGNIN", "true"),
+        ];
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::DevSigninNotLocal(_))
+        ));
+    }
+
+    #[test]
+    fn dev_signin_accepts_loopback_addresses() {
+        for public in [
+            "http://127.0.0.1:41000",
+            "http://[::1]:41000",
+            "http://r.localhost",
+        ] {
+            let vars = [
+                BASE[0],
+                ("ROMULUS_PUBLIC_URL", public),
+                ("ROMULUS_DEV_SIGNIN", "1"),
+            ];
+            assert!(config(&vars).unwrap().dev_signin, "{public}");
+        }
     }
 
     #[test]

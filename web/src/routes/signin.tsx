@@ -9,7 +9,11 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 interface SigninSearch {
-  /** Where to land after signing in. Only same-site paths are kept. */
+  /**
+   * Where to land after signing in: a same-origin path including the /app
+   * prefix (the API redirects there after the callback). Anything else is
+   * dropped here, and the API must check it again.
+   */
   next?: string;
   /** Set by the API's OIDC callback when sign-in did not complete. */
   error?: string;
@@ -52,6 +56,8 @@ export const Route = createFileRoute("/signin")({
 });
 
 function SignIn() {
+  // Seam for the auth module: with ROMULUS_DEV_SIGNIN on, this page also
+  // offers the test users (see crates/romulus-api/src/auth/mod.rs).
   const { next, error } = Route.useSearch();
   const health = useQuery(healthQuery);
   const loginUrl = `/api/auth/login${next ? `?next=${encodeURIComponent(next)}` : ""}`;
