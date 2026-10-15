@@ -1,14 +1,40 @@
 import "./styles/globals.css";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ApiError } from "./api/client";
+import { orgKeys } from "./features/orgs/queries";
 import { routeTree } from "./routeTree.gen";
 
+/**
+ * Errors any screen can meet. A 401 means the session ended (expired, or
+ * signed out in another tab): go to sign-in and come back here afterwards.
+ * Route guards handle the `me` query themselves. A 403 may mean an admin just
+ * changed my role: refetch what I may do, so the screen catches up.
+ */
+function onApiError(error: unknown, queryKey?: readonly unknown[]) {
+  if (!(error instanceof ApiError)) return;
+  if (error.status === 401 && queryKey?.[0] !== "me") {
+    const { pathname, search, hash } = window.location;
+    if (pathname.startsWith("/app/signin")) return;
+    void router.navigate({
+      to: "/signin",
+      search: {
+        next: `${pathname}${search}${hash}`,
+        error: error.code === "session_expired" ? "session_expired" : undefined,
+      },
+    });
+  } else if (error.status === 403) {
+    void queryClient.invalidateQueries({ queryKey: orgKeys.all });
+  }
+}
+
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: (error, query) => onApiError(error, query.queryKey) }),
+  mutationCache: new MutationCache({ onError: (error) => onApiError(error) }),
   defaultOptions: {
     queries: {
       staleTime: 30_000,
