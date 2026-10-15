@@ -93,6 +93,13 @@ async function openDraft(slug: string, alice: Person, ...others: Person[]) {
 }
 
 const sqlOf = (p: Person) => p.page.locator(".cm-content");
+/** The SQL in someone's editor, without the others' carets and name labels. */
+const docText = (p: Person) =>
+  p.page.evaluate(() => {
+    const content = document.querySelector(".cm-content")!.cloneNode(true) as HTMLElement;
+    content.querySelectorAll(".cm-ySelectionCaret").forEach((caret) => caret.remove());
+    return content.textContent;
+  });
 const node = (p: Person, table: string) =>
   p.page.locator(`.react-flow__node[data-id="public.${table}"]`);
 
@@ -116,7 +123,7 @@ test("two developers edit one draft at once while a reviewer watches", async ({ 
     await expect(node(p, "invoices")).toBeVisible();
     await expect(node(p, "teams")).toBeVisible();
   }
-  await expect(sqlOf(alice)).toHaveText((await sqlOf(carol).textContent())!);
+  await expect.poll(() => docText(alice)).toBe(await docText(carol));
 
   // Carets with names, both ways; a pointer on the graph.
   await expect(alice.page.locator(".cm-ySelectionInfo", { hasText: "Carol" })).toBeVisible();
@@ -157,7 +164,7 @@ test("two developers edit one draft at once while a reviewer watches", async ({ 
   // Bob reads only: no typing, no dragging…
   await expect(bob.page.getByText("You’re viewing as a reviewer.")).toBeVisible();
   await expect(sqlOf(bob)).toHaveAttribute("contenteditable", "false");
-  const text = (await sqlOf(alice).textContent())!;
+  const text = await docText(alice);
   await sqlOf(bob).click();
   await bob.page.keyboard.type("DROP TABLE users;");
   // …and an update sent by hand, past the editor, is dropped by the server.
@@ -186,7 +193,7 @@ test("two developers edit one draft at once while a reviewer watches", async ({ 
   );
   expect(sent).toBe(true);
   await alice.page.waitForTimeout(500);
-  await expect(sqlOf(alice)).toHaveText(text);
+  expect(await docText(alice)).toBe(text);
   await expect(sqlOf(carol)).not.toContainText("forged");
   await expect(sqlOf(alice)).not.toContainText("DROP TABLE");
 });

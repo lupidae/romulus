@@ -9,7 +9,10 @@ use axum::{
     },
     response::Response,
 };
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{
+    SinkExt, StreamExt,
+    stream::{SplitSink, SplitStream},
+};
 use tokio::sync::{broadcast::error::RecvError, mpsc};
 use uuid::Uuid;
 
@@ -30,6 +33,8 @@ const MAX_FRAME: usize = 8 * 1024 * 1024;
 const QUEUE: usize = 1024;
 /// Keeps proxies from closing a quiet socket.
 const PING_EVERY: Duration = Duration::from_secs(25);
+/// How long a closing socket waits for the client's close frame.
+const CLOSE_GRACE: Duration = Duration::from_secs(2);
 
 /// Opens a draft live: the y-sync protocol over a websocket.
 ///
@@ -108,16 +113,14 @@ async fn run(hub: Hub, membership: MembershipEvents, draft: Uuid, peer: Peer, so
             } else {
                 close::UNAVAILABLE
             };
-            let _ = sink
-                .send(close_frame(code, "the draft is unavailable"))
-                .await;
+            shut(sink, stream, code, "the draft is unavailable").await;
             return;
         }
     };
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.reset();
 
-    loop {
+    let closing = loop {
         tokio::select! {
             frame = stream.next() => match frame {
                 Some(Ok(Message::Binary(data))) => match decode(&data) {
@@ -129,48 +132,62 @@ async fn run(hub: Hub, membership: MembershipEvents, draft: Uuid, peer: Peer, so
                         connection.send(Command::Malformed { conn: connection.id });
                     }
                 },
-                Some(Ok(Message::Text(_))) => {
-                    let _ = sink.send(close_frame(close::PROTOCOL, "binary y-sync only")).await;
-                    break;
-                }
+                Some(Ok(Message::Text(_))) => break Some((close::PROTOCOL, "binary y-sync only")),
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break None,
             },
             out = queue.recv() => match out {
                 Some(Outgoing::Frame(frame)) => {
                     if sink.send(Message::Binary(frame)).await.is_err() {
-                        break;
+                        break None;
                     }
                 }
-                Some(Outgoing::Close(code, reason)) => {
-                    let _ = sink.send(close_frame(code, reason)).await;
-                    break;
-                }
+                Some(Outgoing::Close(code, reason)) => break Some((code, reason)),
                 // The room let this connection go (too slow, or unloaded).
-                None => {
-                    let _ = sink.send(close_frame(close::LAGGING, "reconnect")).await;
-                    break;
-                }
+                None => break Some((close::LAGGING, "reconnect")),
             },
             change = changes.recv() => match change {
                 Ok(change) if !change.concerns(org_id, user_id) => {}
                 // Missed messages may have named this socket: close to be safe.
                 Ok(_) | Err(RecvError::Lagged(_) | RecvError::Closed) => {
-                    let _ = sink
-                        .send(close_frame(close::MEMBERSHIP, "your access to this organization changed"))
-                        .await;
-                    break;
+                    break Some((close::MEMBERSHIP, "your access to this organization changed"));
                 }
             },
             _ = ping.tick() => {
                 if sink.send(Message::Ping(axum::body::Bytes::new())).await.is_err() {
-                    break;
+                    break None;
                 }
             }
         }
-    }
+    };
     // Dropping the connection tells the room it left.
     drop(connection);
+    if let Some((code, reason)) = closing {
+        shut(sink, stream, code, reason).await;
+    }
+}
+
+/// Sends a close frame, then reads until the client answers it (a moment at
+/// most). Dropping a socket that still has unread data resets the
+/// connection, and the client can lose the close frame, and with it the code
+/// that says whether to reconnect.
+async fn shut(
+    mut sink: SplitSink<WebSocket, Message>,
+    mut stream: SplitStream<WebSocket>,
+    code: u16,
+    reason: &'static str,
+) {
+    if sink.send(close_frame(code, reason)).await.is_err() {
+        return;
+    }
+    let _ = tokio::time::timeout(CLOSE_GRACE, async {
+        while let Some(Ok(message)) = stream.next().await {
+            if matches!(message, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 /// The y-sync messages of a frame, or `None` when it is not y-sync. yrs
