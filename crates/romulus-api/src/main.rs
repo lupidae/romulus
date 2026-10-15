@@ -38,6 +38,7 @@ enum Command {
 
 fn main() -> ExitCode {
     // Before any thread exists: setting the environment is only sound then.
+    #[cfg(debug_assertions)]
     load_dev_env();
     init_tracing();
 
@@ -73,8 +74,11 @@ fn fail(err: &MainError) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// Dev convenience: `.env` (ports, from `scripts/dev-env`) and the OIDC client
-/// the Zitadel provisioner wrote. Neither overrides a variable already set.
+/// Dev convenience, debug builds only: `.env` (ports, from `scripts/dev-env`)
+/// and the OIDC client the Zitadel provisioner wrote. Neither overrides a
+/// variable already set. A release build reads its real environment only, so
+/// a stray `.env` next to a deployed binary changes nothing.
+#[cfg(debug_assertions)]
 fn load_dev_env() {
     let _ = dotenvy::dotenv();
     let _ = dotenvy::from_filename(".dev/zitadel/oidc.env");

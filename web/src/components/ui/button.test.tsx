@@ -16,8 +16,11 @@ describe("Button", () => {
         Publish v13
       </Button>,
     );
-    const button = screen.getByRole("button", { name: /Publish v13/ });
+    const button = screen.getByRole("button", { name: "Publish v13" });
     expect(button).toHaveAttribute("aria-busy", "true");
+    // Visibility would drop the label from the accessibility tree; opacity keeps it.
+    expect(screen.getByText("Publish v13")).toHaveClass("opacity-0");
+    expect(screen.getByText("Publish v13")).not.toHaveClass("invisible");
     expect(button).not.toBeDisabled();
     await userEvent.click(button);
     expect(onClick).not.toHaveBeenCalled();

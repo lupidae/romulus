@@ -194,6 +194,7 @@ const swatches: { group: string; tokens: [string, string][] }[] = [
       ["popover", "bg-popover"],
       ["muted", "bg-muted"],
       ["accent", "bg-accent"],
+      ["highlight", "bg-highlight"],
       ["sidebar", "bg-sidebar"],
       ["border", "bg-border"],
       ["border-strong", "bg-border-strong"],

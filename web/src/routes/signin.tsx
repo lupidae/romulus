@@ -7,6 +7,7 @@ import { LockIcon } from "@/components/icons";
 import { SchemaPreview } from "@/components/shell/schema-preview";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { safePath } from "@/lib/safe-path";
 
 interface SigninSearch {
   /**
@@ -39,12 +40,6 @@ const fallbackError = {
   title: "Sign-in did not complete",
   body: "Something went wrong between romulus and your identity provider. Try again.",
 };
-
-function safePath(value: unknown): string | undefined {
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//")
-    ? value
-    : undefined;
-}
 
 export const Route = createFileRoute("/signin")({
   validateSearch: (search: Record<string, unknown>): SigninSearch => ({

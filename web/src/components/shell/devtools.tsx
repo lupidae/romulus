@@ -1,12 +1,20 @@
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
+import { TanStackDevtools } from "@tanstack/react-devtools";
+import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
+import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
-/** Loaded in dev only (see routes/__root.tsx); never part of a production bundle. */
+/**
+ * Router and Query devtools in one panel behind one button (bottom-left,
+ * clear of the toasts). Loaded in dev only (see routes/__root.tsx), never
+ * part of a production bundle.
+ */
 export default function Devtools() {
   return (
-    <>
-      <TanStackRouterDevtools position="bottom-left" />
-      <ReactQueryDevtools buttonPosition="bottom-left" />
-    </>
+    <TanStackDevtools
+      config={{ position: "bottom-left" }}
+      plugins={[
+        { name: "Router", render: <TanStackRouterDevtoolsPanel /> },
+        { name: "Query", render: <ReactQueryDevtoolsPanel /> },
+      ]}
+    />
   );
 }

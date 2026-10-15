@@ -83,8 +83,12 @@ export function Button({
     >
       {loading && !asChild ? (
         <>
-          <span className="invisible contents">{children}</span>
-          <span className="absolute inset-0 flex items-center justify-center">
+          {/* Transparent, not hidden: the label keeps the width and stays the
+              button's accessible name; aria-busy says it is working. */}
+          <span data-slot="button-label" className="inline-flex items-center gap-1.5 opacity-0">
+            {children}
+          </span>
+          <span aria-hidden className="absolute inset-0 flex items-center justify-center">
             <Spinner />
           </span>
         </>

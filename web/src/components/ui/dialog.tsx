@@ -32,6 +32,10 @@ export function DialogOverlay({
  * A modal. Always give it a DialogTitle (screen readers announce it) and keep
  * one primary action in the footer. Esc and the overlay close it; focus
  * returns to the trigger.
+ *
+ * Describe it with a DialogDescription, which becomes its accessible
+ * description. Without one (the title says it all) the dialog references no
+ * description at all; Radix only links one that is rendered.
  */
 export function DialogContent({
   className,
