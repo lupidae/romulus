@@ -15,9 +15,9 @@ deploy/sandbox/       the sandbox image: Postgres 17 + PostGIS + pgvector, allow
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
 site/                 the static homepage (tokens copied from web/; see site/README.md)
-deploy/zitadel/       the provisioner that sets Zitadel up on `just up`
+deploy/zitadel/       the provisioner that sets Zitadel up on `just up`, and the login's brand assets
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
-docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner
+docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner, mail (Mailpit)
 .superset/            workspace setup/teardown (Superset worktrees boot configured)
 ```
 
@@ -44,7 +44,9 @@ scripts/check-oidc   # discovery, client secret, full PKCE login as alice
 Test users (Zitadel, `.dev/zitadel/users.json`): `alice@romulus.test`,
 `bob@romulus.test`, password `RomulusDev1!`, emails verified. Zitadel console:
 `http://localhost:$ROMULUS_ZITADEL_PORT/ui/console`, `admin@romulus.localhost`,
-same password.
+same password. Anyone can also create an account on Zitadel's login ("Create
+account"): the verification code arrives in the mail catcher,
+`http://localhost:$ROMULUS_MAIL_PORT` (nothing leaves the machine).
 
 ## Ports and worktrees
 
@@ -62,6 +64,7 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +4 | `ROMULUS_ZITADEL_PORT` | Zitadel, issuer `http://localhost:<port>` |
 | +5 | `ROMULUS_PREVIEW_PORT` | `vite preview`: the origin Playwright drives |
 | +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
+| +7 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel sends (sign-up codes) |
 | +7 | `ROMULUS_SITE_PORT` | the static homepage (`just site`, site/'s Playwright) |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
@@ -95,6 +98,18 @@ Made in the skeleton (S0):
   container and a path-routing proxy. The OIDC callback is
   `$ROMULUS_PUBLIC_URL/api/auth/callback` (and the API port's, for direct
   testing); post-logout URIs are `/app/signin`, `/app/` and `/`.
+- **Zitadel's login is branded** by the provisioner (label policy on the
+  instance, which every organization inherits, and the project enforcing its
+  organization's policy): logo per theme, Inter, colors from our tokens, no
+  watermark, English only, romulus's copy for every page a sign-in or sign-up
+  shows. Self-registration stays on: an invitee without an account creates
+  one there (email verified with a code). The assets in
+  `deploy/zitadel/assets` come from `npm --prefix web run zitadel:assets`;
+  re-run it after a brand or token change (`just check` fails otherwise).
+  Invitation links sign in straight through Zitadel with the invited address
+  as `login_hint` (one click, dev stacks too); "switch account" also goes
+  through Zitadel. The dev sign-in is only ever an explicit choice on
+  `/app/signin`.
 - **Dev sign-in**: `ROMULUS_DEV_SIGNIN=true` (on in `.env`) enables
   `GET /api/auth/dev-signin?email=…&next=/app/…[&name=…][&verified=false]`:
   signs in as that address (created if needed) without Zitadel, for QA and
@@ -353,7 +368,9 @@ stable `code` and a `Span` in bytes, UTF-16 (CodeMirror/Yjs) and line/column.
   preview origin with its own API (`playwright.config.ts` starts both, or
   reuses them). Prefer role/label queries; they double as an accessibility
   check. `e2e/helpers.ts`: `devSignIn(page, email, next)` for most tests,
-  `ssoSignIn(page, user)` with `zitadelUsers()` for the real login,
+  `ssoSignIn(page, user)` (from our sign-in page) or `zitadelSignIn(page,
+  user)` (already on Zitadel's) with `zitadelUsers()` for the real login,
+  `emailedCode(email)` for a code Zitadel emailed (sign-up),
   `createOrg`, `inviteLink`, `unique(…)` (the stack's database is shared
   between runs: name things uniquely).
 - Every feature PR: its endpoints tested (happy path, permission denied per
