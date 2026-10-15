@@ -12,7 +12,6 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
-  useStore,
   useStoreApi,
 } from "@xyflow/react";
 import {
@@ -40,12 +39,20 @@ import { DiffLegend, GraphKey, SearchButton, toolbarClass, ZoomControls } from "
 import { graphOf } from "./graph-of";
 import { createGraphUiStore, GraphUiContext, type GraphUiStore, useGraphUi } from "./graph-ui";
 import { AreaLabel, type AreaLabelFlowNode, GroupNode, type GroupFlowNode } from "./group-node";
-import { columnAnchorY, GROUP_PADDING, NODE, tableSize } from "./geometry";
+import {
+  columnAnchorY,
+  FIT_VIEW,
+  GROUP_PADDING,
+  NODE,
+  type NodeState,
+  nextLod,
+  tableSize,
+} from "./geometry";
 import { type DetailsTarget, HoverDetails } from "./hover-details";
 import { KIND_LABEL } from "./kind";
 import { type Box, type Direction, nearestInDirection, nearestTo } from "./navigation";
 import { RelationEdge, type RelationFlowEdge } from "./relation-edge";
-import { type Rect, route } from "./routing";
+import { type Rect, type Route, route } from "./routing";
 import { TableNode, type TableFlowNode, type TableNodeData } from "./table-node";
 import { TableSearch } from "./table-search";
 import { useAutoLayout } from "./use-auto-layout";
@@ -82,7 +89,9 @@ export interface SchemaGraphProps {
 
 const nodeTypes = { table: TableNode, tableGroup: GroupNode, areaLabel: AreaLabel };
 const edgeTypes = { relation: RelationEdge };
-const FIT = { padding: 0.12, maxZoom: 1 } as const;
+const FIT = FIT_VIEW;
+/** The first layout's shape when its positions are persisted (see aspect below). */
+const PERSISTED_ASPECT = 1.4;
 // Schemas get colors in this order, so the first two are the most distinct.
 const SCHEMA_COLORS: GroupColor[] = [
   "blue",
@@ -148,17 +157,35 @@ function GraphCanvas({
   const [store] = useState<GraphUiStore>(() => createGraphUiStore({ selected: selected ?? null }));
   const nodeState = useSyncExternalStore(store.subscribe, () => store.get().nodeState);
   const wrapper = useRef<HTMLDivElement>(null);
-  // The first layout takes the pane's shape: measured before the layout starts.
-  const aspect = useRef(1.6);
+  // The first layout takes the pane's shape, measured before it starts, unless
+  // its positions are written back (a draft): every collaborator placing the
+  // same tables must then compute the same positions, whatever their screen.
+  const aspect = useRef(PERSISTED_ASPECT);
   useLayoutEffect(() => {
     const el = wrapper.current;
-    if (el && el.clientHeight > 0) aspect.current = el.clientWidth / el.clientHeight;
-  }, []);
+    if (!onLayoutChange && el && el.clientHeight > 0)
+      aspect.current = el.clientWidth / el.clientHeight;
+  }, [onLayoutChange]);
   const { positions, pending } = useAutoLayout(graph, layout, groups, onLayoutChange, aspect);
   // The flow mounts once every table has a place, so its first fit shows them all.
   const [ready, setReady] = useState(false);
   if (!ready && pending === 0) setReady(true);
-  const [moved, setMoved] = useState<Layout>({});
+  // Hand moves: `dragging` while the pointer is down; `dropped` after, until
+  // `layout` changes for that table (the move written back, a peer's move, an
+  // undo): the layout map then wins again.
+  const [dragging, setDragging] = useState<Layout>({});
+  const [dropped, setDropped] = useState<Record<string, Dropped>>({});
+  const [layoutSeen, setLayoutSeen] = useState(layout);
+  if (layoutSeen !== layout) {
+    setLayoutSeen(layout);
+    const kept = Object.entries(dropped).filter(([key, d]) => samePosition(layout?.[key], d.base));
+    if (kept.length !== Object.keys(dropped).length) setDropped(Object.fromEntries(kept));
+  }
+  const moved = useMemo<Layout>(() => {
+    const out: Layout = {};
+    for (const [key, d] of Object.entries(dropped)) out[key] = d.position;
+    return { ...out, ...dragging };
+  }, [dropped, dragging]);
   const flow = useReactFlow();
   const flowStore = useStoreApi();
   const [pinned, setPinned] = useState<DetailsTarget | null>(null);
@@ -187,12 +214,50 @@ function GraphCanvas({
     [graph, moved, positions, nodeState],
   );
 
+  useEffect(() => {
+    if (ready) performance.mark("schema graph: drawn");
+  }, [ready]);
+
+  // Zoom-driven styling, written to the element (see ZoomLevel).
+  const applyZoom = useCallback(
+    (zoom: number) => {
+      const el = wrapper.current;
+      if (!el) return;
+      el.style.setProperty("--graph-zoom", String(zoom));
+      const lod = nextLod(store.get().lod, zoom);
+      if (el.dataset.lod !== lod) el.dataset.lod = lod;
+      store.set({ lod });
+    },
+    [store],
+  );
+
+  // The view keeps fitting the pane (a pane shown after mounting hidden, a
+  // resized split, a rotated phone) until the reader moves it themselves.
+  const autoFit = useRef(true);
+  useEffect(() => {
+    const el = wrapper.current;
+    if (!el || !ready) return;
+    let size = `${el.clientWidth}x${el.clientHeight}`;
+    const observer = new ResizeObserver(() => {
+      const next = `${el.clientWidth}x${el.clientHeight}`;
+      if (next === size) return;
+      size = next;
+      // Next frame: fitting inside the observer's callback would resize
+      // observed content again ("ResizeObserver loop" warnings).
+      if (autoFit.current && el.clientWidth > 0 && el.clientHeight > 0)
+        requestAnimationFrame(() => void flow.fitView({ ...FIT }));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ready, flow]);
+
   /** Pans (never zooms) just enough to bring a table into view. */
   const reveal = useCallback(
     (key: string) => {
       const box = boxOf(key);
       const el = wrapper.current;
       if (!box || !el) return;
+      autoFit.current = false;
       const { x, y, zoom } = flow.getViewport();
       const left = box.x * zoom + x;
       const top = box.y * zoom + y;
@@ -218,6 +283,7 @@ function GraphCanvas({
       const box = boxOf(key);
       const el = wrapper.current;
       if (!box || !el) return;
+      autoFit.current = false;
       const fit = Math.min(
         el.clientWidth / (box.width + 320),
         el.clientHeight / (box.height + 200),
@@ -280,6 +346,9 @@ function GraphCanvas({
         position,
         width: size.width,
         height: size.height,
+        // Sizes are computed, not measured: saying so spares React Flow a
+        // measure-and-update round on every new node object (each drag frame).
+        measured: size,
         data: nodeData.get(table.key)!,
         draggable: editable,
         selectable: false,
@@ -333,12 +402,15 @@ function GraphCanvas({
         y1 = Math.max(y1, p.y + size.height);
       }
       if (x0 === Infinity) continue;
+      const width = x1 - x0 + GROUP_PADDING.side * 2;
+      const height = y1 - y0 + GROUP_PADDING.top + GROUP_PADDING.bottom;
       boxes.push({
         id: `group:${area.id}`,
         type: "tableGroup",
         position: { x: x0 - GROUP_PADDING.side, y: y0 - GROUP_PADDING.top },
-        width: x1 - x0 + GROUP_PADDING.side * 2,
-        height: y1 - y0 + GROUP_PADDING.top + GROUP_PADDING.bottom,
+        width,
+        height,
+        measured: { width, height },
         data: { name: area.name, color: area.color, schema: area.schema },
         draggable: false,
         selectable: false,
@@ -365,6 +437,7 @@ function GraphCanvas({
           position: { x: box.position.x + box.width / 2, y: box.position.y + box.height / 2 },
           width: 1,
           height: 1,
+          measured: { width: 1, height: 1 },
           data: box.data,
           draggable: false,
           selectable: false,
@@ -376,71 +449,81 @@ function GraphCanvas({
     return [...out, ...tables, ...labels];
   }, [graph, positions, moved, nodeState, nodeData, groups, editable, schemaColors]);
 
-  // Every placed table's box: the edges route around them.
-  const rects = useMemo(() => {
-    const out = new Map<string, Rect>();
-    for (const table of graph.tables) {
-      const p = moved[table.key] ?? positions[table.key];
-      if (p)
-        out.set(table.key, { ...p, ...tableSize(table, graph.multiSchema, nodeState[table.key]) });
-    }
-    return out;
-  }, [graph, positions, moved, nodeState]);
-
+  // Every placed table's box: the edges route around them. Routing all edges
+  // costs tens of milliseconds at 300 tables, so while tables are dragged only
+  // the edges touching them are routed again; the rest keep the routes of the
+  // last drop, and everything is routed once the pointer is up.
+  const rectsOf = useCallback(
+    (live: Layout) => {
+      const out = new Map<string, Rect>();
+      for (const table of graph.tables) {
+        const p = live[table.key] ?? positions[table.key];
+        if (p)
+          out.set(table.key, {
+            ...p,
+            ...tableSize(table, graph.multiSchema, nodeState[table.key]),
+          });
+      }
+      return out;
+    },
+    [graph, positions, nodeState],
+  );
+  const settledRects = useMemo(() => {
+    const settled: Layout = {};
+    for (const [key, d] of Object.entries(dropped)) settled[key] = d.position;
+    return rectsOf(settled);
+  }, [rectsOf, dropped]);
+  const settledRoutes = useMemo(
+    () => routeAll(graph, settledRects, nodeState, graph.edges),
+    [graph, settledRects, nodeState],
+  );
   const edges = useMemo<RelationFlowEdge[]>(() => {
-    const obstacles = [...rects.values()];
-    const anchor = (key: string, column: string | undefined, kind: EdgeModel["kind"]) =>
-      rects.get(key)!.y +
-      (kind === "reads"
-        ? NODE.header / 2
-        : columnAnchorY(graph.byKey.get(key)!, column, nodeState[key]));
+    const live = Object.keys(dragging).length ? rectsOf(moved) : settledRects;
+    const touched = graph.edges.filter((e) => dragging[e.source] || dragging[e.target]);
+    const fresh = touched.length ? routeAll(graph, live, nodeState, touched) : undefined;
     return graph.edges
-      .filter((e) => rects.has(e.source) && rects.has(e.target))
+      .filter((e) => live.has(e.source) && live.has(e.target))
       .map((e) => ({
         id: e.id,
         source: e.source,
         target: e.target,
         type: "relation",
-        data: {
-          model: e,
-          route: route(
-            {
-              id: e.id,
-              source: rects.get(e.source)!,
-              target: rects.get(e.target)!,
-              sourceY: anchor(e.source, e.sourceColumn, e.kind),
-              targetY: anchor(e.target, e.targetColumn, e.kind),
-            },
-            obstacles,
-          ),
-        },
+        data: { model: e, route: fresh?.get(e.id) ?? settledRoutes.get(e.id)! },
         selectable: false,
         focusable: false,
         zIndex: 1,
       }));
-  }, [graph, rects, nodeState]);
+  }, [graph, dragging, moved, rectsOf, settledRects, settledRoutes, nodeState]);
 
   // ---- Editing: moving tables ----------------------------------------------
   // Drag stop can fire before React re-renders: the latest moves live here.
-  const movedRef = useRef<Layout>({});
+  const draggingRef = useRef<Layout>({});
   const onNodesChange = useCallback(
     (changes: NodeChange<TableFlowNode | GroupFlowNode | AreaLabelFlowNode>[]) => {
       const next: Layout = {};
       for (const c of changes) if (c.type === "position" && c.position) next[c.id] = c.position;
       if (Object.keys(next).length) {
-        movedRef.current = { ...movedRef.current, ...next };
-        setMoved(movedRef.current);
+        draggingRef.current = { ...draggingRef.current, ...next };
+        setDragging(draggingRef.current);
       }
     },
     [],
   );
   const onNodeDragStop = useCallback(
-    (_: unknown, _node: Node, dragged: Node[]) => {
+    (_: unknown, _node: Node, moves: Node[]) => {
       const out: Layout = {};
-      for (const n of dragged) out[n.id] = movedRef.current[n.id] ?? n.position;
+      const drops: Record<string, Dropped> = {};
+      for (const n of moves) {
+        const position = draggingRef.current[n.id] ?? n.position;
+        out[n.id] = position;
+        drops[n.id] = { position, base: layout?.[n.id] };
+      }
+      draggingRef.current = {};
+      setDragging({});
+      setDropped((current) => ({ ...current, ...drops }));
       onLayoutChange?.(out);
     },
-    [onLayoutChange],
+    [onLayoutChange, layout],
   );
 
   // ---- Keyboard -------------------------------------------------------------
@@ -451,11 +534,9 @@ function GraphCanvas({
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (
-      isEditableTarget(event.target) ||
-      (event.target as HTMLElement).closest("button, a, [role=dialog]")
-    )
-      return;
+    const target = event.target as HTMLElement;
+    // Toolbar buttons keep their keys; a node's buttons never hold focus.
+    if (isEditableTarget(target) || target.closest("button, a, [role=dialog]")) return;
     const current = store.get().selected;
     const arrows: Record<string, Direction> = {
       ArrowLeft: "left",
@@ -498,6 +579,22 @@ function GraphCanvas({
               transform: flowStore.getState().transform,
             },
       );
+    } else if ((event.key === "e" || event.key === "E") && current) {
+      // Unfold (or fold) the selection's partitions and extra columns: the
+      // keyboard's way to the buttons in a node, which are not tab stops.
+      const table = graph.byKey.get(current);
+      const state = store.get().nodeState[current];
+      if (!table) return;
+      const open = !(state?.partitions || state?.allColumns);
+      store.set({
+        nodeState: {
+          ...store.get().nodeState,
+          [current]: {
+            partitions: open && table.partitions.length > 0,
+            allColumns: open && table.columns.length > NODE.maxColumns,
+          },
+        },
+      });
     } else if (event.key === "Escape" && pinned) {
       setPinned(null);
     } else if (event.key === "Escape" && current) {
@@ -507,6 +604,7 @@ function GraphCanvas({
     } else if (event.key === "-" || event.key === "_") {
       void flow.zoomOut({ duration: 200 });
     } else if (event.key === "0") {
+      autoFit.current = true;
       void flow.fitView({ ...FIT, duration: 300 });
     } else {
       return;
@@ -613,6 +711,15 @@ function GraphCanvas({
             }}
             onNodeMouseLeave={() => store.set({ hovered: null })}
             onPaneClick={() => select(null)}
+            onMoveStart={(event) => {
+              // A wheel, pinch or drag of the reader's: stop fitting for them.
+              if (event) autoFit.current = false;
+            }}
+            onInit={(instance) => {
+              // Mounted inside a hidden pane: fit for real once it has a size.
+              const el = wrapper.current;
+              if (el && el.clientWidth > 0) void instance.fitView({ ...FIT });
+            }}
             fitView
             fitViewOptions={FIT}
             minZoom={0.05}
@@ -629,14 +736,13 @@ function GraphCanvas({
             panOnScroll
             zoomOnPinch
             zoomActivationKeyCode={["Meta", "Control"]}
-            // Every table stays mounted: panning is then a CSS transform with
-            // no React work, which measured smoother at 300 tables than
-            // mounting and unmounting tables at the viewport's edges.
-            onlyRenderVisibleElements={false}
+            // Zoomed in, only the tables on screen are mounted; zoomed out,
+            // they are, but light (overview bodies, no shadows, no marks).
+            onlyRenderVisibleElements
             attributionPosition="bottom-right"
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.25} />
-            <ZoomVariable target={wrapper} />
+            <ZoomLevel onZoom={applyZoom} />
             {/* One bar across the top: search left, legend and controls right,
                 wrapping on a phone. The bar itself lets drags reach the pane. */}
             <Panel
@@ -681,23 +787,79 @@ function GraphCanvas({
           onPick={(key) => {
             select(key);
             zoomToTable(key);
-            wrapper.current?.focus({ preventScroll: true });
           }}
+          // After a pick, keys go on to the graph (arrows, Enter, E), not
+          // back to the search button.
+          pickedFocus={wrapper}
         />
       </div>
     </GraphUiContext.Provider>
   );
 }
 
+interface Dropped {
+  position: { x: number; y: number };
+  /** `layout` for the table when it was dropped: a change there ends the override. */
+  base: { x: number; y: number } | undefined;
+}
+
+function samePosition(
+  a: { x: number; y: number } | undefined,
+  b: { x: number; y: number } | undefined,
+) {
+  return a === b || (!!a && !!b && a.x === b.x && a.y === b.y);
+}
+
+/** Routes for `edges` among the tables in `rects` (see routing.ts). */
+function routeAll(
+  graph: GraphModel,
+  rects: Map<string, Rect>,
+  nodeState: Record<string, NodeState>,
+  edges: EdgeModel[],
+): Map<string, Route> {
+  const obstacles = [...rects.values()];
+  const anchor = (key: string, column: string | undefined, kind: EdgeModel["kind"]) =>
+    rects.get(key)!.y +
+    (kind === "reads"
+      ? NODE.header / 2
+      : columnAnchorY(graph.byKey.get(key)!, column, nodeState[key]));
+  const out = new Map<string, Route>();
+  for (const e of edges) {
+    if (!rects.has(e.source) || !rects.has(e.target)) continue;
+    out.set(
+      e.id,
+      route(
+        {
+          id: e.id,
+          source: rects.get(e.source)!,
+          target: rects.get(e.target)!,
+          sourceY: anchor(e.source, e.sourceColumn, e.kind),
+          targetY: anchor(e.target, e.targetColumn, e.kind),
+        },
+        obstacles,
+      ),
+    );
+  }
+  return out;
+}
+
 /**
- * The zoom as a CSS variable on the graph (`--graph-zoom`): zoomed-out labels
- * scale against it to stay legible, with no React render per zoom step.
+ * The zoom, written straight to the graph's element: `--graph-zoom` (zoomed-out
+ * labels scale against it) and `data-lod` (which body the nodes show), with
+ * no React render per zoom step. The level of detail also goes to the store,
+ * once per crossing, for nodes that have not mounted their rows yet.
  */
-function ZoomVariable({ target }: { target: React.RefObject<HTMLDivElement | null> }) {
-  const zoom = useStore((s) => s.transform[2]);
-  useEffect(() => {
-    target.current?.style.setProperty("--graph-zoom", String(zoom));
-  }, [target, zoom]);
+function ZoomLevel({ onZoom }: { onZoom: (zoom: number) => void }) {
+  const flowStore = useStoreApi();
+  useLayoutEffect(() => {
+    let last = flowStore.getState().transform[2];
+    onZoom(last);
+    return flowStore.subscribe((s) => {
+      if (s.transform[2] === last) return;
+      last = s.transform[2];
+      onZoom(last);
+    });
+  }, [flowStore, onZoom]);
   return null;
 }
 

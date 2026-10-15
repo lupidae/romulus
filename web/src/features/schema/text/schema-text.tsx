@@ -34,7 +34,11 @@ export interface SchemaTextProps {
   onFormatChange?: (format: TextFormat) => void;
   /** Read-only by default; a draft passes false with its Yjs binding in `sqlExtensions`. */
   readOnly?: boolean;
-  /** Extra CodeMirror extensions for the SQL editor (fixed for its life). */
+  /**
+   * Extra CodeMirror extensions for the SQL editor, read once when it is
+   * created (memoize them). With a binding here (`yCollab`), the binding owns
+   * the text: `texts.sql` only seeds the editor and must match the Y.Text.
+   */
   sqlExtensions?: Extension[];
   /** Mermaid node names carry the schema when the model spans several. */
   multiSchema?: boolean;

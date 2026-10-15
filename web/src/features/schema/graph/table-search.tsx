@@ -17,6 +17,8 @@ interface TableSearchProps {
   graph: GraphModel;
   /** A table (and, for a column hit, which column) was chosen. */
   onPick: (key: string, column?: string) => void;
+  /** Where focus goes after a pick (Esc returns it to whatever opened the search). */
+  pickedFocus?: React.RefObject<HTMLElement | null>;
 }
 
 function Highlight({ text, match }: { text: string; match?: [number, number] }) {
@@ -36,7 +38,8 @@ function Highlight({ text, match }: { text: string; match?: [number, number] }) 
  * Find a table by name (or a column, as `table.column`) and focus it: a
  * combobox in a dialog, arrow keys to move, Enter to go, Esc to come back.
  */
-export function TableSearch({ open, onOpenChange, graph, onPick }: TableSearchProps) {
+export function TableSearch({ open, onOpenChange, graph, onPick, pickedFocus }: TableSearchProps) {
+  const picked = useRef(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
@@ -47,6 +50,7 @@ export function TableSearch({ open, onOpenChange, graph, onPick }: TableSearchPr
   const pick = (index: number) => {
     const hit = hits[index];
     if (!hit) return;
+    picked.current = true;
     onOpenChange(false);
     onPick(hit.table.key, hit.column);
   };
@@ -79,7 +83,16 @@ export function TableSearch({ open, onOpenChange, graph, onPick }: TableSearchPr
         }
       }}
     >
-      <DialogContent hideClose className="max-w-lg gap-0 overflow-hidden p-0">
+      <DialogContent
+        hideClose
+        className="max-w-lg gap-0 overflow-hidden p-0"
+        onCloseAutoFocus={(event) => {
+          if (!picked.current || !pickedFocus?.current) return;
+          picked.current = false;
+          event.preventDefault();
+          pickedFocus.current.focus({ preventScroll: true });
+        }}
+      >
         <DialogTitle className="sr-only">Find a table</DialogTitle>
         <DialogDescription className="sr-only">
           Type a table or column name. Arrow keys move through the results, Enter shows the table.

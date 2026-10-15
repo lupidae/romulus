@@ -4,7 +4,8 @@
 // blog and showcase are remus's own examples (lupidae/remus, examples/*/out),
 // rendered here with remus-sql/-dbml/-mermaid 0.1.1; blog-v2 is blog with a
 // release's worth of changes, and blog-diff.json is romulus-diff's output for
-// blog → blog-v2. The others are built in code (synthetic.ts).
+// blog → blog-v2. The others are built in code (synthetic.ts). showcase.json
+// also carries remus 0.2's `partition_key` on its sub-partitioned partition.
 
 import { parseStatusMap, type SchemaDiffInput } from "../diff";
 import type { Groups, Layout } from "../layout";
@@ -33,13 +34,13 @@ const json = (schema: Schema) => `${JSON.stringify(schema, null, 2)}\n`;
 
 /** Where the blog's tables sat in v1: the diff shows new tables placed next to them. */
 const BLOG_V1_LAYOUT: Layout = {
-  "public.users": { x: 0, y: 150 },
-  "public.profiles": { x: 0, y: 470 },
-  "public.posts": { x: 400, y: 0 },
-  "public.tags": { x: 400, y: 420 },
-  "public.comments": { x: 800, y: 0 },
-  "public.post_tags": { x: 800, y: 300 },
-  "public.published_posts": { x: 800, y: 470 },
+  "public.users": { x: 0, y: 120 },
+  "public.profiles": { x: 0, y: 380 },
+  "public.posts": { x: 340, y: 0 },
+  "public.tags": { x: 340, y: 340 },
+  "public.comments": { x: 700, y: 0 },
+  "public.post_tags": { x: 700, y: 250 },
+  "public.published_posts": { x: 700, y: 390 },
 };
 
 export const FIXTURES: Fixture[] = [

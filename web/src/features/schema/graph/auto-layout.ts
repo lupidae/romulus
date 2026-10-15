@@ -51,9 +51,10 @@ const LAYERED: LayoutOptions = {
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
   "elk.randomSeed": "1",
-  "elk.spacing.nodeNode": "40",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "88",
-  "elk.spacing.componentComponent": "56",
+  "elk.spacing.nodeNode": "32",
+  // Room for two crow's feet and a bend between layers, no more.
+  "elk.layered.spacing.nodeNodeBetweenLayers": "72",
+  "elk.spacing.componentComponent": "48",
   "elk.separateConnectedComponents": "true",
   "elk.aspectRatio": "1.4",
   "elk.layered.nodePlacement.strategy": "BRANDES_KOEPF",
@@ -65,7 +66,7 @@ const LAYERED: LayoutOptions = {
 const PACKED: LayoutOptions = {
   "elk.algorithm": "rectpacking",
   "elk.aspectRatio": "1.6",
-  "elk.spacing.nodeNode": "88",
+  "elk.spacing.nodeNode": "72",
   "elk.padding": "[top=0,left=0,bottom=0,right=0]",
 };
 
@@ -84,6 +85,18 @@ const overlaps = (a: Rect, b: Rect, margin: number) =>
   b.x < a.x + a.width + margin &&
   a.y < b.y + b.height + margin &&
   b.y < a.y + a.height + margin;
+
+const extent = (rects: Rect[]): Rect => {
+  const x = Math.min(...rects.map((r) => r.x));
+  const y = Math.min(...rects.map((r) => r.y));
+  return {
+    x,
+    y,
+    width: Math.max(...rects.map((r) => r.x + r.width)) - x,
+    height: Math.max(...rects.map((r) => r.y + r.height)) - y,
+  };
+};
+const area = (r: Rect) => r.width * r.height;
 
 const byId = <T extends { id: string }>(a: T, b: T) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
@@ -243,7 +256,9 @@ async function elkLayout(
     // One partition and no groups: its clusters are the top level.
     if (partitions.length === 1 && !parts.length)
       parts.push(...containerNode("root", members, shaping).children!);
-    else parts.push(containerNode(`part:${partition}`, members, shaping));
+    // Several schemas: each gets an area drawn around it, so it needs the
+    // same room around its tables as a group.
+    else parts.push(containerNode(`part:${partition}`, members, shaping, GROUP_FRAME));
   }
   const aspect = String(Math.min(2.4, Math.max(0.8, aspectRatio)).toFixed(2));
   const root: ElkNode = {
@@ -380,25 +395,52 @@ export async function placeMissing(request: LayoutRequest, elk: ElkLike): Promis
     }
 
     const anchors = neighbours(ids);
-    let target: Position;
+    let at: Position;
     if (anchors.length) {
-      // Right of the neighbours, vertically centred on them: the reading
-      // direction of the first layout (referenced tables on the left).
-      let right = -Infinity;
-      let cy = 0;
+      // Next to the neighbours: right of them first (the reading direction of
+      // the first layout, referenced tables on the left), else below, above
+      // or left; of the free spots found, the one that grows the diagram
+      // least for its distance, so new tables do not string out sideways.
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
       for (const a of anchors) {
         const n = size.get(a)!;
-        right = Math.max(right, known[a]!.x + n.width);
-        cy += known[a]!.y + n.height / 2;
+        x0 = Math.min(x0, known[a]!.x);
+        y0 = Math.min(y0, known[a]!.y);
+        x1 = Math.max(x1, known[a]!.x + n.width);
+        y1 = Math.max(y1, known[a]!.y + n.height);
       }
-      target = { x: right + GAP, y: cy / anchors.length - height / 2 };
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      const targets: Position[] = [
+        { x: x1 + GAP, y: cy - height / 2 },
+        { x: cx - width / 2, y: y1 + GAP },
+        { x: cx - width / 2, y: y0 - GAP - height },
+        { x: x0 - GAP - width, y: cy - height / 2 },
+      ];
+      const bounds = extent(taken);
+      let best = Infinity;
+      at = targets[0]!;
+      targets.forEach((target, i) => {
+        const spot = freeSpot(target, { width, height }, taken);
+        const grown = extent([...taken, { ...spot, width, height }]);
+        const growth = Math.sqrt(Math.max(0, area(grown) - area(bounds)));
+        const distance = Math.hypot(spot.x + width / 2 - cx, spot.y + height / 2 - cy);
+        // Ties go to the earlier direction (right, below, above, left).
+        const cost = distance + growth + i;
+        if (cost < best) {
+          best = cost;
+          at = spot;
+        }
+      });
     } else {
       // Unrelated to anything placed: a new row under the diagram.
       const left = Math.min(...taken.map((t) => t.x));
       const bottom = Math.max(...taken.map((t) => t.y + t.height));
-      target = { x: left, y: bottom + GAP * 1.5 };
+      at = freeSpot({ x: left, y: bottom + GAP * 1.5 }, { width, height }, taken);
     }
-    const at = freeSpot(target, { width, height }, taken);
     for (const n of component) {
       const p = { x: at.x + relative[n.id]!.x, y: at.y + relative[n.id]!.y };
       out[n.id] = p;

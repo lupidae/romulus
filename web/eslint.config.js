@@ -45,6 +45,7 @@ export default tseslint.config(
   {
     ignores: [
       "dist",
+      "dist-perf",
       "test-results",
       "playwright-report",
       "src/routeTree.gen.ts",

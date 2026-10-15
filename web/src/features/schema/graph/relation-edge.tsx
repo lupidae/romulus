@@ -1,4 +1,4 @@
-import { type Edge, type EdgeProps, useStore } from "@xyflow/react";
+import type { Edge, EdgeProps } from "@xyflow/react";
 import { memo } from "react";
 
 import { cn } from "@/lib/utils";
@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import type { ChangeStatus } from "../diff";
 import type { EdgeModel } from "./build";
 import type { Cardinality } from "./cardinality";
-import { OVERVIEW_ZOOM } from "./geometry";
 import { useGraphUi } from "./graph-ui";
 import { type Route, roundedPath } from "./routing";
 
@@ -75,7 +74,6 @@ function RelationEdgeView({ id, source, target, data }: EdgeProps<RelationFlowEd
     if (st.hovered) return st.hovered === source || st.hovered === target ? "hover" : "normal";
     return "normal";
   });
-  const overview = useStore((st) => st.transform[2] < OVERVIEW_ZOOM);
   if (!data) return null;
   const { model, route } = data;
   const points = route.points;
@@ -108,8 +106,9 @@ function RelationEdgeView({ id, source, target, data }: EdgeProps<RelationFlowEd
           (reads || model.status === "removed") && "[stroke-dasharray:5_4]",
         )}
       />
-      {model.cardinality && !overview && (
-        <g className="stroke-[1.5]">
+      {/* Hidden by CSS when zoomed out (`data-lod`): too small to read, costly to paint. */}
+      {model.cardinality && (
+        <g className="sg-marks stroke-[1.5]">
           <EndMark
             x={S.x}
             y={S.y}

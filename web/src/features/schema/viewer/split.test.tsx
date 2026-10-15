@@ -29,13 +29,13 @@ describe("Split", () => {
     const user = userEvent.setup();
     render(<Harness />);
     const handle = screen.getByRole("separator", { name: "Resize the panes" });
-    expect(handle).toHaveAttribute("aria-valuenow", "60");
+    expect(handle).toHaveAttribute("aria-valuenow", "62");
     await user.tab();
     expect(handle).toHaveFocus();
     await user.keyboard("{ArrowRight}");
-    expect(handle).toHaveAttribute("aria-valuenow", "63");
+    expect(handle).toHaveAttribute("aria-valuenow", "65");
     await user.keyboard("{Shift>}{ArrowLeft}{/Shift}");
-    expect(handle).toHaveAttribute("aria-valuenow", "53");
+    expect(handle).toHaveAttribute("aria-valuenow", "55");
   });
 
   test("Home and End go to the limits, Enter and double-click reset", async () => {

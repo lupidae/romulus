@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 
 export const MIN_RATIO = 0.25;
 export const MAX_RATIO = 0.8;
-export const DEFAULT_RATIO = 0.6;
+/** The graph is the primary pane. */
+export const DEFAULT_RATIO = 0.62;
 
 const clamp = (r: number) => Math.min(MAX_RATIO, Math.max(MIN_RATIO, r));
 
@@ -18,6 +19,9 @@ interface SplitProps {
   end: ReactNode;
   /** Name of what the handle resizes, for assistive tech. */
   label: string;
+  /** Attributes for each pane's element (ids and roles when tabs switch them). */
+  startProps?: React.HTMLAttributes<HTMLDivElement>;
+  endProps?: React.HTMLAttributes<HTMLDivElement>;
   className?: string;
 }
 
@@ -33,6 +37,8 @@ export function Split({
   start,
   end,
   label,
+  startProps,
+  endProps,
   className,
 }: SplitProps) {
   const root = useRef<HTMLDivElement>(null);
@@ -75,6 +81,7 @@ export function Split({
   return (
     <div ref={root} className={cn("flex h-full min-h-0 w-full", className)}>
       <div
+        {...startProps}
         hidden={show === "end"}
         className="min-w-0"
         // Alone, a pane takes the whole width (a grow under 1 would leave a gap).
@@ -111,6 +118,7 @@ export function Split({
         )}
       />
       <div
+        {...endProps}
         hidden={show === "start"}
         className="min-w-0"
         style={{ flex: show === "both" ? `${1 - ratio} 1 0%` : "1 1 0%" }}

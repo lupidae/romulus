@@ -20,11 +20,26 @@ export const NODE = {
   collapsedColumns: 20,
 } as const;
 
+/** Fit to screen: fills the pane, with room for the toolbars, never past 100%. */
+export const FIT_VIEW = {
+  padding: { top: "64px", bottom: "56px", left: "24px", right: "24px" },
+  maxZoom: 1,
+} as const;
+
 /** Room around a group's members for its tinted area, and above them for its label. */
 export const GROUP_PADDING = { top: 60, side: 24, bottom: 24 } as const;
 
-/** Below this zoom a node shows only its name: rows are unreadable, and 300 nodes stay cheap. */
-export const OVERVIEW_ZOOM = 0.42;
+/**
+ * Below this zoom a node shows only its name: rows are unreadable, and 300
+ * nodes stay cheap. Two thresholds (hysteresis), so a zoom hovering around the
+ * line does not flip every node back and forth.
+ */
+export const OVERVIEW_ZOOM = { enter: 0.4, leave: 0.46 } as const;
+
+export function nextLod(current: "overview" | "detail", zoom: number): "overview" | "detail" {
+  if (current === "overview") return zoom > OVERVIEW_ZOOM.leave ? "detail" : "overview";
+  return zoom < OVERVIEW_ZOOM.enter ? "overview" : "detail";
+}
 
 /** JetBrains Mono advances 0.6em: 7.2px at 12px, 7.8px at 13px. */
 const CHAR = 7.2;

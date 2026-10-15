@@ -19,7 +19,9 @@
     "e2e": "playwright test",
     "gen": "openapi-typescript src/api/openapi.json -o src/api/schema.gen.ts && prettier --write src/api/schema.gen.ts",
     "icons:add": "node scripts/add-icon.mjs",
-    "e2e:dev": "playwright test -c playwright.dev.config.ts"
+    "e2e:dev": "playwright test -c playwright.dev.config.ts",
+    "build:perf": "VITE_DEV_ROUTES=true vite build --outDir dist-perf",
+    "perf": "playwright test -c playwright.perf.config.ts --headed"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

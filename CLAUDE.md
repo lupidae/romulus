@@ -31,6 +31,7 @@ just dev         # up + API (cargo run) + web (vite); open $ROMULUS_PUBLIC_URL/a
 just check       # the CI gate: fmt, clippy + tests (--all-features), sqlx prepare --check, gen-check, web, build
 just e2e         # Playwright: production build + its own API, on the preview origin (needs `just up`)
 just e2e-dev     # Playwright on dev-only screens (/app/dev/*, e.g. the schema viewer): dev server, no stack
+just perf        # schema viewer frame times at 300 tables: headed, production build with dev routes
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice

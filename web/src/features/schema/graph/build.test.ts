@@ -82,6 +82,40 @@ describe("buildGraph", () => {
     expect(graph.partitionOwner.get("audit.events_2027_h1")).toBe("audit.events");
   });
 
+  test("carries a sub-partitioned partition's own key (remus 0.2)", () => {
+    const events = buildGraph({ schema: parseSchema(showcase) }).byKey.get("audit.events")!;
+    expect(events.partitions.find((p) => p.name === "events_2027")?.partitionKey).toBe("HASH (id)");
+    expect(events.partitions.find((p) => p.name === "events_2026")?.partitionKey).toBeNull();
+  });
+
+  test("a view reading several partitions of one table reads it once", () => {
+    const schema = parseSchema(showcase);
+    const view = schema.entities!.find((e) => e.name === "open_orders")!;
+    view.depends_on = [
+      { schema: "audit", name: "events_2026" },
+      { schema: "audit", name: "events_2027_h1" },
+      { schema: "audit", name: "events" },
+    ];
+    const ids = buildGraph({ schema }).edges.map((e) => e.id);
+    expect(ids.filter((id) => id === "reads:shop.open_orders:audit.events")).toHaveLength(1);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("says so when two relations share a qualified name, and draws the first", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const schema = parseSchema(blog);
+    const users = schema.entities!.find((e) => e.name === "users")!;
+    // Schema "public.x" + table "y" and schema "public" + table "x.y".
+    schema.entities!.push(
+      { ...users, schema: "public.x", name: "y" },
+      { ...users, schema: "public", name: "x.y" },
+    );
+    const graph = buildGraph({ schema });
+    expect(graph.byKey.get("public.x.y")?.schema).toBe("public.x");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('share the key "public.x.y"'));
+    warn.mockRestore();
+  });
+
   describe("in diff mode", () => {
     const graph = buildGraph({
       schema: parseSchema(blogV2),

@@ -24,6 +24,7 @@ import {
 import type { Layout } from "@/features/schema/layout";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
+import { devRoutes } from "@/lib/dev-routes";
 
 import { orgs, user } from "./-fixtures";
 
@@ -49,9 +50,11 @@ export const Route = createFileRoute("/dev/viewer")({
   }),
   loaderDeps: ({ search }) => ({ fixture: search.fixture ?? "small" }),
   beforeLoad: () => {
-    if (!import.meta.env.DEV) throw notFound();
+    if (!devRoutes) throw notFound();
   },
   loader: ({ deps }) => fixture(deps.fixture).load(),
+  // The skeleton at once: a 300-table fixture takes a moment to build.
+  pendingMs: 0,
   head: () => ({ meta: [{ title: "Schema viewer – romulus" }] }),
   pendingComponent: () => (
     <Frame>

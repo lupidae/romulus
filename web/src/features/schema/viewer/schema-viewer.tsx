@@ -1,5 +1,5 @@
 import type { Extension } from "@codemirror/state";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 
 import { CodeIcon, CollapseIcon, ExpandIcon, NetworkRightIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,7 @@ export function SchemaViewer({
   const [mobilePane, setMobilePane] = useState<"graph" | "text">("graph");
   const [fullScreen, setFullScreen] = useState(false);
   const wide = useMediaQuery("(min-width: 48rem)");
+  const uid = useId();
 
   // Esc leaves full screen, unless something on top (a dialog, the editor's
   // search, a selection in the graph) used it first.
@@ -194,11 +195,12 @@ export function SchemaViewer({
             className="flex-1"
           >
             <TabsList aria-label="Pane" className="grid w-full grid-cols-2">
-              <TabsTrigger value="graph">
+              {/* The panes are the split's, kept mounted: the tabs point at them. */}
+              <TabsTrigger value="graph" id={`${uid}-tab-graph`} aria-controls={`${uid}-graph`}>
                 <NetworkRightIcon />
                 Graph
               </TabsTrigger>
-              <TabsTrigger value="text">
+              <TabsTrigger value="text" id={`${uid}-tab-text`} aria-controls={`${uid}-text`}>
                 <CodeIcon />
                 SQL
               </TabsTrigger>
@@ -214,6 +216,16 @@ export function SchemaViewer({
         label="Resize the graph and the text"
         start={graphPane}
         end={textPane}
+        startProps={
+          wide
+            ? undefined
+            : { id: `${uid}-graph`, role: "tabpanel", "aria-labelledby": `${uid}-tab-graph` }
+        }
+        endProps={
+          wide
+            ? undefined
+            : { id: `${uid}-text`, role: "tabpanel", "aria-labelledby": `${uid}-tab-text` }
+        }
         className="flex-1"
       />
     </div>

@@ -33,6 +33,10 @@ describe("parseStatusMap", () => {
     expect(parseStatusMap(blogDiff.status).entities.public!.profiles!.status).toBe("removed");
   });
 
+  test("refuses a map without entities, so lookups never meet undefined", () => {
+    expect(() => parseStatusMap({})).toThrow("status.entities is not a romulus-diff status map");
+  });
+
   test("refuses a status it does not know", () => {
     const broken = structuredClone(blogDiff.status);
     (broken.entities.public.users.columns as Record<string, string>).email = "renamed";

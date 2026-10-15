@@ -90,8 +90,32 @@ describe("placeMissing", () => {
       height = Math.max(height, layout[n.id]!.y + n.height);
     }
     expect(overlapping(req.nodes, layout)).toEqual([]);
-    expect(width / height).toBeGreaterThan(1);
+    // Screen-shaped, never a strip: six schema blocks pack about square.
+    expect(width / height).toBeGreaterThan(0.7);
     expect(width / height).toBeLessThan(3);
+  });
+
+  test("leaves room for each schema's area, so areas never overlap", async () => {
+    const req = request(largeFixture(120));
+    const layout = await placeMissing(req, elk);
+    const size = new Map(req.nodes.map((n) => [n.id, n]));
+    const pad = { top: 60, side: 24, bottom: 24 };
+    const areas = [...new Set(req.nodes.map((n) => n.partition))].map((schema) => {
+      const ids = req.nodes.filter((n) => n.partition === schema).map((n) => n.id);
+      const xs = ids.flatMap((id) => [layout[id]!.x, layout[id]!.x + size.get(id)!.width]);
+      const ys = ids.flatMap((id) => [layout[id]!.y, layout[id]!.y + size.get(id)!.height]);
+      return {
+        x0: Math.min(...xs) - pad.side,
+        x1: Math.max(...xs) + pad.side,
+        y0: Math.min(...ys) - pad.top,
+        y1: Math.max(...ys) + pad.bottom,
+      };
+    });
+    areas.forEach((a, i) =>
+      areas.slice(i + 1).forEach((b) => {
+        expect(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0).toBe(true);
+      }),
+    );
   });
 
   test("keeps each group's tables together", async () => {

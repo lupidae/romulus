@@ -42,7 +42,7 @@ export interface SchemaDiffInput {
 }
 
 export function entityStatus(status: StatusMap, ref: RelationRef): EntityStatus | undefined {
-  return status.entities[ref.schema]?.[ref.name];
+  return status.entities?.[ref.schema]?.[ref.name];
 }
 
 /** Statuses worth drawing: `unchanged` is drawn as no status at all. */
@@ -89,6 +89,7 @@ export function parseStatusMap(value: unknown): StatusMap {
     }
   };
   if (!isObject(value)) return fail("status");
+  if (!isObject(value.entities)) return fail("status.entities");
   nested(value.entities, "status.entities", (e, path) => {
     if (!isObject(e) || typeof e.status !== "string" || !STATUSES.has(e.status)) return fail(path);
     for (const key of ["columns", "constraints", "indexes", "policies"])

@@ -337,10 +337,20 @@ export interface Editor {
   view: EditorView;
   setDoc(doc: string): void;
   setHighlights(h: Highlights): void;
+  /** Without recreating the editor (and its binding): a role change, say. */
+  setReadOnly(readOnly: boolean): void;
   /** Scrolls a range near the top of the pane, without moving the cursor. */
   reveal(range: Range): void;
   openSearch(): void;
   destroy(): void;
+}
+
+function editability(readOnly: boolean): Extension {
+  return [
+    EditorState.readOnly.of(readOnly),
+    EditorView.editable.of(!readOnly),
+    EditorView.contentAttributes.of(readOnly ? { "aria-readonly": "true" } : {}),
+  ];
 }
 
 export function createEditor(parent: HTMLElement, options: EditorOptions): Editor {
@@ -366,17 +376,10 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
         syntaxHighlighting(highlight),
         theme,
         highlightField,
-        editable.of([
-          EditorState.readOnly.of(options.readOnly),
-          EditorView.editable.of(!options.readOnly),
-        ]),
+        editable.of(editability(options.readOnly)),
         // Read-only still takes focus and a caret: people select, search and
         // copy, and the caret is what selects a table in the graph.
-        EditorView.contentAttributes.of({
-          "aria-label": options.label,
-          tabindex: "0",
-          ...(options.readOnly ? { "aria-readonly": "true" } : {}),
-        }),
+        EditorView.contentAttributes.of({ "aria-label": options.label, tabindex: "0" }),
         EditorView.updateListener.of((update) => {
           if (!options.onCursor || !update.selectionSet) return;
           if (
@@ -398,6 +401,10 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     },
     setHighlights(h) {
       view.dispatch({ effects: setHighlights.of(h) });
+    },
+    setReadOnly(readOnly) {
+      if (view.state.readOnly === readOnly) return;
+      view.dispatch({ effects: editable.reconfigure(editability(readOnly)) });
     },
     reveal(range) {
       const at = Math.min(range.from, view.state.doc.length);

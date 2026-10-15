@@ -61,3 +61,25 @@
 .schema-graph .react-flow__attribution a {
   color: var(--color-faint-foreground);
 }
+
+/* Level of detail, flipped by one attribute on the graph (`data-lod`, set by
+   the zoom listener): crossing the threshold restyles nodes, it does not
+   re-render them. A node without rows yet keeps its overview body. */
+.schema-graph[data-lod="overview"] .sg-detail,
+.schema-graph[data-lod="detail"] .sg-node:has(> .sg-detail) .sg-overview {
+  display: none;
+}
+.schema-graph[data-lod="overview"] .sg-name,
+.schema-graph[data-lod="overview"] .sg-kind {
+  visibility: hidden;
+}
+.schema-graph[data-lod="overview"] .sg-header {
+  border-bottom-color: transparent;
+}
+/* Shadows and crow's feet are invisible that far out, and costly to paint. */
+.schema-graph[data-lod="overview"] .sg-node:not([data-selected]) {
+  box-shadow: none;
+}
+.schema-graph[data-lod="overview"] .sg-marks {
+  display: none;
+}

@@ -6,11 +6,15 @@ import { createContext, useContext, useSyncExternalStore } from "react";
 
 import type { NodeState } from "./geometry";
 
+/** Level of detail: rows are drawn only when they can be read. */
+export type Lod = "overview" | "detail";
+
 export interface GraphUiState {
   selected: string | null;
   hovered: string | null;
   /** Unfolded columns or partitions, by table key. */
   nodeState: Record<string, NodeState>;
+  lod: Lod;
 }
 
 export interface GraphUiStore {
@@ -20,7 +24,14 @@ export interface GraphUiStore {
 }
 
 export function createGraphUiStore(initial: Partial<GraphUiState> = {}): GraphUiStore {
-  let state: GraphUiState = { selected: null, hovered: null, nodeState: {}, ...initial };
+  // Overview until the zoom is known: no node mounts rows it may not show.
+  let state: GraphUiState = {
+    selected: null,
+    hovered: null,
+    nodeState: {},
+    lod: "overview",
+    ...initial,
+  };
   const listeners = new Set<() => void>();
   return {
     get: () => state,

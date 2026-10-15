@@ -1,5 +1,5 @@
-import { Handle, type Node, type NodeProps, Position, useStore } from "@xyflow/react";
-import { memo, useMemo } from "react";
+import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import {
   FingerprintIcon,
@@ -15,7 +15,8 @@ import { cn } from "@/lib/utils";
 
 import { type ChangeStatus, statusGlyph } from "../diff";
 import type { ColumnModel, EdgeModel, TableModel } from "./build";
-import { hasFooter, NODE, OVERVIEW_ZOOM, showsNullable, visibleColumnCount } from "./geometry";
+import { requestDetail } from "./detail-scheduler";
+import { hasFooter, NODE, showsNullable, visibleColumnCount } from "./geometry";
 import { useGraphUi, useGraphUiStore } from "./graph-ui";
 import { KIND_ICON, KIND_LABEL } from "./kind";
 import { StatusBadge } from "./status";
@@ -61,9 +62,7 @@ const ELSEWHERE = "\u0000elsewhere";
 
 function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
   const { table, multiSchema, schemaColor, edges, diffMode } = data;
-  const store = useGraphUiStore();
-  const overview = useStore((s) => s.transform[2] < OVERVIEW_ZOOM);
-  const nodeState = useGraphUi((s) => s.nodeState[id]);
+
   // The selected table when it is this one or a neighbour, "elsewhere" when it
   // is unrelated: the node re-renders only when that answer changes.
   const related = useGraphUi((s) => {
@@ -81,32 +80,16 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
           ? "dimmed"
           : "neighbour";
 
-  // Columns that join this table to the selected one (or, selected, to anything).
-  const joined = useMemo(() => {
-    const set = new Set<string>();
-    if (!related || related === ELSEWHERE) return set;
-    for (const e of edges) {
-      if (e.kind !== "fk") continue;
-      if (e.source === id && (related === id || e.target === related))
-        e.columns.forEach((c) => set.add(c));
-      if (e.target === id && (related === id || e.source === related))
-        e.refColumns.forEach((c) => set.add(c));
-    }
-    return set;
-  }, [edges, id, related]);
-
   const Icon = KIND_ICON[table.kind];
   const kindLabel = KIND_LABEL[table.kind];
   const isView = table.kind === "view" || table.kind === "materialized";
-  const visible = visibleColumnCount(table, nodeState);
   const quiet = diffMode && !table.status && emphasis !== "selected";
 
   return (
     <div
+      data-selected={emphasis === "selected" ? "" : undefined}
       className={cn(
-        "relative flex flex-col overflow-hidden rounded-lg border bg-card text-card-foreground",
-        // Shadows are costly to paint 300 times and invisible when zoomed out.
-        overview ? "shadow-none" : "shadow-raised",
+        "sg-node relative flex flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-raised",
         "transition-[opacity,box-shadow,border-color] duration-(--duration-fast)",
         table.status ? BORDER_STATUS[table.status] : "border-border-strong",
         emphasis === "selected" && "border-primary shadow-popover ring-3 ring-primary/20",
@@ -128,9 +111,8 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
       <div
         data-table-header=""
         className={cn(
-          "flex shrink-0 items-center gap-2 border-b border-border px-3",
+          "sg-header flex shrink-0 items-center gap-2 border-b border-border px-3",
           isView ? "bg-muted" : "bg-card",
-          overview && "border-b-0",
         )}
         style={{ height: NODE.header }}
       >
@@ -143,9 +125,8 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
         <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         <span
           className={cn(
-            "min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground",
+            "sg-name min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground",
             table.status === "removed" && "line-through decoration-destructive/60",
-            overview && "invisible",
           )}
         >
           {multiSchema && (
@@ -153,8 +134,8 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
           )}
           {table.name}
         </span>
-        {kindLabel && !overview && (
-          <span className="shrink-0 rounded-sm px-1.5 text-xs text-muted-foreground ring-1 ring-border-strong ring-inset">
+        {kindLabel && (
+          <span className="sg-kind shrink-0 rounded-sm px-1.5 text-xs text-muted-foreground ring-1 ring-border-strong ring-inset">
             {kindLabel === "materialized view"
               ? "materialized"
               : kindLabel === "foreign table"
@@ -165,57 +146,97 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
         {table.status && <StatusBadge status={table.status} />}
       </div>
 
-      {overview ? (
-        <OverviewBody table={table} width={width ?? NODE.minWidth} />
-      ) : (
-        <>
-          {table.comment && (
-            <p
-              className="shrink-0 truncate border-b border-border bg-muted/60 px-3 text-xs leading-5 text-muted-foreground"
-              style={{ height: NODE.comment }}
-            >
-              {table.comment}
-            </p>
-          )}
-          <ul className="shrink-0" style={{ paddingBlock: NODE.padding }}>
-            {table.columns.slice(0, visible).map((c) => (
-              <ColumnRow
-                key={c.name}
-                column={c}
-                joined={joined.has(c.name)}
-                diffMode={diffMode}
-                nullable={showsNullable(table)}
-              />
-            ))}
-          </ul>
-          {hasFooter(table) && (
-            <Footer
-              table={table}
-              hidden={table.columns.length - visible}
-              partitionsOpen={nodeState?.partitions === true}
-              onToggleColumns={() =>
-                store.set({
-                  nodeState: {
-                    ...store.get().nodeState,
-                    [id]: { ...nodeState, allColumns: !nodeState?.allColumns },
-                  },
-                })
-              }
-              onTogglePartitions={() =>
-                store.set({
-                  nodeState: {
-                    ...store.get().nodeState,
-                    [id]: { ...nodeState, partitions: !nodeState?.partitions },
-                  },
-                })
-              }
-            />
-          )}
-        </>
-      )}
+      <OverviewBody table={table} width={width ?? NODE.minWidth} />
+      <DetailSlot id={id} table={table} edges={edges} diffMode={diffMode} related={related} />
     </div>
   );
 }
+
+/**
+ * The rows, mounted the first time the graph is at a readable zoom (a few
+ * nodes per frame, see detail-scheduler), then kept: later zooms in and out
+ * only flip CSS (`data-lod` on the graph), so crossing the threshold
+ * re-renders this small component per node, never the node itself.
+ */
+function DetailSlot(props: DetailProps) {
+  const [mounted, setMounted] = useState(false);
+  const wanted = useGraphUi((s) => mounted || s.lod === "detail");
+  useEffect(() => {
+    if (!wanted || mounted) return;
+    return requestDetail(() => setMounted(true));
+  }, [wanted, mounted]);
+  return mounted ? <DetailBody {...props} /> : null;
+}
+
+interface DetailProps {
+  id: string;
+  table: TableModel;
+  edges: EdgeModel[];
+  diffMode: boolean;
+  related: string | null;
+}
+
+/** Comment, rows and footer: what a readable zoom shows. */
+const DetailBody = memo(function DetailBody({ id, table, edges, diffMode, related }: DetailProps) {
+  const store = useGraphUiStore();
+  const nodeState = useGraphUi((s) => s.nodeState[id]);
+  const visible = visibleColumnCount(table, nodeState);
+
+  // Columns that join this table to the selected one (or, selected, to anything).
+  const joined = useMemo(() => {
+    const set = new Set<string>();
+    if (!related || related === ELSEWHERE) return set;
+    for (const e of edges) {
+      if (e.kind !== "fk") continue;
+      if (e.source === id && (related === id || e.target === related))
+        e.columns.forEach((c) => set.add(c));
+      if (e.target === id && (related === id || e.source === related))
+        e.refColumns.forEach((c) => set.add(c));
+    }
+    return set;
+  }, [edges, id, related]);
+
+  const toggle = (part: "allColumns" | "partitions") =>
+    store.set({
+      nodeState: {
+        ...store.get().nodeState,
+        [id]: { ...nodeState, [part]: !nodeState?.[part] },
+      },
+    });
+
+  return (
+    <div className="sg-detail flex min-h-0 flex-col">
+      {table.comment && (
+        <p
+          className="shrink-0 truncate border-b border-border bg-muted/60 px-3 text-xs leading-5 text-muted-foreground"
+          style={{ height: NODE.comment }}
+        >
+          {table.comment}
+        </p>
+      )}
+      <ul className="shrink-0" style={{ paddingBlock: NODE.padding }}>
+        {table.columns.slice(0, visible).map((c) => (
+          <ColumnRow
+            key={c.name}
+            column={c}
+            joined={joined.has(c.name)}
+            diffMode={diffMode}
+            nullable={showsNullable(table)}
+          />
+        ))}
+      </ul>
+      {hasFooter(table) && (
+        <Footer
+          table={table}
+          hidden={table.columns.length - visible}
+          partitionsOpen={nodeState?.partitions === true}
+          onToggleColumns={() => toggle("allColumns")}
+          onTogglePartitions={() => toggle("partitions")}
+        />
+      )}
+    </div>
+  );
+});
 
 /**
  * Zoomed far out the rows are unreadable: the node shows its name instead,
@@ -228,7 +249,7 @@ function OverviewBody({ table, width }: { table: TableModel; width: number }) {
   const longest = Math.max(...lines.map((l) => l.length));
   const fits = Math.floor((width - 32) / (longest * 0.62));
   return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.25em] overflow-hidden px-3 text-center">
+    <div className="sg-overview flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.25em] overflow-hidden px-3 text-center">
       <span
         className="max-w-full font-mono leading-tight font-semibold text-foreground"
         style={{ fontSize: `min(${Math.min(fits, 64)}px, calc(0.875rem / var(--graph-zoom, 1)))` }}
@@ -334,6 +355,16 @@ const ColumnRow = memo(function ColumnRow({
   );
 });
 
+/**
+ * The graph is one tab stop (arrow keys between tables, E unfolds the
+ * selected one): buttons inside a node stay out of the tab order and do not
+ * take focus when clicked, so the keys keep working.
+ */
+const outOfTabOrder = {
+  tabIndex: -1,
+  onMouseDown: (event: React.MouseEvent) => event.preventDefault(),
+} as const;
+
 function Footer({
   table,
   hidden,
@@ -354,6 +385,7 @@ function Footer({
         <Button
           variant="ghost"
           size="sm"
+          {...outOfTabOrder}
           onClick={onToggleColumns}
           className="h-7.5 w-full justify-start gap-1.5 rounded-none px-3 font-normal"
         >
@@ -366,6 +398,7 @@ function Footer({
           <Button
             variant="ghost"
             size="sm"
+            {...outOfTabOrder}
             aria-expanded={partitionsOpen}
             onClick={onTogglePartitions}
             className="h-7.5 w-full justify-start gap-1.5 rounded-none px-3 font-normal"
@@ -403,6 +436,14 @@ function Footer({
                     </span>
                   )}
                   <span className="min-w-0 truncate text-foreground">{p.name}</span>
+                  {p.partitionKey && (
+                    <span
+                      className="shrink-0 truncate text-faint-foreground"
+                      title={`Partitioned in turn by ${p.partitionKey}`}
+                    >
+                      by {p.partitionKey}
+                    </span>
+                  )}
                   <span className="ml-auto min-w-0 truncate text-faint-foreground">
                     {p.bound ?? "DEFAULT"}
                   </span>

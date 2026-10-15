@@ -102,3 +102,7 @@ e2e:
 # Playwright on the dev-only screens (/app/dev/*): the Vite dev server, no stack
 e2e-dev:
     npm --prefix web run e2e:dev
+
+# frame times of the schema viewer at 300 tables, headed, on a production build
+perf:
+    npm --prefix web run perf

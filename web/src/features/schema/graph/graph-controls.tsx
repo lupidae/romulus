@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import { type ChangeStatus, statusGlyph } from "../diff";
 import type { DiffCounts } from "./build";
+import { FIT_VIEW } from "./geometry";
 import { EndMark } from "./relation-edge";
 
 /** Floating toolbars share one look: a small raised card of ghost buttons. */
@@ -86,7 +87,7 @@ export function ZoomControls() {
           variant="ghost"
           size="icon-sm"
           aria-label="Fit to screen"
-          onClick={() => void fitView({ padding: 0.12, duration: 300, maxZoom: 1 })}
+          onClick={() => void fitView({ ...FIT_VIEW, duration: 300 })}
         >
           <FrameSelectIcon />
         </Button>

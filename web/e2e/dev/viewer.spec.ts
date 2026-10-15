@@ -180,3 +180,77 @@ test("an empty schema says so", async ({ page }) => {
   await page.goto("./dev/viewer?fixture=empty");
   await expect(page.getByRole("heading", { name: "No tables yet" })).toBeVisible();
 });
+
+const zoomOf = async (page: Page) => {
+  const label = await page.getByRole("button", { name: /^Zoom \d+%/ }).getAttribute("aria-label");
+  return Number(/Zoom (\d+)%/.exec(label ?? "")?.[1] ?? 0) / 100;
+};
+
+test.describe("on a laptop screen", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("a small schema opens filling the graph, readable", async ({ page }) => {
+    await open(page, "fixture=small");
+    await expect.poll(() => zoomOf(page)).toBeGreaterThanOrEqual(0.8);
+    // Filled: the tables span most of the pane's width.
+    const pane = (await graph(page).boundingBox())!;
+    const boxes = await tables(page).evaluateAll((nodes) =>
+      nodes.map((n) => n.getBoundingClientRect()).map((r) => [r.left, r.right]),
+    );
+    const span = Math.max(...boxes.map((b) => b[1])) - Math.min(...boxes.map((b) => b[0]));
+    expect(span / pane.width).toBeGreaterThan(0.6);
+  });
+
+  test("the diff opens readable too", async ({ page }) => {
+    await open(page, "fixture=diff");
+    await expect.poll(() => zoomOf(page)).toBeGreaterThanOrEqual(0.6);
+  });
+});
+
+test("E unfolds the selected table, without a tab stop inside it", async ({ page }) => {
+  await open(page, "fixture=multi-schema");
+  await page.getByRole("button", { name: "Find a table" }).click();
+  await page.getByRole("combobox", { name: "Table or column name" }).fill("events");
+  await page.keyboard.press("Enter");
+  const events = page.locator('.react-flow__node[data-id="audit.events"]');
+  const toggle = events.getByRole("button", { name: /5 partitions/ });
+  await expect(toggle).toHaveAttribute("tabindex", "-1");
+  await page.keyboard.press("e");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(events).toContainText("by HASH (id)");
+  await page.keyboard.press("e");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+});
+
+test("a dragged table stays where it was dropped", async ({ page }) => {
+  await open(page, "fixture=small");
+  await page.getByRole("button", { name: "Move tables" }).click();
+  const header = page.locator('.react-flow__node[data-id="public.tags"] [data-table-header]');
+  const before = (await header.boundingBox())!;
+  await page.mouse.move(before.x + 30, before.y + before.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(before.x + 90, before.y + 70, { steps: 8 });
+  await page.mouse.up();
+  // The drop is written back to the layout (the dev route's stand-in for the
+  // draft's Y.Map); the table stays, also after another render.
+  await page.locator('.react-flow__node[data-id="public.users"] [data-table-header]').click();
+  const after = (await header.boundingBox())!;
+  expect(after.x - before.x).toBeGreaterThan(40);
+  expect(after.y - before.y).toBeGreaterThan(40);
+});
+
+test("a graph first shown after mounting hidden fits the pane", async ({ page }) => {
+  await open(page, "fixture=small");
+  await page.getByRole("button", { name: "Layout" }).click();
+  await page.getByRole("menuitemradio", { name: "Text only" }).click();
+  await page.reload();
+  await expect(sql(page)).toBeVisible();
+  await page.getByRole("button", { name: "Layout" }).click();
+  await page.getByRole("menuitemradio", { name: "Graph and text" }).click();
+  await expect(graph(page)).toBeVisible();
+  await expect.poll(() => zoomOf(page)).toBeGreaterThan(0.4);
+  const pane = (await graph(page).boundingBox())!;
+  const node = (await tables(page).first().boundingBox())!;
+  expect(node.x).toBeGreaterThanOrEqual(pane.x);
+  expect(node.x + node.width).toBeLessThanOrEqual(pane.x + pane.width);
+});

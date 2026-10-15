@@ -8,6 +8,7 @@
 # Web
 node_modules/
 /web/dist/
+/web/dist-perf/
 /web/test-results/
 /web/playwright-report/
 /web/blob-report/

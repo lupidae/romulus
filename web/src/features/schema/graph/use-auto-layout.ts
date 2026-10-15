@@ -55,11 +55,6 @@ export function useAutoLayout(
   aspectRatio?: React.RefObject<number>,
 ): AutoLayout {
   const [computed, setComputed] = useState<Layout>({});
-  const onPlacedRef = useRef(onPlaced);
-  useEffect(() => {
-    onPlacedRef.current = onPlaced;
-  });
-
   const known = useMemo(() => ({ ...computed, ...layout }), [computed, layout]);
   const missing = useMemo(
     () => graph.tables.filter((t) => !known[t.key]).map((t) => t.key),
@@ -67,9 +62,20 @@ export function useAutoLayout(
   );
   const missingKey = missing.join("\n");
 
+  // The job reads the latest graph and positions when it starts; it is keyed
+  // by the set of missing tables only, so a recompile that leaves the same
+  // tables unplaced (a draft compiles on every pause in typing) does not
+  // throw away a layout in flight.
+  const latest = useRef({ graph, known, groups, onPlaced });
+  useEffect(() => {
+    latest.current = { graph, known, groups, onPlaced };
+  });
+
   useEffect(() => {
     if (!missingKey) return;
     let cancelled = false;
+    const started = performance.now();
+    const { graph, known, groups } = latest.current;
     const request: LayoutRequest = {
       nodes: graph.tables.map((t) => ({
         id: t.key,
@@ -90,16 +96,17 @@ export function useAutoLayout(
       })
       .then((placed) => {
         if (cancelled) return;
+        // User Timing, for the perf spec and the browser's profiler.
+        performance.measure(`schema graph: layout of ${Object.keys(placed).length} tables`, {
+          start: started,
+        });
         setComputed((prev) => ({ ...prev, ...placed }));
-        onPlacedRef.current?.(placed);
+        latest.current.onPlaced?.(placed);
       });
     return () => {
       cancelled = true;
     };
-    // `known` and `groups` are read when the set of missing tables changes,
-    // not on every new object identity.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graph, missingKey]);
+  }, [missingKey, aspectRatio]);
 
   return { positions: known, pending: missing.length };
 }

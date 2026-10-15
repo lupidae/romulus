@@ -58,13 +58,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
 import { type ThemePreference, useTheme } from "@/lib/theme";
+import { devRoutes } from "@/lib/dev-routes";
 
 // Every token and kit component on one page, in both themes, for the people
 // and agents building screens and for QA. Dev builds only.
 
 export const Route = createFileRoute("/dev/kit")({
   beforeLoad: () => {
-    if (!import.meta.env.DEV) throw notFound();
+    if (!devRoutes) throw notFound();
   },
   head: () => ({ meta: [{ title: "Kit – romulus" }] }),
   component: Kit,

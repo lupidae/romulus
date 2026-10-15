@@ -69,6 +69,8 @@ export interface PartitionModel {
   /** Qualified name of its immediate parent (the entity, or a sub-partitioned partition). */
   parent: string;
   bound: string | null;
+  /** remus 0.2+: its own `PARTITION BY` when it is partitioned in turn. */
+  partitionKey: string | null;
   /** 0 under the entity, 1 under a partition of it… */
   depth: number;
   status?: ChangeStatus;
@@ -290,7 +292,13 @@ function partitionTrees(
 ) {
   const parentOf = new Map<
     string,
-    { parent: string; bound: string | null; schema: string; name: string }
+    {
+      parent: string;
+      bound: string | null;
+      partitionKey: string | null;
+      schema: string;
+      name: string;
+    }
   >();
   for (const schema of schemas) {
     for (const p of schema.partitions ?? []) {
@@ -299,6 +307,7 @@ function partitionTrees(
       parentOf.set(key, {
         parent: qualifiedName({ schema: p.parent_schema, name: p.parent }),
         bound: p.bound,
+        partitionKey: p.partition_key ?? null,
         schema: p.child_schema,
         name: p.child,
       });
@@ -320,7 +329,7 @@ function partitionTrees(
     const root = entities.get(parent);
     if (!root) continue;
     owner.set(key, parent);
-    const s = status?.entities[root.schema]?.[root.name]?.partitions[info.schema]?.[info.name];
+    const s = status?.entities?.[root.schema]?.[root.name]?.partitions?.[info.schema]?.[info.name];
     const list = byOwner.get(parent) ?? [];
     list.push({
       key,
@@ -328,6 +337,7 @@ function partitionTrees(
       name: info.name,
       parent: info.parent,
       bound: info.bound,
+      partitionKey: info.partitionKey,
       depth,
       status: changeOf(s),
     });
@@ -350,6 +360,28 @@ function partitionTrees(
   return { owner, byOwner };
 }
 
+/**
+ * Entities by qualified name. `schema.name` is ambiguous when a name holds a
+ * dot (schema `a.b` + table `c` vs schema `a` + table `b.c`): the second is
+ * drawn under the key of the first, which is said rather than hidden.
+ */
+function byQualifiedName(entities: Entity[]): Map<string, Entity> {
+  const out = new Map<string, Entity>();
+  for (const e of entities) {
+    const key = qualifiedName(e);
+    const other = out.get(key);
+    if (other) {
+      console.warn(
+        `schema graph: ${JSON.stringify([other.schema, other.name])} and ` +
+          `${JSON.stringify([e.schema, e.name])} share the key "${key}"; only the first is drawn`,
+      );
+      continue;
+    }
+    out.set(key, e);
+  }
+  return out;
+}
+
 export interface BuildGraphInput {
   schema: Schema;
   diff?: SchemaDiffInput;
@@ -361,8 +393,8 @@ export function buildGraph({ schema, diff }: BuildGraphInput): GraphModel {
   const sides = diff ? [schema, diff.base] : [schema];
   const types = typeModels(sides, status);
 
-  const current = new Map((schema.entities ?? []).map((e) => [qualifiedName(e), e]));
-  const previous = new Map((diff?.base.entities ?? []).map((e) => [qualifiedName(e), e]));
+  const current = byQualifiedName(schema.entities ?? []);
+  const previous = byQualifiedName(diff?.base.entities ?? []);
   const entities: Entity[] = [...current.values()];
   for (const [key, e] of previous) if (!current.has(key)) entities.push(e);
   entities.sort(compareRefs);
@@ -435,9 +467,12 @@ export function buildGraph({ schema, diff }: BuildGraphInput): GraphModel {
       });
     }
     if (table.kind === "view" || table.kind === "materialized") {
+      // A view reading several partitions of one table reads that table once.
+      const read = new Set<string>();
       for (const dep of table.entity.depends_on ?? []) {
         const target = resolve(qualifiedName(dep));
-        if (!target || target === table.key) continue;
+        if (!target || target === table.key || read.has(target)) continue;
+        read.add(target);
         edges.push({
           id: `reads:${table.key}:${target}`,
           kind: "reads",

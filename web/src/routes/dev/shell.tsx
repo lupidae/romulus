@@ -4,6 +4,7 @@ import { DatabaseIcon, GroupIcon, SettingsIcon } from "@/components/icons";
 import { AppShell, PageBody } from "@/components/shell/app-shell";
 import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toaster";
+import { devRoutes } from "@/lib/dev-routes";
 
 import { orgs, user } from "./-fixtures";
 
@@ -14,7 +15,7 @@ import { orgs, user } from "./-fixtures";
 
 export const Route = createFileRoute("/dev/shell")({
   beforeLoad: () => {
-    if (!import.meta.env.DEV) throw notFound();
+    if (!devRoutes) throw notFound();
   },
   component: ShellPreview,
 });

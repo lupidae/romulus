@@ -7,12 +7,16 @@ import { cn } from "@/lib/utils";
 import type { CodeLanguage, Editor, Highlights, Range } from "./codemirror";
 
 export interface CodeViewProps {
+  /**
+   * The text. With `extensions` (a Yjs binding owns the text) it only seeds
+   * the editor: later values are ignored, never pushed in as a replace.
+   */
   doc: string;
   language: CodeLanguage;
   /** Accessible name of the text area. */
   label: string;
   readOnly: boolean;
-  /** Fixed for the editor's life: changing them creates a new editor. */
+  /** Read once, when the editor is created (memoize them; a new array is ignored, with a warning in dev). */
   extensions?: Extension[];
   highlights?: Highlights;
   /** Scrolled to whenever a new object is passed (and the view is visible). */
@@ -47,10 +51,26 @@ export function CodeView({
 }: CodeViewProps) {
   const host = useRef<HTMLDivElement>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const latest = useRef({ doc, onCursor, onEditor });
+  const latest = useRef({ doc, readOnly, onCursor, onEditor });
   useEffect(() => {
-    latest.current = { doc, onCursor, onEditor };
+    latest.current = { doc, readOnly, onCursor, onEditor };
   });
+
+  // Extensions are the editor's for its life: a binding torn down and rebuilt
+  // on every render would drop the collaboration. The first value is kept.
+  const [fixedExtensions] = useState(extensions);
+  const warned = useRef(false);
+  useEffect(() => {
+    if (import.meta.env.DEV && extensions !== fixedExtensions && !warned.current) {
+      warned.current = true;
+      console.warn(
+        "CodeView: `extensions` changed after the editor was created and was ignored. " +
+          "Memoize them, or remount the editor (a new `key`) to apply new ones.",
+      );
+    }
+  }, [extensions, fixedExtensions]);
+  // A binding owns the text: the `doc` prop must not overwrite it.
+  const owned = (fixedExtensions?.length ?? 0) > 0;
 
   // Created the first time the tab is shown, then kept.
   const [wanted, setWanted] = useState(active);
@@ -65,9 +85,9 @@ export function CodeView({
       created = createEditor(host.current, {
         doc: latest.current.doc,
         language,
-        readOnly,
+        readOnly: latest.current.readOnly,
         label,
-        extensions,
+        extensions: fixedExtensions,
         onCursor: (offset) => latest.current.onCursor?.(offset),
       });
       setEditor(created);
@@ -79,11 +99,15 @@ export function CodeView({
       setEditor(null);
       latest.current.onEditor?.(null);
     };
-  }, [wanted, language, readOnly, label, extensions]);
+  }, [wanted, language, label, fixedExtensions]);
 
   useEffect(() => {
-    editor?.setDoc(doc);
-  }, [editor, doc]);
+    if (!owned) editor?.setDoc(doc);
+  }, [editor, doc, owned]);
+
+  useEffect(() => {
+    editor?.setReadOnly(readOnly);
+  }, [editor, readOnly]);
 
   useEffect(() => {
     editor?.setHighlights(highlights);
