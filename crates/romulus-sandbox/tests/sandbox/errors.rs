@@ -214,3 +214,47 @@ fn errors_inside_a_rewritten_policy_still_point_at_the_policy() {
         );
     });
 }
+
+/// Type names crafted to look like SQL flow through stub creation and
+/// through types learnt from Postgres's errors without escaping their quotes.
+#[test]
+fn hostile_type_names_stay_identifiers_in_stubs() {
+    with_compiler(|compiler| async move {
+        let sql = "CREATE TYPE \"x'); DROP SCHEMA public; --\" AS ENUM ('a');\n\
+                   CREATE TYPE \"y$romulus_stub$; DROP TABLE t; --\" AS ENUM ('b');\n\
+                   CREATE TABLE t (\n\
+                     c \"x'); DROP SCHEMA public; --\" DEFAULT pick(),\n\
+                     d \"y$romulus_stub$; DROP TABLE t; --\" DEFAULT pick2(),\n\
+                     CHECK (ok(CASE WHEN true THEN c END))\n\
+                   );\n\
+                   CREATE TABLE after_it (id int);";
+        let compilation = compile_ok(compiler, sql).await;
+        let model = compilation.model.as_ref().unwrap();
+        assert!(
+            model
+                .entities
+                .iter()
+                .any(|e| e.schema == "public" && e.name == "t")
+        );
+        assert!(
+            model
+                .entities
+                .iter()
+                .any(|e| e.schema == "public" && e.name == "after_it")
+        );
+        let signatures: Vec<String> = compilation
+            .stubs
+            .iter()
+            .map(romulus_sandbox::Stub::signature)
+            .collect();
+        assert_eq!(
+            signatures,
+            [
+                "public.pick() → \"x'); DROP SCHEMA public; --\"",
+                "public.pick2() → \"y$romulus_stub$; DROP TABLE t; --\"",
+                // Learnt from "function ok(...) does not exist": still quoted.
+                "public.ok(\"x'); DROP SCHEMA public; --\") → boolean",
+            ]
+        );
+    });
+}

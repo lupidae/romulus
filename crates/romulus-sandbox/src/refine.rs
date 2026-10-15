@@ -10,8 +10,15 @@
 //! | 42883 | `operator does not exist: uuid = text` | the stub returns `uuid` |
 //! | 42804 | `… is of type T but default expression is of type U` | returns `T` |
 //! | 42804 | `argument of CHECK must be type boolean, not type text` | returns `boolean` |
+//!
+//! Message text is never written into SQL: a type read from a message is
+//! accepted only if it re-parses as one lone type name, and is then written
+//! back from the parse tree ([`SqlType::parse`]). A message that does not
+//! (a type name crafted to look like SQL, say) teaches nothing, and the
+//! compile reports Postgres's error as it is.
 
 use crate::{
+    names::SqlType,
     parse::ParsedSql,
     prepare::Prepared,
     stubs::{Overrides, Stub},
@@ -45,12 +52,19 @@ pub(crate) fn learn(
                 let stub = at
                     .and_then(|at| stub_called_at(prepared, at))
                     .or_else(|| stub_named(&prepared.stubs, &name, args.len()));
-                return stub.is_some_and(|stub| {
-                    let args: Vec<String> = args
-                        .into_iter()
-                        .map(|a| if a == "unknown" { "text".to_owned() } else { a })
-                        .collect();
-                    args != stub.args && overrides.set_args(&stub.schema, &stub.name, args)
+                let Some(stub) = stub else { return false };
+                let args: Option<Vec<SqlType>> = args
+                    .iter()
+                    .map(|a| {
+                        if a == "unknown" {
+                            Some(SqlType::builtin("text"))
+                        } else {
+                            SqlType::parse(a)
+                        }
+                    })
+                    .collect();
+                return args.is_some_and(|args| {
+                    !stub.has_args(&args) && overrides.set_args(&stub.schema, &stub.name, args)
                 });
             }
             if let Some(rest) = failure.message.strip_prefix("operator does not exist: ") {
@@ -76,11 +90,17 @@ pub(crate) fn learn(
                         continue;
                     };
                     let wanted = if operand.left { right } else { left };
-                    if wanted != "unknown" && wanted != stub.returns {
+                    if wanted == "unknown" {
+                        continue;
+                    }
+                    let Some(wanted) = SqlType::parse(wanted) else {
+                        return false;
+                    };
+                    if &wanted != stub.returns_type() {
                         return overrides.set_returns(
                             &stub.schema,
                             &stub.name,
-                            stub.args.len(),
+                            stub.arity(),
                             wanted,
                         );
                     }
@@ -89,13 +109,14 @@ pub(crate) fn learn(
             false
         }
         "42804" => {
-            let Some(wanted) = wanted_type(&failure.message) else {
+            let Some(wanted) = wanted_type(&failure.message).and_then(|w| SqlType::parse(&w))
+            else {
                 return false;
             };
             at.and_then(|at| stub_called_at(prepared, at))
                 .is_some_and(|stub| {
-                    wanted != stub.returns
-                        && overrides.set_returns(&stub.schema, &stub.name, stub.args.len(), &wanted)
+                    &wanted != stub.returns_type()
+                        && overrides.set_returns(&stub.schema, &stub.name, stub.arity(), wanted)
                 })
         }
         _ => false,
@@ -113,7 +134,7 @@ fn stub_named<'a>(stubs: &'a [Stub], name: &str, arity: usize) -> Option<&'a Stu
         None => (None, unquote(name)),
     };
     stubs.iter().find(|s| {
-        s.name == name && s.args.len() == arity && schema.as_ref().is_none_or(|q| *q == s.schema)
+        s.name == name && s.arity() == arity && schema.as_ref().is_none_or(|q| *q == s.schema)
     })
 }
 
@@ -356,6 +377,72 @@ mod tests {
             &parsed,
             sql,
             &mut overrides
+        ));
+    }
+
+    #[test]
+    fn message_text_that_is_not_a_lone_type_teaches_nothing() {
+        let sql = "CREATE TABLE t (id uuid, c int, CHECK (f(CASE WHEN true THEN id END)), CHECK (g() = c));";
+        let parsed = parse(sql);
+        let prepared = prepare(sql, &parsed, &Catalog::default(), &Overrides::default());
+        let at = |needle: &str| Some(prepared.script.rfind(needle).unwrap());
+        for (sqlstate, message, position) in [
+            (
+                "42883",
+                "function f(integer); DROP SCHEMA public; --) does not exist",
+                at("f(CASE"),
+            ),
+            (
+                "42883",
+                "function f(int) RETURNS int AS $$ SELECT 1 $$; --) does not exist",
+                at("f(CASE"),
+            ),
+            (
+                "42883",
+                "operator does not exist: text = integer; DROP SCHEMA public",
+                at("= c"),
+            ),
+            (
+                "42804",
+                "column \"c\" is of type int) RETURNS int AS 'x'; -- but default expression is of type text",
+                at("g()"),
+            ),
+            (
+                "42804",
+                "argument of CHECK must be type boolean; DROP TABLE t, not type text",
+                at("f(CASE"),
+            ),
+        ] {
+            let failure = Failure {
+                sqlstate: sqlstate.to_owned(),
+                message: message.to_owned(),
+                position,
+            };
+            let mut overrides = Overrides::default();
+            assert!(
+                !learn(&failure, Some(0), &prepared, &parsed, sql, &mut overrides),
+                "{message}"
+            );
+            assert_eq!(overrides, Overrides::default());
+        }
+        // A real, oddly named type is learnt, and written back quoted.
+        let failure = Failure {
+            sqlstate: "42883".to_owned(),
+            message: "function f(\"x$$); DROP SCHEMA public; --\") does not exist".to_owned(),
+            position: at("f(CASE"),
+        };
+        let mut overrides = Overrides::default();
+        assert!(learn(
+            &failure,
+            Some(0),
+            &prepared,
+            &parsed,
+            sql,
+            &mut overrides
+        ));
+        let again = prepare(sql, &parsed, &Catalog::default(), &overrides);
+        assert!(again.script.contains(
+            "CREATE FUNCTION public.f(\"x$$); DROP SCHEMA public; --\") RETURNS pg_catalog.bool"
         ));
     }
 

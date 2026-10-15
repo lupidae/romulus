@@ -37,11 +37,12 @@ use pg_query::{
         a_const::Val,
     },
 };
+use remus_core::emit::ident::quote_literal;
 use serde::Serialize;
 
 use crate::{
     catalog::Catalog,
-    names::{QualifiedName, SearchPath, quote_ident, strings, type_sql},
+    names::{QualifiedName, SearchPath, SqlType, quote_ident, strings},
     parse::Statement,
     source::location,
 };
@@ -53,10 +54,12 @@ pub struct Stub {
     pub schema: String,
     pub name: String,
     /// Argument types, as SQL (`pg_catalog.int4`, `public.mood`, `text[]`).
-    pub args: Vec<String>,
+    #[cfg_attr(feature = "utoipa", schema(value_type = Vec<String>))]
+    args: Vec<SqlType>,
     /// Names of named arguments (`f(p => 1)`), aligned with `args`.
     pub arg_names: Vec<Option<String>>,
-    pub returns: String,
+    #[cfg_attr(feature = "utoipa", schema(value_type = String))]
+    returns: SqlType,
     /// The first statement calling it; the stub is created just before it.
     pub statement: usize,
     /// Byte offset of that first call in the text.
@@ -64,41 +67,65 @@ pub struct Stub {
 }
 
 impl Stub {
+    /// Argument types, as SQL.
+    pub fn args(&self) -> impl Iterator<Item = &str> {
+        self.args.iter().map(SqlType::as_str)
+    }
+
+    /// The return type, as SQL.
+    pub fn returns(&self) -> &str {
+        self.returns.as_str()
+    }
+
+    pub(crate) fn arity(&self) -> usize {
+        self.args.len()
+    }
+
+    pub(crate) fn has_args(&self, args: &[SqlType]) -> bool {
+        self.args == args
+    }
+
+    pub(crate) fn returns_type(&self) -> &SqlType {
+        &self.returns
+    }
+
     /// How a person would write the signature: `auth.uid() → uuid`,
     /// `public.slugify(text, integer) → text`.
     pub fn signature(&self) -> String {
-        let args: Vec<String> = self.args.iter().map(|a| readable_type(a)).collect();
+        let args: Vec<String> = self.args().map(readable_type).collect();
         format!(
             "{}.{}({}) → {}",
             quote_ident(&self.schema),
             quote_ident(&self.name),
             args.join(", "),
-            readable_type(&self.returns)
+            readable_type(self.returns())
         )
     }
 
-    /// The `CREATE FUNCTION` that stands in for it.
+    /// The `CREATE FUNCTION` that stands in for it. Names are quoted, types
+    /// are [`SqlType`]s (written from a parse tree), and the body is a
+    /// quoted literal, so nothing in it can end a quote early.
     pub(crate) fn ddl(&self) -> String {
         let args: Vec<String> = self
             .args
             .iter()
             .zip(&self.arg_names)
             .map(|(ty, name)| match name {
-                Some(name) => format!("{} {ty}", quote_ident(name)),
-                None => ty.clone(),
+                Some(name) => format!("{} {}", quote_ident(name), ty.as_str()),
+                None => ty.as_str().to_owned(),
             })
             .collect();
         format!(
-            "CREATE FUNCTION {}.{}({}) RETURNS {} LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $romulus_stub$SELECT NULL::{}$romulus_stub$",
+            "CREATE FUNCTION {}.{}({}) RETURNS {} LANGUAGE sql IMMUTABLE PARALLEL SAFE AS {}",
             quote_ident(&self.schema),
             quote_ident(&self.name),
             args.join(", "),
-            self.returns,
-            self.returns
+            self.returns.as_str(),
+            quote_literal(&format!("SELECT NULL::{}", self.returns.as_str()))
         )
     }
 
-    fn identity(&self) -> (String, String, Vec<String>) {
+    fn identity(&self) -> (String, String, Vec<SqlType>) {
         (self.schema.clone(), self.name.clone(), self.args.clone())
     }
 }
@@ -108,19 +135,19 @@ impl Stub {
 pub(crate) struct Overrides {
     map: HashMap<(String, String, usize), Override>,
     /// Stubs Postgres could not create: let the call fail on its own.
-    skipped: HashSet<(String, String, Vec<String>)>,
+    skipped: HashSet<(String, String, Vec<SqlType>)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Override {
-    args: Option<Vec<String>>,
-    returns: Option<String>,
+    args: Option<Vec<SqlType>>,
+    returns: Option<SqlType>,
 }
 
 impl Overrides {
     /// Use these argument types for `schema.name` with this many arguments.
     /// Returns whether anything changed.
-    pub fn set_args(&mut self, schema: &str, name: &str, args: Vec<String>) -> bool {
+    pub fn set_args(&mut self, schema: &str, name: &str, args: Vec<SqlType>) -> bool {
         let entry = self
             .map
             .entry((schema.to_owned(), name.to_owned(), args.len()))
@@ -131,13 +158,19 @@ impl Overrides {
     }
 
     /// Use this return type for `schema.name` with this many arguments.
-    pub fn set_returns(&mut self, schema: &str, name: &str, arity: usize, returns: &str) -> bool {
+    pub fn set_returns(
+        &mut self,
+        schema: &str,
+        name: &str,
+        arity: usize,
+        returns: SqlType,
+    ) -> bool {
         let entry = self
             .map
             .entry((schema.to_owned(), name.to_owned(), arity))
             .or_default();
-        let changed = entry.returns.as_deref() != Some(returns);
-        entry.returns = Some(returns.to_owned());
+        let changed = entry.returns.as_ref() != Some(&returns);
+        entry.returns = Some(returns);
         changed
     }
 
@@ -215,22 +248,22 @@ pub(crate) fn infer(
 /// What the context of an expression needs it to be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Expect {
-    Type(String),
+    Type(SqlType),
     Bool,
     Unknown,
 }
 
 impl Expect {
-    fn returns(&self) -> String {
+    fn returns(&self) -> SqlType {
         match self {
             Self::Type(t) => t.clone(),
-            Self::Bool => "boolean".to_owned(),
-            Self::Unknown => "text".to_owned(),
+            Self::Bool => SqlType::builtin("boolean"),
+            Self::Unknown => SqlType::builtin("text"),
         }
     }
 }
 
-type Columns = Vec<(String, Option<String>)>;
+type Columns = Vec<(String, Option<SqlType>)>;
 
 /// Column names and types visible to an expression, per table alias.
 #[derive(Debug, Clone, Default)]
@@ -245,7 +278,7 @@ impl Scope {
         }
     }
 
-    fn column(&self, fields: &[String]) -> Option<String> {
+    fn column(&self, fields: &[String]) -> Option<SqlType> {
         match fields {
             [column] => self
                 .tables
@@ -270,7 +303,7 @@ struct Inference<'a> {
     /// Columns of the tables created so far.
     tables: HashMap<(String, String), Columns>,
     /// Base types of the domains created so far.
-    domains: HashMap<(String, String), Option<String>>,
+    domains: HashMap<(String, String), Option<SqlType>>,
     out: Inferred,
     statement: usize,
     path: SearchPath,
@@ -319,12 +352,12 @@ impl Inference<'_> {
                         Some(N::ColumnDef(c)) => {
                             if let Some(slot) = columns.iter_mut().find(|(n, _)| *n == c.colname) {
                                 if c.type_name.is_some() {
-                                    slot.1 = c.type_name.as_ref().and_then(type_sql);
+                                    slot.1 = c.type_name.as_ref().and_then(SqlType::from_type_name);
                                 }
                             } else {
                                 columns.push((
                                     c.colname.clone(),
-                                    c.type_name.as_ref().and_then(type_sql),
+                                    c.type_name.as_ref().and_then(SqlType::from_type_name),
                                 ));
                             }
                         }
@@ -348,7 +381,7 @@ impl Inference<'_> {
                                 .iter()
                                 .find(|(n, _)| *n == c.colname)
                                 .and_then(|(_, t)| t.clone());
-                            self.column_constraints(&c.constraints, ty.as_deref(), &scope);
+                            self.column_constraints(&c.constraints, ty.as_ref(), &scope);
                         }
                         Some(N::Constraint(c)) => self.table_constraint(c, &scope),
                         _ => {}
@@ -382,11 +415,11 @@ impl Inference<'_> {
                         Scope::table(&q.name, self.tables.get(&key).cloned().unwrap_or_default());
                     match (cmd.subtype(), def) {
                         (AlterTableType::AtAddColumn, Some(N::ColumnDef(c))) => {
-                            let ty = c.type_name.as_ref().and_then(type_sql);
+                            let ty = c.type_name.as_ref().and_then(SqlType::from_type_name);
                             let columns = self.tables.entry(key.clone()).or_default();
                             columns.push((c.colname.clone(), ty.clone()));
                             let scope = Scope::table(&q.name, columns.clone());
-                            self.column_constraints(&c.constraints, ty.as_deref(), &scope);
+                            self.column_constraints(&c.constraints, ty.as_ref(), &scope);
                         }
                         (AlterTableType::AtColumnDefault, Some(_)) => {
                             let ty = scope.column(std::slice::from_ref(&cmd.name));
@@ -398,7 +431,7 @@ impl Inference<'_> {
                             self.table_constraint(c, &scope);
                         }
                         (AlterTableType::AtAlterColumnType, Some(N::ColumnDef(c))) => {
-                            let ty = c.type_name.as_ref().and_then(type_sql);
+                            let ty = c.type_name.as_ref().and_then(SqlType::from_type_name);
                             if let Some(using) = &c.raw_default {
                                 let expect = ty.clone().map_or(Expect::Unknown, Expect::Type);
                                 self.expr(using, &expect, &scope);
@@ -450,13 +483,13 @@ impl Inference<'_> {
                 }
             }
             N::CreateDomainStmt(s) => {
-                let base = s.type_name.as_ref().and_then(type_sql);
+                let base = s.type_name.as_ref().and_then(SqlType::from_type_name);
                 if let Some(q) = QualifiedName::from_list(&s.domainname) {
                     let key = self.resolve(&q);
                     self.domains.insert(key, base.clone());
                 }
                 let scope = Scope::table("", vec![("value".to_owned(), base.clone())]);
-                self.column_constraints(&s.constraints, base.as_deref(), &scope);
+                self.column_constraints(&s.constraints, base.as_ref(), &scope);
             }
             N::AlterDomainStmt(s) => {
                 let base = QualifiedName::from_list(&s.type_name)
@@ -465,7 +498,7 @@ impl Inference<'_> {
                 let scope = Scope::table("", vec![("value".to_owned(), base.clone())]);
                 match (s.subtype.as_str(), s.def.as_deref()) {
                     ("C", Some(def)) => {
-                        self.column_constraints(std::slice::from_ref(def), base.as_deref(), &scope);
+                        self.column_constraints(std::slice::from_ref(def), base.as_ref(), &scope);
                     }
                     ("T", Some(def)) => {
                         self.expr(def, &base.map_or(Expect::Unknown, Expect::Type), &scope);
@@ -536,7 +569,7 @@ impl Inference<'_> {
     }
 
     /// DEFAULT, GENERATED and CHECK constraints of a column (or a domain).
-    fn column_constraints(&mut self, constraints: &[Node], ty: Option<&str>, scope: &Scope) {
+    fn column_constraints(&mut self, constraints: &[Node], ty: Option<&SqlType>, scope: &Scope) {
         for constraint in constraints {
             let Some(NodeEnum::Constraint(c)) = constraint.node.as_ref() else {
                 continue;
@@ -544,7 +577,7 @@ impl Inference<'_> {
             let Some(expr) = &c.raw_expr else { continue };
             match c.contype() {
                 ConstrType::ConstrDefault | ConstrType::ConstrGenerated => {
-                    let expect = ty.map_or(Expect::Unknown, |t| Expect::Type(t.to_owned()));
+                    let expect = ty.map_or(Expect::Unknown, |t| Expect::Type(t.clone()));
                     self.expr(expr, &expect, scope);
                 }
                 ConstrType::ConstrCheck => self.expr(expr, &Expect::Bool, scope),
@@ -693,7 +726,7 @@ impl Inference<'_> {
                 let expect = cast
                     .type_name
                     .as_ref()
-                    .and_then(type_sql)
+                    .and_then(SqlType::from_type_name)
                     .map_or(Expect::Unknown, Expect::Type);
                 if let Some(arg) = &cast.arg {
                     self.expr(arg, &expect, scope);
@@ -774,9 +807,7 @@ impl Inference<'_> {
             }
             N::AArrayExpr(a) => {
                 let element = match expect {
-                    Expect::Type(t) => t
-                        .strip_suffix("[]")
-                        .map_or(Expect::Unknown, |e| Expect::Type(e.to_owned())),
+                    Expect::Type(t) => t.element().map_or(Expect::Unknown, Expect::Type),
                     _ => Expect::Unknown,
                 };
                 for item in &a.elements {
@@ -824,7 +855,7 @@ impl Inference<'_> {
         let right_type = right.and_then(|n| type_of(n, scope));
         let (left_expect, right_expect) = match e.kind() {
             AExprKind::AexprOp if is_json_operator(&operator) => {
-                (Expect::Type("jsonb".to_owned()), Expect::Unknown)
+                (Expect::Type(SqlType::builtin("jsonb")), Expect::Unknown)
             }
             AExprKind::AexprOp if is_comparison(&operator) => (
                 right_type.clone().map_or(Expect::Unknown, Expect::Type),
@@ -835,13 +866,13 @@ impl Inference<'_> {
                     left_type
                         .clone()
                         .or(right_type.clone())
-                        .unwrap_or_else(|| "text".to_owned()),
+                        .unwrap_or_else(|| SqlType::builtin("text")),
                 ),
                 Expect::Type(
                     right_type
                         .clone()
                         .or(left_type.clone())
-                        .unwrap_or_else(|| "text".to_owned()),
+                        .unwrap_or_else(|| SqlType::builtin("text")),
                 ),
             ),
             AExprKind::AexprOp => {
@@ -858,7 +889,7 @@ impl Inference<'_> {
                 Expect::Unknown,
                 left_type
                     .clone()
-                    .map_or(Expect::Unknown, |t| Expect::Type(format!("{t}[]"))),
+                    .map_or(Expect::Unknown, |t| Expect::Type(t.array())),
             ),
             AExprKind::AexprDistinct
             | AExprKind::AexprNotDistinct
@@ -872,8 +903,8 @@ impl Inference<'_> {
                 left_type.clone().map_or(Expect::Unknown, Expect::Type),
             ),
             AExprKind::AexprLike | AExprKind::AexprIlike | AExprKind::AexprSimilar => (
-                Expect::Type("text".to_owned()),
-                Expect::Type("text".to_owned()),
+                Expect::Type(SqlType::builtin("text")),
+                Expect::Type(SqlType::builtin("text")),
             ),
             AExprKind::Undefined => (Expect::Unknown, Expect::Unknown),
         };
@@ -946,10 +977,10 @@ impl Inference<'_> {
         for arg in &call.args {
             if let Some(NodeEnum::NamedArgExpr(named_arg)) = arg.node.as_ref() {
                 let ty = named_arg.arg.as_deref().and_then(|a| type_of(a, scope));
-                args.push(ty.unwrap_or_else(|| "text".to_owned()));
+                args.push(ty.unwrap_or_else(|| SqlType::builtin("text")));
                 arg_names.push(Some(named_arg.name.clone()));
             } else {
-                args.push(type_of(arg, scope).unwrap_or_else(|| "text".to_owned()));
+                args.push(type_of(arg, scope).unwrap_or_else(|| SqlType::builtin("text")));
                 arg_names.push(None);
             }
         }
@@ -992,46 +1023,44 @@ impl Inference<'_> {
 }
 
 /// The type of an expression, when the text makes it obvious.
-fn type_of(node: &Node, scope: &Scope) -> Option<String> {
+fn type_of(node: &Node, scope: &Scope) -> Option<SqlType> {
     use NodeEnum as N;
     match node.node.as_ref()? {
         N::AConst(c) => match c.val.as_ref()? {
-            Val::Ival(_) => Some("integer".to_owned()),
-            Val::Fval(_) => Some("numeric".to_owned()),
-            Val::Boolval(_) => Some("boolean".to_owned()),
-            Val::Sval(_) => Some("text".to_owned()),
-            Val::Bsval(_) => Some("bit varying".to_owned()),
+            Val::Ival(_) => Some(SqlType::builtin("integer")),
+            Val::Fval(_) => Some(SqlType::builtin("numeric")),
+            Val::Boolval(_) => Some(SqlType::builtin("boolean")),
+            Val::Sval(_) => Some(SqlType::builtin("text")),
+            Val::Bsval(_) => Some(SqlType::builtin("bit varying")),
         },
-        N::TypeCast(cast) => cast.type_name.as_ref().and_then(type_sql),
+        N::TypeCast(cast) => cast.type_name.as_ref().and_then(SqlType::from_type_name),
         N::ColumnRef(c) => scope.column(&strings(&c.fields)),
-        N::BoolExpr(_) | N::NullTest(_) | N::BooleanTest(_) => Some("boolean".to_owned()),
-        N::SqlvalueFunction(f) => Some(
-            match f.op() {
-                SqlValueFunctionOp::SvfopCurrentDate => "date",
-                SqlValueFunctionOp::SvfopCurrentTime | SqlValueFunctionOp::SvfopCurrentTimeN => {
-                    "time with time zone"
-                }
-                SqlValueFunctionOp::SvfopCurrentTimestamp
-                | SqlValueFunctionOp::SvfopCurrentTimestampN => "timestamp with time zone",
-                SqlValueFunctionOp::SvfopLocaltime | SqlValueFunctionOp::SvfopLocaltimeN => {
-                    "time without time zone"
-                }
-                SqlValueFunctionOp::SvfopLocaltimestamp
-                | SqlValueFunctionOp::SvfopLocaltimestampN => "timestamp without time zone",
-                _ => "name",
+        N::BoolExpr(_) | N::NullTest(_) | N::BooleanTest(_) => Some(SqlType::builtin("boolean")),
+        N::SqlvalueFunction(f) => Some(SqlType::builtin(match f.op() {
+            SqlValueFunctionOp::SvfopCurrentDate => "date",
+            SqlValueFunctionOp::SvfopCurrentTime | SqlValueFunctionOp::SvfopCurrentTimeN => {
+                "time with time zone"
             }
-            .to_owned(),
-        ),
+            SqlValueFunctionOp::SvfopCurrentTimestamp
+            | SqlValueFunctionOp::SvfopCurrentTimestampN => "timestamp with time zone",
+            SqlValueFunctionOp::SvfopLocaltime | SqlValueFunctionOp::SvfopLocaltimeN => {
+                "time without time zone"
+            }
+            SqlValueFunctionOp::SvfopLocaltimestamp | SqlValueFunctionOp::SvfopLocaltimestampN => {
+                "timestamp without time zone"
+            }
+            _ => "name",
+        })),
         N::AExpr(e) if e.kind() == AExprKind::AexprOp => {
             let operator = strings(&e.name).pop().unwrap_or_default();
             if is_comparison(&operator) {
-                return Some("boolean".to_owned());
+                return Some(SqlType::builtin("boolean"));
             }
             if operator == "->>" || operator == "#>>" {
-                return Some("text".to_owned());
+                return Some(SqlType::builtin("text"));
             }
             if operator == "||" {
-                return Some("text".to_owned());
+                return Some(SqlType::builtin("text"));
             }
             e.lexpr
                 .as_deref()
@@ -1088,6 +1117,7 @@ fn readable_type(sql: &str) -> String {
         "float4" => "real",
         "float8" => "double precision",
         "bool" => "boolean",
+        "varbit" => "bit varying",
         "varchar" => "character varying",
         "bpchar" => "character",
         "timestamptz" => "timestamp with time zone",
@@ -1106,6 +1136,7 @@ mod tests {
     use super::{Overrides, infer};
     use crate::{
         catalog::{Catalog, Extension},
+        names::SqlType,
         parse,
     };
 
@@ -1262,9 +1293,10 @@ mod tests {
     #[test]
     fn overrides_correct_the_inferred_types() {
         let mut overrides = Overrides::default();
-        assert!(overrides.set_args("public", "f", vec!["uuid".to_owned()]));
-        assert!(!overrides.set_args("public", "f", vec!["uuid".to_owned()]));
-        assert!(overrides.set_returns("public", "f", 1, "bigint"));
+        let uuid = || SqlType::parse("uuid").unwrap();
+        assert!(overrides.set_args("public", "f", vec![uuid()]));
+        assert!(!overrides.set_args("public", "f", vec![uuid()]));
+        assert!(overrides.set_returns("public", "f", 1, SqlType::parse("bigint").unwrap()));
         assert_eq!(
             signatures_with("CREATE TABLE t (a int DEFAULT f('x'));", &overrides),
             ["public.f(uuid) → bigint"]
@@ -1277,7 +1309,7 @@ mod tests {
         let stubs = infer(&parsed.statements, &catalog(), &Overrides::default()).stubs;
         assert_eq!(
             stubs[0].ddl(),
-            "CREATE FUNCTION \"My\".f(p pg_catalog.int8) RETURNS pg_catalog.int4 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $romulus_stub$SELECT NULL::pg_catalog.int4$romulus_stub$"
+            "CREATE FUNCTION \"My\".f(p pg_catalog.int8) RETURNS pg_catalog.int4 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS 'SELECT NULL::pg_catalog.int4'"
         );
         assert_eq!(stubs[0].signature(), "\"My\".f(bigint) → integer");
     }
