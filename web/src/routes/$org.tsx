@@ -1,5 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, notFound, Outlet, useNavigate } from "@tanstack/react-router";
+import * as React from "react";
 
 import { ApiError } from "@/api/client";
 import { DatabaseIcon, GroupIcon, MailOutIcon, SettingsIcon } from "@/components/icons";
@@ -28,7 +29,6 @@ export const Route = createFileRoute("/$org")({
       if (error instanceof ApiError && error.status === 404) throw notFound();
       throw error;
     }
-    rememberLastOrg(params.org);
   },
   component: OrgLayout,
 });
@@ -40,6 +40,9 @@ function OrgLayout() {
   const { data: orgs } = useSuspenseQuery(orgsQuery);
   const navigate = useNavigate();
   const params = { org: slug };
+
+  // Here, not in the loader: hovering another org in the switcher preloads it.
+  React.useEffect(() => rememberLastOrg(slug), [slug]);
 
   const nav = (
     <SidebarNav aria-label={org.name}>

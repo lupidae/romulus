@@ -92,9 +92,20 @@ Made in the skeleton (S0):
   container and a path-routing proxy. The OIDC callback is
   `$ROMULUS_PUBLIC_URL/api/auth/callback` (and the API port's, for direct
   testing); post-logout URIs are `/app/signin`, `/app/` and `/`.
-- **Dev sign-in**: `ROMULUS_DEV_SIGNIN=true` (on in `.env`) enables the
-  dev-only sign-in the auth module adds (see `src/auth/mod.rs`); config
-  refuses to start with it unless `ROMULUS_PUBLIC_URL` is loopback.
+- **Dev sign-in**: `ROMULUS_DEV_SIGNIN=true` (on in `.env`) enables
+  `GET /api/auth/dev-signin?email=…&next=/app/…[&name=…][&verified=false]`:
+  signs in as that address (created if needed) without Zitadel, for QA and
+  Playwright; the sign-in page lists alice and bob. Off, it is a 404 and not
+  in the OpenAPI document. Config refuses it unless `ROMULUS_PUBLIC_URL` is
+  loopback. It reuses an existing user by email; a later real SSO login of
+  that address is another user (different `sub`).
+- **Sessions**: a random token in an httpOnly `SameSite=Lax` cookie
+  (`Path=/api`, `Secure` on https), only its sha256 stored; expiry slides a
+  week from each use, never past 30 days after sign-in. No IdP token is kept
+  (`sessions.oidc_refresh_token` stays NULL; no `offline_access`). Logout is
+  a POST answering the IdP's `end_session` URL; "switch account" signs in
+  again with `prompt=select_account`. An expired session answers 401
+  `session_expired` (the app says so on the sign-in page).
 - **Invariants live in Postgres**: last admin (trigger, constraint
   `organization_needs_an_admin` → 409 `last_admin`), versions never updated
   and only deleted with their database (`versions_are_immutable`,
@@ -109,7 +120,9 @@ Made in the skeleton (S0):
 - **Deviations from MVP.md's data model**: `UNIQUE (org_id, slug)` on
   databases only among live rows (a deleted database frees its slug);
   `drafts.base_version_id` may be NULL (a database with no version yet);
-  added `users.email_verified` and `versions.created_by_token`.
+  added `users.email_verified` and `versions.created_by_token`; added
+  `oidc_flows` (sign-ins in flight: PKCE verifier, nonce, `next`) and the
+  `organizations_slug_not_reserved` check.
 - **Design system**: Tailwind v4 + Radix primitives, owned components in
   `web/src/components/ui` (shadcn-style, not a dependency). Chosen because
   every agent already knows the idiom, tokens are plain CSS variables, and
@@ -145,12 +158,35 @@ Made in the skeleton (S0):
   Anything else that errors outside a handler (a 405, the 30 s timeout's 503
   `timeout`, another extractor) is rewritten to the same format by
   `layers::errors_as_json`, but prefer a precise code from your handler.
-- **State**: `AppState { db, config }` derives `FromRef`: take `State<PgPool>`
-  or `State<Arc<Config>>` directly.
+- **State**: `AppState { db, config, oidc, membership }` derives `FromRef`:
+  take `State<PgPool>` or `State<Arc<Config>>` directly.
+- **Who is calling** (`auth`): take `CurrentUser` for anything a signed-in
+  person does, and `Member<min::Reviewer | min::Developer | min::Admin>` for
+  everything under `/orgs/{org}/…` (the path segment must be named `org`):
+  it loads the membership, answers 404 to non-members and 403 below the
+  minimum. The matrix (docs/MVP.md "Roles"): reads → `Member` (reviewer is
+  the default); edit drafts, versions, uploads, API tokens, create/delete
+  databases → `Member<min::Developer>`; members, invitations, org settings →
+  `Member<min::Admin>`. `Option<CurrentUser>` works for pages that also serve
+  signed-out visitors. `ApiError::Denied { code, .. }` is a 403 with its own
+  code; `ApiError::SessionExpired` is the 401 above.
+- **Membership changes and live connections**: `orgs` publishes every
+  committed role change or removal on `state.membership`
+  (`orgs::events::MembershipEvents`, a broadcast channel). A websocket task
+  subscribes and closes when `change.concerns(org_id, user_id)`, or on
+  `Lagged` (see the module docs). Membership writes go through
+  `db::begin_read_committed`.
+- **Secrets handed out** (session ids, invitation links, later API tokens):
+  `token::generate()` (32 random bytes, base64url) and store
+  `token::hash(..)` (sha256, fits the `*_hash bytea` checks).
 - **CSRF** is global middleware: every non-GET request needs
   `X-Romulus-Csrf: 1` and an `Origin` equal to `ROMULUS_PUBLIC_URL`, unless it
   carries `Authorization: Bearer` (API tokens). Bearer requests must never fall
-  back to the cookie. Websocket upgrades check `Origin` in `collab`.
+  back to the cookie (`CurrentUser` refuses them). Websocket upgrades take
+  the `csrf::SameOrigin` extractor, which checks `Origin` the same way.
+- **OpenAPI**: give every handler a unique `operation_id` in
+  `#[utoipa::path]`; the web types key operations by it (a test fails on
+  duplicates).
 - **Shared types**: `domain.rs` maps every Postgres enum (`Role`,
   `SourceKind`, `VersionOrigin`, `DraftStatus`, `TokenScope`) and re-exports
   `remus_core::Schema`. Don't redefine them in a module.
@@ -181,9 +217,11 @@ Made in the skeleton (S0):
 
 ```
 src/routes/              TanStack file routes (only route + page code); -prefixed files are ignored
-src/components/ui/       the kit: Button, Input/Textarea, Field, Select, Dialog, Sheet, Menu,
-                         Toaster/toast, Avatar/AvatarStack, Badge, Tabs, EmptyState, Skeleton,
-                         Tooltip, Kbd, Alert, Card, Separator, Spinner, Sidebar*
+src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field, Select
+                         (SelectItem `description`), Dialog, ConfirmDialog, Sheet, Menu,
+                         Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
+                         EmptyState, Skeleton, Tooltip, Kbd, Alert, Card, Separator, Spinner,
+                         Sidebar*
 src/components/shell/    AppShell (top bar, org switcher, user menu, nav, panel), PageHeader,
                          PageBody, status pages (404/500), the sign-in preview
 src/components/icons/    Iconoir only, generated: `npm --prefix web run icons:add -- <name>`
@@ -194,12 +232,20 @@ src/api/                 client.ts (typed openapi-fetch + CSRF header), generate
 src/styles/globals.css   every token; the only file with raw colors
 ```
 
-- **Routes** live under `/app`. Org pages will be `/app/$org/…`, so slugs
-  must not collide with top-level routes: reserve `signin`, `new`, `invite`,
-  `dev`, `settings`, `api`, `app`. A signed-in layout route renders
-  `<AppShell>`; pages render `<PageBody>` + `<PageHeader>` inside it (see
-  `routes/dev/shell*.tsx`, which is the template). `/app/dev/kit` and
-  `/app/dev/shell` exist in dev builds only.
+- **Routes** live under `/app`. Org pages are `routes/$org/…`
+  (`/app/<slug>/…`): `routes/$org.tsx` is the signed-in layout (it renders
+  `<AppShell>` with the real user and orgs, and 404s for non-members); add a
+  page as a child file and render `<PageHeader>` in it (the layout already
+  wraps `<PageBody>`). Read the org with `useSuspenseQuery(orgQuery(slug))`
+  and gate actions on `canWrite(org.role)` / `canManageMembers(org.role)`
+  (`features/orgs/roles.ts`); the API enforces it anyway. Slugs must not
+  collide with top-level routes: `signin`, `new`, `invite`, `dev`,
+  `settings`, `api`, `app` are reserved (API and database refuse them). A
+  signed-in route outside `$org` calls `requireUser(queryClient,
+  location.href)` (`features/auth/session.ts`) in `beforeLoad`. A 401 from
+  any query or mutation sends the user to sign-in and back; a 403 refetches
+  the orgs (main.tsx). `/app/dev/kit` and `/app/dev/shell` exist in dev
+  builds only.
 - **Data**: TanStack Query owns server state. Export `queryOptions` from
   `features/<module>/`, call `api.GET/POST(...)` through `unwrap` (throws
   `ApiError` with the API's `code`). Never hand-write an API type: change the
@@ -237,13 +283,20 @@ src/styles/globals.css   every token; the only file with raw colors
   `mod` line in `main.rs`), `#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]`
   with `db: PgPool`, `TestApp::new(db)` → `.get`, `.post_json` (adds CSRF
   header and Origin), `.send`; responses have `.status`, `.json()`, `.code()`.
-  Fixtures: `harness::{user, org, member, database}`. Unit tests inline in
-  `#[cfg(test)] mod tests`, named as assertions.
+  Fixtures: `harness::{user, org, member, database}`; signed in:
+  `signed_in(&db, "Alice")` or `session(&db, user)`, then
+  `app.as_user(&session).get/post/patch/delete(…)`; `Team::new(&db, "acme")`
+  gives an org with one session per role plus an outsider. `idp::FakeIdp`
+  plays the OIDC provider (`TestApp::with_config(db, idp.config())`). Unit
+  tests inline in `#[cfg(test)] mod tests`, named as assertions.
 - Web: Vitest + Testing Library next to the code (`*.test.tsx`) for behaviour;
   Playwright in `web/e2e/` for flows, against the production build on the
   preview origin with its own API (`playwright.config.ts` starts both, or
   reuses them). Prefer role/label queries; they double as an accessibility
-  check.
+  check. `e2e/helpers.ts`: `devSignIn(page, email, next)` for most tests,
+  `ssoSignIn(page, user)` with `zitadelUsers()` for the real login,
+  `createOrg`, `inviteLink`, `unique(…)` (the stack's database is shared
+  between runs: name things uniquely).
 - Every feature PR: its endpoints tested (happy path, permission denied per
   role, validation), its screens with at least one Playwright path. `just check`
   green before pushing.
