@@ -1112,7 +1112,7 @@ async fn only_the_update_rewrites_a_draft_it_froze(db: PgPool) {
     let edit = changes(&content.sql, &format!("{}-- tidied\n", content.sql));
 
     // Anyone else (Tidy) is refused meanwhile.
-    let refused = hub.rewrite(id, sha.clone(), edit.clone()).await.unwrap();
+    let refused = hub.rewrite(id, sha.clone(), edit.clone(), "tidy").await.unwrap();
     assert!(
         matches!(refused, Err(RewriteError::NotOpen(_))),
         "{refused:?}"
