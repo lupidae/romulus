@@ -550,6 +550,12 @@ fn partitions(
                     after: a.bound.clone(),
                 });
             }
+            field!(
+                changes,
+                PartitionChange::PartitionKey,
+                b.partition_key,
+                a.partition_key
+            );
         }
         let status = presence(before, after, !changes.is_empty());
         nest(&mut statuses, schema, name, status);

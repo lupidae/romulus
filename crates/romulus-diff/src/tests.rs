@@ -24,8 +24,52 @@ fn rel(schema: &str, name: &str) -> Relation {
     }
 }
 
+/// The showcase as these tests were written against: remus 0.2's fixture
+/// minus its multi-level `audit.events_2027` tree, which the sub-partition
+/// tests below build for themselves (see `the_showcase_tree_has_no_diff`).
 fn showcase() -> Schema {
+    let mut schema = full_showcase();
+    schema
+        .partitions
+        .retain(|p| p.child != "events_2027" && p.parent != "events_2027");
+    schema
+}
+
+fn full_showcase() -> Schema {
     Schema::from_json(SHOWCASE).unwrap()
+}
+
+#[test]
+fn a_partition_partitioned_in_turn_is_a_change() {
+    let old = showcase();
+    let mut new = showcase();
+    new.partitions[0].partition_key = Some("HASH (id)".into());
+    let d = diff(&old, &new);
+    let events = &d.entities[0];
+    assert_eq!(
+        events.lines,
+        ["partition `audit.events_2026` of `audit.events`: partitioned by none → HASH (id)"]
+    );
+    assert!(
+        events.partitions[0]
+            .definition
+            .after
+            .as_deref()
+            .unwrap()
+            .ends_with(" PARTITION BY HASH (id)")
+    );
+    assert_eq!(diff(&new, &old), d.reversed());
+}
+
+#[test]
+fn the_showcase_tree_has_no_diff() {
+    let full = full_showcase();
+    assert!(full.partitions.iter().any(|p| p.partition_key.is_some()));
+    assert!(diff(&full, &full).is_empty());
+    let d = diff(&showcase(), &full);
+    let events = &d.entities[0];
+    assert_eq!(events.name, "events");
+    assert_eq!(events.partitions.len(), 3);
 }
 
 fn entity<'a>(schema: &'a mut Schema, qualified_name: &str) -> &'a mut Entity {
@@ -1119,6 +1163,7 @@ fn partition(parent: (&str, &str), child: (&str, &str), bound: Option<&str>) -> 
         child_schema: child.0.into(),
         child: child.1.into(),
         bound: bound.map(Into::into),
+        partition_key: None,
     }
 }
 

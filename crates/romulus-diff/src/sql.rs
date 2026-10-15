@@ -296,5 +296,9 @@ pub(crate) fn policy_definition(policy: &Policy) -> String {
 }
 
 pub(crate) fn partition_bound(partition: &Partition) -> String {
-    partition.bound.as_deref().unwrap_or("DEFAULT").to_owned()
+    let bound = partition.bound.as_deref().unwrap_or("DEFAULT");
+    match &partition.partition_key {
+        Some(key) => format!("{bound} PARTITION BY {key}"),
+        None => bound.to_owned(),
+    }
 }

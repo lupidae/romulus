@@ -52,7 +52,7 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
       "partitions": [
         {
           "schema": "audit",
-          "name": "events_2027",
+          "name": "events_2028",
           "parent": {
             "schema": "audit",
             "name": "events"
@@ -61,16 +61,16 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
           "changes": [],
           "definition": {
             "before": null,
-            "after": "FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')"
+            "after": "FOR VALUES FROM ('2028-01-01 00:00:00+00') TO ('2029-01-01 00:00:00+00')"
           }
         }
       ],
       "lines": [
-        "partition `audit.events_2027` of `audit.events` added: FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')"
+        "partition `audit.events_2028` of `audit.events` added: FOR VALUES FROM ('2028-01-01 00:00:00+00') TO ('2029-01-01 00:00:00+00')"
       ],
       "sql": {
-        "before": "CREATE TABLE audit.events (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    occurred_at timestamp with time zone NOT NULL,\n    customer_id bigint,\n    payload jsonb NOT NULL,\n    CONSTRAINT events_pkey PRIMARY KEY (id, occurred_at)\n) PARTITION BY RANGE (occurred_at);\n\nCREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\nCREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n\nALTER TABLE audit.events ADD CONSTRAINT events_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id);\n",
-        "after": "CREATE TABLE audit.events (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    occurred_at timestamp with time zone NOT NULL,\n    customer_id bigint,\n    payload jsonb NOT NULL,\n    CONSTRAINT events_pkey PRIMARY KEY (id, occurred_at)\n) PARTITION BY RANGE (occurred_at);\n\nCREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\nCREATE TABLE audit.events_2027 PARTITION OF audit.events FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00');\nCREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n\nALTER TABLE audit.events ADD CONSTRAINT events_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id);\n"
+        "before": "CREATE TABLE audit.events (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    occurred_at timestamp with time zone NOT NULL,\n    customer_id bigint,\n    payload jsonb NOT NULL,\n    CONSTRAINT events_pkey PRIMARY KEY (id, occurred_at)\n) PARTITION BY RANGE (occurred_at);\n\nCREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\nCREATE TABLE audit.events_2027 PARTITION OF audit.events FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00') PARTITION BY HASH (id);\nCREATE TABLE audit.events_2027_h0 PARTITION OF audit.events_2027 FOR VALUES WITH (modulus 2, remainder 0);\nCREATE TABLE audit.events_2027_h1 PARTITION OF audit.events_2027 FOR VALUES WITH (modulus 2, remainder 1);\nCREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n\nALTER TABLE audit.events ADD CONSTRAINT events_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id);\n",
+        "after": "CREATE TABLE audit.events (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    occurred_at timestamp with time zone NOT NULL,\n    customer_id bigint,\n    payload jsonb NOT NULL,\n    CONSTRAINT events_pkey PRIMARY KEY (id, occurred_at)\n) PARTITION BY RANGE (occurred_at);\n\nCREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\nCREATE TABLE audit.events_2027 PARTITION OF audit.events FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00') PARTITION BY HASH (id);\nCREATE TABLE audit.events_2027_h0 PARTITION OF audit.events_2027 FOR VALUES WITH (modulus 2, remainder 0);\nCREATE TABLE audit.events_2027_h1 PARTITION OF audit.events_2027 FOR VALUES WITH (modulus 2, remainder 1);\nCREATE TABLE audit.events_2028 PARTITION OF audit.events FOR VALUES FROM ('2028-01-01 00:00:00+00') TO ('2029-01-01 00:00:00+00');\nCREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n\nALTER TABLE audit.events ADD CONSTRAINT events_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id);\n"
       }
     },
     {
@@ -413,7 +413,10 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
           "partitions": {
             "audit": {
               "events_2026": "unchanged",
-              "events_2027": "added",
+              "events_2027": "unchanged",
+              "events_2027_h0": "unchanged",
+              "events_2027_h1": "unchanged",
+              "events_2028": "added",
               "events_default": "unchanged"
             }
           }

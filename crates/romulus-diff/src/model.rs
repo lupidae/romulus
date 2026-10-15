@@ -475,7 +475,8 @@ pub struct PartitionDiff {
     pub parent: Relation,
     pub status: Status,
     pub changes: Vec<PartitionChange>,
-    /// `FOR VALUES …` or `DEFAULT`.
+    /// `FOR VALUES …` or `DEFAULT`, then `PARTITION BY …` when the
+    /// partition is partitioned in turn.
     pub definition: Sides,
 }
 
@@ -487,6 +488,9 @@ changes! {
         /// `FOR VALUES …`, or `DEFAULT`. A `null` bound means `DEFAULT` too
         /// and never differs from it.
         Bound(Option<String>),
+        /// `PARTITION BY …` of a partition partitioned in turn (`null` when
+        /// it is a leaf).
+        PartitionKey(Option<String>),
     }
 }
 

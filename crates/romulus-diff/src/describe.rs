@@ -464,6 +464,10 @@ fn partition_lines(p: &PartitionDiff) -> Vec<String> {
                 let bound = |b: &Option<String>| b.as_deref().unwrap_or("DEFAULT").to_owned();
                 format!("{me}: bound {}", arrow(&bound(before), &bound(after)))
             }
+            PartitionChange::PartitionKey { before, after } => {
+                let key = |k: &Option<String>| k.as_deref().unwrap_or("none").to_owned();
+                format!("{me}: partitioned by {}", arrow(&key(before), &key(after)))
+            }
         })
         .collect()
 }

@@ -4,7 +4,7 @@ expression: text
 ---
 1 table added, 3 changed, 1 removed; 1 partition added; 1 enum changed; 1 domain changed; 1 extension added, 1 changed
 
-partition `audit.events_2027` of `audit.events` added: FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')
+partition `audit.events_2028` of `audit.events` added: FOR VALUES FROM ('2028-01-01 00:00:00+00') TO ('2029-01-01 00:00:00+00')
 table `audit.scratch` removed
 table `shop.coupons` added
 `shop.customers.email`: type shop.email → citext

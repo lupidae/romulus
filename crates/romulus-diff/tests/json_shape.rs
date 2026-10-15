@@ -73,9 +73,10 @@ fn release() -> (Schema, Schema) {
     money.constraints = vec!["CHECK ((VALUE >= 0) AND (VALUE < 100000000))".into()];
 
     let mut next_year = new.partitions[0].clone();
-    next_year.child = "events_2027".into();
+    // events_2027 is in the fixture (sub-partitioned) since remus 0.2.
+    next_year.child = "events_2028".into();
     next_year.bound =
-        Some("FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')".into());
+        Some("FOR VALUES FROM ('2028-01-01 00:00:00+00') TO ('2029-01-01 00:00:00+00')".into());
     new.partitions.push(next_year);
 
     new.extensions[1].version = "1.4".into();

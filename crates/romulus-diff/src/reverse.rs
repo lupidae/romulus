@@ -138,7 +138,7 @@ impl PartitionDiff {
             .iter()
             .find_map(|c| match c {
                 PartitionChange::Parent { after, .. } => Some(after.clone()),
-                PartitionChange::Bound { .. } => None,
+                PartitionChange::Bound { .. } | PartitionChange::PartitionKey { .. } => None,
             })
             .unwrap_or(self.parent);
         Self {

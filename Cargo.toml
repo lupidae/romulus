@@ -12,8 +12,8 @@ rust-version = "1.99"
 publish = false
 
 [workspace.dependencies]
-remus-core = "0.1.1"
-remus-sql = "0.1.1"
+remus-core = "0.2.0"
+remus-sql = "0.2.0"
 
 axum = { version = "0.8.9", features = ["macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }

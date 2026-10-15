@@ -355,6 +355,7 @@ fn schema() -> impl Strategy<Value = Schema> {
                 child_schema: "app".into(),
                 child,
                 bound,
+                partition_key: None,
             })
             .collect::<Vec<_>>()
     })
