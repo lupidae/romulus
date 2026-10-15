@@ -115,34 +115,39 @@ pub fn parse(sql: &str) -> ParsedSql {
     let mut errors = Vec::new();
 
     // libpg_query takes a C string: a NUL byte would end the text early.
-    let cleaned;
-    let text = if let Some(nul) = sql.find('\0') {
+    // Both it and a leading byte order mark (which editors on Windows
+    // write) are blanked in place, so every offset stays the user's.
+    let mut cleaned = None;
+    if let Some(nul) = sql.find('\0') {
         errors.push(
             Diagnostic::error(Code::SyntaxError, "the text contains a NUL byte")
                 .with_span(lines.span(sql, nul..nul + 1)),
         );
-        cleaned = sql.replace('\0', " ");
-        cleaned.as_str()
-    } else {
-        sql
-    };
+        cleaned = Some(sql.replace('\0', " "));
+    }
+    if sql.starts_with('\u{FEFF}') {
+        let text = cleaned.take().unwrap_or_else(|| sql.to_owned());
+        cleaned = Some(format!("   {}", &text['\u{FEFF}'.len_utf8()..]));
+    }
+    let text = cleaned.as_deref().unwrap_or(sql);
 
-    let (tokens, scan_error) = scan(text);
-    if let Some((offset, message)) = &scan_error {
+    let scanned = scan(text);
+    for (range, message) in &scanned.errors {
         errors.push(
             Diagnostic::error(Code::SyntaxError, message.clone())
-                .with_span(lines.span(sql, *offset..sql.len())),
+                .with_span(lines.span(sql, range.clone())),
         );
     }
+    let tokens = scanned.tokens;
 
-    let whole = if scan_error.is_none() {
+    let whole = if scanned.chunks.is_none() {
         pg_query::parse(text).ok()
     } else {
         None
     };
     let raw = whole.or_else(|| {
-        let unterminated = scan_error.as_ref().map(|(offset, _)| *offset);
-        parse_around_errors(text, &tokens, unterminated, &mut |message, range| {
+        let chunks = scanned.chunks.unwrap_or_else(|| token_chunks(&tokens));
+        parse_around_errors(text, &tokens, &chunks, &mut |message, range| {
             errors.push(
                 Diagnostic::error(Code::SyntaxError, message).with_span(lines.span(sql, range)),
             );
@@ -199,16 +204,17 @@ pub fn parse(sql: &str) -> ParsedSql {
 fn parse_around_errors(
     text: &str,
     tokens: &[Token],
-    unterminated: Option<usize>,
+    chunks: &[Chunk],
     report: &mut impl FnMut(String, std::ops::Range<usize>),
 ) -> Option<pg_query::ParseResult> {
     let mut blanked = text.as_bytes().to_vec();
-    for chunk in chunks(tokens, unterminated, text.len()) {
-        let code: Vec<&Token> = tokens[chunk.tokens.clone()]
+    for chunk in chunks {
+        let code: Vec<&Token> = tokens
             .iter()
-            .filter(|t| !t.is_comment())
+            .filter(|t| t.start >= chunk.start && t.end <= chunk.end && !t.is_comment())
             .collect();
-        let valid = if chunk.unterminated {
+        let valid = if chunk.lexer_error {
+            // Already reported where the scanner stopped.
             false
         } else if code.is_empty() {
             true
@@ -230,33 +236,194 @@ fn parse_around_errors(
     pg_query::parse(&blanked).ok()
 }
 
-/// Tokens of the text, and the scanner's error if a string, comment or
-/// quoted identifier is unterminated: its offset (it runs to the end of the
-/// text) and message. Tokens stop where the error starts.
-fn scan(text: &str) -> (Vec<Token>, Option<(usize, String)>) {
-    match pg_query::scan(text) {
-        Ok(result) => (tokens(&result), None),
-        Err(err) => {
-            let message = parse_message(&err);
-            let offset = near_text(&message)
-                .filter(|near| text.ends_with(near))
-                .map_or(0, |near| text.len() - near.len());
-            let tokens = pg_query::scan(&text[..offset])
-                .map(|r| tokens(&r))
-                .unwrap_or_default();
-            (tokens, Some((offset, message)))
-        }
-    }
+/// The tokens of a text and its lexical errors.
+struct Scanned {
+    tokens: Vec<Token>,
+    /// Tokens that do not lex (`12abc`, `0x`, `""`, an unterminated
+    /// string): where, and the scanner's message.
+    errors: Vec<(std::ops::Range<usize>, String)>,
+    /// When the whole text does not lex: its statements, split without the
+    /// scanner, the ones that do not lex flagged.
+    chunks: Option<Vec<Chunk>>,
 }
 
-fn tokens(result: &protobuf::ScanResult) -> Vec<Token> {
+/// Scan the text. When some token does not lex, the scanner gives up on the
+/// whole text: split it into statements with [`split_tolerant`] and scan
+/// each on its own, so one bad literal costs only its statement.
+fn scan(text: &str) -> Scanned {
+    if let Ok(result) = pg_query::scan(text) {
+        return Scanned {
+            tokens: tokens(&result, 0),
+            errors: Vec::new(),
+            chunks: None,
+        };
+    }
+    let mut scanned = Scanned {
+        tokens: Vec::new(),
+        errors: Vec::new(),
+        chunks: Some(Vec::new()),
+    };
+    for range in split_tolerant(text) {
+        let piece = &text[range.clone()];
+        let lexer_error = match pg_query::scan(piece) {
+            Ok(result) => {
+                scanned.tokens.extend(tokens(&result, range.start));
+                false
+            }
+            Err(err) => {
+                let message = parse_message(&err);
+                let at = lexer_error_at(piece, &message);
+                scanned
+                    .errors
+                    .push((range.start + at.start..range.start + at.end, message));
+                true
+            }
+        };
+        if let Some(chunks) = scanned.chunks.as_mut() {
+            chunks.push(Chunk {
+                start: range.start,
+                end: range.end,
+                lexer_error,
+            });
+        }
+    }
+    scanned
+}
+
+/// Where in a statement the scanner failed: the token its message quotes
+/// (`trailing junk after numeric literal at or near "12a"`). An
+/// unterminated literal runs to the end; otherwise the first occurrence
+/// the text before which still lexes.
+fn lexer_error_at(piece: &str, message: &str) -> std::ops::Range<usize> {
+    let start = piece.len() - piece.trim_start().len();
+    let whole = start..piece.trim_end().len().max(start);
+    let Some(near) = near_text(message).filter(|n| !n.is_empty()) else {
+        return whole;
+    };
+    if piece.ends_with(near) {
+        return piece.len() - near.len()..piece.len();
+    }
+    let occurrences: Vec<usize> = piece.match_indices(near).map(|(at, _)| at).collect();
+    occurrences
+        .iter()
+        .find(|at| pg_query::scan(&piece[..**at]).is_ok())
+        .or_else(|| occurrences.first())
+        .map_or(whole, |at| *at..*at + near.len())
+}
+
+/// Split a text into statements at top-level semicolons without Postgres's
+/// scanner, so a token it rejects does not hide the rest. Knows what can
+/// hide a `;`: quoted strings (`'…'`, with backslash escapes after `E`),
+/// quoted identifiers, dollar-quoted strings, line and nested block
+/// comments, and parentheses. Each range runs from the end of the previous
+/// statement to its `;` included (the last one to the end of the text).
+fn split_tolerant(text: &str) -> Vec<std::ops::Range<usize>> {
+    let b = text.as_bytes();
+    let n = b.len();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
+    let mut ranges = Vec::new();
+    let (mut i, mut start, mut depth) = (0, 0, 0_usize);
+    while i < n {
+        match b[i] {
+            b'-' if b.get(i + 1) == Some(&b'-') => {
+                i = text[i..].find('\n').map_or(n, |nl| i + nl + 1);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let mut nested = 0_usize;
+                while i < n {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        nested += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        nested -= 1;
+                        i += 2;
+                        if nested == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'\'' => {
+                let escapes =
+                    i > 0 && matches!(b[i - 1], b'E' | b'e') && (i < 2 || !ident(b[i - 2]));
+                i += 1;
+                while i < n {
+                    match b[i] {
+                        b'\\' if escapes => i += 2,
+                        b'\'' if b.get(i + 1) == Some(&b'\'') => i += 2,
+                        b'\'' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < n {
+                    if b[i] == b'"' {
+                        if b.get(i + 1) == Some(&b'"') {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'$' if i == 0 || !ident(b[i - 1]) => {
+                // `$tag$` or `$$`; `$1` and lone dollars are not quotes.
+                let tag_end = b[i + 1..]
+                    .iter()
+                    .position(|c| !ident(*c))
+                    .map(|p| i + 1 + p);
+                match tag_end {
+                    Some(end)
+                        if b[end] == b'$' && !b.get(i + 1).is_some_and(u8::is_ascii_digit) =>
+                    {
+                        let tag = &text[i..=end];
+                        i = text[end + 1..]
+                            .find(tag)
+                            .map_or(n, |close| end + 1 + close + tag.len());
+                    }
+                    _ => i += 1,
+                }
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b';' if depth == 0 => {
+                ranges.push(start..i + 1);
+                start = i + 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < n {
+        ranges.push(start..n);
+    }
+    ranges
+}
+
+/// Tokens of a scan of `text[offset..]`, located in `text`.
+fn tokens(result: &protobuf::ScanResult, offset: usize) -> Vec<Token> {
     result
         .tokens
         .iter()
         .filter_map(|t| {
             Some(Token {
-                start: location(t.start)?,
-                end: location(t.end)?,
+                start: offset + location(t.start)?,
+                end: offset + location(t.end)?,
                 kind: TokenKind::try_from(t.token).ok()?,
                 keyword: t.keyword_kind != protobuf::KeywordKind::NoKeyword as i32,
             })
@@ -283,22 +450,20 @@ fn near_text(message: &str) -> Option<&str> {
     message.get(start..message.len().checked_sub(1)?)
 }
 
-/// A run of tokens between two top-level semicolons.
+/// One statement's text, between two top-level semicolons.
 struct Chunk {
-    /// Byte range, from just after the previous `;` to just before the next.
     start: usize,
     end: usize,
-    tokens: std::ops::Range<usize>,
-    /// Runs into an unterminated string or comment.
-    unterminated: bool,
+    /// It does not lex (already reported).
+    lexer_error: bool,
 }
 
-fn chunks(tokens: &[Token], unterminated_at: Option<usize>, len: usize) -> Vec<Chunk> {
+/// Statements from a text's tokens: split at top-level semicolons.
+fn token_chunks(tokens: &[Token]) -> Vec<Chunk> {
     let mut chunks = Vec::new();
     let mut start = 0;
-    let mut first = 0;
     let mut depth = 0_usize;
-    for (i, token) in tokens.iter().enumerate() {
+    for token in tokens {
         match token.kind {
             TokenKind::Ascii40 => depth += 1,
             TokenKind::Ascii41 => depth = depth.saturating_sub(1),
@@ -306,26 +471,18 @@ fn chunks(tokens: &[Token], unterminated_at: Option<usize>, len: usize) -> Vec<C
                 chunks.push(Chunk {
                     start,
                     end: token.start,
-                    tokens: first..i,
-                    unterminated: false,
+                    lexer_error: false,
                 });
                 start = token.end;
-                first = i + 1;
             }
             _ => {}
         }
     }
-    // An unterminated literal runs to the end of the text.
-    let end = if unterminated_at.is_some() {
-        len
-    } else {
-        tokens.last().map_or(0, |t| t.end)
-    };
+    let end = tokens.last().map_or(0, |t| t.end);
     chunks.push(Chunk {
         start,
         end: end.max(start),
-        tokens: first..tokens.len(),
-        unterminated: unterminated_at.is_some(),
+        lexer_error: false,
     });
     chunks
 }
@@ -540,6 +697,78 @@ mod tests {
             }
         );
         assert_eq!(span.end, sql.len());
+    }
+
+    #[test]
+    fn a_token_that_does_not_lex_costs_only_its_statement() {
+        for (bad, near) in [
+            ("CREATE TABLE b (x int DEFAULT 12abc);", "12abc"),
+            ("CREATE TABLE b (x int DEFAULT 0x);", "0x"),
+            ("CREATE TABLE \"\" (id int);", "\"\""),
+            // A parser error without "at or near": the statement.
+            (
+                "CREATE TABLE b (x text DEFAULT U&'\\zzzz');",
+                "CREATE TABLE b (x text DEFAULT U&'\\zzzz')",
+            ),
+        ] {
+            let sql = format!(
+                "CREATE TABLE a (id int);\n{bad}\nCREATE TABLE c (id int); -- it's fine; really\n\
+                 CREATE FUNCTION f() RETURNS text LANGUAGE sql AS $body$ SELECT ';' $body$;"
+            );
+            let parsed = parse(&sql);
+            let keys: Vec<String> = parsed
+                .statements
+                .iter()
+                .map(|s| s.key.to_string())
+                .collect();
+            assert_eq!(
+                keys,
+                ["table:public.a", "table:public.c", "function:public.f"],
+                "{bad}"
+            );
+            assert_eq!(parsed.errors.len(), 1, "{bad}: {:?}", parsed.errors);
+            let span = parsed.errors[0].span.unwrap();
+            assert_eq!(span.from.line, 2, "{bad}");
+            assert_eq!(
+                &sql[span.range()],
+                near,
+                "{bad}: {}",
+                parsed.errors[0].message
+            );
+            // Spans of the statements after it are still exact.
+            assert_eq!(parsed.statements[1].text(&sql), "CREATE TABLE c (id int)");
+        }
+    }
+
+    #[test]
+    fn the_tolerant_splitter_respects_everything_that_can_hide_a_semicolon() {
+        let sql = "SELECT ';' , E'\\';' , \"a;b\" , $$;$$ , $t$;$t$ , $1;\n\
+                   -- ; in a comment\n/* ; /* nested ; */ ; */ SELECT (1;2); SELECT 3";
+        let pieces: Vec<&str> = super::split_tolerant(sql)
+            .into_iter()
+            .map(|r| sql[r].trim())
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                "SELECT ';' , E'\\';' , \"a;b\" , $$;$$ , $t$;$t$ , $1;",
+                "-- ; in a comment\n/* ; /* nested ; */ ; */ SELECT (1;2);",
+                "SELECT 3",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_is_ignored_and_positions_stay_put() {
+        let sql = "\u{FEFF}CREATE TABLE t (id int);\nCREATE TABLE u (id int);";
+        let parsed = parse(sql);
+        assert_eq!(parsed.errors, []);
+        assert_eq!(parsed.statements.len(), 2);
+        assert_eq!(parsed.statements[0].text(sql), "CREATE TABLE t (id int)");
+        assert_eq!(
+            parsed.statements[0].span.from,
+            Position { line: 1, column: 2 }
+        );
     }
 
     #[test]

@@ -599,10 +599,10 @@ fn check_statement(node: &NodeEnum, out: &mut Vec<Problem>) {
                 out.push(Problem::statement(HINT_FUNCTIONS));
             }
         }
+        N::CreatePolicyStmt(s) => check_policy_roles(&s.roles, out),
+        N::AlterPolicyStmt(s) => check_policy_roles(&s.roles, out),
         // Allowed as they are.
         N::ViewStmt(_)
-        | N::CreatePolicyStmt(_)
-        | N::AlterPolicyStmt(_)
         | N::CreateSeqStmt(_)
         | N::AlterSeqStmt(_)
         | N::CreateEnumStmt(_)
@@ -670,6 +670,32 @@ fn check_statement(node: &NodeEnum, out: &mut Vec<Problem>) {
         | N::DropUserMappingStmt(_)
         | N::ImportForeignSchemaStmt(_) => out.push(Problem::statement(HINT_FOREIGN)),
         _ => out.push(Problem::statement(HINT_CLUSTER)),
+    }
+}
+
+/// `TO CURRENT_USER` (and the like) names whoever runs the SQL: a role the
+/// model cannot record by name, so it would not round-trip.
+fn check_policy_roles(roles: &[pg_query::protobuf::Node], out: &mut Vec<Problem>) {
+    use pg_query::protobuf::RoleSpecType as R;
+    for role in roles {
+        let Some(NodeEnum::RoleSpec(spec)) = role.node.as_ref() else {
+            continue;
+        };
+        let word = match spec.roletype() {
+            R::RolespecCurrentUser => "CURRENT_USER",
+            R::RolespecSessionUser => "SESSION_USER",
+            R::RolespecCurrentRole => "CURRENT_ROLE",
+            _ => continue,
+        };
+        out.push(Problem {
+            code: Code::NotAllowed,
+            message: format!("TO {word} is not allowed in a policy"),
+            hint: Some(
+                "It names whoever runs the SQL, which a schema cannot record: name the role instead."
+                    .to_owned(),
+            ),
+            at: location(spec.location),
+        });
     }
 }
 
@@ -1255,6 +1281,8 @@ mod tests {
              CREATE EXTENSION dblink;
              CREATE EXTENSION tablefunc;
              CREATE EXTENSION postgis_raster;
+             CREATE POLICY p ON t TO app, CURRENT_USER USING (true);
+             ALTER POLICY p ON t TO SESSION_USER;
              CREATE EXTENSION IF NOT EXISTS citext;
              DROP EXTENSION citext;
              CREATE EXTENSION citext;",
@@ -1281,6 +1309,8 @@ mod tests {
                 "extension \"dblink\" is not available",
                 "extension \"tablefunc\" is not available",
                 "extension \"postgis_raster\" is not available",
+                "TO CURRENT_USER is not allowed in a policy",
+                "TO SESSION_USER is not allowed in a policy",
                 "extension \"citext\" is created twice",
             ]
         );

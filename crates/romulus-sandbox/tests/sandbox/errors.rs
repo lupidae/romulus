@@ -258,3 +258,56 @@ fn hostile_type_names_stay_identifiers_in_stubs() {
         );
     });
 }
+
+/// Policy roles come back as Postgres stores them and remus reports them:
+/// PUBLIC among other roles is PUBLIC (no roles), and `ALTER POLICY … TO
+/// PUBLIC` resets roles set before.
+#[test]
+fn policy_roles_read_as_postgres_stores_them() {
+    with_compiler(|compiler| async move {
+        let sql = "CREATE TABLE t (id int);\n\
+                   CREATE POLICY mixed ON t TO public, app_user USING (true);\n\
+                   CREATE POLICY named ON t TO app_user, admin, app_user USING (true);\n\
+                   CREATE POLICY reset ON t TO app_user USING (true);\n\
+                   ALTER POLICY reset ON t TO PUBLIC;\n\
+                   CREATE POLICY plain ON t USING (true);";
+        let compilation = compile_ok(compiler, sql).await;
+        let model = compilation.model.unwrap();
+        let roles: Vec<(String, Vec<String>)> = model.entities[0]
+            .policies
+            .iter()
+            .map(|p| (p.name.clone(), p.roles.clone()))
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                ("mixed".to_owned(), vec![]),
+                (
+                    "named".to_owned(),
+                    vec!["app_user".to_owned(), "admin".to_owned()]
+                ),
+                ("plain".to_owned(), vec![]),
+                ("reset".to_owned(), vec![]),
+            ]
+        );
+    });
+}
+
+#[test]
+fn a_dotted_name_in_an_error_is_underlined_whole() {
+    with_compiler(|compiler| async move {
+        let sql = "CREATE TABLE \"a.b\" (id int);\nCREATE TABLE \"a.b\" (id int);";
+        let compilation = compiler.compile(sql).await.expect("the sandbox runs");
+        let error = only_error(sql, &compilation);
+        assert_eq!(
+            at(sql, &error),
+            (
+                "\"a.b\"",
+                Position {
+                    line: 2,
+                    column: 14
+                }
+            )
+        );
+    });
+}

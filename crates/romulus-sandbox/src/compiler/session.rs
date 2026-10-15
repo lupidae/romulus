@@ -1,5 +1,10 @@
 //! One pool slot: its connection, and running a prepared script on it.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicI32, Ordering},
+};
+
 use remus_core::{INTROSPECT_SQL, Schema};
 use serde::Deserialize;
 use sqlx::{
@@ -40,8 +45,11 @@ JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace";
 pub(crate) struct Slot {
     pub spec: SlotSpec,
     pub conn: Option<PgConnection>,
-    /// The backend serving `conn`, to terminate a runaway compile.
-    pub pid: Option<i32>,
+    /// The backend serving `conn` (0: none), shared so the compile deadline
+    /// reads the current one even after a reconnect mid-compile.
+    pub pid: Arc<AtomicI32>,
+    /// A transaction is open on `conn`: the slot must not be reused as is.
+    pub dirty: bool,
 }
 
 /// How an attempt ended, short of producing a model.
@@ -49,7 +57,30 @@ pub(crate) enum AttemptError {
     /// Postgres rejected the script (or introspection): a user error.
     Sql(Box<SqlFailure>),
     /// The connection failed: the sandbox is unavailable, not the SQL.
-    Connection(sqlx::Error),
+    /// `retry` when trying again on a fresh connection is safe: the
+    /// connection was stale, or Postgres said it was shutting the backend
+    /// down (an operator, a restart, another backend's crash). Not when the
+    /// backend vanished while running the user's SQL: that SQL may be what
+    /// killed it (the OOM killer), and replaying it would do it again.
+    Connection { error: sqlx::Error, retry: bool },
+}
+
+impl AttemptError {
+    fn stale(error: sqlx::Error) -> Self {
+        Self::Connection { error, retry: true }
+    }
+
+    /// A connection error while the user's SQL (or introspection) ran.
+    fn running(error: sqlx::Error) -> Self {
+        let notified = error
+            .as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            .is_some_and(|code| is_connection_state(&code));
+        Self::Connection {
+            error,
+            retry: notified,
+        }
+    }
 }
 
 pub(crate) struct SqlFailure {
@@ -78,7 +109,8 @@ impl Slot {
         Self {
             spec,
             conn: None,
-            pid: None,
+            pid: Arc::new(AtomicI32::new(0)),
+            dirty: false,
         }
     }
 
@@ -101,23 +133,29 @@ impl Slot {
                 .fetch_one(&mut conn)
                 .await?
                 .try_get(0)?;
-            self.pid = Some(pid);
+            self.pid.store(pid, Ordering::Relaxed);
             self.conn = Some(conn);
+            self.dirty = false;
         }
         self.conn.as_mut().ok_or(sqlx::Error::PoolClosed)
     }
 
-    /// Forget a connection in an unknown state (it is closed on drop).
-    pub fn discard(&mut self) {
+    /// Forget a connection in an unknown state (it is closed on drop, which
+    /// makes Postgres roll back whatever was open on it). Returns the
+    /// backend it was served by, to terminate if it may still be running.
+    pub fn discard(&mut self) -> Option<i32> {
         self.conn = None;
-        self.pid = None;
+        self.dirty = false;
+        let pid = self.pid.swap(0, Ordering::Relaxed);
+        (pid != 0).then_some(pid)
     }
 
     pub async fn close(&mut self) {
         if let Some(conn) = self.conn.take() {
             let _ = conn.close().await;
         }
-        self.pid = None;
+        self.dirty = false;
+        self.pid.store(0, Ordering::Relaxed);
     }
 
     /// Run a prepared script in a transaction, introspect, roll back.
@@ -127,10 +165,11 @@ impl Slot {
         settings: &Settings,
         prepared: &Prepared,
     ) -> Result<(String, Vec<PolicyRoles>), AttemptError> {
-        let conn = self
-            .connection(base)
-            .await
-            .map_err(AttemptError::Connection)?;
+        self.connection(base).await.map_err(AttemptError::stale)?;
+        let Self { conn, dirty, .. } = self;
+        let conn = conn
+            .as_mut()
+            .ok_or_else(|| AttemptError::stale(sqlx::Error::PoolClosed))?;
         let begin = format!(
             "BEGIN; SET LOCAL statement_timeout = '{}ms'; SET LOCAL lock_timeout = '{}ms'; \
              SET LOCAL search_path TO \"$user\", public",
@@ -139,13 +178,16 @@ impl Slot {
         raw_sql(AssertSqlSafe(begin))
             .execute(&mut *conn)
             .await
-            .map_err(AttemptError::Connection)?;
+            .map_err(AttemptError::stale)?;
+        *dirty = true;
 
         let ran = raw_sql(AssertSqlSafe(prepared.script.as_str()))
             .execute(&mut *conn)
             .await;
         if let Err(err) = ran {
-            return Err(failed(conn, err, &prepared.script).await);
+            let failure = failed(conn, err, Some(&prepared.script)).await;
+            *dirty = matches!(failure, AttemptError::Connection { .. });
+            return Err(failure);
         }
         let model: Result<String, sqlx::Error> = async {
             raw_sql(INTROSPECT_SQL)
@@ -156,14 +198,19 @@ impl Slot {
         .await;
         let model = match model {
             Ok(model) => model,
-            Err(err) => return Err(failed(conn, err, INTROSPECT_SQL).await),
+            // Our own query: its position means nothing in the user's text.
+            Err(err) => {
+                let failure = failed(conn, err, None).await;
+                *dirty = matches!(failure, AttemptError::Connection { .. });
+                return Err(failure);
+            }
         };
         let roles = if prepared.records_policy_roles {
             let json: String = raw_sql(POLICY_ROLES_SQL)
                 .fetch_one(&mut *conn)
                 .await
                 .and_then(|row| row.try_get(0))
-                .map_err(AttemptError::Connection)?;
+                .map_err(AttemptError::running)?;
             serde_json::from_str(&json).unwrap_or_default()
         } else {
             Vec::new()
@@ -171,22 +218,26 @@ impl Slot {
         raw_sql("ROLLBACK")
             .execute(&mut *conn)
             .await
-            .map_err(AttemptError::Connection)?;
+            .map_err(AttemptError::running)?;
+        *dirty = false;
         Ok((model, roles))
     }
 }
 
 /// Turn a failed statement into a user error (rolling back and reading the
-/// progress marker), or a connection error.
-async fn failed(conn: &mut PgConnection, err: sqlx::Error, sent: &str) -> AttemptError {
-    let Some(db) = err.as_database_error() else {
-        return AttemptError::Connection(err);
+/// progress marker), or a connection error. `sent` is the user's script,
+/// whose positions map back to the text; `None` for our own queries.
+async fn failed(conn: &mut PgConnection, err: sqlx::Error, sent: Option<&str>) -> AttemptError {
+    let pg = err
+        .as_database_error()
+        .and_then(|db| db.try_downcast_ref::<PgDatabaseError>());
+    let Some(pg) = pg.filter(|pg| !is_connection_state(pg.code())) else {
+        return AttemptError::running(err);
     };
-    let Some(pg) = db.try_downcast_ref::<PgDatabaseError>() else {
-        return AttemptError::Connection(err);
-    };
-    let position = match pg.position() {
-        Some(PgErrorPosition::Original(chars)) => Some(char_to_byte(sent, chars.saturating_sub(1))),
+    let position = match (pg.position(), sent) {
+        (Some(PgErrorPosition::Original(chars)), Some(sent)) => {
+            Some(char_to_byte(sent, chars.saturating_sub(1)))
+        }
         _ => None,
     };
     let failure = SqlFailure {
@@ -200,7 +251,7 @@ async fn failed(conn: &mut PgConnection, err: sqlx::Error, sent: &str) -> Attemp
         statement: None,
     };
     if let Err(err) = raw_sql("ROLLBACK").execute(&mut *conn).await {
-        return AttemptError::Connection(err);
+        return AttemptError::running(err);
     }
     let progress: Result<String, sqlx::Error> = async {
         raw_sql(AssertSqlSafe(format!(
@@ -216,8 +267,14 @@ async fn failed(conn: &mut PgConnection, err: sqlx::Error, sent: &str) -> Attemp
             statement: value.parse().ok().and_then(statement_of_progress),
             ..failure
         })),
-        Err(err) => AttemptError::Connection(err),
+        Err(err) => AttemptError::running(err),
     }
+}
+
+/// SQLSTATEs that are about the connection, not the SQL: the backend is
+/// going away (57P0x) or the connection broke (08).
+fn is_connection_state(code: &str) -> bool {
+    code.starts_with("08") || matches!(code, "57P01" | "57P02" | "57P03")
 }
 
 /// The diagnostic for a Postgres error, located in the user's text.
@@ -254,7 +311,12 @@ pub(crate) fn diagnostic(
             // the name the message quotes, when the statement has it once.
             let statement = parsed.statements.get(statement?)?;
             let name = quoted_name(&failure.failure.message)?;
-            named_token(parsed, statement, sql, name)
+            // `relation "a.b" already exists` names the relation "a.b" (or b
+            // in schema a): try the whole name, then its last part.
+            named_token(parsed, statement, sql, name).or_else(|| {
+                let last = name.rsplit('.').next()?;
+                (last != name).then(|| named_token(parsed, statement, sql, last))?
+            })
         })
         .or_else(|| {
             statement
@@ -300,13 +362,11 @@ pub(crate) fn diagnostic(
     diagnostic
 }
 
-/// The first double-quoted name in a message, its last dotted part
-/// (`relation "app.users" does not exist` → `users`).
+/// The first double-quoted name in a message.
 fn quoted_name(message: &str) -> Option<&str> {
     let start = message.find('"')? + 1;
     let end = start + message[start..].find('"')?;
-    let name = &message[start..end];
-    Some(name.rsplit('.').next().unwrap_or(name))
+    Some(&message[start..end])
 }
 
 /// The only identifier token of a statement that spells `name`.

@@ -331,3 +331,204 @@ fn extensions_are_probed_where_no_compile_role_reaches() {
         );
     });
 }
+
+/// A compile whose caller goes away (a client disconnects, a handler times
+/// out) still finishes and hands its database back clean: the next compile
+/// on it sees nothing of the abandoned one, and gets its own result.
+#[test]
+fn a_dropped_compile_never_leaves_its_database_dirty() {
+    with_own_compiler(
+        |url| SandboxConfig {
+            pool_size: 1,
+            ..config(url, "romulus_test_cancel")
+        },
+        |compiler| async move {
+            let slow = (0..1_500).fold(
+                String::from("CREATE TABLE leaked (id int);\n"),
+                |mut sql, i| {
+                    use std::fmt::Write;
+                    let _ = writeln!(sql, "CREATE TABLE z{i} (id int PRIMARY KEY, label text);");
+                    sql
+                },
+            );
+            let task = {
+                let compiler = compiler.clone();
+                tokio::spawn(async move { compiler.compile(&slow).await })
+            };
+            let mut admin = admin().await;
+            for _ in 0..500 {
+                let n: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM pg_stat_activity \
+                     WHERE usename = 'romulus_test_cancel_0' AND state = 'active'",
+                )
+                .fetch_one(&mut admin)
+                .await
+                .expect("activity");
+                if n > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            task.abort();
+            assert!(task.await.is_err_and(|e| e.is_cancelled()));
+
+            for _ in 0..2 {
+                let next = compiler
+                    .compile("CREATE TABLE fresh_one (id int);")
+                    .await
+                    .expect("the sandbox runs");
+                assert!(next.is_ok(), "{}", explain("", &next));
+                let names: Vec<String> = next
+                    .model
+                    .unwrap()
+                    .entities
+                    .into_iter()
+                    .map(|e| e.name)
+                    .collect();
+                assert_eq!(names, ["fresh_one"]);
+            }
+        },
+    );
+}
+
+/// A text needing more stub corrections than one compile allows is not
+/// cached as a failure: the draft's next compile starts from what was
+/// learnt and gets there.
+#[test]
+fn stub_corrections_carry_over_instead_of_caching_a_failure() {
+    with_own_compiler(
+        |url| SandboxConfig {
+            pool_size: 1,
+            max_stub_rounds: 2,
+            ..config(url, "romulus_test_learn")
+        },
+        |compiler| async move {
+            let mut sql = String::from("CREATE TABLE t (id uuid, n numeric);\n");
+            for i in 0..4 {
+                use std::fmt::Write;
+                let _ = writeln!(
+                    sql,
+                    "CREATE POLICY p{i} ON t USING (app.a{i}() = (SELECT max(n) FROM t));"
+                );
+            }
+            let first = compiler
+                .compile_for("draft", sql.clone())
+                .await
+                .expect("compiled");
+            assert!(!first.is_ok());
+            assert!(!first.cached);
+            let mut rounds = 1;
+            let last = loop {
+                let next = compiler
+                    .compile_for("draft", sql.clone())
+                    .await
+                    .expect("compiled");
+                rounds += 1;
+                if next.is_ok() || rounds > 4 {
+                    break next;
+                }
+                assert!(!next.cached);
+            };
+            assert!(last.is_ok(), "{}", explain(&sql, &last));
+            assert!(rounds <= 3, "{rounds} compiles");
+            // The success is cached for everyone.
+            assert!(compiler.compile(&sql).await.expect("compiled").cached);
+        },
+    );
+}
+
+/// After a slot loses its connection, the deadline still stops the backend
+/// the next compile opened.
+#[test]
+fn the_deadline_stops_the_backend_of_a_reconnected_slot() {
+    with_own_compiler(
+        |url| SandboxConfig {
+            pool_size: 1,
+            compile_timeout: Duration::from_millis(1500),
+            ..config(url, "romulus_test_pid")
+        },
+        |compiler| async move {
+            let bomb = (0..3_000).fold(String::new(), |mut sql, i| {
+                use std::fmt::Write;
+                let _ = writeln!(sql, "CREATE TABLE t{i} (id int PRIMARY KEY, label text);");
+                sql
+            });
+            for variant in ["", "\n-- again"] {
+                let sql = format!("{bomb}{variant}");
+                let compilation = compiler.compile(&sql).await.expect("the sandbox runs");
+                assert!(
+                    compilation
+                        .errors()
+                        .any(|d| d.code == romulus_sandbox::Code::Timeout)
+                );
+                // Nothing of it keeps running.
+                let mut admin = admin().await;
+                let mut active = 1;
+                for _ in 0..50 {
+                    active = sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM pg_stat_activity \
+                         WHERE usename = 'romulus_test_pid_0' AND state = 'active'",
+                    )
+                    .fetch_one(&mut admin)
+                    .await
+                    .expect("activity");
+                    if active == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                assert_eq!(active, 0, "a backend outlived the deadline");
+            }
+        },
+    );
+}
+
+/// Uploads (`compile`) use at most their share of the pool.
+#[test]
+fn uploads_use_at_most_their_share_of_the_pool() {
+    with_own_compiler(
+        |url| SandboxConfig {
+            pool_size: 2,
+            upload_concurrency: Some(1),
+            ..config(url, "romulus_test_uploads")
+        },
+        |compiler| async move {
+            let slow = |tag: &str| {
+                (0..800).fold(format!("-- {tag}\n"), |mut sql, i| {
+                    use std::fmt::Write;
+                    let _ = writeln!(sql, "CREATE TABLE u{i} (id int PRIMARY KEY);");
+                    sql
+                })
+            };
+            let uploads: Vec<_> = ["a", "b"]
+                .map(|tag| {
+                    let compiler = compiler.clone();
+                    let sql = slow(tag);
+                    tokio::spawn(async move { compiler.compile(&sql).await })
+                })
+                .into();
+            // One upload runs, the other waits: the pool never fills up.
+            let mut busy = false;
+            for _ in 0..200 {
+                let free = compiler.metrics().pool_free;
+                assert!(free >= 1, "uploads took the whole pool");
+                busy |= free == 1;
+                if busy && free == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(busy, "no upload reached the pool");
+            // A draft still gets a slot meanwhile.
+            let draft = compiler
+                .compile_for("draft", "CREATE TABLE d (id int)".to_owned())
+                .await
+                .expect("a draft compiles while uploads queue");
+            assert!(draft.is_ok());
+            for upload in uploads {
+                assert!(upload.await.expect("task").expect("compiled").is_ok());
+            }
+        },
+    );
+}

@@ -92,13 +92,19 @@ pub struct SandboxConfig {
     /// Between two compile starts of one key ([`Compiler::compile_for`]).
     /// Default 250 ms.
     pub min_interval: Duration,
-    /// Retries after correcting a stub from Postgres's error. Default 4.
+    /// Retries after correcting a stub from Postgres's error. Default 8. A
+    /// compile that runs out of rounds is not cached, and `compile_for`
+    /// keeps what it learnt for the draft's next compile.
     pub max_stub_rounds: usize,
     /// Compile results kept by SHA-256 of their text. Default 256.
     pub cache_entries: usize,
     /// How often the admin connection (which holds the prefix lock) is
     /// checked, and re-established if lost. Default 10 s.
     pub admin_check_interval: Duration,
+    /// At most this many [`Compiler::compile`] calls (uploads) use the pool
+    /// at once, so uploads cannot starve drafts. Default: half the pool,
+    /// at least 1. Per-user or per-organization rate limits are the API's.
+    pub upload_concurrency: Option<usize>,
 }
 
 impl SandboxConfig {
@@ -114,9 +120,10 @@ impl SandboxConfig {
             max_sql_bytes: 1 << 20,
             max_statements: 5_000,
             min_interval: Duration::from_millis(250),
-            max_stub_rounds: 4,
+            max_stub_rounds: 8,
             cache_entries: 256,
             admin_check_interval: Duration::from_secs(10),
+            upload_concurrency: None,
         }
     }
 }
@@ -173,6 +180,9 @@ pub struct Compilation {
     pub duration_ms: u64,
     /// Served from the cache.
     pub cached: bool,
+    /// Whether the outcome depends on the text alone (see [`cacheable`]).
+    #[serde(skip)]
+    cacheable: bool,
 }
 
 impl Compilation {
@@ -194,8 +204,38 @@ impl Compilation {
             sha256,
             duration_ms: 0,
             cached: false,
+            cacheable: true,
         }
     }
+}
+
+/// SQLSTATE classes of errors the text itself causes, the same every time:
+/// feature not supported, data exception, integrity constraint, dependent
+/// objects, invalid schema name, syntax error or access rule, WITH CHECK
+/// OPTION. Anything else (insufficient resources 53, program limits 54,
+/// operator intervention and timeouts 57, system errors 58, internal XX,
+/// transaction rollbacks 40, connection 08…) can depend on the sandbox's
+/// state and is never cached.
+const DETERMINISTIC_SQLSTATE_CLASSES: &[&str] = &["0A", "22", "23", "2B", "3F", "42", "44"];
+
+/// Whether a compilation can be served again for the same text: a model,
+/// or errors the text alone causes. Not timeouts, not the sandbox failing,
+/// not server-state errors, and not a compile that ran out of stub
+/// corrections (another one, knowing more, can succeed).
+fn cacheable(compilation: &Compilation) -> bool {
+    if compilation.is_ok() {
+        return true;
+    }
+    compilation.cacheable
+        && compilation.errors().all(|d| match d.code {
+            Code::Timeout | Code::Unavailable => false,
+            Code::Sql => d
+                .sqlstate
+                .as_deref()
+                .and_then(|s| s.get(..2))
+                .is_some_and(|class| DETERMINISTIC_SQLSTATE_CLASSES.contains(&class)),
+            _ => true,
+        })
 }
 
 /// Counters since start, for metrics endpoints and logs.
@@ -277,6 +317,12 @@ struct Inner {
     /// The prefix was taken by another process while the admin connection
     /// was lost: compiling would share its databases.
     prefix_lost: std::sync::atomic::AtomicBool,
+    /// The sandbox came back from a restart on another Postgres major.
+    version_changed: Mutex<Option<String>>,
+    /// Backends of connections dropped mid-transaction, to terminate.
+    orphans: Mutex<Vec<i32>>,
+    /// Bounds the pool share of `compile()` (uploads).
+    uploads: Semaphore,
     slots: Mutex<Vec<Slot>>,
     permits: Semaphore,
     keys: Mutex<HashMap<String, KeyState>>,
@@ -343,6 +389,14 @@ impl Compiler {
                 slots: Mutex::new(connected),
                 admin: tokio::sync::Mutex::new(Some(admin)),
                 prefix_lost: std::sync::atomic::AtomicBool::new(false),
+                version_changed: Mutex::new(None),
+                orphans: Mutex::new(Vec::new()),
+                uploads: Semaphore::new(
+                    config
+                        .upload_concurrency
+                        .unwrap_or(config.pool_size.div_ceil(2))
+                        .clamp(1, config.pool_size),
+                ),
                 options,
                 catalog: Arc::new(catalog),
                 server_version,
@@ -402,10 +456,24 @@ impl Compiler {
     }
 
     /// Compile one text. See the module documentation.
+    ///
+    /// Cancel-safe: the compile runs in a task of its own, so dropping this
+    /// future (a client gone, a handler timeout) lets it finish and hand
+    /// its sandbox database back clean.
     pub async fn compile(&self, sql: &str) -> Result<Compilation, SandboxError> {
         bump(&self.inner.counters.requests);
-        let mut overrides = Overrides::default();
-        self.inner.compile(sql, &mut overrides).await
+        let inner = Arc::clone(&self.inner);
+        let sql = sql.to_owned();
+        tokio::spawn(async move {
+            let _upload = inner
+                .uploads
+                .acquire()
+                .await
+                .map_err(|_| SandboxError::Unavailable("the compiler is closed".into()))?;
+            inner.compile(&sql, &mut Overrides::default()).await
+        })
+        .await
+        .map_err(|e| SandboxError::Unavailable(format!("the compile failed unexpectedly: {e}")))?
     }
 
     /// Compile a draft's text: coalesced per `key`, rate-limited, never two
@@ -425,7 +493,13 @@ impl Compiler {
         if drive {
             tokio::spawn(Inner::drive(self.inner.clone(), key.to_owned()));
         }
-        result.await.unwrap_or(Err(Rejected::Superseded))
+        // Superseded requests are told so; a dropped reply means the
+        // draft's compile task failed.
+        result.await.unwrap_or_else(|_| {
+            Err(Rejected::Sandbox(SandboxError::Unavailable(
+                "the compile failed unexpectedly".into(),
+            )))
+        })
     }
 
     /// Close every connection, releasing the prefix.
@@ -435,6 +509,7 @@ impl Compiler {
             slot.close().await;
         }
         self.inner.permits.close();
+        self.inner.uploads.close();
         if let Some(admin) = self.inner.admin.lock().await.take() {
             // Closing the session releases the prefix lock.
             let _ = admin.close().await;
@@ -445,6 +520,13 @@ impl Compiler {
 impl Inner {
     /// One key's compiles, one after the other, newest request first.
     async fn drive(self: Arc<Self>, key: String) {
+        // If anything below panics, the key must not stay `driving` forever
+        // with callers waiting on it.
+        let mut guard = DriveGuard {
+            keys: &self.keys,
+            key: &key,
+            armed: true,
+        };
         loop {
             let wait = {
                 let keys = lock(&self.keys);
@@ -458,10 +540,12 @@ impl Inner {
             let (job, mut learnt) = {
                 let mut keys = lock(&self.keys);
                 let Some(state) = keys.get_mut(&key) else {
+                    guard.armed = false;
                     return;
                 };
                 let Some(job) = state.pending.take() else {
                     state.driving = false;
+                    guard.armed = false;
                     return;
                 };
                 state.last_start = Some(Instant::now());
@@ -499,6 +583,12 @@ impl Inner {
         if self.prefix_lost.load(Ordering::Relaxed) {
             return Err(SandboxError::PrefixInUse(self.config.prefix.clone()));
         }
+        if let Some(server) = lock(&self.version_changed).clone() {
+            return Err(SandboxError::VersionMismatch {
+                server,
+                parser: bootstrap::parser_major(),
+            });
+        }
         let started = Instant::now();
         let sha256 = hex(&Sha256::digest(sql.as_bytes()));
         if let Some(mut hit) = lock(&self.cache).entries.get(&sha256).cloned() {
@@ -509,18 +599,15 @@ impl Inner {
 
         let mut compilation = self.compile_uncached(sql, sha256, overrides).await?;
         compilation.duration_ms = millis(started.elapsed());
-        let transient = compilation
-            .diagnostics
-            .iter()
-            .any(|d| matches!(d.code, Code::Timeout | Code::Unavailable));
+        let timed_out = compilation.errors().any(|d| d.code == Code::Timeout);
         if compilation.is_ok() {
             bump(&self.counters.succeeded);
-        } else if transient {
+        } else if timed_out {
             bump(&self.counters.timeouts);
         } else {
             bump(&self.counters.failed);
         }
-        if !transient && self.config.cache_entries > 0 {
+        if cacheable(&compilation) && self.config.cache_entries > 0 {
             let mut cache = lock(&self.cache);
             if !cache.entries.contains_key(&compilation.sha256) {
                 cache.order.push_back(compilation.sha256.clone());
@@ -616,6 +703,7 @@ impl Inner {
         let Some(slot) = lease.slot.as_mut() else {
             return Err(SandboxError::Unavailable("no pool database left".into()));
         };
+        self.reap_orphans().await;
 
         bump(&self.counters.sandbox_runs);
         let ran = Instant::now();
@@ -650,7 +738,8 @@ impl Inner {
         parsed: &ParsedSql,
         overrides: &mut Overrides,
     ) -> Result<Compilation, SandboxError> {
-        let pid = slot.pid;
+        // Read at the deadline, not now: the slot may reconnect meanwhile.
+        let pid = Arc::clone(&slot.pid);
         let mut work = Box::pin(self.attempts(slot, sql, parsed, overrides));
         tokio::select! {
             result = &mut work => return result,
@@ -658,10 +747,13 @@ impl Inner {
         }
         // Past the deadline: stop the backend, so the attempt fails on its
         // connection, and give it a moment to notice.
-        self.terminate(pid).await;
+        let backend = pid.load(Ordering::Relaxed);
+        self.terminate((backend != 0).then_some(backend)).await;
         let _ = tokio::time::timeout(Duration::from_secs(2), &mut work).await;
         drop(work);
-        slot.discard();
+        if let Some(still) = slot.discard().filter(|p| *p != backend) {
+            self.terminate(Some(still)).await;
+        }
         let diagnostic = Diagnostic::error(
             Code::Timeout,
             format!(
@@ -671,6 +763,15 @@ impl Inner {
         )
         .with_hint("Nothing in a schema should take this long: look for an expensive default, index or view.");
         Ok(Compilation::failed(String::new(), 0, vec![diagnostic]))
+    }
+
+    /// Terminate the backends of connections dropped mid-transaction (a
+    /// lease dropped while a compile ran: only on a panic).
+    async fn reap_orphans(&self) {
+        let orphans = std::mem::take(&mut *lock(&self.orphans));
+        for pid in orphans {
+            self.terminate(Some(pid)).await;
+        }
     }
 
     async fn terminate(&self, pid: Option<i32>) {
@@ -715,6 +816,22 @@ impl Inner {
             tracing::error!(%prefix, "another process took the sandbox prefix; this compiler stops");
             return Err(SandboxError::PrefixInUse(prefix.clone()));
         }
+        // The sandbox may have come back on another Postgres major.
+        let version: (String, String) = sqlx::query_as(
+            "SELECT current_setting('server_version'), current_setting('server_version_num')",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .map_err(|e| SandboxError::Unavailable(e.to_string()))?;
+        let major = version.1.parse::<u32>().unwrap_or(0) / 10_000;
+        if major != bootstrap::parser_major() {
+            tracing::error!(server = %version.0, "the sandbox restarted on another Postgres major; this compiler stops");
+            *lock(&self.version_changed) = Some(version.0.clone());
+            return Err(SandboxError::VersionMismatch {
+                server: version.0,
+                parser: bootstrap::parser_major(),
+            });
+        }
         tracing::info!(%prefix, "sandbox admin connection and prefix lock re-established");
         *admin = Some(conn);
         Ok(())
@@ -748,6 +865,7 @@ impl Inner {
                         sha256: String::new(),
                         duration_ms: 0,
                         cached: false,
+                        cacheable: true,
                     });
                 }
                 Err(AttemptError::Sql(failure)) => {
@@ -778,21 +896,39 @@ impl Inner {
                         bump(&self.counters.stub_retries);
                         continue;
                     }
-                    return Ok(self.failure(&failure, &prepared, parsed, sql));
+                    let mut compilation = self.failure(&failure, &prepared, parsed, sql);
+                    // Out of rounds while still learning: another compile,
+                    // starting from what was learnt, can succeed.
+                    compilation.cacheable = !learnt;
+                    return Ok(compilation);
                 }
-                Err(AttemptError::Connection(err)) => {
+                Err(AttemptError::Connection { error, retry }) => {
                     slot.discard();
-                    // The backend went away: terminated, killed by the OOM
-                    // killer (the postmaster then restarts every backend
-                    // and recovers for a moment), or the sandbox restarted.
-                    // Try again on a fresh connection, backing off, for a
-                    // few seconds; the deadline still applies.
+                    if !retry {
+                        // The backend vanished while running this SQL: it
+                        // may be what killed it (the OOM killer). Not
+                        // replayed, not cached.
+                        let diagnostic = Diagnostic::error(
+                            Code::Unavailable,
+                            "the sandbox stopped while compiling this SQL",
+                        )
+                        .with_hint("If it happens again with this text, something in it is too heavy for the sandbox; otherwise retry.");
+                        let mut compilation =
+                            Compilation::failed(String::new(), 0, vec![diagnostic]);
+                        compilation.cacheable = false;
+                        tracing::warn!(error = %error, "a sandbox backend vanished mid-compile");
+                        return Ok(compilation);
+                    }
+                    // Stale, terminated, or the sandbox restarting (the
+                    // postmaster restarts every backend after a crash and
+                    // recovers for a moment): a fresh connection, backing
+                    // off, for a few seconds; the deadline still applies.
                     if connection_retries < CONNECTION_RETRIES {
                         tokio::time::sleep(Duration::from_millis(100 << connection_retries)).await;
                         connection_retries += 1;
                         continue;
                     }
-                    return Err(SandboxError::Unavailable(err.to_string()));
+                    return Err(SandboxError::Unavailable(error.to_string()));
                 }
             }
         }
@@ -822,6 +958,35 @@ impl Inner {
             sha256: String::new(),
             duration_ms: 0,
             cached: false,
+            cacheable: true,
+        }
+    }
+}
+
+/// Resets a draft's compile state if its drive task dies (a panic): the
+/// key stops `driving`, and a waiting request is told the compile failed
+/// rather than left waiting forever. Disarmed on a normal exit.
+struct DriveGuard<'a> {
+    keys: &'a Mutex<HashMap<String, KeyState>>,
+    key: &'a str,
+    armed: bool,
+}
+
+impl Drop for DriveGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut keys = lock(self.keys);
+        if let Some(state) = keys.get_mut(self.key) {
+            state.driving = false;
+            if let Some(pending) = state.pending.take() {
+                let _ = pending
+                    .reply
+                    .send(Err(Rejected::Sandbox(SandboxError::Unavailable(
+                        "the compile failed unexpectedly".into(),
+                    ))));
+            }
         }
     }
 }
@@ -851,9 +1016,120 @@ struct Lease<'a> {
 }
 
 impl Drop for Lease<'_> {
+    /// A slot goes back clean or without its connection: if a transaction
+    /// is still open (the compile was dropped mid-run), the connection is
+    /// closed, which makes Postgres roll it back, and its backend is
+    /// terminated before the slot is next used.
     fn drop(&mut self) {
-        if let Some(slot) = self.slot.take() {
+        if let Some(mut slot) = self.slot.take() {
+            if slot.dirty
+                && let Some(pid) = slot.discard()
+            {
+                lock(&self.inner.orphans).push(pid);
+            }
             lock(&self.inner.slots).push(slot);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Mutex};
+
+    use tokio::sync::oneshot;
+
+    use super::{Compilation, DriveGuard, KeyState, Pending, Rejected, SandboxError, cacheable};
+    use crate::diagnostic::{Code, Diagnostic};
+
+    fn failed_with(code: Code, sqlstate: Option<&str>) -> Compilation {
+        let mut diagnostic = Diagnostic::error(code, "x");
+        diagnostic.sqlstate = sqlstate.map(str::to_owned);
+        Compilation::failed(String::new(), 1, vec![diagnostic])
+    }
+
+    #[test]
+    fn only_errors_the_text_itself_causes_are_cached() {
+        for (code, sqlstate) in [
+            (Code::SyntaxError, None),
+            (Code::NotAllowed, None),
+            (Code::Sql, Some("42P01")),
+            (Code::Sql, Some("42804")),
+            (Code::Sql, Some("23505")),
+            (Code::Sql, Some("22P02")),
+            (Code::Sql, Some("2BP01")),
+            (Code::Sql, Some("3F000")),
+            (Code::Sql, Some("0A000")),
+        ] {
+            assert!(
+                cacheable(&failed_with(code, sqlstate)),
+                "{code:?} {sqlstate:?}"
+            );
+        }
+        for (code, sqlstate) in [
+            (Code::Sql, Some("53200")), // out of shared memory
+            (Code::Sql, Some("53100")), // disk full
+            (Code::Sql, Some("54000")), // program limit
+            (Code::Sql, Some("57P01")), // admin shutdown
+            (Code::Sql, Some("58030")), // I/O error
+            (Code::Sql, Some("XX000")), // internal
+            (Code::Sql, Some("40P01")), // deadlock
+            (Code::Sql, None),
+            (Code::Timeout, Some("57014")),
+            (Code::Unavailable, None),
+        ] {
+            assert!(
+                !cacheable(&failed_with(code, sqlstate)),
+                "{code:?} {sqlstate:?}"
+            );
+        }
+        let mut exhausted = failed_with(Code::Sql, Some("42883"));
+        exhausted.cacheable = false;
+        assert!(!cacheable(&exhausted));
+    }
+
+    #[test]
+    fn a_panicking_drive_task_releases_its_key_and_fails_waiting_requests() {
+        let keys: Mutex<HashMap<String, KeyState>> = Mutex::new(HashMap::new());
+        let (reply, waiting) = oneshot::channel();
+        keys.lock().unwrap().insert(
+            "draft".to_owned(),
+            KeyState {
+                driving: true,
+                pending: Some(Pending {
+                    sql: "CREATE TABLE t ()".to_owned(),
+                    reply,
+                }),
+                ..KeyState::default()
+            },
+        );
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = DriveGuard {
+                keys: &keys,
+                key: "draft",
+                armed: true,
+            };
+            panic!("a bug in a compile");
+        }));
+        assert!(panicked.is_err());
+        let state = keys.lock().unwrap();
+        assert!(!state["draft"].driving, "the draft stays wedged");
+        assert!(state["draft"].pending.is_none());
+        let answer = waiting.blocking_recv().expect("an answer, not silence");
+        assert!(matches!(
+            answer,
+            Err(Rejected::Sandbox(SandboxError::Unavailable(_)))
+        ));
+
+        // A normal exit (disarmed) leaves the state alone.
+        drop(state);
+        keys.lock().unwrap().get_mut("draft").unwrap().driving = true;
+        let mut guard = DriveGuard {
+            keys: &keys,
+            key: "draft",
+            armed: true,
+        };
+        guard.armed = false;
+        drop(guard);
+        assert!(keys.lock().unwrap()["draft"].driving);
     }
 }

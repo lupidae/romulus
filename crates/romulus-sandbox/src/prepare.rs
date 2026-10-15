@@ -179,8 +179,8 @@ pub(crate) fn prepare(
 
         let mut rewrites: Vec<(Range<usize>, String)> = Vec::new();
         let roles = policy_roles(statement, parsed);
-        if let Some((range, _)) = &roles {
-            rewrites.push((range.clone(), "PUBLIC".to_owned()));
+        if let Some(range) = roles.as_ref().and_then(|r| r.rewrite.clone()) {
+            rewrites.push((range, "PUBLIC".to_owned()));
         }
         if let Some(rewrite) = materialized_view_without_data(statement, parsed, sql) {
             rewrites.push(rewrite);
@@ -196,7 +196,7 @@ pub(crate) fn prepare(
         script.source(sql, cursor..statement.span.end);
         script.inject(";\n", Some(i), Injection::Terminator);
 
-        if let Some((_, written)) = roles
+        if let Some(written) = roles.and_then(|r| r.record)
             && let Some(capture) = record_policy_roles(statement, &written)
         {
             records_policy_roles = true;
@@ -298,13 +298,24 @@ impl Script {
     }
 }
 
-/// `TO role, …` of a `CREATE`/`ALTER POLICY`: the range of the role list,
-/// and the roles to restore (PUBLIC aside). `None` when the policy is for
-/// PUBLIC only.
-fn policy_roles(statement: &Statement, parsed: &ParsedSql) -> Option<(Range<usize>, Vec<String>)> {
-    let roles = match &statement.node {
-        NodeEnum::CreatePolicyStmt(s) => &s.roles,
-        NodeEnum::AlterPolicyStmt(s) => &s.roles,
+/// What a `CREATE`/`ALTER POLICY … TO …` needs.
+struct PolicyRoles {
+    /// The role list, to rewrite as `PUBLIC` (the roles do not exist in the
+    /// sandbox); `None` when it already is just `PUBLIC`.
+    rewrite: Option<Range<usize>>,
+    /// The roles to record for the model; `Some(vec![])` resets them to
+    /// PUBLIC (an `ALTER POLICY … TO PUBLIC`).
+    record: Option<Vec<String>>,
+}
+
+/// The `TO` list of a policy statement. Postgres keeps only PUBLIC when the
+/// list names it alongside other roles (with a warning), and remus reports
+/// PUBLIC as no roles: the model must say the same. `CURRENT_USER` and the
+/// like are refused by the allowlist (no name to restore).
+fn policy_roles(statement: &Statement, parsed: &ParsedSql) -> Option<PolicyRoles> {
+    let (roles, alter) = match &statement.node {
+        NodeEnum::CreatePolicyStmt(s) => (&s.roles, false),
+        NodeEnum::AlterPolicyStmt(s) => (&s.roles, true),
         _ => return None,
     };
     let specs: Vec<&pg_query::protobuf::RoleSpec> = roles
@@ -314,29 +325,37 @@ fn policy_roles(statement: &Statement, parsed: &ParsedSql) -> Option<(Range<usiz
             _ => None,
         })
         .collect();
-    let written: Vec<String> = specs
-        .iter()
-        .filter_map(|spec| match spec.roletype() {
-            RoleSpecType::RolespecCstring => Some(spec.rolename.clone()),
-            RoleSpecType::RolespecCurrentUser => Some("current_user".to_owned()),
-            RoleSpecType::RolespecSessionUser => Some("session_user".to_owned()),
-            RoleSpecType::RolespecCurrentRole => Some("current_role".to_owned()),
-            RoleSpecType::RolespecPublic | RoleSpecType::Undefined => None,
-        })
-        .collect();
-    if written.is_empty() {
+    if specs.is_empty() {
         return None;
     }
-    let start = specs.iter().filter_map(|s| location(s.location)).min()?;
-    let last = specs.iter().filter_map(|s| location(s.location)).max()?;
-    let end = parsed.token_at(last).map_or(last, |t| t.end);
-    let mut unique = Vec::new();
-    for role in written {
-        if !unique.contains(&role) {
-            unique.push(role);
+    let public = specs
+        .iter()
+        .any(|spec| spec.roletype() == RoleSpecType::RolespecPublic);
+    let named: Vec<String> = specs
+        .iter()
+        .filter(|spec| spec.roletype() != RoleSpecType::RolespecPublic)
+        .map(|spec| spec.rolename.clone())
+        .collect();
+    let rewrite = if named.is_empty() {
+        None
+    } else {
+        let start = specs.iter().filter_map(|s| location(s.location)).min()?;
+        let last = specs.iter().filter_map(|s| location(s.location)).max()?;
+        let end = parsed.token_at(last).map_or(last, |t| t.end);
+        Some(start..end)
+    };
+    let record = if public {
+        alter.then(Vec::new)
+    } else {
+        let mut unique = Vec::new();
+        for role in named {
+            if !unique.contains(&role) {
+                unique.push(role);
+            }
         }
-    }
-    Some((start..end, unique))
+        Some(unique)
+    };
+    Some(PolicyRoles { rewrite, record })
 }
 
 /// The statement that records a policy's written roles against its OID.
@@ -664,7 +683,9 @@ mod tests {
         let prepared = script(
             "CREATE POLICY own ON app.docs AS RESTRICTIVE FOR SELECT TO app_user, \"Admin\", app_user USING (true);
              CREATE POLICY pub ON docs TO PUBLIC USING (true);
-             ALTER POLICY own ON app.docs TO CURRENT_USER;",
+             ALTER POLICY own ON app.docs TO auditor;
+             CREATE POLICY mixed ON docs TO app_user, PUBLIC USING (true);
+             ALTER POLICY own ON app.docs TO PUBLIC;",
         );
         assert_eq!(
             statements(&prepared),
@@ -678,7 +699,15 @@ mod tests {
                 "CREATE POLICY pub ON docs TO PUBLIC USING (true);",
                 "ALTER POLICY own ON app.docs TO PUBLIC;",
                 &format!(
-                    "INSERT INTO {POLICY_ROLES} (policy, roles) SELECT p.oid, ARRAY['current_user']::text[] FROM pg_catalog.pg_policy p WHERE p.polrelid = 'app.docs'::regclass AND p.polname = 'own' ON CONFLICT (policy) DO UPDATE SET roles = excluded.roles;"
+                    "INSERT INTO {POLICY_ROLES} (policy, roles) SELECT p.oid, ARRAY['auditor']::text[] FROM pg_catalog.pg_policy p WHERE p.polrelid = 'app.docs'::regclass AND p.polname = 'own' ON CONFLICT (policy) DO UPDATE SET roles = excluded.roles;"
+                ),
+                // PUBLIC among other roles is PUBLIC, as Postgres keeps it:
+                // rewritten (the others do not exist), nothing to restore.
+                "CREATE POLICY mixed ON docs TO PUBLIC USING (true);",
+                // Back to PUBLIC: the roles recorded earlier are reset.
+                "ALTER POLICY own ON app.docs TO PUBLIC;",
+                &format!(
+                    "INSERT INTO {POLICY_ROLES} (policy, roles) SELECT p.oid, ARRAY[]::text[] FROM pg_catalog.pg_policy p WHERE p.polrelid = 'app.docs'::regclass AND p.polname = 'own' ON CONFLICT (policy) DO UPDATE SET roles = excluded.roles;"
                 ),
             ]
         );
