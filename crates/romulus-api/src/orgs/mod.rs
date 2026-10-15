@@ -122,6 +122,7 @@ fn slug_taken(slug: &str) -> impl FnOnce(sqlx::Error) -> ApiError + '_ {
 #[utoipa::path(
     get,
     path = "/orgs",
+    operation_id = "list_orgs",
     tag = "orgs",
     responses(
         (status = 200, body = Vec<Org>),
@@ -146,6 +147,7 @@ async fn list(user: CurrentUser, State(db): State<PgPool>) -> ApiResult<Json<Vec
 #[utoipa::path(
     post,
     path = "/orgs",
+    operation_id = "create_org",
     tag = "orgs",
     request_body = CreateOrg,
     responses(
@@ -194,6 +196,7 @@ async fn create(
 #[utoipa::path(
     get,
     path = "/orgs/{org}",
+    operation_id = "get_org",
     tag = "orgs",
     params(("org" = String, Path, description = "The organization's slug")),
     responses(
@@ -214,6 +217,7 @@ async fn get(member: Member) -> Json<Org> {
 #[utoipa::path(
     patch,
     path = "/orgs/{org}",
+    operation_id = "update_org",
     tag = "orgs",
     params(("org" = String, Path, description = "The organization's slug")),
     request_body = UpdateOrg,

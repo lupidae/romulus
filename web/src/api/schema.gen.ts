@@ -15,7 +15,7 @@ export interface paths {
      * The IdP's redirect back: exchanges the code, verifies the ID token,
      *     upserts the user and starts a session. Requires a verified email.
      */
-    get: operations["callback"];
+    get: operations["auth_callback"];
     put?: never;
     post?: never;
     delete?: never;
@@ -73,7 +73,7 @@ export interface paths {
       cookie?: never;
     };
     /** What the sign-in page can offer. */
-    get: operations["methods"];
+    get: operations["auth_methods"];
     put?: never;
     post?: never;
     delete?: never;
@@ -110,7 +110,7 @@ export interface paths {
      * What an invitation link invites to, and whether the viewer (signed in or
      *     not) can accept it. Anyone holding the link may look.
      */
-    get: operations["preview"];
+    get: operations["preview_invitation"];
     put?: never;
     post?: never;
     delete?: never;
@@ -132,7 +132,7 @@ export interface paths {
      * Joins the organization with the invited role. The caller must be signed
      *     in with the invited email, verified by the IdP.
      */
-    post: operations["accept"];
+    post: operations["accept_invitation"];
     delete?: never;
     options?: never;
     head?: never;
@@ -164,10 +164,10 @@ export interface paths {
       cookie?: never;
     };
     /** The organizations the caller belongs to, by name. */
-    get: operations["list"];
+    get: operations["list_orgs"];
     put?: never;
     /** Creates an organization; the caller becomes its admin. */
-    post: operations["create"];
+    post: operations["create_org"];
     delete?: never;
     options?: never;
     head?: never;
@@ -182,14 +182,14 @@ export interface paths {
       cookie?: never;
     };
     /** One organization the caller belongs to. */
-    get: operations["get"];
+    get: operations["get_org"];
     put?: never;
     post?: never;
     delete?: never;
     options?: never;
     head?: never;
     /** Renames an organization, or moves it to another slug. Admins only. */
-    patch: operations["update"];
+    patch: operations["update_org"];
     trace?: never;
   };
   "/api/orgs/{org}/invitations": {
@@ -200,14 +200,14 @@ export interface paths {
       cookie?: never;
     };
     /** Pending invitations, newest first, expired ones included. Admins only. */
-    get: operations["list"];
+    get: operations["list_invitations"];
     put?: never;
     /**
      * Invites an email address with a role and answers the one-time link.
      *     Inviting an address that already has a pending invitation replaces it
      *     (the old link stops working). Admins only.
      */
-    post: operations["create"];
+    post: operations["create_invitation"];
     delete?: never;
     options?: never;
     head?: never;
@@ -225,7 +225,7 @@ export interface paths {
     put?: never;
     post?: never;
     /** Revokes a pending invitation: its link stops working. Admins only. */
-    delete: operations["revoke"];
+    delete: operations["revoke_invitation"];
     options?: never;
     head?: never;
     patch?: never;
@@ -239,7 +239,7 @@ export interface paths {
       cookie?: never;
     };
     /** Everyone in the organization, by name. Any member may see who else is. */
-    get: operations["list"];
+    get: operations["list_members"];
     put?: never;
     post?: never;
     delete?: never;
@@ -263,14 +263,14 @@ export interface paths {
      *     themselves (leave). The last admin cannot go (409 `last_admin`). Closes
      *     the member's live connections.
      */
-    delete: operations["remove"];
+    delete: operations["remove_member"];
     options?: never;
     head?: never;
     /**
      * Changes a member's role. Admins only; the last admin cannot be demoted
      *     (409 `last_admin`). Closes the member's live connections.
      */
-    patch: operations["change_role"];
+    patch: operations["change_member_role"];
     trace?: never;
   };
 }
@@ -439,7 +439,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-  callback: {
+  auth_callback: {
     parameters: {
       query?: {
         code?: string;
@@ -519,7 +519,7 @@ export interface operations {
       };
     };
   };
-  methods: {
+  auth_methods: {
     parameters: {
       query?: never;
       header?: never;
@@ -567,7 +567,7 @@ export interface operations {
       };
     };
   };
-  preview: {
+  preview_invitation: {
     parameters: {
       query?: never;
       header?: never;
@@ -598,7 +598,7 @@ export interface operations {
       };
     };
   };
-  accept: {
+  accept_invitation: {
     parameters: {
       query?: never;
       header?: never;
@@ -682,7 +682,7 @@ export interface operations {
       };
     };
   };
-  list: {
+  list_orgs: {
     parameters: {
       query?: never;
       header?: never;
@@ -709,7 +709,7 @@ export interface operations {
       };
     };
   };
-  create: {
+  create_org: {
     parameters: {
       query?: never;
       header?: never;
@@ -750,7 +750,7 @@ export interface operations {
       };
     };
   };
-  get: {
+  get_org: {
     parameters: {
       query?: never;
       header?: never;
@@ -781,7 +781,7 @@ export interface operations {
       };
     };
   };
-  update: {
+  update_org: {
     parameters: {
       query?: never;
       header?: never;
@@ -832,7 +832,7 @@ export interface operations {
       };
     };
   };
-  list: {
+  list_invitations: {
     parameters: {
       query?: never;
       header?: never;
@@ -862,7 +862,7 @@ export interface operations {
       };
     };
   };
-  create: {
+  create_invitation: {
     parameters: {
       query?: never;
       header?: never;
@@ -913,7 +913,7 @@ export interface operations {
       };
     };
   };
-  revoke: {
+  revoke_invitation: {
     parameters: {
       query?: never;
       header?: never;
@@ -953,7 +953,7 @@ export interface operations {
       };
     };
   };
-  list: {
+  list_members: {
     parameters: {
       query?: never;
       header?: never;
@@ -983,7 +983,7 @@ export interface operations {
       };
     };
   };
-  remove: {
+  remove_member: {
     parameters: {
       query?: never;
       header?: never;
@@ -1032,7 +1032,7 @@ export interface operations {
       };
     };
   };
-  change_role: {
+  change_member_role: {
     parameters: {
       query?: never;
       header?: never;

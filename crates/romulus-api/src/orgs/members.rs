@@ -41,6 +41,7 @@ pub struct ChangeRole {
 #[utoipa::path(
     get,
     path = "/orgs/{org}/members",
+    operation_id = "list_members",
     tag = "orgs",
     params(("org" = String, Path, description = "The organization's slug")),
     responses(
@@ -67,6 +68,7 @@ async fn list(member: Member, State(state): State<AppState>) -> ApiResult<Json<V
 #[utoipa::path(
     patch,
     path = "/orgs/{org}/members/{user}",
+    operation_id = "change_member_role",
     tag = "orgs",
     params(
         ("org" = String, Path, description = "The organization's slug"),
@@ -124,6 +126,7 @@ async fn change_role(
 #[utoipa::path(
     delete,
     path = "/orgs/{org}/members/{user}",
+    operation_id = "remove_member",
     tag = "orgs",
     params(
         ("org" = String, Path, description = "The organization's slug"),

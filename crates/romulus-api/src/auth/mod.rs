@@ -112,6 +112,7 @@ pub struct AuthMethods {
 #[utoipa::path(
     get,
     path = "/auth/methods",
+    operation_id = "auth_methods",
     tag = "auth",
     responses((status = 200, body = AuthMethods))
 )]
@@ -138,6 +139,7 @@ pub struct LoginQuery {
 #[utoipa::path(
     get,
     path = "/auth/login",
+    operation_id = "login",
     tag = "auth",
     params(LoginQuery),
     responses(
@@ -191,6 +193,7 @@ pub struct CallbackQuery {
 #[utoipa::path(
     get,
     path = "/auth/callback",
+    operation_id = "auth_callback",
     tag = "auth",
     params(CallbackQuery),
     responses(
@@ -336,6 +339,7 @@ pub struct SignedOut {
 #[utoipa::path(
     post,
     path = "/auth/logout",
+    operation_id = "logout",
     tag = "auth",
     responses(
         (status = 200, body = SignedOut),
@@ -368,6 +372,7 @@ async fn logout(
 #[utoipa::path(
     get,
     path = "/me",
+    operation_id = "me",
     tag = "auth",
     responses(
         (status = 200, body = CurrentUser),

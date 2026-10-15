@@ -9,13 +9,25 @@ export type ErrorBody = components["schemas"]["ErrorBody"];
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Per-field messages of a 422 `validation`, keyed by field name. */
+  readonly fields: Record<string, string>;
 
   constructor(status: number, body: Partial<ErrorBody> | undefined) {
     super(body?.message ?? `Request failed (${status})`);
     this.name = "ApiError";
     this.status = status;
     this.code = body?.code ?? "unknown";
+    this.fields = fieldMessages(body?.details);
   }
+}
+
+function fieldMessages(details: unknown): Record<string, string> {
+  if (typeof details !== "object" || details === null) return {};
+  return Object.fromEntries(
+    Object.entries(details).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
 }
 
 // The API refuses cookie-authenticated mutations without this header (CSRF);
@@ -52,4 +64,14 @@ export async function unwrap<T>(
     throw new ApiError(response.status, error as Partial<ErrorBody> | undefined);
   }
   return data;
+}
+
+/** For calls that answer 204 No Content: resolves when they succeed, throws an ApiError otherwise. */
+export async function succeed(
+  call: Promise<{ error?: unknown; response: Response }>,
+): Promise<void> {
+  const { error, response } = await call;
+  if (!response.ok) {
+    throw new ApiError(response.status, error as Partial<ErrorBody> | undefined);
+  }
 }

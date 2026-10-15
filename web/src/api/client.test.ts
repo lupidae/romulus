@@ -30,15 +30,20 @@ describe("api client", () => {
     expect(error).toMatchObject({ status: 503, code: "unavailable", message: "Database down" });
   });
 
+  it("keeps the per-field messages of a validation error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      respond(422, { code: "validation", message: "Bad slug", details: { slug: "Bad slug" } }),
+    );
+    const error = await unwrap(api.GET("/api/health")).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "validation", fields: { slug: "Bad slug" } });
+  });
+
   it("sends the CSRF header on mutations only", async () => {
     const fetch = respond(200, {});
     vi.stubGlobal("fetch", fetch);
     await api.GET("/api/health");
-    // No mutating endpoint exists yet: send a raw POST through the same client.
-    await (api.POST as unknown as (path: string, init: object) => Promise<unknown>)(
-      "/api/health",
-      {},
-    );
+    await api.POST("/api/auth/logout");
     const [get, post] = fetch.mock.calls.map(([request]) => request);
     expect(get?.headers.get("X-Romulus-Csrf")).toBeNull();
     expect(post?.headers.get("X-Romulus-Csrf")).toBe("1");

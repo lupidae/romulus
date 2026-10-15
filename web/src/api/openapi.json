@@ -16,7 +16,7 @@
           "auth"
         ],
         "summary": "The IdP's redirect back: exchanges the code, verifies the ID token,\nupserts the user and starts a session. Requires a verified email.",
-        "operationId": "callback",
+        "operationId": "auth_callback",
         "parameters": [
           {
             "name": "code",
@@ -121,7 +121,7 @@
           "auth"
         ],
         "summary": "What the sign-in page can offer.",
-        "operationId": "methods",
+        "operationId": "auth_methods",
         "responses": {
           "200": {
             "content": {
@@ -172,7 +172,7 @@
           "invitations"
         ],
         "summary": "What an invitation link invites to, and whether the viewer (signed in or\nnot) can accept it. Anyone holding the link may look.",
-        "operationId": "preview",
+        "operationId": "preview_invitation",
         "parameters": [
           {
             "name": "token",
@@ -213,7 +213,7 @@
           "invitations"
         ],
         "summary": "Joins the organization with the invited role. The caller must be signed\nin with the invited email, verified by the IdP.",
-        "operationId": "accept",
+        "operationId": "accept_invitation",
         "parameters": [
           {
             "name": "token",
@@ -312,7 +312,7 @@
           "orgs"
         ],
         "summary": "The organizations the caller belongs to, by name.",
-        "operationId": "list",
+        "operationId": "list_orgs",
         "responses": {
           "200": {
             "content": {
@@ -342,7 +342,7 @@
           "orgs"
         ],
         "summary": "Creates an organization; the caller becomes its admin.",
-        "operationId": "create",
+        "operationId": "create_org",
         "requestBody": {
           "content": {
             "application/json": {
@@ -392,7 +392,7 @@
           "orgs"
         ],
         "summary": "One organization the caller belongs to.",
-        "operationId": "get",
+        "operationId": "get_org",
         "parameters": [
           {
             "name": "org",
@@ -431,7 +431,7 @@
           "orgs"
         ],
         "summary": "Renames an organization, or moves it to another slug. Admins only.",
-        "operationId": "update",
+        "operationId": "update_org",
         "parameters": [
           {
             "name": "org",
@@ -500,7 +500,7 @@
           "invitations"
         ],
         "summary": "Pending invitations, newest first, expired ones included. Admins only.",
-        "operationId": "list",
+        "operationId": "list_invitations",
         "parameters": [
           {
             "name": "org",
@@ -541,7 +541,7 @@
           "invitations"
         ],
         "summary": "Invites an email address with a role and answers the one-time link.\nInviting an address that already has a pending invitation replaces it\n(the old link stops working). Admins only.",
-        "operationId": "create",
+        "operationId": "create_invitation",
         "parameters": [
           {
             "name": "org",
@@ -610,7 +610,7 @@
           "invitations"
         ],
         "summary": "Revokes a pending invitation: its link stops working. Admins only.",
-        "operationId": "revoke",
+        "operationId": "revoke_invitation",
         "parameters": [
           {
             "name": "org",
@@ -664,7 +664,7 @@
           "orgs"
         ],
         "summary": "Everyone in the organization, by name. Any member may see who else is.",
-        "operationId": "list",
+        "operationId": "list_members",
         "parameters": [
           {
             "name": "org",
@@ -707,7 +707,7 @@
           "orgs"
         ],
         "summary": "Removes a member. Admins may remove anyone; any member may remove\nthemselves (leave). The last admin cannot go (409 `last_admin`). Closes\nthe member's live connections.",
-        "operationId": "remove",
+        "operationId": "remove_member",
         "parameters": [
           {
             "name": "org",
@@ -769,7 +769,7 @@
           "orgs"
         ],
         "summary": "Changes a member's role. Admins only; the last admin cannot be demoted\n(409 `last_admin`). Closes the member's live connections.",
-        "operationId": "change_role",
+        "operationId": "change_member_role",
         "parameters": [
           {
             "name": "org",

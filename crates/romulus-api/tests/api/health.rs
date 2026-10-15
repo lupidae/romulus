@@ -51,3 +51,21 @@ async fn a_wrong_method_answers_in_the_api_format(db: PgPool) {
     assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(response.code(), "method_not_allowed");
 }
+
+/// The web app's generated types key operations by id: two `list` handlers
+/// in different modules would collide there. Name them (`operation_id`).
+#[test]
+fn openapi_operation_ids_are_unique() {
+    let spec = serde_json::to_value(romulus_api::openapi()).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    for (path, methods) in spec["paths"].as_object().unwrap() {
+        for (method, operation) in methods.as_object().unwrap() {
+            if let Some(id) = operation["operationId"].as_str() {
+                assert!(
+                    seen.insert(id.to_owned()),
+                    "{method} {path}: operationId {id} is taken"
+                );
+            }
+        }
+    }
+}

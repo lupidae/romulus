@@ -76,6 +76,7 @@ pub struct CreateInvitation {
 #[utoipa::path(
     get,
     path = "/orgs/{org}/invitations",
+    operation_id = "list_invitations",
     tag = "invitations",
     params(("org" = String, Path, description = "The organization's slug")),
     responses(
@@ -140,6 +141,7 @@ fn checked_email(email: &str) -> ApiResult<String> {
 #[utoipa::path(
     post,
     path = "/orgs/{org}/invitations",
+    operation_id = "create_invitation",
     tag = "invitations",
     params(("org" = String, Path, description = "The organization's slug")),
     request_body = CreateInvitation,
@@ -222,6 +224,7 @@ async fn create(
 #[utoipa::path(
     delete,
     path = "/orgs/{org}/invitations/{id}",
+    operation_id = "revoke_invitation",
     tag = "invitations",
     params(
         ("org" = String, Path, description = "The organization's slug"),
@@ -363,6 +366,7 @@ fn not_found() -> ApiError {
 #[utoipa::path(
     get,
     path = "/invitations/{token}",
+    operation_id = "preview_invitation",
     tag = "invitations",
     params(("token" = String, Path, description = "The token from the invitation link")),
     responses(
@@ -393,6 +397,7 @@ pub struct Accepted {
 #[utoipa::path(
     post,
     path = "/invitations/{token}/accept",
+    operation_id = "accept_invitation",
     tag = "invitations",
     params(("token" = String, Path, description = "The token from the invitation link")),
     responses(
