@@ -69,7 +69,8 @@ export const FIXTURES: Fixture[] = [
   {
     id: "medium",
     label: "Commerce",
-    description: "45 tables in six groups, partitions, views, row level security",
+    description:
+      "46 tables in six groups, partitions, views, a 30-column table, row level security",
     load: async () => {
       const { mediumFixture, renderFixtureSql } = await import("./synthetic");
       const { schema, groups } = mediumFixture();

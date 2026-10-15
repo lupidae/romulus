@@ -13,6 +13,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
   useStore,
+  useStoreApi,
 } from "@xyflow/react";
 import {
   type ReactNode,
@@ -40,7 +41,7 @@ import { graphOf } from "./graph-of";
 import { createGraphUiStore, GraphUiContext, type GraphUiStore, useGraphUi } from "./graph-ui";
 import { AreaLabel, type AreaLabelFlowNode, GroupNode, type GroupFlowNode } from "./group-node";
 import { columnAnchorY, GROUP_PADDING, NODE, tableSize } from "./geometry";
-import { HoverDetails } from "./hover-details";
+import { type DetailsTarget, HoverDetails } from "./hover-details";
 import { KIND_LABEL } from "./kind";
 import { type Box, type Direction, nearestInDirection, nearestTo } from "./navigation";
 import { RelationEdge, type RelationFlowEdge } from "./relation-edge";
@@ -159,6 +160,8 @@ function GraphCanvas({
   if (!ready && pending === 0) setReady(true);
   const [moved, setMoved] = useState<Layout>({});
   const flow = useReactFlow();
+  const flowStore = useStoreApi();
+  const [pinned, setPinned] = useState<DetailsTarget | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const hintId = useId();
 
@@ -167,6 +170,7 @@ function GraphCanvas({
   const select = useCallback(
     (key: string | null) => {
       localPick.current = key;
+      setPinned(null);
       if (selected === undefined) store.set({ selected: key });
       onSelectedChange?.(key);
     },
@@ -479,6 +483,23 @@ function GraphCanvas({
       }
     } else if (event.key === "Enter" && current) {
       zoomToTable(current);
+    } else if (event.key === " " && current) {
+      // The keyboard's way to the details a pointer gets by hovering.
+      const header = wrapper.current?.querySelector(
+        `.react-flow__node[data-id="${CSS.escape(current)}"] [data-table-header]`,
+      );
+      const table = graph.byKey.get(current);
+      setPinned(
+        pinned?.table.key === current || !header || !table
+          ? null
+          : {
+              table,
+              rect: header.getBoundingClientRect(),
+              transform: flowStore.getState().transform,
+            },
+      );
+    } else if (event.key === "Escape" && pinned) {
+      setPinned(null);
     } else if (event.key === "Escape" && current) {
       select(null);
     } else if (event.key === "+" || event.key === "=") {
@@ -616,14 +637,19 @@ function GraphCanvas({
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.25} />
             <ZoomVariable target={wrapper} />
-            <Panel position="top-left" className="!m-3">
+            {/* One bar across the top: search left, legend and controls right,
+                wrapping on a phone. The bar itself lets drags reach the pane. */}
+            <Panel
+              position="top-left"
+              className="pointer-events-none !inset-x-3 !top-3 !m-0 flex items-start justify-between gap-2 *:pointer-events-auto"
+            >
               <SearchButton onClick={() => setSearchOpen(true)} />
-            </Panel>
-            <Panel position="top-right" className="!m-3 flex items-center gap-2">
-              {graph.counts && <DiffLegend counts={graph.counts} onNext={nextWithStatus} />}
-              <div className={toolbarClass}>
-                <GraphKey diff={graph.counts !== undefined} />
-                {controls}
+              <div className="pointer-events-none flex flex-wrap-reverse items-center justify-end gap-2 *:pointer-events-auto">
+                {graph.counts && <DiffLegend counts={graph.counts} onNext={nextWithStatus} />}
+                <div className={toolbarClass}>
+                  <GraphKey diff={graph.counts !== undefined} />
+                  {controls}
+                </div>
               </div>
             </Panel>
             <Panel position="bottom-left" className="!m-3">
@@ -647,7 +673,7 @@ function GraphCanvas({
             {children}
           </ReactFlow>
         )}
-        <HoverDetails container={wrapper} graph={graph} />
+        <HoverDetails container={wrapper} graph={graph} pinned={pinned} />
         <TableSearch
           open={searchOpen}
           onOpenChange={setSearchOpen}
@@ -689,6 +715,7 @@ function Announcer({ graph }: { graph: GraphModel }) {
       .map((e) => e.source);
     text = [
       `${table.key}, ${KIND_LABEL[table.kind] ?? "table"}, ${table.columns.length} columns`,
+      table.comment,
       table.status && `${table.status} in this diff`,
       refs.length > 0 && `references ${[...new Set(refs)].join(", ")}`,
       by.length > 0 && `referenced by ${[...new Set(by)].join(", ")}`,

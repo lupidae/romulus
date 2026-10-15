@@ -647,6 +647,43 @@ const ACME: Record<string, TableSpec[]> = {
       dependsOn: ["orders", "payments"],
     },
     {
+      name: "order_exports",
+      columns: [
+        "id pk",
+        "order_id -> orders",
+        "exported_at ts! now",
+        ...[
+          "customer_email",
+          "customer_name",
+          "billing_line1",
+          "billing_city",
+          "billing_postcode",
+          "billing_country",
+          "shipping_line1",
+          "shipping_city",
+          "shipping_postcode",
+          "shipping_country",
+          "currency",
+          "subtotal",
+          "discount",
+          "tax",
+          "shipping_fee",
+          "total",
+          "payment_brand",
+          "payment_last4",
+          "coupon_code",
+          "channel",
+          "utm_source",
+          "utm_campaign",
+          "warehouse_code",
+          "carrier",
+          "tracking_number",
+          "notes",
+        ].map((c) => `${c} ${/total|subtotal|discount|tax|fee/.test(c) ? "numeric" : "text"}`),
+      ],
+      comment: "Flat rows for the finance export, rebuilt nightly",
+    },
+    {
       name: "active_customers",
       columns: ["customer_id bigint", "org_id bigint", "last_order_at ts"],
       kind: "v",
@@ -664,7 +701,7 @@ const GROUP_STYLE: Record<string, { name: string; color: string }> = {
   analytics: { name: "Analytics", color: "teal" },
 };
 
-/** A 45-table SaaS commerce schema in `public`, with six groups. */
+/** A 46-table SaaS commerce schema in `public`, with six groups. */
 export function mediumFixture(): { schema: Schema; groups: Groups } {
   const enums = new Set(ACME_ENUMS.map((e) => e.name));
   const entities: Entity[] = [];

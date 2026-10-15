@@ -30,6 +30,7 @@ just up          # .env if missing, then the stack; Zitadel provisioned (~15 s f
 just dev         # up + API (cargo run) + web (vite); open $ROMULUS_PUBLIC_URL/app/
 just check       # the CI gate: fmt, clippy + tests (--all-features), sqlx prepare --check, gen-check, web, build
 just e2e         # Playwright: production build + its own API, on the preview origin (needs `just up`)
+just e2e-dev     # Playwright on dev-only screens (/app/dev/*, e.g. the schema viewer): dev server, no stack
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
@@ -183,6 +184,8 @@ src/components/shell/    AppShell (top bar, org switcher, user menu, nav, panel)
                          PageBody, status pages (404/500), the sign-in preview
 src/components/icons/    Iconoir only, generated: `npm --prefix web run icons:add -- <name>`
 src/features/<module>/   per-feature code: queries (queryOptions), mutations, components
+src/features/schema/     SchemaViewer / SchemaGraph / SchemaText (graph + SQL panes), remus model
+                         types (parseSchema), fixtures; /app/dev/viewer shows them
 src/api/                 client.ts (typed openapi-fetch + CSRF header), generated types
 src/styles/globals.css   every token; the only file with raw colors
 ```

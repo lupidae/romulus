@@ -51,6 +51,7 @@ export { SunLightIcon } from "./sun-light";
 export { TableIcon } from "./table";
 export { TrashIcon } from "./trash";
 export { UserIcon } from "./user";
+export { ViewColumns2Icon } from "./view-columns-2";
 export { ViewColumns3Icon } from "./view-columns-3";
 export { WarningTriangleIcon } from "./warning-triangle";
 export { XmarkIcon } from "./xmark";

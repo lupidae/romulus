@@ -11,7 +11,13 @@ import { describeCardinality } from "./cardinality";
 import { StatusBadge } from "./status";
 import { KIND_LABEL } from "./kind";
 
-type Target = { table: TableModel; column?: ColumnModel; rect: DOMRect; transform: unknown };
+export type DetailsTarget = {
+  table: TableModel;
+  column?: ColumnModel;
+  rect: DOMRect;
+  transform: unknown;
+};
+type Target = DetailsTarget;
 
 const OPEN_DELAY = 450;
 const CARD_WIDTH = 304;
@@ -25,9 +31,12 @@ const CARD_WIDTH = 304;
 export function HoverDetails({
   container,
   graph,
+  pinned,
 }: {
   container: React.RefObject<HTMLElement | null>;
   graph: GraphModel;
+  /** Shown without a pointer (Space on the selected table); hover takes over. */
+  pinned?: DetailsTarget | null;
 }) {
   const [target, setTarget] = useState<Target | null>(null);
   const openTimer = useRef<number | undefined>(undefined);
@@ -96,8 +105,9 @@ export function HoverDetails({
   }, [container, graph]);
 
   // Any pan or zoom since it opened has moved the row away from the card.
-  if (!target || target.transform !== transform) return null;
-  return createPortal(<Card target={target} graph={graph} />, document.body);
+  const shown = target ?? pinned;
+  if (!shown || shown.transform !== transform) return null;
+  return createPortal(<Card target={shown} graph={graph} />, document.body);
 }
 
 function Card({ target, graph }: { target: Target; graph: GraphModel }) {
@@ -120,10 +130,8 @@ function Card({ target, graph }: { target: Target; graph: GraphModel }) {
       ref={ref}
       role="tooltip"
       style={style}
-      className={cn(
-        "pointer-events-none fixed z-(--z-tooltip) grid gap-2.5 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-popover",
-        "animate-in duration-(--duration-fast) fade-in-0 zoom-in-[0.98]",
-      )}
+      // Summoned many times a minute: it appears at once, no entrance.
+      className="pointer-events-none fixed z-(--z-tooltip) grid gap-2.5 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-popover"
     >
       {target.column ? (
         <ColumnDetails table={target.table} column={target.column} graph={graph} />

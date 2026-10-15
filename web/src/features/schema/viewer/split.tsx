@@ -74,7 +74,12 @@ export function Split({
 
   return (
     <div ref={root} className={cn("flex h-full min-h-0 w-full", className)}>
-      <div hidden={show === "end"} className="min-w-0" style={{ flex: `${ratio} 1 0%` }}>
+      <div
+        hidden={show === "end"}
+        className="min-w-0"
+        // Alone, a pane takes the whole width (a grow under 1 would leave a gap).
+        style={{ flex: show === "both" ? `${ratio} 1 0%` : "1 1 0%" }}
+      >
         {start}
       </div>
       {/* A focusable separator is the WAI-ARIA window splitter, an
@@ -100,11 +105,16 @@ export function Split({
           "group relative z-(--z-sticky) w-px shrink-0 cursor-col-resize touch-none bg-border outline-none select-none",
           // A wider invisible grip, and a visible one on hover and focus.
           "before:absolute before:inset-y-0 before:-left-1.5 before:w-3",
+          "pointer-coarse:before:-left-5.5 pointer-coarse:before:w-11",
           "after:absolute after:inset-y-0 after:-left-px after:w-0.75 after:bg-primary after:opacity-0 after:transition-opacity",
           "hover:after:opacity-60 focus-visible:after:opacity-100 active:after:opacity-100",
         )}
       />
-      <div hidden={show === "start"} className="min-w-0" style={{ flex: `${1 - ratio} 1 0%` }}>
+      <div
+        hidden={show === "start"}
+        className="min-w-0"
+        style={{ flex: show === "both" ? `${1 - ratio} 1 0%` : "1 1 0%" }}
+      >
         {end}
       </div>
     </div>

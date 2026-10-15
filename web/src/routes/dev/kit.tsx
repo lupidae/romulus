@@ -54,6 +54,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toaster";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
 import { type ThemePreference, useTheme } from "@/lib/theme";
@@ -78,7 +79,7 @@ const sections = [
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
-  ["overlays", "Menu, Dialog, Toast"],
+  ["overlays", "Menu, Popover, Dialog, Toast"],
   ["feedback", "Alert, Spinner, Skeleton"],
   ["empty", "Empty state"],
   ["shell", "App shell"],
@@ -517,8 +518,21 @@ function TabsDemo() {
 
 function Overlays() {
   return (
-    <Section id="overlays" title="Menu, Dialog, Toast">
+    <Section id="overlays" title="Menu, Popover, Dialog, Toast">
       <Card className="grid gap-6 p-4">
+        <Specimen label="Popover (a legend, a small detail)">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button>Legend</Button>
+            </PopoverTrigger>
+            <PopoverContent className="grid gap-1.5 text-sm">
+              <p className="font-medium text-foreground">Reading the graph</p>
+              <p className="text-muted-foreground">
+                A key marks the primary key; a link, a foreign key.
+              </p>
+            </PopoverContent>
+          </Popover>
+        </Specimen>
         <Specimen label="Menu">
           <Menu>
             <MenuTrigger asChild>

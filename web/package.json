@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "gen": "openapi-typescript src/api/openapi.json -o src/api/schema.gen.ts && prettier --write src/api/schema.gen.ts",
-    "icons:add": "node scripts/add-icon.mjs"
+    "icons:add": "node scripts/add-icon.mjs",
+    "e2e:dev": "playwright test -c playwright.dev.config.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

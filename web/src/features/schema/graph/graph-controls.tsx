@@ -32,13 +32,15 @@ export function SearchButton({ onClick }: { onClick: () => void }) {
     <Button
       variant="secondary"
       onClick={onClick}
-      className="w-9 justify-start gap-2 px-2.5 text-muted-foreground shadow-raised sm:w-56"
+      aria-label="Find a table"
       aria-keyshortcuts="Meta+K Control+K /"
+      className="w-9 justify-start gap-2 px-2.5 text-muted-foreground shadow-raised sm:w-56"
     >
       <SearchIcon />
-      <span className="hidden flex-1 text-left font-normal sm:inline">Find a table</span>
+      <span aria-hidden className="hidden flex-1 text-left font-normal sm:inline">
+        Find a table
+      </span>
       <KbdGroup keys={[modKey, "K"]} className="hidden sm:inline-flex" />
-      <span className="sr-only sm:hidden">Find a table</span>
     </Button>
   );
 }
@@ -123,13 +125,15 @@ export function DiffLegend({
             variant="ghost"
             size="sm"
             onClick={() => onNext(status)}
+            aria-label={`${counts[status]} ${status}: show the next ${status} table`}
             className="gap-1 px-2 font-normal"
           >
             <span aria-hidden className={cn("w-2.5 font-mono font-semibold", STATUS_TEXT[status])}>
               {statusGlyph(status)}
             </span>
             <span className="text-foreground tabular">{counts[status]}</span>
-            <span className="text-muted-foreground">{status}</span>
+            {/* Glyph and count say enough on a phone; the legend names them. */}
+            <span className="hidden text-muted-foreground sm:inline">{status}</span>
           </Button>
         </Tooltip>
       ))}
@@ -192,12 +196,12 @@ export function GraphKey({ diff }: { diff: boolean }) {
                 </span>
               }
             >
-              Enum, domain or composite type
+              Enum, domain or composite
             </KeyRow>
           </ul>
         </section>
         <section className="grid gap-2">
-          <h3 className="text-xs font-medium text-muted-foreground">Relationships, at each end</h3>
+          <h3 className="text-xs font-medium text-muted-foreground">Relationship ends</h3>
           <ul className="grid gap-1.5">
             <KeyRow icon={<Mark mark="||" />}>Exactly one</KeyRow>
             <KeyRow icon={<Mark mark="|o" />}>Zero or one</KeyRow>
@@ -230,22 +234,19 @@ export function GraphKey({ diff }: { diff: boolean }) {
                     </span>
                   }
                 >
-                  {s === "added"
-                    ? "Added"
-                    : s === "removed"
-                      ? "Removed (only in the old version)"
-                      : "Changed"}
+                  {s === "added" ? "Added" : s === "removed" ? "Removed" : "Changed"}
                 </KeyRow>
               ))}
             </ul>
           </section>
         )}
         <section className="grid gap-2">
-          <h3 className="text-xs font-medium text-muted-foreground">Keyboard, on the graph</h3>
+          <h3 className="text-xs font-medium text-muted-foreground">Keyboard</h3>
           <ul className="grid gap-1.5">
-            <KeyRow icon={<KbdGroup keys={[modKey, "K"]} />}>Find a table (or /)</KeyRow>
-            <KeyRow icon={<KbdGroup keys={["←", "→"]} />}>Move to the next table</KeyRow>
-            <KeyRow icon={<Kbd>↵</Kbd>}>Zoom to the selected table</KeyRow>
+            <KeyRow icon={<KbdGroup keys={[modKey, "K"]} />}>Find a table, or /</KeyRow>
+            <KeyRow icon={<KbdGroup keys={["←", "→"]} />}>Next table</KeyRow>
+            <KeyRow icon={<Kbd>↵</Kbd>}>Zoom to the selection</KeyRow>
+            <KeyRow icon={<Kbd>Space</Kbd>}>Show its details</KeyRow>
             <KeyRow icon={<Kbd>Esc</Kbd>}>Clear the selection</KeyRow>
             <KeyRow icon={<KbdGroup keys={["+", "−", "0"]} />}>Zoom in, out, fit</KeyRow>
           </ul>

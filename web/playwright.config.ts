@@ -24,6 +24,8 @@ const env = (extra: Record<string, string>) => ({
 
 export default defineConfig({
   testDir: "./e2e",
+  // Dev-only screens run against the dev server: playwright.dev.config.ts.
+  testIgnore: "dev/**",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

@@ -1,13 +1,7 @@
 import type { Extension } from "@codemirror/state";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 
-import {
-  CodeIcon,
-  CollapseIcon,
-  ExpandIcon,
-  NetworkRightIcon,
-  SidebarCollapseIcon,
-} from "@/components/icons";
+import { CodeIcon, CollapseIcon, ExpandIcon, NetworkRightIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -21,6 +15,7 @@ import { qualifiedName, type RelationRef, type Schema } from "../model";
 import type { SchemaTexts, TextFormat } from "../text/formats";
 import { SchemaText } from "../text/schema-text";
 import type { SqlStatement } from "../text/statements";
+import { type HiddenPane, LayoutMenu } from "./layout-menu";
 import { DEFAULT_RATIO, MAX_RATIO, MIN_RATIO, Split } from "./split";
 import { useMediaQuery, usePreference } from "./use-preference";
 
@@ -54,7 +49,7 @@ export interface SchemaViewerProps {
   className?: string;
 }
 
-type Hidden = "none" | "graph" | "text";
+type Hidden = HiddenPane;
 const isRatio = (v: unknown): v is number =>
   typeof v === "number" && v >= MIN_RATIO && v <= MAX_RATIO;
 const isHidden = (v: unknown): v is Hidden => v === "none" || v === "graph" || v === "text";
@@ -139,6 +134,15 @@ export function SchemaViewer({
     </Tooltip>
   );
 
+  const layoutMenu = (
+    <LayoutMenu
+      hidden={hidden}
+      onHiddenChange={setHidden}
+      fullScreen={fullScreen}
+      onFullScreenChange={setFullScreen}
+    />
+  );
+
   const showGraph = !wide ? mobilePane === "graph" : hidden !== "graph";
   const showText = !wide ? mobilePane === "text" : hidden !== "text";
 
@@ -152,36 +156,7 @@ export function SchemaViewer({
       editable={editable}
       selected={selected}
       onSelectedChange={select}
-      controls={
-        wide && (
-          <>
-            <Tooltip content="Hide the graph">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Hide the graph"
-                onClick={() => setHidden("graph")}
-              >
-                <SidebarCollapseIcon />
-              </Button>
-            </Tooltip>
-            {hidden === "text" && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setHidden("none")}
-                  className="font-normal"
-                >
-                  <CodeIcon />
-                  Show text
-                </Button>
-                {fullScreenButton}
-              </>
-            )}
-          </>
-        )
-      }
+      controls={wide && hidden === "text" && layoutMenu}
     >
       {graphChildren}
     </SchemaGraph>
@@ -199,35 +174,7 @@ export function SchemaViewer({
       readOnly={readOnly}
       sqlExtensions={sqlExtensions}
       multiSchema={graph.multiSchema}
-      actions={
-        wide && (
-          <>
-            {hidden === "graph" ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setHidden("none")}
-                className="font-normal"
-              >
-                <NetworkRightIcon />
-                Show graph
-              </Button>
-            ) : (
-              <Tooltip content="Hide the text">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Hide the text"
-                  onClick={() => setHidden("text")}
-                >
-                  <SidebarCollapseIcon className="-scale-x-100" />
-                </Button>
-              </Tooltip>
-            )}
-            {fullScreenButton}
-          </>
-        )
-      }
+      actions={wide && layoutMenu}
     />
   );
 
