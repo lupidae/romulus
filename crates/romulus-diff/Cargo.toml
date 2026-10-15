@@ -1,11 +1,12 @@
 [package]
 name = "romulus-diff"
 description = "Semantic diff between two remus schema models. No I/O."
-version = "0.1.0"
-edition = "2024"
-license = "UNLICENSED"
-publish = false
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
 
 [features]
 # `utoipa::ToSchema` on every output type, so the API can put the diff in its
@@ -13,13 +14,15 @@ rust-version = "1.97"
 utoipa = ["dep:utoipa"]
 
 [dependencies]
-remus-core = "0.1.1"
-remus-sql = "0.1.1"
-serde = { version = "1.0.229", features = ["derive"] }
+remus-core.workspace = true
+remus-sql.workspace = true
+serde.workspace = true
+# Not the workspace's utoipa: this crate builds for wasm, so it takes the
+# macros only, without the chrono/uuid integrations the API enables.
 utoipa = { version = "6.0.0", optional = true, default-features = false, features = ["macros"] }
 
 [dev-dependencies]
-remus-core = { version = "0.1.1", features = ["fixtures"] }
+remus-core = { workspace = true, features = ["fixtures"] }
 insta = "1.49.0"
 proptest = "1.12.0"
-serde_json = "1.0.151"
+serde_json.workspace = true

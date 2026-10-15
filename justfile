@@ -71,8 +71,11 @@ gen-check:
 # the full gate, as CI runs it (needs DATABASE_URL on a migrated database)
 check:
     cargo +nightly fmt --all --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    # --all-features: romulus-diff's `utoipa` feature (and its tests) included;
+    # the feature-off build is linted too, since the API may not enable it.
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy -p romulus-diff --all-targets -- -D warnings
+    cargo test --workspace --all-features
     cargo sqlx prepare --workspace --check -- --all-targets
     just gen-check
     npm --prefix web run typecheck

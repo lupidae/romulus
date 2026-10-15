@@ -9,7 +9,7 @@ remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
 
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
-crates/romulus-diff/  model diff, no I/O (joins the workspace via crates/*)
+crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
 deploy/zitadel/       the provisioner that sets Zitadel up on `just up`
@@ -27,7 +27,7 @@ Needs: rustup, Docker, Node 24 + npm, `just`, `cargo install sqlx-cli
 ```bash
 just up          # .env if missing, then the stack; Zitadel provisioned (~15 s from scratch)
 just dev         # up + API (cargo run) + web (vite); open $ROMULUS_PUBLIC_URL/app/
-just check       # the CI gate: fmt, clippy, tests, sqlx prepare --check, gen-check, web checks, build
+just check       # the CI gate: fmt, clippy + tests (--all-features), sqlx prepare --check, gen-check, web, build
 just e2e         # Playwright against a production build + the real API (needs `just up`)
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
