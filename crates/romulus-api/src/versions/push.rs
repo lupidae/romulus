@@ -196,14 +196,19 @@ async fn push(
         layout: None,
         expected_base: None,
     };
+    let database_id = new.database_id;
     Ok(match store(&state.db, new, true).await? {
-        Stored::Created(version) => (
-            StatusCode::CREATED,
-            Json(PushResult {
-                status: PushStatus::Created,
-                version,
-            }),
-        ),
+        Stored::Created(version) => {
+            // Open drafts of the database learn their base moved.
+            state.collab.version_created(database_id, version.number);
+            (
+                StatusCode::CREATED,
+                Json(PushResult {
+                    status: PushStatus::Created,
+                    version,
+                }),
+            )
+        }
         Stored::Unchanged(version) => (
             StatusCode::OK,
             Json(PushResult {

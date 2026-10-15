@@ -434,16 +434,13 @@ async fn a_rename_typed_in_the_text_keeps_the_table_s_place(db: PgPool) {
         .await;
     alice
         .until(|c| {
-            let layout = c
-                .roots
-                .presentation(&yrs::Transact::transact(&c.doc))
-                .layout;
+            let layout = c.roots.layout(&yrs::Transact::transact(&c.doc)).layout;
             layout.contains_key("public.members")
         })
         .await;
     let layout = alice
         .roots
-        .presentation(&yrs::Transact::transact(&alice.doc))
+        .layout(&yrs::Transact::transact(&alice.doc))
         .layout;
     assert_eq!(layout["public.members"].x, 10.0);
     assert!(!layout.contains_key("public.users"));

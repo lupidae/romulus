@@ -181,7 +181,7 @@ Made in the skeleton (S0):
   Anything else that errors outside a handler (a 405, the 30 s timeout's 503
   `timeout`, another extractor) is rewritten to the same format by
   `layers::errors_as_json`, but prefer a precise code from your handler.
-- **State**: `AppState { db, config, oidc, membership, collab }` derives `FromRef`:
+- **State**: `AppState { db, config, oidc, membership, compiler, limits, collab }` derives `FromRef`:
   take `State<PgPool>` or `State<Arc<Config>>` directly.
 - **Who is calling** (`auth`): take `CurrentUser` for anything a signed-in
   person does, and `Member<min::Reviewer | min::Developer | min::Admin>` for
@@ -425,15 +425,19 @@ side (list with presence, one-click create, rename, soft delete, publish).
   `selection`; a connection only speaks for the Yjs client ids it announced
   first. Freezing (publish) drops edits, then `SyncStep1` to everyone on
   unfreeze brings them back.
-- **Compile on type**: `collab::compile::DraftCompiler` (sandbox, or a
-  function in tests); debounced 300 ms (at most 1 s), coalesced per draft.
+- **Compile on type**: through the one `state.compiler` (`SqlCompiler::compile_for`,
+  coalesced per draft; `AppState::with_compiler` hands it to the hub too);
+  debounced 300 ms (at most 1 s).
   A rename typed in the text (same `CREATE` statement index, the last
   compile that succeeded vs this one) moves the layout and group entries,
   written by the server. `draft_compiles.good_model` is the graph while the
   text has errors.
-- **Versions from drafts** store `{layout, groups}` pruned to the model;
-  base moved → 409 `stale_base` (milestone 6 brings "Update draft").
-- **Tests** (`tests/api/live.rs`): `live_app(db, quick())` (fake compiler:
+- **Versions from drafts** go through `versions::store` with the draft's
+  `VersionLayout` and `expected_base`: base moved → 409 `stale_base`
+  (milestone 6 brings "Update draft"). Creating a version (upload, push,
+  publish) calls `collab.version_created`; deleting a database calls
+  `collab.database_deleted`.
+- **Tests** (`tests/api/live.rs`): `live_app(db, quick())` (`draft_compiler()`:
   a table per `CREATE TABLE`, an error at `ERROR`), `serve(&app)` for a real
   socket, `Client::join(addr, path, &session)` (a y-websocket client made of
   yrs: `edit`, `announce`, `until`, `settle`, `events`, `awareness`),
@@ -445,8 +449,9 @@ side (list with presence, one-click create, rename, soft delete, publish).
   placing tables, are never undone), React hooks in `use-session.ts`
   (`useSyncExternalStore` over Yjs), CodeMirror extensions in `collab.ts`
   (yCollab, diagnostics, remote carets in tokens). The editor is the
-  full-screen route `routes/$org_.$db.drafts.$draft.tsx`; the database page
-  shows `<DraftsSection>`. `SchemaViewer` takes `picked`/`onPickedChange`
+  full-screen route `routes/$org_.$db.drafts.$draft.tsx`. The database page
+  has `NewDraftButton` and `OpenDrafts` in its header and `<DraftsSection>`
+  in `DraftsSlot` (History tab). `SchemaViewer` takes `picked`/`onPickedChange`
   (shift- or ⌘-click), `graphControls`, `graphEmpty`.
 - Pitfalls: y-protocols ignores a stranger's first awareness state at clock
   0 (the session sets a field before connecting); a compile event can arrive

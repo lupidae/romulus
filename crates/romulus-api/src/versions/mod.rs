@@ -404,6 +404,8 @@ async fn upload(
     let Stored::Created(version) = store(&state.db, new, false).await? else {
         unreachable!("store skips an unchanged model only when asked to");
     };
+    // Open drafts of the database learn their base moved.
+    state.collab.version_created(database.id, version.number);
     Ok((StatusCode::CREATED, Json(version)))
 }
 

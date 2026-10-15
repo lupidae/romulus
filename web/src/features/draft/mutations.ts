@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, succeed, unwrap } from "@/api/client";
+import { databaseKeys } from "@/features/databases/queries";
 
 import { type Draft, draftKeys } from "./queries";
 
@@ -78,8 +79,10 @@ export function usePublishDraft(org: string, db: string, id: string) {
       queryClient.removeQueries({ queryKey: draftKeys.preview(org, db, id) });
       void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
       void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, id), exact: true });
-      // The database page's versions (milestone 2's queries) are keyed by the database.
-      void queryClient.invalidateQueries({ queryKey: ["databases", org] });
+      // The database's latest version and history now include it.
+      void queryClient.invalidateQueries({ queryKey: databaseKeys.one(org, db) });
+      void queryClient.invalidateQueries({ queryKey: databaseKeys.versions(org, db) });
+      void queryClient.invalidateQueries({ queryKey: databaseKeys.list(org) });
     },
   });
 }

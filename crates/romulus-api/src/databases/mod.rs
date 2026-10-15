@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
+    collab::Hub,
     db,
     domain::{SourceKind, VersionOrigin},
     error::ErrorBody,
@@ -85,13 +86,14 @@ pub struct UpdateDatabase {
 pub struct DatabaseRef {
     pub id: Uuid,
     pub slug: String,
+    pub name: String,
 }
 
 /// The live database `slug` of the organization `org_id`, or 404.
 pub async fn find(db: &PgPool, org_id: Uuid, slug: &str) -> ApiResult<DatabaseRef> {
     sqlx::query_as!(
         DatabaseRef,
-        "SELECT id, slug FROM databases WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+        "SELECT id, slug, name FROM databases WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
         org_id,
         slug,
     )
@@ -396,6 +398,7 @@ async fn update(
 async fn delete(
     member: Member<min::Developer>,
     State(db): State<PgPool>,
+    State(collab): State<Hub>,
     Path((_, slug)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let mut tx = db.begin().await?;
@@ -415,6 +418,8 @@ async fn delete(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    // Its drafts go with it: whoever has one open is told and let go.
+    collab.database_deleted(id, &member.user.name);
     tracing::info!(org = %member.org.slug, database = %slug, "database deleted");
     Ok(StatusCode::NO_CONTENT)
 }

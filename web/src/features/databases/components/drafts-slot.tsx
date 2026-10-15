@@ -1,9 +1,9 @@
+import { DraftsSection } from "@/features/draft/components/drafts-section";
+
 /**
- * Where a database's open drafts are listed, above its versions. Milestone 4
- * (`web/src/features/draft/`) renders its `<DraftsSection org db />` here;
- * until drafts exist there is nothing to show.
+ * Where a database's open drafts are listed, above its versions: who is in
+ * each, where it started. "New draft" is in the database's header.
  */
-export function DraftsSlot(props: { org: string; db: string }) {
-  void props;
-  return null;
+export function DraftsSlot({ org, db }: { org: string; db: string }) {
+  return <DraftsSection org={org} db={db} withNewButton={false} />;
 }

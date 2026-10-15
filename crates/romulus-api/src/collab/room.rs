@@ -46,12 +46,12 @@ use yrs::{
 use super::{
     HubInner, Present,
     awareness::{Peer, sanitize},
-    compile::{self, CompileError, CompileState, Compiled, DraftCompiler, sha256_hex},
-    doc::{self, Presentation, Roots},
+    compile::{self, CompileState, Compiled, Rejected, SqlCompiler, sha256_hex},
+    doc::{self, Roots},
     protocol::{self, LiveStatus, ServerEvent},
     store::{self, CompileRow, Job, Loaded, Writer},
 };
-use crate::domain::DraftStatus;
+use crate::{domain::DraftStatus, versions::layout::VersionLayout};
 
 /// Timings and thresholds; [`Settings::default`] in production, shorter in
 /// tests.
@@ -149,7 +149,7 @@ pub mod close {
 #[derive(Debug, Clone)]
 pub struct Content {
     pub sql: String,
-    pub presentation: Presentation,
+    pub layout: VersionLayout,
     /// The model of exactly this SQL, when the last compile was of it and
     /// succeeded (publishing then needs no compile of its own).
     pub model: Option<Arc<Value>>,
@@ -231,7 +231,7 @@ struct CompileDone {
     sha256: String,
     /// Where it creates each relation (`compile::created_at`).
     tables: HashMap<String, usize>,
-    result: Result<Compiled, CompileError>,
+    result: Result<Compiled, Rejected>,
 }
 
 /// The last compile, as it is sent to someone joining.
@@ -245,7 +245,7 @@ struct Room {
     id: Uuid,
     hub: Arc<HubInner>,
     settings: Settings,
-    compiler: DraftCompiler,
+    compiler: SqlCompiler,
     shared: Arc<Shared>,
 
     doc: Doc,
@@ -730,7 +730,7 @@ impl Room {
             last.state == CompileState::Ok && last.sha256.as_deref() == Some(&sha256_hex(&sql))
         });
         Content {
-            presentation: self.roots.presentation(&txn),
+            layout: self.roots.layout(&txn),
             model: compiled_now.then(|| self.good_model.clone()).flatten(),
             sql,
         }
@@ -905,7 +905,7 @@ impl Room {
         tokio::spawn(async move {
             let sha256 = sha256_hex(&sql);
             let tables = compile::created_at(&sql);
-            let result = compiler.compile_for(id, sql).await;
+            let result = compiler.compile_for(&id.to_string(), sql).await;
             let _ = results.send(CompileDone {
                 sha256,
                 tables,
@@ -922,9 +922,9 @@ impl Room {
         } = done;
         let compiled = match result {
             Ok(compiled) => compiled,
-            Err(CompileError::Superseded) => return,
-            Err(CompileError::Unavailable(reason)) => {
-                tracing::warn!(draft = %self.id, %reason, "collab: cannot compile");
+            Err(Rejected::Superseded) => return,
+            Err(Rejected::Api(err)) => {
+                tracing::warn!(draft = %self.id, reason = %err, "collab: cannot compile");
                 self.retry_at = Some(Instant::now() + self.settings.retry_unavailable);
                 self.last_compile = Some(LastCompile {
                     state: CompileState::Unavailable,

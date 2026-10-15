@@ -8,7 +8,7 @@ use romulus_api::{
     AppState, Config, app,
     collab::{
         Hub,
-        compile::{Compiled, DraftCompiler, created_at},
+        compile::{Compiled, SqlCompiler, created_at},
         doc::{Roots, new_doc},
         protocol::MESSAGE_EVENT,
         room::Settings,
@@ -47,9 +47,9 @@ pub fn quick() -> Settings {
     }
 }
 
-/// An app whose drafts compile with [`fake_compiler`].
+/// An app whose drafts compile with [`draft_compiler`].
 pub fn live_app(db: PgPool, settings: Settings) -> TestApp {
-    let hub = Hub::with_settings(db.clone(), fake_compiler(), settings);
+    let hub = Hub::with_settings(db.clone(), draft_compiler(), settings);
     TestApp::with_state(AppState::new(db, Config::for_tests()).with_collab(hub))
 }
 
@@ -71,8 +71,8 @@ pub async fn serve(test: &TestApp) -> SocketAddr {
 
 /// A compiler without a sandbox: a table per `CREATE TABLE`, and an error
 /// wherever the text says `ERROR`.
-pub fn fake_compiler() -> DraftCompiler {
-    DraftCompiler::from_fn(|sql| match sql.find("ERROR") {
+pub fn draft_compiler() -> SqlCompiler {
+    SqlCompiler::from_fn(|sql| match sql.find("ERROR") {
         Some(at) => Compiled {
             model: None,
             diagnostics: vec![
@@ -87,7 +87,7 @@ pub fn fake_compiler() -> DraftCompiler {
     })
 }
 
-/// What [`fake_compiler`] makes of `sql`.
+/// What [`draft_compiler`] makes of `sql`.
 pub fn model_of(sql: &str) -> Schema {
     let mut tables: Vec<String> = created_at(sql).into_keys().collect();
     tables.sort();

@@ -293,6 +293,67 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The open drafts of a database, most recently edited first, with who has
+     *     each open.
+     */
+    get: operations["list_drafts"];
+    put?: never;
+    /**
+     * A new draft from the latest version, ready to edit: no form, renamed
+     *     later if wanted.
+     */
+    post: operations["create_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One draft (published ones too: the editor says what became of them). */
+    get: operations["get_draft"];
+    put?: never;
+    post?: never;
+    /** Deletes an open draft. Whoever has it open is told and let go. */
+    delete: operations["delete_draft"];
+    options?: never;
+    head?: never;
+    /** Renames an open draft; everyone in it sees the new name at once. */
+    patch: operations["rename_draft"];
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/publish": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The diff publishing would create, for the confirm dialog. */
+    get: operations["preview_publish"];
+    put?: never;
+    /** Publishes the draft as the next version. */
+    post: operations["publish_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/tokens": {
     parameters: {
       query?: never;
@@ -372,6 +433,29 @@ export interface paths {
     };
     /** One version's model as SQL, JSON, DBML and Mermaid. */
     get: operations["get_version_texts"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/drafts/{id}/ws": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Opens a draft live: the y-sync protocol over a websocket.
+     * @description Members only (reviewers watch: their document updates are dropped).
+     *     Messages: y-sync (sync, awareness) plus server events (tag 100, see the
+     *     `ServerEvent` schema). Close codes: 1012 server restarting, 4000 too
+     *     slow, 4001 membership changed (reconnect), 4404 draft deleted (do not).
+     */
+    get: operations["draft_socket"];
     put?: never;
     post?: never;
     delete?: never;
@@ -487,6 +571,33 @@ export interface components {
       name: string;
       scope: components["schemas"]["TokenScope"];
     };
+    /**
+     * @description A change to one attribute of a composite type.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    AttributeChange:
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "type";
+        }
+      | {
+          after: number;
+          before: number;
+          /** @enum {string} */
+          field: "position";
+        };
+    AttributeDiff: {
+      changes: components["schemas"]["AttributeChange"][];
+      /** @description The attribute's type. */
+      definition: components["schemas"]["Sides"];
+      name: string;
+      position: components["schemas"]["Positions"];
+      status: components["schemas"]["Status"];
+    };
     AuthMethods: {
       /** @description The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`). */
       dev_signin: boolean;
@@ -509,6 +620,21 @@ export interface components {
           kind: "token";
           name: string;
         };
+    /**
+     * @description What [`Summary`] counts. Partitioned tables count as tables; an entity whose
+     *     kind changed counts under its new kind.
+     * @enum {string}
+     */
+    Category:
+      | "table"
+      | "view"
+      | "materialized_view"
+      | "foreign_table"
+      | "partition"
+      | "enum"
+      | "domain"
+      | "composite"
+      | "extension";
     ChangeRole: {
       role: components["schemas"]["Role"];
     };
@@ -542,6 +668,90 @@ export interface components {
       | "timeout"
       | "unavailable"
       | "provided_by_extension";
+    /**
+     * @description A change to one column.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    ColumnChange:
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "type";
+        }
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "type_name";
+        }
+      | {
+          after: components["schemas"]["TypeKind"];
+          before: components["schemas"]["TypeKind"];
+          /** @enum {string} */
+          field: "type_kind";
+        }
+      | {
+          after: boolean;
+          before: boolean;
+          /** @enum {string} */
+          field: "not_null";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "default";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "expression";
+        }
+      | {
+          after: components["schemas"]["Identity"] | null;
+          before: components["schemas"]["Identity"] | null;
+          /** @enum {string} */
+          field: "identity";
+        }
+      | {
+          after: components["schemas"]["Generated"] | null;
+          before: components["schemas"]["Generated"] | null;
+          /** @enum {string} */
+          field: "generated";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "comment";
+        }
+      | {
+          after: number;
+          before: number;
+          /** @enum {string} */
+          field: "position";
+        };
+    /**
+     * @description A column. Columns are listed in table order: by their smallest position on
+     *     either side, then their largest, then name, which reads naturally and does
+     *     not depend on which side is old.
+     */
+    ColumnDiff: {
+      /** @description Empty when added or removed. */
+      changes: components["schemas"]["ColumnChange"][];
+      /**
+       * @description Type and clauses as in `CREATE TABLE`, without the name:
+       *     `bigint GENERATED ALWAYS AS IDENTITY NOT NULL`.
+       */
+      definition: components["schemas"]["Sides"];
+      name: string;
+      position: components["schemas"]["Positions"];
+      status: components["schemas"]["Status"];
+    };
     /** @description A dry run: whether the SQL compiles, and what it would change. */
     CompileReport: {
       changes?: components["schemas"]["Changes"] | null;
@@ -550,6 +760,78 @@ export interface components {
     };
     CompileSql: {
       sql: string;
+    };
+    /**
+     * @description A compile's outcome, as everyone in the draft receives it.
+     * @enum {string}
+     */
+    CompileState: "ok" | "failed" | "unavailable" | "pending";
+    /**
+     * @description A change to a composite type other than its attributes.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    CompositeChange: {
+      after: string | null;
+      before: string | null;
+      /** @enum {string} */
+      field: "comment";
+    };
+    CompositeDiff: {
+      /** @description Ordered like [`ColumnDiff`]s. */
+      attributes: components["schemas"]["AttributeDiff"][];
+      changes: components["schemas"]["CompositeChange"][];
+      lines: string[];
+      name: string;
+      schema: string;
+      sql: components["schemas"]["Sides"];
+      status: components["schemas"]["Status"];
+    };
+    /**
+     * @description A change to one constraint.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    ConstraintChange:
+      | {
+          after: components["schemas"]["ConstraintKind"];
+          before: components["schemas"]["ConstraintKind"];
+          /** @enum {string} */
+          field: "kind";
+        }
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "definition";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "comment";
+        };
+    ConstraintDiff: {
+      changes: components["schemas"]["ConstraintChange"][];
+      /** @description `pg_get_constraintdef`: `FOREIGN KEY (customer_id) REFERENCES shop.customers(id)`. */
+      definition: components["schemas"]["Sides"];
+      /** @description The new kind, or the old one when the constraint was removed. */
+      kind: components["schemas"]["ConstraintKind"];
+      name: string;
+      status: components["schemas"]["Status"];
+    };
+    /**
+     * @description `pg_constraint.contype`, as a word.
+     * @enum {string}
+     */
+    ConstraintKind: "primary_key" | "unique" | "foreign_key" | "check" | "exclusion";
+    Count: {
+      added: number;
+      category: components["schemas"]["Category"];
+      changed: number;
+      removed: number;
     };
     CreateDatabase: {
       /** @description At most 1000 characters. */
@@ -652,6 +934,243 @@ export interface components {
       statement?: number | null;
     };
     /**
+     * @description A change to a domain.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    DomainChange:
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "base_type";
+        }
+      | {
+          after: boolean;
+          before: boolean;
+          /** @enum {string} */
+          field: "not_null";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "default";
+        }
+      | {
+          after: string[];
+          before: string[];
+          /** @enum {string} */
+          field: "constraints";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "comment";
+        };
+    DomainDiff: {
+      changes: components["schemas"]["DomainChange"][];
+      lines: string[];
+      name: string;
+      schema: string;
+      sql: components["schemas"]["Sides"];
+      status: components["schemas"]["Status"];
+    };
+    /** @description A draft, as the database page and the editor show it. */
+    Draft: {
+      /**
+       * Format: int32
+       * @description The version it started from; `null` when the database had none.
+       */
+      base_version?: number | null;
+      /** Format: date-time */
+      created_at: string;
+      created_by?: components["schemas"]["Person"] | null;
+      database: components["schemas"]["DraftDatabase"];
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: int32
+       * @description The database's newest version now.
+       */
+      latest_version?: number | null;
+      name: string;
+      /** @description Who has it open right now. */
+      present: components["schemas"]["Present"][];
+      /**
+       * Format: int32
+       * @description The version it became, once published.
+       */
+      published_version?: number | null;
+      /**
+       * @description Someone published since the draft started: publishing it needs
+       *     "Update draft" first.
+       */
+      stale: boolean;
+      status: components["schemas"]["DraftStatus"];
+      /**
+       * Format: date-time
+       * @description The last edit (or rename).
+       */
+      updated_at: string;
+    };
+    DraftDatabase: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      slug: string;
+    };
+    /**
+     * @description A draft's lifecycle (`draft_status`).
+     * @enum {string}
+     */
+    DraftStatus: "open" | "published" | "deleted";
+    /**
+     * @description A change to an entity's own attributes.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    EntityChange:
+      | {
+          after: components["schemas"]["EntityKind"];
+          before: components["schemas"]["EntityKind"];
+          /** @enum {string} */
+          field: "kind";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "comment";
+        }
+      | {
+          after: boolean;
+          before: boolean;
+          /** @enum {string} */
+          field: "rls";
+        }
+      | {
+          after: boolean;
+          before: boolean;
+          /** @enum {string} */
+          field: "rls_forced";
+        }
+      | {
+          after: boolean;
+          before: boolean;
+          /** @enum {string} */
+          field: "unlogged";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "partition_key";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "view_definition";
+        }
+      | {
+          after: components["schemas"]["Relation"][];
+          before: components["schemas"]["Relation"][];
+          /** @enum {string} */
+          field: "depends_on";
+        };
+    /** @description A table, view, materialized view or foreign table. */
+    EntityDiff: {
+      /** @description Changes to the entity itself. Empty when added or removed. */
+      changes: components["schemas"]["EntityChange"][];
+      /**
+       * @description Every column of an added or removed entity; the added, removed and
+       *     changed ones otherwise. In table order (see [`ColumnDiff`]).
+       */
+      columns: components["schemas"]["ColumnDiff"][];
+      /** @description By name, like the next three. */
+      constraints: components["schemas"]["ConstraintDiff"][];
+      indexes: components["schemas"]["IndexDiff"][];
+      /** @description The new kind, or the old one when the entity was removed. */
+      kind: components["schemas"]["EntityKind"];
+      /** @description One human-readable line per change, ready for a change list. */
+      lines: string[];
+      name: string;
+      /**
+       * @description Partitions of a partitioned table, at every level (a sub-partition is
+       *     not an entity, so its own partitions are listed here too), by schema
+       *     then name.
+       */
+      partitions: components["schemas"]["PartitionDiff"][];
+      policies: components["schemas"]["PolicyDiff"][];
+      schema: string;
+      /**
+       * @description Table, sequences it owns, partitions, foreign keys, indexes, row level
+       *     security and comments; or the view.
+       */
+      sql: components["schemas"]["Sides"];
+      status: components["schemas"]["Status"];
+    };
+    /**
+     * @description `pg_class.relkind`, as a word.
+     * @enum {string}
+     */
+    EntityKind: "table" | "partitioned_table" | "view" | "materialized_view" | "foreign_table";
+    /**
+     * @description One graph node: the entity's status and that of every part it has on
+     *     either side. Foreign keys are the graph's edges. Columns, constraints,
+     *     indexes and policies are keyed by name; partitions (every level under this
+     *     entity) by schema, then name.
+     */
+    EntityStatus: {
+      columns: {
+        [key: string]: components["schemas"]["Status"];
+      };
+      constraints: {
+        [key: string]: components["schemas"]["Status"];
+      };
+      indexes: {
+        [key: string]: components["schemas"]["Status"];
+      };
+      partitions: {
+        [key: string]: {
+          [key: string]: components["schemas"]["Status"];
+        };
+      };
+      policies: {
+        [key: string]: components["schemas"]["Status"];
+      };
+      status: components["schemas"]["Status"];
+    };
+    /**
+     * @description A change to an enum other than its labels.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    EnumChange: {
+      after: string | null;
+      before: string | null;
+      /** @enum {string} */
+      field: "comment";
+    };
+    EnumDiff: {
+      changes: components["schemas"]["EnumChange"][];
+      /**
+       * @description Every label of an added or removed enum; the added, removed and moved
+       *     ones otherwise. Ordered like [`ColumnDiff`]s.
+       */
+      labels: components["schemas"]["LabelDiff"][];
+      lines: string[];
+      name: string;
+      schema: string;
+      sql: components["schemas"]["Sides"];
+      status: components["schemas"]["Status"];
+    };
+    /**
      * @description The body of every error response.
      *
      *     `code` is stable and machine-readable (the web app switches on it);
@@ -664,6 +1183,37 @@ export interface components {
       details?: unknown;
       message: string;
     };
+    /**
+     * @description A change to an installed extension.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    ExtensionChange:
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "schema";
+        }
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "version";
+        };
+    ExtensionDiff: {
+      changes: components["schemas"]["ExtensionChange"][];
+      lines: string[];
+      name: string;
+      sql: components["schemas"]["Sides"];
+      status: components["schemas"]["Status"];
+    };
+    /**
+     * @description `pg_attribute.attgenerated`, as a word.
+     * @enum {string}
+     */
+    Generated: "stored" | "virtual";
     Health: {
       /** @description `ok` when a query round-trips. */
       database: string;
@@ -677,6 +1227,30 @@ export interface components {
       status: string;
       /** @description The API's crate version. */
       version: string;
+    };
+    /**
+     * @description `pg_attribute.attidentity`, as a word.
+     * @enum {string}
+     */
+    Identity: "always" | "by_default";
+    /**
+     * @description A change to one index.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    IndexChange: {
+      after: string;
+      before: string;
+      /** @enum {string} */
+      field: "definition";
+    };
+    IndexDiff: {
+      changes: components["schemas"]["IndexChange"][];
+      /** @description `pg_get_indexdef`, a complete `CREATE INDEX` statement. */
+      definition: components["schemas"]["Sides"];
+      name: string;
+      status: components["schemas"]["Status"];
     };
     /** @description A pending invitation (its link is never shown again). */
     Invitation: {
@@ -719,6 +1293,21 @@ export interface components {
       | "already_member"
       | "expired"
       | "used";
+    /**
+     * @description One enum label. `changed` means moved: its order relative to the labels
+     *     present on both sides changed, which matters because enums compare by
+     *     declaration order.
+     */
+    LabelDiff: {
+      label: string;
+      position: components["schemas"]["Positions"];
+      status: components["schemas"]["Status"];
+    };
+    /**
+     * @description Where a draft is in its life, as the people in it see it.
+     * @enum {string}
+     */
+    LiveStatus: "open" | "publishing" | "published" | "deleted";
     /** @description An organization, as one of its members sees it. */
     Org: {
       /** Format: uuid */
@@ -742,10 +1331,121 @@ export interface components {
       name: string;
       slug: string;
     };
+    /**
+     * @description Partitions whose chain of parents reaches no entity in either schema: the
+     *     root table was left out of the model (a schema filter that kept a
+     *     sub-partition's schema but not its root's), or the model was written by
+     *     hand. They are matched like any partition and described here instead of
+     *     under an entity.
+     */
+    OrphanPartitions: {
+      lines: string[];
+      /** @description By schema then name. */
+      partitions: components["schemas"]["PartitionDiff"][];
+      /**
+       * @description Every orphan partition of each side as `remus-sql` renders it; `null`
+       *     on a side with none, and on both sides when nothing changed.
+       */
+      sql: components["schemas"]["Sides"];
+    };
+    /**
+     * @description A change to one partition.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    PartitionChange:
+      | {
+          after: components["schemas"]["Relation"];
+          before: components["schemas"]["Relation"];
+          /** @enum {string} */
+          field: "parent";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "bound";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "partition_key";
+        };
+    /** @description A partition, matched by its own schema and name. */
+    PartitionDiff: {
+      changes: components["schemas"]["PartitionChange"][];
+      /**
+       * @description `FOR VALUES …` or `DEFAULT`, then `PARTITION BY …` when the
+       *     partition is partitioned in turn.
+       */
+      definition: components["schemas"]["Sides"];
+      name: string;
+      /**
+       * @description The table it is a partition of (the entity, or a partition that is
+       *     itself partitioned): the new one, or the old one when removed.
+       */
+      parent: components["schemas"]["Relation"];
+      schema: string;
+      status: components["schemas"]["Status"];
+    };
     Person: {
       /** Format: uuid */
       id: string;
       name: string;
+    };
+    /**
+     * @description A change to one row level security policy.
+     *
+     *     Every variant carries the old value as `before` and the new one as
+     *     `after`.
+     */
+    PolicyChange:
+      | {
+          after: components["schemas"]["PolicyCommand"];
+          before: components["schemas"]["PolicyCommand"];
+          /** @enum {string} */
+          field: "command";
+        }
+      | {
+          after: boolean;
+          before: boolean;
+          /** @enum {string} */
+          field: "permissive";
+        }
+      | {
+          after: string[];
+          before: string[];
+          /** @enum {string} */
+          field: "roles";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "using";
+        }
+      | {
+          after: string | null;
+          before: string | null;
+          /** @enum {string} */
+          field: "check";
+        };
+    /**
+     * @description `pg_policy.polcmd`, as a word.
+     * @enum {string}
+     */
+    PolicyCommand: "all" | "select" | "insert" | "update" | "delete";
+    PolicyDiff: {
+      changes: components["schemas"]["PolicyChange"][];
+      /**
+       * @description What follows `CREATE POLICY name ON table`:
+       *     `AS RESTRICTIVE FOR SELECT TO reader USING (…)`.
+       */
+      definition: components["schemas"]["Sides"];
+      name: string;
+      status: components["schemas"]["Status"];
     };
     /**
      * @description A 1-based line and column. Columns count Unicode scalar values, which is
@@ -757,6 +1457,58 @@ export interface components {
       /** Format: int32 */
       line: number;
     };
+    /**
+     * @description 0-based index in the old and the new list, `null` on the side the item is
+     *     absent from. Every item carries both, moved or not.
+     */
+    Positions: {
+      after: number | null;
+      before: number | null;
+    };
+    /** @description Someone who has a draft open right now. */
+    Present: {
+      /** @description They may edit (developer or admin); otherwise they watch (reviewer). */
+      editing: boolean;
+      name: string;
+      /** Format: uuid */
+      user_id: string;
+    };
+    PublishDraft: {
+      /** @description What changed, in a line (at most 1000 characters). */
+      message?: string | null;
+      /** @description The `sha256` of the preview the person confirmed. */
+      sha256: string;
+    };
+    /** @description What publishing the draft now would create. */
+    PublishPreview: {
+      /** @description The base version's model, for drawing the diff. */
+      base_model?: Record<string, never> | null;
+      /** Format: int32 */
+      base_version?: number | null;
+      /** @description Errors that prevent publishing (then no diff), then notes. */
+      diagnostics: components["schemas"]["Diagnostic"][];
+      diff?: components["schemas"]["SchemaDiff"] | null;
+      /** Format: int32 */
+      latest_version?: number | null;
+      /** @description The model the version would have. */
+      model?: Record<string, never> | null;
+      /**
+       * Format: int32
+       * @description The number the new version would get.
+       */
+      number: number;
+      /** @description SHA-256 of the SQL previewed: send it back to publish exactly this. */
+      sha256: string;
+      /** @description Someone published since the draft started: "Update draft" first. */
+      stale: boolean;
+    };
+    /** @description The version a draft became. */
+    Published: {
+      /** Format: uuid */
+      id: string;
+      /** Format: int32 */
+      number: number;
+    };
     PushResult: {
       status: components["schemas"]["PushStatus"];
       /** @description The version created, or the latest one when unchanged. */
@@ -764,13 +1516,118 @@ export interface components {
     };
     /** @enum {string} */
     PushStatus: "created" | "unchanged";
+    /** @description A schema-qualified relation name, unquoted. */
+    Relation: {
+      name: string;
+      schema: string;
+    };
+    RenameDraft: {
+      /** @description 1 to 200 characters. */
+      name: string;
+    };
     /**
      * @description A member's role in an organization (`member_role`).
      * @enum {string}
      */
     Role: "admin" | "developer" | "reviewer";
+    /**
+     * @description Everything that differs between two schemas, matched by schema and name:
+     *     a rename is a removal plus an addition.
+     *
+     *     Lists hold only what was added, removed or changed. [`SchemaDiff::status`]
+     *     is the total view (every object of either side, unchanged ones included)
+     *     for highlighting a graph.
+     */
+    SchemaDiff: {
+      composites: components["schemas"]["CompositeDiff"][];
+      domains: components["schemas"]["DomainDiff"][];
+      /**
+       * @description Tables, partitioned tables, views, materialized views and foreign
+       *     tables, by schema then name. Partitions are listed under the entity
+       *     their chain of parents leads to, not here.
+       */
+      entities: components["schemas"]["EntityDiff"][];
+      enums: components["schemas"]["EnumDiff"][];
+      extensions: components["schemas"]["ExtensionDiff"][];
+      orphan_partitions: components["schemas"]["OrphanPartitions"];
+      status: components["schemas"]["StatusMap"];
+      summary: components["schemas"]["Summary"];
+    };
+    /** @description A message only the server sends (tag 100 on the websocket), as JSON. */
+    ServerEvent:
+      | {
+          /**
+           * @description Document updates from this connection are dropped (reviewers,
+           *     and everyone once the draft is no longer open).
+           */
+          read_only: boolean;
+          /** @description The connection's role in the organization. */
+          role: components["schemas"]["Role"];
+          status: components["schemas"]["LiveStatus"];
+          /** @enum {string} */
+          type: "welcome";
+        }
+      | {
+          /**
+           * @description Errors (when `failed`), then notes. Spans count UTF-16 code
+           *     units in `utf16_start`/`utf16_end`, like `Y.Text` in the browser.
+           */
+          diagnostics: components["schemas"]["Diagnostic"][];
+          /**
+           * @description The model when `ok`. When `failed`, the last model that compiled,
+           *     sent only on joining (others already have it); keep showing the
+           *     previous one when absent.
+           */
+          model?: Record<string, never> | null;
+          /**
+           * @description Hex SHA-256 of the SQL compiled. A client whose text hashes the
+           *     same can place `diagnostics` as they are; otherwise a newer
+           *     compile is on its way.
+           */
+          sha256?: string | null;
+          state: components["schemas"]["CompileState"];
+          /** @enum {string} */
+          type: "compile";
+        }
+      | {
+          /** @description Who published or deleted it. */
+          by?: string | null;
+          status: components["schemas"]["LiveStatus"];
+          /** @enum {string} */
+          type: "status";
+          /**
+           * Format: int32
+           * @description The version it became, once `published`.
+           */
+          version?: number | null;
+        }
+      | {
+          name: string;
+          /** @enum {string} */
+          type: "renamed";
+        }
+      | {
+          /** Format: int32 */
+          number: number;
+          /** @enum {string} */
+          type: "version_created";
+        };
     /** @enum {string} */
     Severity: "error" | "info";
+    /**
+     * @description The same thing on both sides, `null` where it does not exist.
+     *
+     *     For an object it is the DDL `remus-sql` renders for it alone (statements
+     *     separated by blank lines, ending with a newline), so the web can show the
+     *     two side by side. For a part of an object it is the one-line definition:
+     *     a column's type and clauses, a constraint's `pg_get_constraintdef`, an
+     *     index's `CREATE INDEX`, a policy's clauses after `ON table`, a partition's
+     *     bound.
+     */
+    Sides: {
+      after: string | null;
+      before: string | null;
+    };
     SignedOut: {
       /**
        * @description Where the browser goes next: the IdP's logout (which comes back to
@@ -801,6 +1658,59 @@ export interface components {
       /** @description `start` in UTF-16 code units: a JavaScript string index. */
       utf16_start: number;
     };
+    /**
+     * @description Where an object, or a part of one, stands between the old and the new
+     *     schema.
+     * @enum {string}
+     */
+    Status: "added" | "removed" | "changed" | "unchanged";
+    /**
+     * @description Status of every object on either side, unchanged ones included.
+     *
+     *     Schema-qualified objects are nested by schema, then name, both unquoted
+     *     exactly as in the model: `status.entities["shop"]["orders"]`. Nesting keeps
+     *     keys collision-free without making the web reproduce Postgres's quoting
+     *     rules (a flat `schema.name` key cannot tell schema `a.b` + table `c` from
+     *     schema `a` + table `b.c`). Extensions are database-wide, keyed by name.
+     */
+    StatusMap: {
+      composites: {
+        [key: string]: {
+          [key: string]: components["schemas"]["Status"];
+        };
+      };
+      domains: {
+        [key: string]: {
+          [key: string]: components["schemas"]["Status"];
+        };
+      };
+      entities: {
+        [key: string]: {
+          [key: string]: components["schemas"]["EntityStatus"];
+        };
+      };
+      enums: {
+        [key: string]: {
+          [key: string]: components["schemas"]["Status"];
+        };
+      };
+      extensions: {
+        [key: string]: components["schemas"]["Status"];
+      };
+      /** @description See [`OrphanPartitions`]. */
+      orphan_partitions: {
+        [key: string]: {
+          [key: string]: components["schemas"]["Status"];
+        };
+      };
+    };
+    /** @description Counts per category, and the same as one sentence. */
+    Summary: {
+      /** @description Categories with at least one change, in [`Category`] order. */
+      counts: components["schemas"]["Count"][];
+      /** @description `"3 tables added, 1 changed; 1 enum changed"`, or `"no changes"`. */
+      text: string;
+    };
     TableGroup: {
       /**
        * @description A color name (`stone`, `red`, `amber`, `green`, `teal`, `blue`,
@@ -822,6 +1732,11 @@ export interface components {
      * @enum {string}
      */
     TokenScope: "push" | "full";
+    /**
+     * @description `pg_type.typtype` of a column's type, as a word.
+     * @enum {string}
+     */
+    TypeKind: "base" | "enum" | "domain" | "composite" | "range" | "multirange" | "pseudo";
     UpdateDatabase: {
       description?: string | null;
       name?: string | null;
@@ -1753,6 +2668,342 @@ export interface operations {
       };
     };
   };
+  list_drafts: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        /** @description Database slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Draft"][];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        /** @description Database slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Draft"];
+        };
+      };
+      /** @description Reviewers cannot create drafts */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Draft"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deleted */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Published drafts stay with their version */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  rename_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RenameDraft"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Draft"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Published drafts keep their name */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  preview_publish: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublishPreview"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Already published */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The compiler is unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  publish_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PublishDraft"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Published"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_changed` (review again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The SQL does not compile (`details.diagnostics`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The compiler is unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   list_api_tokens: {
     parameters: {
       query?: never;
@@ -2054,6 +3305,58 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  draft_socket: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Organization slug */
+        org: string;
+        /** @description Draft id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Switching to the websocket */
+      101: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ServerEvent"];
+        };
+      };
+      /** @description Another origin */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such draft, or not a member */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The draft is published: open its version instead */
+      409: {
         headers: {
           [name: string]: unknown;
         };

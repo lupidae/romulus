@@ -33,15 +33,16 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use self::versions::DatabaseRef;
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
     collab::{Hub, Present, compile, doc},
+    databases::{self, DatabaseRef},
     domain::{DraftStatus, Schema, SourceKind},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
+    versions::layout::VersionLayout,
 };
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -195,7 +196,7 @@ async fn list(
     Path((_, db_slug)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<Draft>>> {
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let latest = latest_number(&state.db, database.id).await?;
     let rows = sqlx::query_as!(
         Row,
@@ -238,10 +239,10 @@ async fn create(
     Path((_, db_slug)): Path<(String, String)>,
     State(state): State<AppState>,
 ) -> ApiResult<(StatusCode, Json<Draft>)> {
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let base = versions::latest(&state.db, database.id).await?;
 
-    let (name, sql, presentation, model) = match &base {
+    let (name, sql, layout, model) = match &base {
         Some(version) => {
             let sql = match version.source_kind {
                 SourceKind::Sql => version.source.clone(),
@@ -253,14 +254,14 @@ async fn create(
             (
                 format!("Draft from v{}", version.number),
                 sql,
-                doc::Presentation::from_json(&version.layout),
+                VersionLayout::from_value(&version.layout),
                 Some(&version.model),
             )
         }
         None => (
             "New draft".to_owned(),
             String::new(),
-            doc::Presentation::default(),
+            VersionLayout::default(),
             None,
         ),
     };
@@ -279,7 +280,7 @@ async fn create(
     sqlx::query!(
         "INSERT INTO draft_updates (draft_id, update) VALUES ($1, $2)",
         id,
-        doc::initial_update(&sql, &presentation),
+        doc::initial_update(&sql, &layout),
     )
     .execute(&mut *tx)
     .await?;
@@ -323,7 +324,7 @@ async fn get(
     Path((_, db_slug, id)): Path<(String, String, Uuid)>,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Draft>> {
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
     let latest = latest_number(&state.db, database.id).await?;
     Ok(Json(row.into_draft(&database, latest, &state.collab)))
@@ -358,7 +359,7 @@ async fn rename(
     if name.chars().count() > 200 {
         return Err(invalid("name", "Keep the name to 200 characters or fewer."));
     }
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
     if row.status != DraftStatus::Open {
         return Err(not_open(row.status));
@@ -395,7 +396,7 @@ async fn delete(
     Path((_, db_slug, id)): Path<(String, String, Uuid)>,
     State(state): State<AppState>,
 ) -> ApiResult<StatusCode> {
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
     if row.status != DraftStatus::Open {
         return Err(not_open(row.status));

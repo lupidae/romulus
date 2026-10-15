@@ -17,64 +17,17 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use serde::Serialize;
 use yrs::{
     Any, Doc, GetString, Map, MapRef, OffsetKind, Options, ReadTxn, StateVector, Text, TextRef,
     Transact, TransactionMut, Update, types::ToJson, updates::decoder::Decode,
 };
 
+use crate::versions::layout::{TableGroup, VersionLayout};
+
 pub const SQL: &str = "sql";
 pub const LAYOUT: &str = "layout";
 pub const GROUPS: &str = "groups";
-
-/// A table's top-left corner, in graph coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct Position {
-    pub x: f64,
-    pub y: f64,
-}
-
-/// A named, colored set of tables.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct Group {
-    pub name: String,
-    /// A color name of the web app's group palette (`blue`, `amber`…).
-    pub color: String,
-    /// Qualified names.
-    pub members: Vec<String>,
-}
-
-/// The presentation a version keeps next to its SQL: `versions.layout`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
-pub struct Presentation {
-    /// Positions by qualified name.
-    #[serde(default)]
-    pub layout: BTreeMap<String, Position>,
-    /// Groups by id.
-    #[serde(default)]
-    pub groups: BTreeMap<String, Group>,
-}
-
-impl Presentation {
-    /// A version's `layout` column; anything unreadable is an empty layout
-    /// (versions from uploads and pushes store `{}`).
-    pub fn from_json(value: &serde_json::Value) -> Self {
-        serde_json::from_value(value.clone()).unwrap_or_default()
-    }
-
-    /// Only what concerns `tables` (qualified names): layout entries of
-    /// tables a draft dropped or renamed are kept while it is edited (undo
-    /// brings them back), not in the version it becomes.
-    #[must_use]
-    pub fn pruned(mut self, tables: &std::collections::HashSet<String>) -> Self {
-        self.layout.retain(|name, _| tables.contains(name));
-        for group in self.groups.values_mut() {
-            group.members.retain(|name| tables.contains(name));
-        }
-        self
-    }
-}
 
 /// A doc with the options every peer uses: text offsets in UTF-16 code units,
 /// like the browser's Yjs.
@@ -106,8 +59,8 @@ impl Roots {
         self.sql.get_string(txn)
     }
 
-    pub fn presentation<T: ReadTxn>(&self, txn: &T) -> Presentation {
-        Presentation {
+    pub fn layout<T: ReadTxn>(&self, txn: &T) -> VersionLayout {
+        VersionLayout {
             layout: read_map(&self.layout, txn),
             groups: read_map(&self.groups, txn),
         }
@@ -129,7 +82,7 @@ impl Roots {
                 changed = true;
             }
         }
-        let groups: BTreeMap<String, Group> = read_map(&self.groups, txn);
+        let groups: BTreeMap<String, TableGroup> = read_map(&self.groups, txn);
         for (id, mut group) in groups {
             let mut touched = false;
             for member in &mut group.members {
@@ -180,7 +133,7 @@ fn to_any<T: Serialize>(value: &T) -> Any {
 /// The first update of a new draft: its SQL and presentation, as one Yjs
 /// update. Written once, by the server, so no two clients ever insert the
 /// same starting text.
-pub fn initial_update(sql: &str, presentation: &Presentation) -> Vec<u8> {
+pub fn initial_update(sql: &str, presentation: &VersionLayout) -> Vec<u8> {
     let doc = new_doc();
     let roots = Roots::of(&doc);
     {
@@ -201,7 +154,7 @@ pub fn initial_update(sql: &str, presentation: &Presentation) -> Vec<u8> {
 
 /// The content of a doc state (a snapshot plus updates), without a room:
 /// tests and tools.
-pub fn read(updates: &[Vec<u8>]) -> Result<(String, Presentation), yrs::encoding::read::Error> {
+pub fn read(updates: &[Vec<u8>]) -> Result<(String, VersionLayout), yrs::encoding::read::Error> {
     let doc = new_doc();
     let roots = Roots::of(&doc);
     {
@@ -211,22 +164,23 @@ pub fn read(updates: &[Vec<u8>]) -> Result<(String, Presentation), yrs::encoding
         }
     }
     let txn = doc.transact();
-    Ok((roots.sql(&txn), roots.presentation(&txn)))
+    Ok((roots.sql(&txn), roots.layout(&txn)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::versions::layout::TablePosition;
 
-    fn presentation() -> Presentation {
-        Presentation {
+    fn presentation() -> VersionLayout {
+        VersionLayout {
             layout: BTreeMap::from([
-                ("public.users".into(), Position { x: 10.0, y: 20.0 }),
-                ("public.orders".into(), Position { x: 300.0, y: 20.5 }),
+                ("public.users".into(), TablePosition { x: 10.0, y: 20.0 }),
+                ("public.orders".into(), TablePosition { x: 300.0, y: 20.5 }),
             ]),
             groups: BTreeMap::from([(
                 "g1".into(),
-                Group {
+                TableGroup {
                     name: "Billing".into(),
                     color: "amber".into(),
                     members: vec!["public.orders".into(), "public.users".into()],
@@ -254,10 +208,10 @@ mod tests {
         }
         let renames = [("public.users".to_owned(), "public.members".to_owned())];
         assert!(roots.rename(&mut doc.transact_mut(), &renames));
-        let after = roots.presentation(&doc.transact());
+        let after = roots.layout(&doc.transact());
         assert_eq!(
             after.layout["public.members"],
-            Position { x: 10.0, y: 20.0 }
+            TablePosition { x: 10.0, y: 20.0 }
         );
         assert!(!after.layout.contains_key("public.users"));
         assert_eq!(
@@ -277,24 +231,12 @@ mod tests {
         }
         let renames = [("public.users".to_owned(), "public.orders".to_owned())];
         roots.rename(&mut doc.transact_mut(), &renames);
-        let after = roots.presentation(&doc.transact());
+        let after = roots.layout(&doc.transact());
         assert_eq!(
             after.layout["public.orders"],
-            Position { x: 300.0, y: 20.5 }
+            TablePosition { x: 300.0, y: 20.5 }
         );
         // Its group membership still follows the name, once.
         assert_eq!(after.groups["g1"].members, ["public.orders"]);
-    }
-
-    #[test]
-    fn versions_keep_only_the_tables_they_have() {
-        let tables = ["public.users".to_owned()].into_iter().collect();
-        let pruned = presentation().pruned(&tables);
-        assert_eq!(pruned.layout.len(), 1);
-        assert_eq!(pruned.groups["g1"].members, ["public.users"]);
-        assert_eq!(
-            Presentation::from_json(&serde_json::json!({})),
-            Presentation::default()
-        );
     }
 }

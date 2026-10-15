@@ -52,7 +52,7 @@ use uuid::Uuid;
 
 use self::{
     awareness::Peer,
-    compile::DraftCompiler,
+    compile::SqlCompiler,
     room::{Command, ConnId, Content, FreezeError, Outgoing, Settings, Shared},
 };
 use crate::AppState;
@@ -76,7 +76,7 @@ pub struct Hub(Arc<HubInner>);
 
 pub struct HubInner {
     db: PgPool,
-    compiler: DraftCompiler,
+    compiler: SqlCompiler,
     settings: Settings,
     rooms: Mutex<HashMap<Uuid, Entry>>,
     next_conn: AtomicU64,
@@ -121,11 +121,11 @@ impl Drop for Connection {
 }
 
 impl Hub {
-    pub fn new(db: PgPool, compiler: DraftCompiler) -> Self {
+    pub fn new(db: PgPool, compiler: SqlCompiler) -> Self {
         Self::with_settings(db, compiler, Settings::default())
     }
 
-    pub fn with_settings(db: PgPool, compiler: DraftCompiler, settings: Settings) -> Self {
+    pub fn with_settings(db: PgPool, compiler: SqlCompiler, settings: Settings) -> Self {
         Self(Arc::new(HubInner {
             db,
             compiler,
@@ -138,7 +138,7 @@ impl Hub {
         }))
     }
 
-    pub fn compiler(&self) -> &DraftCompiler {
+    pub fn compiler(&self) -> &SqlCompiler {
         &self.0.compiler
     }
 

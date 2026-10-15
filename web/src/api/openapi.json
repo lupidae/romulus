@@ -1101,6 +1101,516 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "The open drafts of a database, most recently edited first, with who has\neach open.",
+        "operationId": "list_drafts",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "Database slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Draft"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "A new draft from the latest version, ready to edit: no form, renamed\nlater if wanted.",
+        "operationId": "create_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "Database slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Draft"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reviewers cannot create drafts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "One draft (published ones too: the editor says what became of them).",
+        "operationId": "get_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Draft"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Deletes an open draft. Whoever has it open is told and let go.",
+        "operationId": "delete_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Published drafts stay with their version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Renames an open draft; everyone in it sees the new name at once.",
+        "operationId": "rename_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Draft"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Published drafts keep their name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/publish": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "The diff publishing would create, for the confirm dialog.",
+        "operationId": "preview_publish",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishPreview"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The compiler is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Publishes the draft as the next version.",
+        "operationId": "publish_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Published"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_changed` (review again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The SQL does not compile (`details.diagnostics`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The compiler is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/tokens": {
       "get": {
         "tags": [
@@ -1583,6 +2093,79 @@
         }
       }
     },
+    "/api/orgs/{org}/drafts/{id}/ws": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Opens a draft live: the y-sync protocol over a websocket.",
+        "description": "Members only (reviewers watch: their document updates are dropped).\nMessages: y-sync (sync, awareness) plus server events (tag 100, see the\n`ServerEvent` schema). Close codes: 1012 server restarting, 4000 too\nslow, 4001 membership changed (reconnect), 4404 draft deleted (do not).",
+        "operationId": "draft_socket",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "Organization slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Draft id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching to the websocket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerEvent"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Another origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such draft, or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft is published: open its version instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/invitations": {
       "get": {
         "tags": [
@@ -1993,6 +2576,89 @@
           }
         }
       },
+      "AttributeChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "type"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Moved relative to the other attributes, as for columns.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "before": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "position"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to one attribute of a composite type.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "AttributeDiff": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "position",
+          "changes",
+          "definition"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttributeChange"
+            }
+          },
+          "definition": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "The attribute's type."
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "$ref": "#/components/schemas/Positions"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
       "AuthMethods": {
         "type": "object",
         "required": [
@@ -2061,6 +2727,21 @@
         ],
         "description": "Who made a version: a person (uploads, drafts) or an API token (pushes)."
       },
+      "Category": {
+        "type": "string",
+        "description": "What [`Summary`] counts. Partitioned tables count as tables; an entity whose\nkind changed counts under its new kind.",
+        "enum": [
+          "table",
+          "view",
+          "materialized_view",
+          "foreign_table",
+          "partition",
+          "enum",
+          "domain",
+          "composite",
+          "extension"
+        ]
+      },
       "ChangeRole": {
         "type": "object",
         "required": [
@@ -2113,6 +2794,318 @@
           "provided_by_extension"
         ]
       },
+      "ColumnChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "As `format_type` prints it.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "type"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`type_schema.type_name`, with `[]` for an array: reported instead\nof [`ColumnChange::Type`] when the type prints the same but is\nanother type (`email` from another schema on the search path).",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "type_name"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Same type text, different kind of type (a domain replaced by an\nenum of the same name).",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "$ref": "#/components/schemas/TypeKind"
+              },
+              "before": {
+                "$ref": "#/components/schemas/TypeKind"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "type_kind"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "boolean"
+              },
+              "before": {
+                "type": "boolean"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "not_null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Default expression. For a column generated on both sides the\nexpression is reported as [`ColumnChange::Expression`] instead.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "default"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Generation expression of a column generated on both sides.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "expression"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Identity"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "before": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Identity"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "identity"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Generated"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "before": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Generated"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "generated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "comment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The column moved relative to the others. Only for real moves: an\ninsertion before a column does not move it (positions are compared\nthrough the longest common ordering of the shared columns).",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "before": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "position"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to one column.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "ColumnDiff": {
+        "type": "object",
+        "description": "A column. Columns are listed in table order: by their smallest position on\neither side, then their largest, then name, which reads naturally and does\nnot depend on which side is old.",
+        "required": [
+          "name",
+          "status",
+          "position",
+          "changes",
+          "definition"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ColumnChange"
+            },
+            "description": "Empty when added or removed."
+          },
+          "definition": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "Type and clauses as in `CREATE TABLE`, without the name:\n`bigint GENERATED ALWAYS AS IDENTITY NOT NULL`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "$ref": "#/components/schemas/Positions"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
       "CompileReport": {
         "type": "object",
         "description": "A dry run: whether the SQL compiles, and what it would change.",
@@ -2148,6 +3141,241 @@
         "properties": {
           "sql": {
             "type": "string"
+          }
+        }
+      },
+      "CompileState": {
+        "type": "string",
+        "description": "A compile's outcome, as everyone in the draft receives it.",
+        "enum": [
+          "ok",
+          "failed",
+          "unavailable",
+          "pending"
+        ]
+      },
+      "CompositeChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "comment"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to a composite type other than its attributes.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "CompositeDiff": {
+        "type": "object",
+        "required": [
+          "schema",
+          "name",
+          "status",
+          "changes",
+          "attributes",
+          "lines",
+          "sql"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttributeDiff"
+            },
+            "description": "Ordered like [`ColumnDiff`]s."
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompositeChange"
+            }
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/Sides"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "ConstraintChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "$ref": "#/components/schemas/ConstraintKind"
+              },
+              "before": {
+                "$ref": "#/components/schemas/ConstraintKind"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "kind"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`pg_get_constraintdef`, compared with whitespace outside quotes\nignored and reported raw. Also reported when only a structural\nfield behind the same text differs (columns, target, actions,\ndeferrable).",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "definition"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "comment"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to one constraint.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "ConstraintDiff": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "status",
+          "changes",
+          "definition"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConstraintChange"
+            }
+          },
+          "definition": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "`pg_get_constraintdef`: `FOREIGN KEY (customer_id) REFERENCES shop.customers(id)`."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ConstraintKind",
+            "description": "The new kind, or the old one when the constraint was removed."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "ConstraintKind": {
+        "type": "string",
+        "description": "`pg_constraint.contype`, as a word.",
+        "enum": [
+          "primary_key",
+          "unique",
+          "foreign_key",
+          "check",
+          "exclusion"
+        ]
+      },
+      "Count": {
+        "type": "object",
+        "required": [
+          "category",
+          "added",
+          "removed",
+          "changed"
+        ],
+        "properties": {
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "category": {
+            "$ref": "#/components/schemas/Category"
+          },
+          "changed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -2395,6 +3623,741 @@
           }
         }
       },
+      "DomainChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "base_type"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "boolean"
+              },
+              "before": {
+                "type": "boolean"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "not_null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "default"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`CHECK (…)` clauses, sorted. The catalog's constraint names are not\nin the model, so checks compare by text, whitespace outside quotes\nignored.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "before": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "constraints"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "comment"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to a domain.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "DomainDiff": {
+        "type": "object",
+        "required": [
+          "schema",
+          "name",
+          "status",
+          "changes",
+          "lines",
+          "sql"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainChange"
+            }
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/Sides"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "Draft": {
+        "type": "object",
+        "description": "A draft, as the database page and the editor show it.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "database",
+          "stale",
+          "created_at",
+          "updated_at",
+          "present"
+        ],
+        "properties": {
+          "base_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it started from; `null` when the database had none."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "`null` once their account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "database": {
+            "$ref": "#/components/schemas/DraftDatabase"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "latest_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The database's newest version now."
+          },
+          "name": {
+            "type": "string"
+          },
+          "present": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Present"
+            },
+            "description": "Who has it open right now."
+          },
+          "published_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it became, once published."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Someone published since the draft started: publishing it needs\n\"Update draft\" first."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DraftStatus"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The last edit (or rename)."
+          }
+        }
+      },
+      "DraftDatabase": {
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "DraftStatus": {
+        "type": "string",
+        "description": "A draft's lifecycle (`draft_status`).",
+        "enum": [
+          "open",
+          "published",
+          "deleted"
+        ]
+      },
+      "EntityChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "$ref": "#/components/schemas/EntityKind"
+              },
+              "before": {
+                "$ref": "#/components/schemas/EntityKind"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "kind"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "comment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Row level security enabled.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "boolean"
+              },
+              "before": {
+                "type": "boolean"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "rls"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Row level security forced on the table owner too.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "boolean"
+              },
+              "before": {
+                "type": "boolean"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "rls_forced"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "boolean"
+              },
+              "before": {
+                "type": "boolean"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "unlogged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`PARTITION BY` clause, without the keywords.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "partition_key"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A view's `SELECT`, as `pg_get_viewdef` prints it. Compared with\nwhitespace outside quotes ignored, since Postgres majors indent it\ndifferently; reported raw.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "view_definition"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Relations a view reads from, sorted.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Relation"
+                }
+              },
+              "before": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Relation"
+                }
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "depends_on"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to an entity's own attributes.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "EntityDiff": {
+        "type": "object",
+        "description": "A table, view, materialized view or foreign table.",
+        "required": [
+          "schema",
+          "name",
+          "kind",
+          "status",
+          "changes",
+          "columns",
+          "constraints",
+          "indexes",
+          "policies",
+          "partitions",
+          "lines",
+          "sql"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityChange"
+            },
+            "description": "Changes to the entity itself. Empty when added or removed."
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ColumnDiff"
+            },
+            "description": "Every column of an added or removed entity; the added, removed and\nchanged ones otherwise. In table order (see [`ColumnDiff`])."
+          },
+          "constraints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConstraintDiff"
+            },
+            "description": "By name, like the next three."
+          },
+          "indexes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndexDiff"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntityKind",
+            "description": "The new kind, or the old one when the entity was removed."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One human-readable line per change, ready for a change list."
+          },
+          "name": {
+            "type": "string"
+          },
+          "partitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartitionDiff"
+            },
+            "description": "Partitions of a partitioned table, at every level (a sub-partition is\nnot an entity, so its own partitions are listed here too), by schema\nthen name."
+          },
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyDiff"
+            }
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "Table, sequences it owns, partitions, foreign keys, indexes, row level\nsecurity and comments; or the view."
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "EntityKind": {
+        "type": "string",
+        "description": "`pg_class.relkind`, as a word.",
+        "enum": [
+          "table",
+          "partitioned_table",
+          "view",
+          "materialized_view",
+          "foreign_table"
+        ]
+      },
+      "EntityStatus": {
+        "type": "object",
+        "description": "One graph node: the entity's status and that of every part it has on\neither side. Foreign keys are the graph's edges. Columns, constraints,\nindexes and policies are keyed by name; partitions (every level under this\nentity) by schema, then name.",
+        "required": [
+          "status",
+          "columns",
+          "constraints",
+          "indexes",
+          "policies",
+          "partitions"
+        ],
+        "properties": {
+          "columns": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Status"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "constraints": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Status"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "indexes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Status"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "partitions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Status"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "policies": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Status"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "EnumChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "comment"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to an enum other than its labels.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "EnumDiff": {
+        "type": "object",
+        "required": [
+          "schema",
+          "name",
+          "status",
+          "changes",
+          "labels",
+          "lines",
+          "sql"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnumChange"
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelDiff"
+            },
+            "description": "Every label of an added or removed enum; the added, removed and moved\nones otherwise. Ordered like [`ColumnDiff`]s."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/Sides"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The body of every error response.\n\n`code` is stable and machine-readable (the web app switches on it);\n`message` is for people and may change.",
@@ -2414,6 +4377,96 @@
             "type": "string"
           }
         }
+      },
+      "ExtensionChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "schema"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "version"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to an installed extension.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "ExtensionDiff": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "changes",
+          "lines",
+          "sql"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionChange"
+            }
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "sql": {
+            "$ref": "#/components/schemas/Sides"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "Generated": {
+        "type": "string",
+        "description": "`pg_attribute.attgenerated`, as a word.",
+        "enum": [
+          "stored",
+          "virtual"
+        ]
       },
       "Health": {
         "type": "object",
@@ -2439,6 +4492,69 @@
           "version": {
             "type": "string",
             "description": "The API's crate version."
+          }
+        }
+      },
+      "Identity": {
+        "type": "string",
+        "description": "`pg_attribute.attidentity`, as a word.",
+        "enum": [
+          "always",
+          "by_default"
+        ]
+      },
+      "IndexChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`pg_get_indexdef`. Also reported when only the unique or partial\nflag behind the same text differs.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "definition"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to one index.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "IndexDiff": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "changes",
+          "definition"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IndexChange"
+            }
+          },
+          "definition": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "`pg_get_indexdef`, a complete `CREATE INDEX` statement."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
           }
         }
       },
@@ -2551,6 +4667,36 @@
           "used"
         ]
       },
+      "LabelDiff": {
+        "type": "object",
+        "description": "One enum label. `changed` means moved: its order relative to the labels\npresent on both sides changed, which matters because enums compare by\ndeclaration order.",
+        "required": [
+          "label",
+          "status",
+          "position"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "position": {
+            "$ref": "#/components/schemas/Positions"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "LiveStatus": {
+        "type": "string",
+        "description": "Where a draft is in its life, as the people in it see it.",
+        "enum": [
+          "open",
+          "publishing",
+          "published",
+          "deleted"
+        ]
+      },
       "Org": {
         "type": "object",
         "description": "An organization, as one of its members sees it.",
@@ -2622,6 +4768,157 @@
           }
         }
       },
+      "OrphanPartitions": {
+        "type": "object",
+        "description": "Partitions whose chain of parents reaches no entity in either schema: the\nroot table was left out of the model (a schema filter that kept a\nsub-partition's schema but not its root's), or the model was written by\nhand. They are matched like any partition and described here instead of\nunder an entity.",
+        "required": [
+          "partitions",
+          "lines",
+          "sql"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "partitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartitionDiff"
+            },
+            "description": "By schema then name."
+          },
+          "sql": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "Every orphan partition of each side as `remus-sql` renders it; `null`\non a side with none, and on both sides when nothing changed."
+          }
+        }
+      },
+      "PartitionChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Attached to another table of the same tree.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "$ref": "#/components/schemas/Relation"
+              },
+              "before": {
+                "$ref": "#/components/schemas/Relation"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "parent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`FOR VALUES …`, or `DEFAULT`. A `null` bound means `DEFAULT` too\nand never differs from it.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "bound"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`PARTITION BY …` of a partition partitioned in turn (`null` when\nit is a leaf).",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "partition_key"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to one partition.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "PartitionDiff": {
+        "type": "object",
+        "description": "A partition, matched by its own schema and name.",
+        "required": [
+          "schema",
+          "name",
+          "parent",
+          "status",
+          "changes",
+          "definition"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartitionChange"
+            }
+          },
+          "definition": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "`FOR VALUES …` or `DEFAULT`, then `PARTITION BY …` when the\npartition is partitioned in turn."
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/Relation",
+            "description": "The table it is a partition of (the entity, or a partition that is\nitself partitioned): the new one, or the old one when removed."
+          },
+          "schema": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
       "Person": {
         "type": "object",
         "required": [
@@ -2635,6 +4932,178 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "PolicyChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "$ref": "#/components/schemas/PolicyCommand"
+              },
+              "before": {
+                "$ref": "#/components/schemas/PolicyCommand"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "command"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "boolean"
+              },
+              "before": {
+                "type": "boolean"
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "permissive"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Sorted; empty means `PUBLIC`.",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "before": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "roles"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "using"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "before",
+              "after",
+              "field"
+            ],
+            "properties": {
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "before": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string",
+                "enum": [
+                  "check"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A change to one row level security policy.\n\nEvery variant carries the old value as `before` and the new one as\n`after`."
+      },
+      "PolicyCommand": {
+        "type": "string",
+        "description": "`pg_policy.polcmd`, as a word.",
+        "enum": [
+          "all",
+          "select",
+          "insert",
+          "update",
+          "delete"
+        ]
+      },
+      "PolicyDiff": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "changes",
+          "definition"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyChange"
+            }
+          },
+          "definition": {
+            "$ref": "#/components/schemas/Sides",
+            "description": "What follows `CREATE POLICY name ON table`:\n`AS RESTRICTIVE FOR SELECT TO reader USING (…)`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
           }
         }
       },
@@ -2655,6 +5124,160 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "Positions": {
+        "type": "object",
+        "description": "0-based index in the old and the new list, `null` on the side the item is\nabsent from. Every item carries both, moved or not.",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      },
+      "Present": {
+        "type": "object",
+        "description": "Someone who has a draft open right now.",
+        "required": [
+          "user_id",
+          "name",
+          "editing"
+        ],
+        "properties": {
+          "editing": {
+            "type": "boolean",
+            "description": "They may edit (developer or admin); otherwise they watch (reviewer)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "PublishDraft": {
+        "type": "object",
+        "required": [
+          "sha256"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed, in a line (at most 1000 characters)."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "The `sha256` of the preview the person confirmed."
+          }
+        }
+      },
+      "PublishPreview": {
+        "type": "object",
+        "description": "What publishing the draft now would create.",
+        "required": [
+          "number",
+          "stale",
+          "sha256",
+          "diagnostics"
+        ],
+        "properties": {
+          "base_model": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The base version's model, for drawing the diff."
+          },
+          "base_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "description": "Errors that prevent publishing (then no diff), then notes."
+          },
+          "diff": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SchemaDiff",
+                "description": "What changes against the base version (against nothing when there is\nnone); `null` when the SQL does not compile."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "latest_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "model": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The model the version would have."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number the new version would get."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 of the SQL previewed: send it back to publish exactly this."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Someone published since the draft started: \"Update draft\" first."
+          }
+        }
+      },
+      "Published": {
+        "type": "object",
+        "description": "The version a draft became.",
+        "required": [
+          "id",
+          "number"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },
@@ -2681,6 +5304,34 @@
           "unchanged"
         ]
       },
+      "Relation": {
+        "type": "object",
+        "description": "A schema-qualified relation name, unquoted.",
+        "required": [
+          "schema",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "RenameDraft": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 200 characters."
+          }
+        }
+      },
       "Role": {
         "type": "string",
         "description": "A member's role in an organization (`member_role`).",
@@ -2690,12 +5341,238 @@
           "reviewer"
         ]
       },
+      "SchemaDiff": {
+        "type": "object",
+        "description": "Everything that differs between two schemas, matched by schema and name:\na rename is a removal plus an addition.\n\nLists hold only what was added, removed or changed. [`SchemaDiff::status`]\nis the total view (every object of either side, unchanged ones included)\nfor highlighting a graph.",
+        "required": [
+          "summary",
+          "entities",
+          "enums",
+          "domains",
+          "composites",
+          "extensions",
+          "orphan_partitions",
+          "status"
+        ],
+        "properties": {
+          "composites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompositeDiff"
+            }
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainDiff"
+            }
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityDiff"
+            },
+            "description": "Tables, partitioned tables, views, materialized views and foreign\ntables, by schema then name. Partitions are listed under the entity\ntheir chain of parents leads to, not here."
+          },
+          "enums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnumDiff"
+            }
+          },
+          "extensions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionDiff"
+            }
+          },
+          "orphan_partitions": {
+            "$ref": "#/components/schemas/OrphanPartitions"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusMap"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        }
+      },
+      "ServerEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The first event after connecting: how the server treats this\nconnection.",
+            "required": [
+              "role",
+              "read_only",
+              "status",
+              "type"
+            ],
+            "properties": {
+              "read_only": {
+                "type": "boolean",
+                "description": "Document updates from this connection are dropped (reviewers,\nand everyone once the draft is no longer open)."
+              },
+              "role": {
+                "$ref": "#/components/schemas/Role",
+                "description": "The connection's role in the organization."
+              },
+              "status": {
+                "$ref": "#/components/schemas/LiveStatus"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "welcome"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The latest compile of the draft's SQL. Sent to everyone after each\ncompile, and to each connection when it joins.",
+            "required": [
+              "state",
+              "diagnostics",
+              "type"
+            ],
+            "properties": {
+              "diagnostics": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Diagnostic"
+                },
+                "description": "Errors (when `failed`), then notes. Spans count UTF-16 code\nunits in `utf16_start`/`utf16_end`, like `Y.Text` in the browser."
+              },
+              "model": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "The model when `ok`. When `failed`, the last model that compiled,\nsent only on joining (others already have it); keep showing the\nprevious one when absent."
+              },
+              "sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Hex SHA-256 of the SQL compiled. A client whose text hashes the\nsame can place `diagnostics` as they are; otherwise a newer\ncompile is on its way."
+              },
+              "state": {
+                "$ref": "#/components/schemas/CompileState"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "compile"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The draft's status changed (publishing started, failed or\nsucceeded; the draft was deleted).",
+            "required": [
+              "status",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Who published or deleted it."
+              },
+              "status": {
+                "$ref": "#/components/schemas/LiveStatus"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "status"
+                ]
+              },
+              "version": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "The version it became, once `published`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The draft was renamed.",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "renamed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The database has a new version (another draft was published): if\nit is not this draft's base, publishing now needs \"Update draft\".",
+            "required": [
+              "number",
+              "type"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "version_created"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A message only the server sends (tag 100 on the websocket), as JSON."
+      },
       "Severity": {
         "type": "string",
         "enum": [
           "error",
           "info"
         ]
+      },
+      "Sides": {
+        "type": "object",
+        "description": "The same thing on both sides, `null` where it does not exist.\n\nFor an object it is the DDL `remus-sql` renders for it alone (statements\nseparated by blank lines, ending with a newline), so the web can show the\ntwo side by side. For a part of an object it is the one-line definition:\na column's type and clauses, a constraint's `pg_get_constraintdef`, an\nindex's `CREATE INDEX`, a policy's clauses after `ON table`, a partition's\nbound.",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "SignedOut": {
         "type": "object",
@@ -2759,6 +5636,136 @@
           }
         }
       },
+      "Status": {
+        "type": "string",
+        "description": "Where an object, or a part of one, stands between the old and the new\nschema.",
+        "enum": [
+          "added",
+          "removed",
+          "changed",
+          "unchanged"
+        ]
+      },
+      "StatusMap": {
+        "type": "object",
+        "description": "Status of every object on either side, unchanged ones included.\n\nSchema-qualified objects are nested by schema, then name, both unquoted\nexactly as in the model: `status.entities[\"shop\"][\"orders\"]`. Nesting keeps\nkeys collision-free without making the web reproduce Postgres's quoting\nrules (a flat `schema.name` key cannot tell schema `a.b` + table `c` from\nschema `a` + table `b.c`). Extensions are database-wide, keyed by name.",
+        "required": [
+          "entities",
+          "orphan_partitions",
+          "enums",
+          "domains",
+          "composites",
+          "extensions"
+        ],
+        "properties": {
+          "composites": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Status"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "domains": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Status"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "entities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/EntityStatus"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "enums": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Status"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Status"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "orphan_partitions": {
+            "type": "object",
+            "description": "See [`OrphanPartitions`].",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/Status"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "description": "Counts per category, and the same as one sentence.",
+        "required": [
+          "counts",
+          "text"
+        ],
+        "properties": {
+          "counts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Count"
+            },
+            "description": "Categories with at least one change, in [`Category`] order."
+          },
+          "text": {
+            "type": "string",
+            "description": "`\"3 tables added, 1 changed; 1 enum changed\"`, or `\"no changes\"`."
+          }
+        }
+      },
       "TableGroup": {
         "type": "object",
         "required": [
@@ -2806,6 +5813,19 @@
         "enum": [
           "push",
           "full"
+        ]
+      },
+      "TypeKind": {
+        "type": "string",
+        "description": "`pg_type.typtype` of a column's type, as a word.",
+        "enum": [
+          "base",
+          "enum",
+          "domain",
+          "composite",
+          "range",
+          "multirange",
+          "pseudo"
         ]
       },
       "UpdateDatabase": {

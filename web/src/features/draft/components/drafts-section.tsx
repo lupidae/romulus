@@ -28,10 +28,13 @@ export function NewDraftButton({
   org,
   db,
   variant = "secondary",
+  compact = false,
 }: {
   org: string;
   db: string;
   variant?: "primary" | "secondary";
+  /** Icon only below `sm` (a page header). */
+  compact?: boolean;
 }) {
   const create = useCreateDraft(org, db);
   const navigate = useNavigate();
@@ -39,6 +42,8 @@ export function NewDraftButton({
     <Button
       variant={variant}
       loading={create.isPending}
+      aria-label={compact ? "New draft" : undefined}
+      className={compact ? "max-sm:px-2.5" : undefined}
       onClick={() =>
         create.mutate(undefined, {
           onSuccess: (draft) =>
@@ -54,7 +59,7 @@ export function NewDraftButton({
       }
     >
       <PlusIcon />
-      New draft
+      <span className={compact ? "max-sm:hidden" : undefined}>New draft</span>
     </Button>
   );
 }
@@ -70,7 +75,10 @@ export function DraftsSection({
 }: {
   org: string;
   db: string;
-  /** Off when the page has its own "New draft" button. */
+  /**
+   * Off when the page has its own "New draft" button: the section then
+   * shows nothing while there are no drafts.
+   */
   withNewButton?: boolean;
 }) {
   const { data: orgData } = useSuspenseQuery(orgQuery(org));
@@ -78,6 +86,7 @@ export function DraftsSection({
   const writer = canWrite(orgData.role);
   const id = React.useId();
   const count = drafts.data?.length ?? 0;
+  if (!withNewButton && drafts.isSuccess && count === 0) return null;
 
   return (
     <section aria-labelledby={id} className="grid gap-3">
@@ -186,5 +195,34 @@ function DraftRow({ org, db, draft }: { org: string; db: string; draft: Draft })
         className="size-4 shrink-0 text-faint-foreground transition-transform group-hover:translate-x-0.5"
       />
     </Link>
+  );
+}
+
+/**
+ * The database header's word on drafts: how many are open, and who is in
+ * them, linking to where they are listed. Nothing when none is open.
+ */
+export function OpenDrafts({ org, db }: { org: string; db: string }) {
+  const drafts = useQuery(draftsQuery(org, db));
+  const list = drafts.data ?? [];
+  if (list.length === 0) return null;
+  const people = new Map<string, { id: string; name: string; detail: string }>();
+  for (const draft of list)
+    for (const p of draft.present)
+      if (!people.has(p.user_id) || p.editing)
+        people.set(p.user_id, {
+          id: p.user_id,
+          name: p.name,
+          detail: `${p.editing ? "editing" : "watching"} ${draft.name}`,
+        });
+  const label = list.length === 1 ? "1 open draft" : `${list.length} open drafts`;
+  return (
+    <Button variant="ghost" asChild className="gap-2 max-sm:px-2">
+      <Link to="/$org/$db/history" params={{ org, db }}>
+        {people.size > 0 && <AvatarStack people={[...people.values()]} size="sm" max={3} />}
+        <GitBranchIcon className="sm:hidden" />
+        <span className="max-sm:sr-only">{label}</span>
+      </Link>
+    </Button>
   );
 }

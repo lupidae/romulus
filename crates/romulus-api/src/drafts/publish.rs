@@ -16,8 +16,6 @@
 //! Any failure unfreezes the draft, and the clients send back what they
 //! typed while it was frozen.
 
-use std::collections::HashSet;
-
 use axum::{extract::State, http::StatusCode};
 use romulus_diff::SchemaDiff;
 use romulus_sandbox::Diagnostic;
@@ -32,9 +30,10 @@ use crate::{
     auth::{Member, min},
     collab::{
         Hub, HubError,
-        compile::{CompileError, sha256_hex},
+        compile::sha256_hex,
         room::{Content, FreezeError},
     },
+    databases::{self, DatabaseRef},
     domain::{DraftStatus, Schema},
     error::ErrorBody,
     extract::{Json, Path},
@@ -100,7 +99,7 @@ pub(super) async fn preview(
     Path((_, db_slug, id)): Path<(String, String, Uuid)>,
     State(state): State<AppState>,
 ) -> ApiResult<Json<PublishPreview>> {
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
     if row.status != DraftStatus::Open {
         return Err(not_open(row.status));
@@ -176,7 +175,7 @@ pub(super) async fn publish(
             "Keep the message to 1000 characters or fewer.",
         ));
     }
-    let database = versions::database(&state.db, member.org.id, &db_slug).await?;
+    let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let draft = sqlx::query!(
         r#"SELECT status AS "status: DraftStatus", base_version_id
            FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'"#,
@@ -225,8 +224,8 @@ pub(super) async fn publish(
     let mut model = match compiled(&state.collab, &content).await? {
         (Some(model), _) => model,
         (None, diagnostics) => {
-            // TODO(M2 rebase): `ApiError::Unprocessable { code: "compile_failed" }`.
-            return Err(ApiError::Validation {
+            return Err(ApiError::Unprocessable {
+                code: "compile_failed",
                 message: "The SQL has errors. Fix them before publishing.".into(),
                 details: Some(json!({ "diagnostics": diagnostics })),
             });
@@ -239,7 +238,7 @@ pub(super) async fn publish(
         id,
         draft.base_version_id,
         &content,
-        &model,
+        model,
         message,
         member.user.id,
     )
@@ -256,39 +255,32 @@ pub(super) async fn publish(
     ))
 }
 
-/// Stores the frozen content as the next version and marks the draft
-/// published, in one transaction.
+/// Stores the frozen content as the next version, then marks the draft
+/// published. Two steps: if the second fails, the version exists and the
+/// draft, still open, is now stale (it cannot be published twice).
 #[expect(
     clippy::too_many_arguments,
     reason = "one call site, all of it the version"
 )]
 async fn store(
     state: &AppState,
-    database: &versions::DatabaseRef,
+    database: &DatabaseRef,
     draft: Uuid,
     base: Option<Uuid>,
     content: &Content,
-    model: &Schema,
+    model: Schema,
     message: Option<&str>,
     by: Uuid,
 ) -> ApiResult<versions::Created> {
-    let tables: HashSet<String> = model
-        .entities
-        .iter()
-        .map(|e| format!("{}.{}", e.schema, e.name))
-        .collect();
-    let layout = serde_json::to_value(content.presentation.clone().pruned(&tables))
-        .map_err(ApiError::internal)?;
-    let mut tx = state.db.begin().await?;
     let created = versions::create_version(
-        &mut tx,
+        &state.db,
         versions::DraftVersion {
             database_id: database.id,
             expected_base: base,
+            layout: content.layout.clone(),
             model,
-            source: &content.sql,
-            layout,
-            message,
+            source: content.sql.clone(),
+            message: message.map(str::to_owned),
             created_by: by,
         },
     )
@@ -299,12 +291,11 @@ async fn store(
         draft,
         created.id,
     )
-    .execute(&mut *tx)
+    .execute(&state.db)
     .await?;
     if marked.rows_affected() != 1 {
-        return Err(not_open(DraftStatus::Deleted));
+        tracing::warn!(%draft, number = created.number, "publish: the draft was deleted meanwhile");
     }
-    tx.commit().await?;
     Ok(created)
 }
 
@@ -315,11 +306,7 @@ async fn compiled(hub: &Hub, content: &Content) -> ApiResult<(Option<Schema>, Ve
         let model = Schema::deserialize(&**model).map_err(ApiError::internal)?;
         return Ok((Some(model), Vec::new()));
     }
-    let compiled = hub
-        .compiler()
-        .compile(&content.sql)
-        .await
-        .map_err(|err| compile_error(&err))?;
+    let compiled = hub.compiler().compile(&content.sql).await?;
     Ok((compiled.model, compiled.diagnostics))
 }
 
@@ -362,13 +349,6 @@ fn hub_error(err: HubError) -> ApiError {
         HubError::Closing => "The server is restarting. Try again in a moment.".into(),
         HubError::Unavailable => "The draft could not be loaded. Try again in a moment.".into(),
     })
-}
-
-fn compile_error(err: &CompileError) -> ApiError {
-    tracing::warn!(error = %err, "publish: cannot compile");
-    ApiError::Unavailable(
-        "The SQL compiler is not available right now. Try again in a minute.".into(),
-    )
 }
 
 #[cfg(test)]

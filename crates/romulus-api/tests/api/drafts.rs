@@ -60,12 +60,12 @@ async fn a_draft_starts_from_the_latest_version_in_one_click(db: PgPool) {
     assert_eq!(draft["stale"], false);
     assert_eq!(draft["created_by"]["name"], "Developer-acme");
 
-    // Its content is the version's SQL and presentation.
+    // Its content is the version's SQL, layout and groups.
     let id: Uuid = draft["id"].as_str().unwrap().parse().unwrap();
     assert_eq!(stored_sql(&db, id).await, V1);
     let content = app.state.collab.content(id).await.unwrap();
-    assert_eq!(content.presentation.layout.len(), 2);
-    assert_eq!(content.presentation.groups["g1"].name, "Core");
+    assert_eq!(content.layout.layout.len(), 2);
+    assert_eq!(content.layout.groups["g1"].name, "Core");
     // And the version's model is its first compile: the graph shows at once.
     assert!(content.model.is_some());
 }
