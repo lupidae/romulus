@@ -1,0 +1,113 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`sqlFor > add a NOT NULL column with a default 1`] = `"ALTER TABLE public."User Accounts" ADD COLUMN "createdAt" timestamptz NOT NULL DEFAULT now();"`;
+
+exports[`sqlFor > add a NOT NULL column with a default 2`] = `"Add column User Accounts.createdAt"`;
+
+exports[`sqlFor > add a column 1`] = `"ALTER TABLE public.users ADD COLUMN nickname text;"`;
+
+exports[`sqlFor > add a column 2`] = `"Add column users.nickname"`;
+
+exports[`sqlFor > add a column of an enum 1`] = `"ALTER TABLE public.users ADD COLUMN status "Billing".post_status NOT NULL DEFAULT 'draft';"`;
+
+exports[`sqlFor > add a column of an enum 2`] = `"Add column users.status"`;
+
+exports[`sqlFor > add a foreign key 1`] = `"ALTER TABLE public.orders ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users (id);"`;
+
+exports[`sqlFor > add a foreign key 2`] = `"Link orders.user_id to users.id"`;
+
+exports[`sqlFor > add a foreign key that cascades 1`] = `"ALTER TABLE shop."Order" ADD CONSTRAINT "Order_user_fkey" FOREIGN KEY ("user") REFERENCES auth.users (id) ON DELETE CASCADE;"`;
+
+exports[`sqlFor > add a foreign key that cascades 2`] = `"Link Order.user to users.id"`;
+
+exports[`sqlFor > add a foreign key that sets null 1`] = `"ALTER TABLE public.users ADD CONSTRAINT users_manager_id_fkey FOREIGN KEY (manager_id) REFERENCES public.users (id) ON DELETE SET NULL;"`;
+
+exports[`sqlFor > add a foreign key that sets null 2`] = `"Link users.manager_id to users.id"`;
+
+exports[`sqlFor > add a table 1`] = `
+"CREATE TABLE "Sales"."order" (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+);"
+`;
+
+exports[`sqlFor > add a table 2`] = `"Add table order"`;
+
+exports[`sqlFor > allow nulls 1`] = `"ALTER TABLE public.users ALTER COLUMN email DROP NOT NULL;"`;
+
+exports[`sqlFor > allow nulls 2`] = `"Allow nulls in users.email"`;
+
+exports[`sqlFor > change a type 1`] = `"ALTER TABLE public.users ALTER COLUMN name TYPE varchar(120);"`;
+
+exports[`sqlFor > change a type 2`] = `"Change users.name to varchar(120)"`;
+
+exports[`sqlFor > change a type with a cast 1`] = `"ALTER TABLE public.users ALTER COLUMN "Age" TYPE integer USING "Age"::integer;"`;
+
+exports[`sqlFor > change a type with a cast 2`] = `"Change users.Age to integer"`;
+
+exports[`sqlFor > comment a column 1`] = `"COMMENT ON COLUMN public.users.email IS 'Unique, lowercase.';"`;
+
+exports[`sqlFor > comment a column 2`] = `"Edit the comment on users.email"`;
+
+exports[`sqlFor > comment a materialized view with a quote 1`] = `"COMMENT ON MATERIALIZED VIEW public.m IS 'Bob''s';"`;
+
+exports[`sqlFor > comment a materialized view with a quote 2`] = `"Edit the comment on m"`;
+
+exports[`sqlFor > comment a table 1`] = `"COMMENT ON TABLE public.users IS 'People who sign in.';"`;
+
+exports[`sqlFor > comment a table 2`] = `"Edit the comment on users"`;
+
+exports[`sqlFor > comment a view 1`] = `"COMMENT ON VIEW public.v IS 'x';"`;
+
+exports[`sqlFor > comment a view 2`] = `"Edit the comment on v"`;
+
+exports[`sqlFor > drop a column 1`] = `"ALTER TABLE public.users DROP COLUMN email;"`;
+
+exports[`sqlFor > drop a column 2`] = `"Drop column users.email"`;
+
+exports[`sqlFor > drop a column with dependents 1`] = `"ALTER TABLE public.users DROP COLUMN "user" CASCADE;"`;
+
+exports[`sqlFor > drop a column with dependents 2`] = `"Drop column users.user"`;
+
+exports[`sqlFor > drop a default 1`] = `"ALTER TABLE public.users ALTER COLUMN role DROP DEFAULT;"`;
+
+exports[`sqlFor > drop a default 2`] = `"Remove the default of users.role"`;
+
+exports[`sqlFor > drop a table 1`] = `"DROP TABLE public.users;"`;
+
+exports[`sqlFor > drop a table 2`] = `"Drop table users"`;
+
+exports[`sqlFor > drop a table others depend on 1`] = `"DROP TABLE public.users CASCADE;"`;
+
+exports[`sqlFor > drop a table others depend on 2`] = `"Drop table users"`;
+
+exports[`sqlFor > drop a view 1`] = `"DROP VIEW public.v;"`;
+
+exports[`sqlFor > drop a view 2`] = `"Drop view v"`;
+
+exports[`sqlFor > remove a comment 1`] = `"COMMENT ON COLUMN public.users.email IS NULL;"`;
+
+exports[`sqlFor > remove a comment 2`] = `"Remove the comment on users.email"`;
+
+exports[`sqlFor > rename a column 1`] = `"ALTER TABLE public.users RENAME COLUMN email TO "e-mail";"`;
+
+exports[`sqlFor > rename a column 2`] = `"Rename users.email to e-mail"`;
+
+exports[`sqlFor > rename a materialized view 1`] = `"ALTER MATERIALIZED VIEW public.m RENAME TO "Totals";"`;
+
+exports[`sqlFor > rename a materialized view 2`] = `"Rename m to Totals"`;
+
+exports[`sqlFor > rename a table 1`] = `"ALTER TABLE public.users RENAME TO members;"`;
+
+exports[`sqlFor > rename a table 2`] = `"Rename users to members"`;
+
+exports[`sqlFor > rename a view 1`] = `"ALTER VIEW public.v RENAME TO w;"`;
+
+exports[`sqlFor > rename a view 2`] = `"Rename v to w"`;
+
+exports[`sqlFor > require a value 1`] = `"ALTER TABLE public.users ALTER COLUMN email SET NOT NULL;"`;
+
+exports[`sqlFor > require a value 2`] = `"Make users.email NOT NULL"`;
+
+exports[`sqlFor > set a default 1`] = `"ALTER TABLE public.users ALTER COLUMN role SET DEFAULT 'member';"`;
+
+exports[`sqlFor > set a default 2`] = `"Set the default of users.role"`;
