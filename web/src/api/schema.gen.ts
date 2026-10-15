@@ -4,6 +4,84 @@
  */
 
 export interface paths {
+  "/api/auth/callback": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The IdP's redirect back: exchanges the code, verifies the ID token,
+     *     upserts the user and starts a session. Requires a verified email.
+     */
+    get: operations["callback"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/login": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Starts signing in: redirects to the IdP's authorization endpoint (code
+     *     flow, PKCE S256, state, nonce).
+     */
+    get: operations["login"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/logout": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Ends the session (idempotent: an expired one is fine) and clears the
+     *     cookie. The web app then navigates to `redirect_url` to end the IdP
+     *     session too.
+     */
+    post: operations["logout"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/methods": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** What the sign-in page can offer. */
+    get: operations["methods"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/health": {
     parameters: {
       query?: never;
@@ -21,10 +99,233 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/invitations/{token}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * What an invitation link invites to, and whether the viewer (signed in or
+     *     not) can accept it. Anyone holding the link may look.
+     */
+    get: operations["preview"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/invitations/{token}/accept": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Joins the organization with the invited role. The caller must be signed
+     *     in with the invited email, verified by the IdP.
+     */
+    post: operations["accept"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/me": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The signed-in user. */
+    get: operations["me"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The organizations the caller belongs to, by name. */
+    get: operations["list"];
+    put?: never;
+    /** Creates an organization; the caller becomes its admin. */
+    post: operations["create"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One organization the caller belongs to. */
+    get: operations["get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Renames an organization, or moves it to another slug. Admins only. */
+    patch: operations["update"];
+    trace?: never;
+  };
+  "/api/orgs/{org}/invitations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Pending invitations, newest first, expired ones included. Admins only. */
+    get: operations["list"];
+    put?: never;
+    /**
+     * Invites an email address with a role and answers the one-time link.
+     *     Inviting an address that already has a pending invitation replaces it
+     *     (the old link stops working). Admins only.
+     */
+    post: operations["create"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/invitations/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revokes a pending invitation: its link stops working. Admins only. */
+    delete: operations["revoke"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/members": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Everyone in the organization, by name. Any member may see who else is. */
+    get: operations["list"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/members/{user}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Removes a member. Admins may remove anyone; any member may remove
+     *     themselves (leave). The last admin cannot go (409 `last_admin`). Closes
+     *     the member's live connections.
+     */
+    delete: operations["remove"];
+    options?: never;
+    head?: never;
+    /**
+     * Changes a member's role. Admins only; the last admin cannot be demoted
+     *     (409 `last_admin`). Closes the member's live connections.
+     */
+    patch: operations["change_role"];
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    Accepted: {
+      /** @description The caller was a member already; nothing changed. */
+      already_member: boolean;
+      org: components["schemas"]["Org"];
+    };
+    AuthMethods: {
+      /** @description The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`). */
+      dev_signin: boolean;
+      /** @description Single sign-on is configured (Zitadel is provisioned). */
+      sso: boolean;
+    };
+    ChangeRole: {
+      role: components["schemas"]["Role"];
+    };
+    CreateInvitation: {
+      email: string;
+      role: components["schemas"]["Role"];
+    };
+    CreateOrg: {
+      /** @description 1 to 100 characters. */
+      name: string;
+      /**
+       * @description Lowercase letters, digits and single hyphens, at most 63 characters,
+       *     not one of the app's own routes.
+       */
+      slug: string;
+    };
+    CreatedInvitation: {
+      invitation: components["schemas"]["Invitation"];
+      /** @description The one-time link to send to the invitee. Shown only now. */
+      url: string;
+    };
+    /**
+     * @description The signed-in user, from the session cookie. Every endpoint that needs a
+     *     person takes it (or [`super::Member`], which includes it).
+     *
+     *     Rejects with 401 `unauthorized` without a cookie, 401 `session_expired`
+     *     with a cookie whose session is gone, and 401 `unauthorized` for any
+     *     request with `Authorization: Bearer`: API tokens are not people, and a
+     *     bearer request never falls back to the cookie (see `crate::csrf`).
+     */
+    CurrentUser: {
+      email: string;
+      /** @description Accepting an invitation requires it. */
+      email_verified: boolean;
+      /** Format: uuid */
+      id: string;
+      name: string;
+    };
     /**
      * @description The body of every error response.
      *
@@ -46,6 +347,89 @@ export interface components {
       /** @description The API's crate version. */
       version: string;
     };
+    /** @description A pending invitation (its link is never shown again). */
+    Invitation: {
+      /** Format: date-time */
+      created_at: string;
+      email: string;
+      /** @description The link no longer works; inviting the address again makes a new one. */
+      expired: boolean;
+      /** Format: date-time */
+      expires_at: string;
+      /** Format: uuid */
+      id: string;
+      invited_by?: components["schemas"]["Person"] | null;
+      role: components["schemas"]["Role"];
+    };
+    /** @description What an invitation link invites to, for its landing page. */
+    InvitationPreview: {
+      /** @description The invited address: who has to be signed in to accept. */
+      email: string;
+      /** Format: date-time */
+      expires_at: string;
+      invited_by?: string | null;
+      member_role?: components["schemas"]["Role"] | null;
+      org: components["schemas"]["OrgSummary"];
+      role: components["schemas"]["Role"];
+      status: components["schemas"]["InvitationStatus"];
+    };
+    /**
+     * @description Where the viewer of an invitation link stands.
+     * @enum {string}
+     */
+    InvitationStatus:
+      | "sign_in_required"
+      | "ready"
+      | "wrong_account"
+      | "email_unverified"
+      | "already_member"
+      | "expired"
+      | "used";
+    /** @description An organization, as one of its members sees it. */
+    Org: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /** @description The caller's role in it. */
+      role: components["schemas"]["Role"];
+      /** @description Its address: `/app/<slug>`. */
+      slug: string;
+    };
+    OrgMember: {
+      email: string;
+      /** Format: date-time */
+      joined_at: string;
+      name: string;
+      role: components["schemas"]["Role"];
+      /** Format: uuid */
+      user_id: string;
+    };
+    OrgSummary: {
+      name: string;
+      slug: string;
+    };
+    Person: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+    };
+    /**
+     * @description A member's role in an organization (`member_role`).
+     * @enum {string}
+     */
+    Role: "admin" | "developer" | "reviewer";
+    SignedOut: {
+      /**
+       * @description Where the browser goes next: the IdP's logout (which comes back to
+       *     the sign-in page), or the sign-in page itself.
+       */
+      redirect_url: string;
+    };
+    UpdateOrg: {
+      name?: string | null;
+      /** @description Changing it changes every link to the organization. */
+      slug?: string | null;
+    };
   };
   responses: never;
   parameters: never;
@@ -55,6 +439,105 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  callback: {
+    parameters: {
+      query?: {
+        code?: string;
+        state?: string;
+        /** @description Set by the IdP instead of `code` when sign-in did not happen. */
+        error?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Signed in: to the `next` of the sign-in, with the session cookie. Otherwise to `/app/signin?error=…` */
+      303: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  login: {
+    parameters: {
+      query?: {
+        /**
+         * @description Where to land afterwards: a path under `/app`. Anything else is
+         *     ignored (the app's home instead).
+         */
+        next?: string;
+        /**
+         * @description `select_account` asks the IdP which account to use even when one is
+         *     already signed in there ("switch account").
+         */
+        prompt?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description To the IdP; or to `/app/signin?error=sso_unavailable` when it is unreachable */
+      303: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  logout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SignedOut"];
+        };
+      };
+      /** @description Missing CSRF header or foreign Origin */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  methods: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AuthMethods"];
+        };
+      };
+    };
+  };
   health: {
     parameters: {
       query?: never;
@@ -75,6 +558,525 @@ export interface operations {
       };
       /** @description The database is unreachable */
       503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  preview: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The token from the invitation link */
+        token: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["InvitationPreview"];
+        };
+      };
+      /** @description Unknown, revoked or replaced link */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  accept: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The token from the invitation link */
+        token: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Accepted"];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `wrong_account` or `email_unverified` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `invitation_expired` or `invitation_used` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  me: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CurrentUser"];
+        };
+      };
+      /** @description `unauthorized`, or `session_expired` when the cookie's session is gone */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Org"][];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateOrg"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Org"];
+        };
+      };
+      /** @description `slug_taken` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`, `details` names the field */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Org"];
+        };
+      };
+      /** @description No such organization, or not a member */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  update: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateOrg"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Org"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `slug_taken` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Invitation"][];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateInvitation"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreatedInvitation"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `already_member` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  revoke: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The invitation's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such pending invitation */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OrgMember"][];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  remove: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The member's user id */
+        user: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Removed */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such member */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `last_admin` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  change_role: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The member's user id */
+        user: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChangeRole"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OrgMember"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such member */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `last_admin` */
+      409: {
         headers: {
           [name: string]: unknown;
         };
