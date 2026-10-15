@@ -4,7 +4,8 @@ use axum::extract::FromRef;
 use sqlx::PgPool;
 
 use crate::{
-    Config, auth::oidc::Oidc, compile::SqlCompiler, orgs::events::MembershipEvents, rate::Limits,
+    Config, auth::oidc::Oidc, collab::Hub, compile::SqlCompiler, orgs::events::MembershipEvents,
+    rate::Limits,
 };
 
 /// Shared by every handler. Cheap to clone: a pool handle and `Arc`s.
@@ -19,16 +20,19 @@ pub struct AppState {
     pub oidc: Arc<Oidc>,
     /// Role changes and removals, for the collab server to close sockets.
     pub membership: MembershipEvents,
-    /// SQL → model, for uploads and SQL pushes.
+    /// SQL → model, for uploads, SQL pushes and drafts.
     pub compiler: SqlCompiler,
     /// Per-token and per-person rate limits.
     pub limits: Arc<Limits>,
+    /// The drafts open right now (the collab server); compiles with `compiler`.
+    pub collab: Hub,
 }
 
 impl AppState {
     /// Without a SQL compiler (see [`AppState::with_compiler`]).
     pub fn new(db: PgPool, config: Config) -> Self {
         Self {
+            collab: Hub::new(db.clone(), SqlCompiler::unavailable()),
             db,
             oidc: Arc::new(Oidc::new(&config)),
             config: Arc::new(config),
@@ -38,9 +42,19 @@ impl AppState {
         }
     }
 
+    /// Uploads, pushes and drafts compile with `compiler` (the sandbox in
+    /// production): one pool, whose prefix only one process may hold.
     #[must_use]
     pub fn with_compiler(mut self, compiler: SqlCompiler) -> Self {
+        self.collab = Hub::new(self.db.clone(), compiler.clone());
         self.compiler = compiler;
+        self
+    }
+
+    /// A collab hub of one's own (tests: shorter timings).
+    #[must_use]
+    pub fn with_collab(mut self, collab: Hub) -> Self {
+        self.collab = collab;
         self
     }
 }

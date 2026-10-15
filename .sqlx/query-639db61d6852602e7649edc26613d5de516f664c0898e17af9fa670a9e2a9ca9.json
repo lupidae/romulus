@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET updated_at = now()\n         WHERE id = $1 AND updated_at < now() - interval '5 seconds'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "639db61d6852602e7649edc26613d5de516f664c0898e17af9fa670a9e2a9ca9"
+}

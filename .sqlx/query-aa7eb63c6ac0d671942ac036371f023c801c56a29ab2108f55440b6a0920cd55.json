@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT source_hash, model, errors, good_model, good_tables\n         FROM draft_compiles WHERE draft_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "source_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "model",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "errors",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "errors"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "good_model",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "good_model"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "good_tables",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "good_tables"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "aa7eb63c6ac0d671942ac036371f023c801c56a29ab2108f55440b6a0920cd55"
+}

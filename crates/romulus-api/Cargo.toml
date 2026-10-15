@@ -13,19 +13,21 @@ remus-core.workspace = true
 remus-dbml.workspace = true
 remus-mermaid.workspace = true
 remus-sql.workspace = true
-romulus-diff.workspace = true
+romulus-diff = { workspace = true, features = ["utoipa"] }
 romulus-sandbox = { workspace = true, features = ["utoipa"] }
 
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 axum-extra.workspace = true
 base64.workspace = true
 chrono.workspace = true
 cookie.workspace = true
 dotenvy.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
 http-body-util.workspace = true
 openidconnect.workspace = true
-serde.workspace = true
+# `rc`: compile results are shared, not copied, between the people in a draft.
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
@@ -40,12 +42,14 @@ url.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true
+yrs.workspace = true
 
 [dev-dependencies]
 remus-core = { workspace = true, features = ["fixtures"] }
 http-body-util.workspace = true
 rand.workspace = true
 rsa.workspace = true
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

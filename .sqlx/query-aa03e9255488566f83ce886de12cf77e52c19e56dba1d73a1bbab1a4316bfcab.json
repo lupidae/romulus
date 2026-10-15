@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO draft_snapshots (draft_id, state, upto_update_id) VALUES ($1, $2, $3)\n         ON CONFLICT (draft_id) DO UPDATE\n         SET state = EXCLUDED.state, upto_update_id = EXCLUDED.upto_update_id, created_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aa03e9255488566f83ce886de12cf77e52c19e56dba1d73a1bbab1a4316bfcab"
+}

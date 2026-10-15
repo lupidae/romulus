@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT status AS \"status: DraftStatus\", base_version_id\n           FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status: DraftStatus",
+        "type_info": {
+          "Custom": {
+            "name": "draft_status",
+            "kind": {
+              "Enum": [
+                "open",
+                "published",
+                "deleted"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "base_version_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "base_version_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "02d904a590429f54facc1c8360d52899bee20eee2510d470322f05480b862409"
+}

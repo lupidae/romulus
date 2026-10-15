@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM draft_updates WHERE draft_id = $1 AND id <= $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c1d8ae1b1f00076e47f0336cc0447d2f685aaf97c2b49947865c5f1151c29446"
+}

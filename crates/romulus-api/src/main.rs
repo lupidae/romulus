@@ -130,15 +130,23 @@ async fn serve() -> Result<(), MainError> {
         listener.local_addr()?,
         config.public_url
     );
-    // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
     let compiler = SqlCompiler::sandbox(&config);
     if config.sandbox_url.is_none() {
-        tracing::warn!("no sandbox configured (ROMULUS_SANDBOX_URL): SQL uploads answer 503");
+        tracing::warn!(
+            "no sandbox configured (ROMULUS_SANDBOX_URL): SQL uploads answer 503, drafts do not compile"
+        );
     }
-    let app = app(AppState::new(pool, config).with_compiler(compiler.clone()))
-        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let state = AppState::new(pool, config).with_compiler(compiler.clone());
+    let collab = state.collab.clone();
+    // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
+    let app = app(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // Websockets outlive their request: close them (the clients
+            // reconnect after the restart) and write every open draft.
+            collab.shutdown().await;
+        })
         .await?;
     compiler.close().await;
     tracing::info!("shut down cleanly");

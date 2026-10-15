@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET status = 'deleted' WHERE id = $1 AND status = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de3fddbf2664224b0fc077c5858904555041afc54ec6bb6496c2456f09b40696"
+}
