@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT i.id, i.org_id, i.email, i.role AS \"role: Role\", i.expires_at,\n                  i.accepted_at IS NOT NULL AS \"used!\", i.expires_at <= now() AS \"expired!\",\n                  o.name AS org_name, o.slug AS org_slug, u.name AS \"invited_by?\",\n                  m.role AS \"member_role?: Role\"\n           FROM invitations i\n           JOIN organizations o ON o.id = i.org_id\n           LEFT JOIN users u ON u.id = i.created_by\n           LEFT JOIN memberships m ON m.org_id = i.org_id AND m.user_id = $2\n           WHERE i.token_hash = $1",
+  "query": "SELECT i.id, i.org_id, i.email, i.role AS \"role: Role\", i.expires_at,\n                  i.accepted_at IS NOT NULL AS \"used!\", i.expires_at <= now() AS \"expired!\",\n                  o.name AS org_name, o.slug AS org_slug, u.name AS \"invited_by?\",\n                  m.role AS \"member_role?: Role\",\n                  coalesce(lower(i.email) = lower($3), false) AS \"viewer_is_invitee!\"\n           FROM invitations i\n           JOIN organizations o ON o.id = i.org_id\n           LEFT JOIN users u ON u.id = i.created_by\n           LEFT JOIN memberships m ON m.org_id = i.org_id AND m.user_id = $2\n           WHERE i.token_hash = $1\n             AND EXISTS (SELECT 1 FROM memberships author\n                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by\n                           AND author.role = 'admin')",
   "describe": {
     "columns": [
       {
@@ -135,12 +135,19 @@
             "name": "role"
           }
         }
+      },
+      {
+        "ordinal": 11,
+        "name": "viewer_is_invitee!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
         "Bytea",
-        "Uuid"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
@@ -153,9 +160,10 @@
       null,
       false,
       false,
-      true,
-      true
+      false,
+      false,
+      null
     ]
   },
-  "hash": "6ee16e205feb73626cbc59b9d7d3e74e09a9ec8c91584f5da79a497a7f58514e"
+  "hash": "5b56fffdab9b8be5cb8ef401f3548e333078dc03644821685e4c44a13bfc238d"
 }

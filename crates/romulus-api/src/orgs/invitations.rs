@@ -285,8 +285,9 @@ pub struct OrgSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct InvitationPreview {
     pub org: OrgSummary,
-    /// The invited address: who has to be signed in to accept.
-    pub email: String,
+    /// The invited address: who has to be signed in to accept. Only while
+    /// the link can still be used; a used or expired link no longer says.
+    pub email: Option<String>,
     pub role: Role,
     pub invited_by: Option<String>,
     pub expires_at: DateTime<Utc>,
@@ -298,11 +299,17 @@ pub struct InvitationPreview {
 struct Found {
     id: Uuid,
     org_id: Uuid,
+    /// The viewer is signed in with the invited address (compared by
+    /// Postgres, like every other email match: `lower()` on both sides).
+    viewer_is_invitee: bool,
     preview: InvitationPreview,
 }
 
 /// The invitation a link names, judged for `viewer`; `None` for an unknown
-/// (or revoked, or replaced) link.
+/// (or revoked, or replaced) link, or one whose inviter is no longer an admin
+/// of the organization: an invitation carries its author's rights, so it
+/// dies with them (demoting or removing an admin also deletes their pending
+/// invitations; this is the backstop).
 async fn find(db: &PgPool, link: &str, viewer: Option<&CurrentUser>) -> ApiResult<Option<Found>> {
     if !token::is_well_formed(link) {
         return Ok(None);
@@ -311,14 +318,19 @@ async fn find(db: &PgPool, link: &str, viewer: Option<&CurrentUser>) -> ApiResul
         r#"SELECT i.id, i.org_id, i.email, i.role AS "role: Role", i.expires_at,
                   i.accepted_at IS NOT NULL AS "used!", i.expires_at <= now() AS "expired!",
                   o.name AS org_name, o.slug AS org_slug, u.name AS "invited_by?",
-                  m.role AS "member_role?: Role"
+                  m.role AS "member_role?: Role",
+                  coalesce(lower(i.email) = lower($3), false) AS "viewer_is_invitee!"
            FROM invitations i
            JOIN organizations o ON o.id = i.org_id
            LEFT JOIN users u ON u.id = i.created_by
            LEFT JOIN memberships m ON m.org_id = i.org_id AND m.user_id = $2
-           WHERE i.token_hash = $1"#,
+           WHERE i.token_hash = $1
+             AND EXISTS (SELECT 1 FROM memberships author
+                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by
+                           AND author.role = 'admin')"#,
         token::hash(link),
         viewer.map(|viewer| viewer.id),
+        viewer.map(|viewer| viewer.email.as_str()),
     )
     .fetch_optional(db)
     .await?
@@ -331,21 +343,21 @@ async fn find(db: &PgPool, link: &str, viewer: Option<&CurrentUser>) -> ApiResul
         _ if row.used => InvitationStatus::Used,
         _ if row.expired => InvitationStatus::Expired,
         None => InvitationStatus::SignInRequired,
-        Some(viewer) if !viewer.email.eq_ignore_ascii_case(&row.email) => {
-            InvitationStatus::WrongAccount
-        }
+        Some(_) if !row.viewer_is_invitee => InvitationStatus::WrongAccount,
         Some(viewer) if !viewer.email_verified => InvitationStatus::EmailUnverified,
         Some(_) => InvitationStatus::Ready,
     };
+    let live = !(row.used || row.expired);
     Ok(Some(Found {
         id: row.id,
         org_id: row.org_id,
+        viewer_is_invitee: row.viewer_is_invitee,
         preview: InvitationPreview {
             org: OrgSummary {
                 name: row.org_name,
                 slug: row.org_slug,
             },
-            email: row.email,
+            email: live.then_some(row.email),
             role: row.role,
             invited_by: row.invited_by,
             expires_at: row.expires_at,
@@ -427,7 +439,7 @@ async fn accept(
         InvitationStatus::AlreadyMember => {
             let role = preview.member_role.unwrap_or(preview.role);
             // The invitee joined some other way: this link has served.
-            if user.email.eq_ignore_ascii_case(&preview.email) {
+            if found.viewer_is_invitee {
                 sqlx::query!(
                     "UPDATE invitations SET accepted_at = now() WHERE id = $1 AND accepted_at IS NULL",
                     found.id
@@ -455,7 +467,8 @@ async fn accept(
                 code: "wrong_account",
                 message: format!(
                     "This invitation is for {}, and you are signed in as {}. Switch account to accept it.",
-                    preview.email, user.email
+                    preview.email.as_deref().unwrap_or("another address"),
+                    user.email
                 ),
             });
         }
@@ -471,11 +484,17 @@ async fn accept(
 
     let mut tx = db::begin_read_committed(&state.db).await?;
     // Claims the link: of two concurrent accepts, one finds it already used.
+    // The same token, still from an admin: inviting the address again (a new
+    // link, maybe another role) or demoting the author in between voids it.
     let role = sqlx::query_scalar!(
-        r#"UPDATE invitations SET accepted_at = now()
-           WHERE id = $1 AND accepted_at IS NULL AND expires_at > now()
-           RETURNING role AS "role: Role""#,
+        r#"UPDATE invitations i SET accepted_at = now()
+           WHERE i.id = $1 AND i.token_hash = $2 AND i.accepted_at IS NULL AND i.expires_at > now()
+             AND EXISTS (SELECT 1 FROM memberships author
+                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by
+                           AND author.role = 'admin')
+           RETURNING i.role AS "role: Role""#,
         found.id,
+        token::hash(&link),
     )
     .fetch_optional(&mut *tx)
     .await?
@@ -495,6 +514,24 @@ async fn accept(
         org: org(role),
         already_member: false,
     }))
+}
+
+/// Deletes the pending invitations `author` sent in `org_id`: run in the
+/// transaction that removes them or takes their admin role away, since an
+/// invitation carries its author's rights.
+pub(super) async fn revoke_sent_by(
+    tx: &mut sqlx::PgConnection,
+    org_id: Uuid,
+    author: Uuid,
+) -> Result<u64, sqlx::Error> {
+    sqlx::query!(
+        "DELETE FROM invitations WHERE org_id = $1 AND created_by = $2 AND accepted_at IS NULL",
+        org_id,
+        author,
+    )
+    .execute(tx)
+    .await
+    .map(|done| done.rows_affected())
 }
 
 fn used() -> ApiError {

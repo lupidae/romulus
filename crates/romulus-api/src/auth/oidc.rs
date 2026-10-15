@@ -38,6 +38,11 @@ use crate::{Config, error::Chain};
 /// key rotation never waits for this.
 const DISCOVERY_TTL: Duration = Duration::from_mins(10);
 
+/// After a failed discovery, how long requests use what is cached (or fail
+/// fast when nothing is) before anyone asks the IdP again: a hanging IdP must
+/// not make every sign-in wait for its timeout.
+const DISCOVERY_RETRY: Duration = Duration::from_mins(1);
+
 /// Zitadel (and OIDC Session Management) advertise the logout endpoint
 /// outside the core discovery fields.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -78,6 +83,8 @@ pub enum OidcError {
     NotConfigured,
     #[error("OIDC discovery failed")]
     Discovery(#[source] Box<dyn Error + Send + Sync>),
+    #[error("the IdP did not answer discovery a moment ago; not asking again yet")]
+    Unreachable,
     #[error("the authorization code exchange failed")]
     Exchange(#[source] Box<dyn Error + Send + Sync>),
     #[error("the IdP returned no ID token")]
@@ -121,11 +128,19 @@ struct Provider {
     fetched_at: Instant,
 }
 
+/// What discovery last found, and when it may be asked again after a failure.
+#[derive(Default)]
+struct Cache {
+    provider: Option<Arc<Provider>>,
+    retry_at: Option<Instant>,
+}
+
 /// The relying party, in `AppState`. Holds the discovery cache.
 pub struct Oidc {
     settings: Option<Settings>,
     http: reqwest::Client,
-    provider: Mutex<Option<Arc<Provider>>>,
+    /// Held across a fetch, so concurrent sign-ins share one discovery.
+    cache: Mutex<Cache>,
 }
 
 impl Oidc {
@@ -149,13 +164,13 @@ impl Oidc {
             // Following redirects would let a hostile IdP response aim the
             // API at internal addresses (SSRF).
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(5))
             .build()
             .expect("the HTTP client's TLS backend initialises");
         Self {
             settings,
             http,
-            provider: Mutex::new(None),
+            cache: Mutex::new(Cache::default()),
         }
     }
 
@@ -172,12 +187,16 @@ impl Oidc {
     /// serving the previous discovery rather than failing every sign-in.
     async fn provider(&self, refresh: bool) -> Result<Arc<Provider>, OidcError> {
         let settings = self.settings()?;
-        let mut cached = self.provider.lock().await;
-        if let Some(provider) = cached.as_ref()
-            && !refresh
-            && provider.fetched_at.elapsed() < DISCOVERY_TTL
-        {
-            return Ok(Arc::clone(provider));
+        let mut cache = self.cache.lock().await;
+        let backing_off = cache.retry_at.is_some_and(|at| Instant::now() < at);
+        match cache.provider.as_ref() {
+            Some(provider)
+                if backing_off || (!refresh && provider.fetched_at.elapsed() < DISCOVERY_TTL) =>
+            {
+                return Ok(Arc::clone(provider));
+            }
+            None if backing_off => return Err(OidcError::Unreachable),
+            _ => {}
         }
         match Metadata::discover_async(settings.issuer.clone(), &self.http).await {
             Ok(metadata) => {
@@ -193,16 +212,22 @@ impl Oidc {
                     end_session,
                     fetched_at: Instant::now(),
                 });
-                *cached = Some(Arc::clone(&provider));
+                *cache = Cache {
+                    provider: Some(Arc::clone(&provider)),
+                    retry_at: None,
+                };
                 Ok(provider)
             }
-            Err(err) => match cached.as_ref() {
-                Some(stale) => {
-                    tracing::warn!(error = %Chain(&err), "oidc: discovery failed, keeping the previous one");
-                    Ok(Arc::clone(stale))
+            Err(err) => {
+                cache.retry_at = Some(Instant::now() + DISCOVERY_RETRY);
+                match cache.provider.as_ref() {
+                    Some(stale) => {
+                        tracing::warn!(error = %Chain(&err), "oidc: discovery failed, keeping the previous one");
+                        Ok(Arc::clone(stale))
+                    }
+                    None => Err(OidcError::Discovery(Box::new(err))),
                 }
-                None => Err(OidcError::Discovery(Box::new(err))),
-            },
+            }
         }
     }
 

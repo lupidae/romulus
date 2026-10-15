@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE invitations SET accepted_at = now()\n           WHERE id = $1 AND accepted_at IS NULL AND expires_at > now()\n           RETURNING role AS \"role: Role\"",
+  "query": "UPDATE invitations i SET accepted_at = now()\n           WHERE i.id = $1 AND i.token_hash = $2 AND i.accepted_at IS NULL AND i.expires_at > now()\n             AND EXISTS (SELECT 1 FROM memberships author\n                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by\n                           AND author.role = 'admin')\n           RETURNING i.role AS \"role: Role\"",
   "describe": {
     "columns": [
       {
@@ -28,12 +28,13 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Bytea"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "bc650e6e318c512ae3b27bb00fd8bb2f579c0f99b1df334ec584adb90cdde7fb"
+  "hash": "5ffd01fd8723f3e94c1a00d07f50c58cacaf3048dfaf365ef709c5a2e94272e6"
 }

@@ -465,3 +465,120 @@ async fn accepting_needs_the_csrf_header(db: PgPool) {
         .unwrap();
     assert_eq!(app.send(request).await.code(), "csrf");
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_admins_invitations_die_with_their_admin_rights(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let app = TestApp::new(db.clone());
+    // A second admin invites someone, then loses the role (or is removed).
+    let second = signed_in(&db, "Second").await;
+    crate::harness::member(&db, team.org, second.user, romulus_api::domain::Role::Admin).await;
+    for remove in [false, true] {
+        let response = app
+            .as_user(&second)
+            .post(
+                &team.path("/invitations"),
+                &json!({ "email": "m2@personal.test", "role": "admin" }),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::CREATED);
+        let link = response.json()["url"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        let path = team.path(&format!("/members/{}", second.user));
+        let change = if remove {
+            app.as_user(&team.admin).delete(&path).await
+        } else {
+            app.as_user(&team.admin)
+                .patch(&path, &json!({ "role": "developer" }))
+                .await
+        };
+        assert!(change.status.is_success(), "{:?}", change.body);
+
+        assert_eq!(
+            app.get(&format!("/api/invitations/{link}")).await.status,
+            StatusCode::NOT_FOUND,
+            "remove: {remove}"
+        );
+        let pending = app
+            .as_user(&team.admin)
+            .get(&team.path("/invitations"))
+            .await
+            .json();
+        assert_eq!(pending, json!([]), "remove: {remove}");
+        // Back to admin for the second round.
+        if !remove {
+            app.as_user(&team.admin)
+                .patch(&path, &json!({ "role": "admin" }))
+                .await;
+        }
+    }
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_invitation_whose_author_is_no_longer_admin_cannot_be_accepted(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let app = TestApp::new(db.clone());
+    let link = invite(&app, &team, "bob@romulus.test", "admin").await;
+    let bob = signed_in(&db, "Bob").await;
+    // Whatever path took the role away (here, straight in the database).
+    sqlx::query!(
+        "INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, 'admin')",
+        team.org,
+        team.outsider.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE memberships SET role = 'reviewer' WHERE user_id = $1",
+        team.admin.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let response = app
+        .as_user(&bob)
+        .post_empty(&format!("/api/invitations/{link}/accept"))
+        .await;
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn addresses_match_whatever_their_case_beyond_ascii(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let app = TestApp::new(db.clone());
+    let link = invite(&app, &team, "Élodie@romulus.test", "developer").await;
+    let elodie = signed_in(&db, "Elodie").await;
+    sqlx::query!(
+        "UPDATE users SET email = 'élodie@romulus.test' WHERE id = $1",
+        elodie.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    assert_eq!(preview(&app, &link, Some(&elodie)).await["status"], "ready");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_dead_link_no_longer_tells_whom_it_invited(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let app = TestApp::new(db.clone());
+    let link = invite(&app, &team, "bob@romulus.test", "developer").await;
+    assert_eq!(
+        preview(&app, &link, None).await["email"],
+        "bob@romulus.test"
+    );
+    sqlx::query!("UPDATE invitations SET expires_at = now() - interval '1 second'")
+        .execute(&db)
+        .await
+        .unwrap();
+    let expired = preview(&app, &link, None).await;
+    assert_eq!(expired["status"], "expired");
+    assert_eq!(expired["email"], Value::Null);
+}

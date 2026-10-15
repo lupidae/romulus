@@ -309,3 +309,20 @@ async fn signing_in_again_replaces_the_previous_session(db: PgPool) {
         "session_expired"
     );
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_bearer_logout_leaves_the_cookie_session_alone(db: PgPool) {
+    let alice = signed_in(&db, "Alice").await;
+    let app = TestApp::new(db);
+    // Bearer requests skip the CSRF check: they must not reach the cookie.
+    let request = Request::post("/api/auth/logout")
+        .header(header::COOKIE, alice.cookie())
+        .header(header::AUTHORIZATION, "Bearer rom_whatever")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(app.send(request).await.status, StatusCode::OK);
+    assert_eq!(
+        app.as_user(&alice).get("/api/me").await.status,
+        StatusCode::OK
+    );
+}

@@ -7,7 +7,7 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::events::MembershipChange;
+use super::{events::MembershipChange, invitations};
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min, min::MinRole},
@@ -101,6 +101,9 @@ async fn change_role(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::not_found("No such member."))?;
+    if changed.previous == Role::Admin && body.role != Role::Admin {
+        invitations::revoke_sent_by(&mut tx, admin.org.id, user_id).await?;
+    }
     tx.commit().await?;
 
     if changed.previous != body.role {
@@ -167,6 +170,7 @@ async fn remove(
     if removed.is_none() {
         return Err(ApiError::not_found("No such member."));
     }
+    invitations::revoke_sent_by(&mut tx, member.org.id, user_id).await?;
     tx.commit().await?;
 
     tracing::info!(org = %member.org.slug, user = %user_id, leaving, "member removed");

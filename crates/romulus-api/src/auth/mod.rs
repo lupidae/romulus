@@ -348,9 +348,15 @@ pub struct SignedOut {
 )]
 async fn logout(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     jar: CookieJar,
 ) -> ApiResult<(CookieJar, Json<SignedOut>)> {
-    if let Some(cookie) = jar.get(&state.config.session_cookie) {
+    // A bearer request is exempt from the CSRF check, so it must not touch
+    // the cookie's session either (see `crate::csrf`).
+    if let Some(cookie) = jar
+        .get(&state.config.session_cookie)
+        .filter(|_| !crate::csrf::has_bearer(&headers))
+    {
         session::delete(&state.db, cookie.value()).await?;
     }
     let redirect_url = match state.oidc.logout_url().await {

@@ -96,9 +96,29 @@ fn request_span<B>(request: &Request<B>) -> Span {
     tracing::info_span!(
         "request",
         method = %request.method(),
-        path = %request.uri().path(),
+        path = %redacted(request.uri().path()),
         request_id = %id,
     )
+}
+
+/// The path as logs may show it: segments shaped like a secret this API
+/// hands out (an invitation link's token, `crate::token`) are replaced, so a
+/// log line never carries a usable link.
+fn redacted(path: &str) -> std::borrow::Cow<'_, str> {
+    if !path.split('/').any(crate::token::is_well_formed) {
+        return path.into();
+    }
+    path.split('/')
+        .map(|segment| {
+            if crate::token::is_well_formed(segment) {
+                "<token>"
+            } else {
+                segment
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+        .into()
 }
 
 fn panic_response(panic: &(dyn Any + Send)) -> Response {
@@ -172,6 +192,16 @@ mod tests {
 
     fn get_request(path: &str) -> Request<Body> {
         Request::get(path).body(Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn logged_paths_hide_tokens() {
+        let token = crate::token::generate();
+        assert_eq!(
+            redacted(&format!("/api/invitations/{token}/accept")),
+            "/api/invitations/<token>/accept"
+        );
+        assert_eq!(redacted("/api/orgs/acme/members"), "/api/orgs/acme/members");
     }
 
     #[tokio::test]

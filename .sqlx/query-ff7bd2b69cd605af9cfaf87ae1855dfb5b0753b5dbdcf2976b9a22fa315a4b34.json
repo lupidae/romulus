@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE memberships SET role = 'reviewer' WHERE user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff7bd2b69cd605af9cfaf87ae1855dfb5b0753b5dbdcf2976b9a22fa315a4b34"
+}
