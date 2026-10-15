@@ -391,6 +391,30 @@ All seven are the MVP.
 - romulus depends on `remus-core` from crates.io; a new model field in remus is a
   romulus dependency bump.
 
+## Next: migration files (decided 2026-10-16, after the MVP is deployed)
+
+Two features, built in this order:
+
+1. **Import migrations → version history.** A database's history can be rebuilt
+   from a folder of migrations: each migration becomes one version (message =
+   file name, origin `import`), replayed cumulatively in the sandbox from an empty
+   database. Formats: plain ordered SQL folders (sqlx, dbmate, golang-migrate,
+   node-pg-migrate), Flyway (`V<ver>__<name>.sql`; repeatable `R__` ignored),
+   Prisma (`migrations/<ts>_<name>/migration.sql`). Code-based tools (Rails,
+   Django, Alembic) are imported from the SQL the tool prints itself
+   (`alembic upgrade head --sql`, `manage.py sqlmigrate`, Rails structure dumps)
+   via a documented exporter script; romulus never runs user code.
+   Data statements (INSERT/UPDATE/DELETE/COPY, `DO` blocks) are **skipped and
+   reported** per file; functions and triggers are allowed in import mode so later
+   DDL compiles (stubs never reach the model). Import runs from the web (upload a
+   folder or zip) and from CI (an endpoint taking the files with the same bearer
+   token as push), and refuses a database that already has versions unless asked
+   to append.
+2. **Generate a migration from a diff.** From a draft (before publishing) or any
+   two versions, produce a ready-to-review migration (`ALTER …` statements in
+   dependency order, with destructive changes flagged) in the formats above
+   (file naming per tool), downloadable or copyable.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).
