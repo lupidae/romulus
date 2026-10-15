@@ -77,6 +77,11 @@ export interface SchemaGraphProps {
   selected?: string | null;
   onSelectedChange?: (key: string | null) => void;
   /**
+   * Zoomed to whenever a new object is passed (a change picked in a list):
+   * the table centered, at a zoom that shows it whole.
+   */
+  focus?: { key: string } | null;
+  /**
    * Tables picked for an action on several (a draft's groups): shift- or
    * ⌘-click adds or removes one, Esc clears. Without `onPickedChange`, those
    * clicks select like any other.
@@ -85,6 +90,8 @@ export interface SchemaGraphProps {
   onPickedChange?: (keys: string[]) => void;
   /** ⌘K and / open the table search. Turn off when two graphs share a page. */
   shortcuts?: boolean;
+  /** Diff mode's legend (counts, next added table…); off when a list beside the graph has them. */
+  legend?: boolean;
   /** Shown instead of the graph when the schema has no tables. */
   empty?: ReactNode;
   /** More buttons in the top-right toolbar (show the text pane, full screen…). */
@@ -154,9 +161,11 @@ function GraphCanvas({
   editable = false,
   selected,
   onSelectedChange,
+  focus,
   picked,
   onPickedChange,
   shortcuts = true,
+  legend = true,
   empty,
   controls,
   children,
@@ -306,6 +315,18 @@ function GraphCanvas({
     },
     [boxOf, flow],
   );
+
+  // Once the flow has fitted its first view, so that fit does not undo it.
+  const [initialized, setInitialized] = useState(false);
+  const zoomTo = useRef(zoomToTable);
+  useEffect(() => {
+    zoomTo.current = zoomToTable;
+  });
+  useEffect(() => {
+    if (!focus || !initialized) return;
+    const frame = requestAnimationFrame(() => zoomTo.current(focus.key));
+    return () => cancelAnimationFrame(frame);
+  }, [focus, initialized]);
 
   useEffect(() => {
     if (selected === undefined) return;
@@ -750,6 +771,7 @@ function GraphCanvas({
               // Mounted inside a hidden pane: fit for real once it has a size.
               const el = wrapper.current;
               if (el && el.clientWidth > 0) void instance.fitView({ ...FIT });
+              setInitialized(true);
             }}
             fitView
             fitViewOptions={FIT}
@@ -782,7 +804,9 @@ function GraphCanvas({
             >
               <SearchButton onClick={() => setSearchOpen(true)} />
               <div className="pointer-events-none flex flex-wrap-reverse items-center justify-end gap-2 *:pointer-events-auto">
-                {graph.counts && <DiffLegend counts={graph.counts} onNext={nextWithStatus} />}
+                {legend && graph.counts && (
+                  <DiffLegend counts={graph.counts} onNext={nextWithStatus} />
+                )}
                 <div className={toolbarClass}>
                   <GraphKey diff={graph.counts !== undefined} />
                   {controls}

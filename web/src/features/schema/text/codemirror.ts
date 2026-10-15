@@ -418,3 +418,16 @@ export function createEditor(parent: HTMLElement, options: EditorOptions): Edito
     },
   };
 }
+
+// ---- For editors made elsewhere ----------------------------------------------
+
+/**
+ * The look and language of these editors, with the statement highlights
+ * (set them with `highlightEffect`): what an editor made elsewhere (the
+ * diff's merge view) needs to read the same as the text pane.
+ */
+export function codeStyle(lang: CodeLanguage): Extension {
+  return [language(lang), syntaxHighlighting(highlight), theme, highlightField];
+}
+
+export const highlightEffect = setHighlights;
