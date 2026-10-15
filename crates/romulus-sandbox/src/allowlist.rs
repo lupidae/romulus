@@ -9,23 +9,33 @@
 //!
 //! Allowed statements can still make Postgres evaluate expressions while it
 //! compiles: partition bounds are evaluated, and immutable calls with
-//! constant arguments are folded in defaults added by `ALTER TABLE`, CHECKs
-//! added by `ALTER TABLE`, index and partition-key expressions, generated
-//! columns and `ALTER … TYPE … USING`. Users cannot define functions, so
-//! only built-ins run, and three rules keep that harmless:
+//! constant arguments are folded in defaults added by `ALTER TABLE` (and
+//! domain defaults they use), CHECKs added by `ALTER TABLE`, index and
+//! partition-key expressions, generated columns and `ALTER … TYPE … USING`.
+//! Users cannot define functions, so only built-ins and extension functions
+//! run, and four rules keep that harmless:
 //!
 //! - functions with side effects or that run SQL given as text (`pg_sleep`,
 //!   `pg_terminate_backend`, advisory locks, `set_config`, large objects,
 //!   server files, `query_to_xml`, `ts_stat`…) are refused anywhere;
-//! - functions whose output can dwarf their input (`repeat`, `lpad`,
-//!   `replace`, `array_fill`, `format`…) are refused when all their
-//!   arguments are constants, the case Postgres folds;
+//! - in every statement but views, materialized views (created without
+//!   data), policies and comments, which are never evaluated, a built-in or
+//!   extension function called with only constant arguments must be on a
+//!   short allowlist of functions whose result is bounded by their input
+//!   (`now()`, `gen_random_uuid()`, `lower()`, `jsonb_build_object()`,
+//!   `ST_MakePoint()`…). Everything else (`repeat`, `lpad`, `array_fill`,
+//!   `ST_Buffer`… and whatever a future extension adds) is refused. The
+//!   text's own functions are stubs returning NULL, so they are fine;
+//! - XML parsed from a constant is refused there too (entity expansion);
 //! - partition bounds must be constants.
 //!
 //! Defence in depth behind it: no superuser, one role per sandbox database
 //! (a backend cannot signal another compile's), `statement_timeout`,
-//! `temp_file_limit`, materialized views always created `WITH NO DATA`, and
-//! every compile rolled back.
+//! `temp_file_limit` and small `work_mem` for the compile roles, no parallel
+//! workers, materialized views always created `WITH NO DATA`, every compile
+//! rolled back, and on the server a 128 MB cap on each process's private
+//! memory, so an oversized value fails with "out of memory" instead of
+//! growing (deploy/sandbox/README.md).
 
 use pg_query::{
     NodeEnum,
@@ -34,7 +44,7 @@ use pg_query::{
 use serde_json::Value;
 
 use crate::{
-    catalog::ALLOWED_EXTENSIONS,
+    catalog::{ALLOWED_EXTENSIONS, Catalog},
     diagnostic::{Code, Diagnostic},
     parse::{ParsedSql, Token},
     source::location,
@@ -146,17 +156,244 @@ const DENIED_FUNCTIONS: &[&str] = &[
     "dblink_exec",
 ];
 
-/// Functions whose result can be far larger than their input, refused when
-/// every argument is a constant (the calls Postgres folds while compiling).
-const AMPLIFYING_FUNCTIONS: &[&str] = &[
-    "repeat",
-    "lpad",
-    "rpad",
-    "array_fill",
-    "replace",
-    "regexp_replace",
+/// Functions that may be called with only constant arguments where
+/// Postgres may evaluate the call while compiling (defaults, checks,
+/// generated columns, indexes, partition keys, domains): their result is
+/// small and bounded by their input. Any other built-in or extension
+/// function called that way is refused; a function the text does not
+/// define is a stub returning NULL, so it is fine. Calls that take a column
+/// are never evaluated on the sandbox's empty tables.
+const CONSTANT_CALLS: &[&str] = &[
+    // Time.
+    "now",
+    "clock_timestamp",
+    "statement_timestamp",
+    "transaction_timestamp",
+    "timeofday",
+    "date_trunc",
+    "date_part",
+    "extract",
+    "date_bin",
+    "make_date",
+    "make_time",
+    "make_timestamp",
+    "make_timestamptz",
+    "make_interval",
+    "to_timestamp",
+    "to_date",
+    "to_char",
+    "to_number",
+    "timezone",
+    "age",
+    "justify_days",
+    "justify_hours",
+    "justify_interval",
+    "isfinite",
+    "overlaps",
+    // Identifiers, randomness, hashing.
+    "gen_random_uuid",
+    "random",
+    "random_normal",
+    "nextval",
+    "currval",
+    "md5",
+    "sha224",
+    "sha256",
+    "sha384",
+    "sha512",
+    "encode",
+    "decode",
+    "to_hex",
+    "crc32",
+    "crc32c",
+    // Text, bounded by the input.
+    "lower",
+    "upper",
+    "initcap",
+    "btrim",
+    "ltrim",
+    "rtrim",
+    "trim",
+    "substr",
+    "substring",
+    "left",
+    "right",
+    "length",
+    "char_length",
+    "character_length",
+    "octet_length",
+    "bit_length",
+    "position",
+    "strpos",
+    "split_part",
+    "concat",
+    "concat_ws",
+    "quote_ident",
+    "quote_literal",
+    "quote_nullable",
+    "chr",
+    "ascii",
+    "reverse",
+    "starts_with",
+    "normalize",
+    "translate",
     "overlay",
-    "format",
+    "string_to_array",
+    "array_to_string",
+    "collation for",
+    "current_setting",
+    "current_database",
+    "current_schema",
+    "version",
+    // Numbers.
+    "abs",
+    "round",
+    "trunc",
+    "ceil",
+    "ceiling",
+    "floor",
+    "sign",
+    "mod",
+    "div",
+    "sqrt",
+    "cbrt",
+    "pi",
+    "width_bucket",
+    "gcd",
+    "lcm",
+    "scale",
+    "trim_scale",
+    "min_scale",
+    "greatest",
+    "least",
+    // JSON and arrays, bounded by the input.
+    "json_build_object",
+    "jsonb_build_object",
+    "json_build_array",
+    "jsonb_build_array",
+    "to_json",
+    "to_jsonb",
+    "json_object",
+    "jsonb_object",
+    "jsonb_set",
+    "jsonb_insert",
+    "jsonb_strip_nulls",
+    "json_strip_nulls",
+    "array_length",
+    "cardinality",
+    "array_append",
+    "array_prepend",
+    "array_cat",
+    "array_remove",
+    "array_replace",
+    "array_position",
+    "array_upper",
+    "array_lower",
+    "array_ndims",
+    "array_dims",
+    // Text search, ranges, network.
+    "to_tsvector",
+    "to_tsquery",
+    "plainto_tsquery",
+    "phraseto_tsquery",
+    "websearch_to_tsquery",
+    "setweight",
+    "int4range",
+    "int8range",
+    "numrange",
+    "tsrange",
+    "tstzrange",
+    "daterange",
+    "host",
+    "masklen",
+    "set_masklen",
+    "network",
+    "broadcast",
+    // Functional cast syntax: `numeric(10)`, `text(1)`…
+    "int2",
+    "int4",
+    "int8",
+    "float4",
+    "float8",
+    "numeric",
+    "text",
+    "varchar",
+    "bpchar",
+    "bool",
+    "date",
+    "time",
+    "timetz",
+    "timestamp",
+    "timestamptz",
+    "interval",
+    "uuid",
+    "json",
+    "jsonb",
+    "inet",
+    "cidr",
+    "macaddr",
+    "bytea",
+    "name",
+    "oid",
+    // uuid-ossp, pgcrypto (gen_random_bytes is capped at 1 KiB), citext,
+    // hstore, unaccent, ltree, pg_trgm, fuzzystrmatch, cube/earthdistance.
+    "uuid_generate_v1",
+    "uuid_generate_v1mc",
+    "uuid_generate_v3",
+    "uuid_generate_v4",
+    "uuid_generate_v5",
+    "uuid_nil",
+    "uuid_ns_dns",
+    "uuid_ns_url",
+    "uuid_ns_oid",
+    "uuid_ns_x500",
+    "gen_random_bytes",
+    "gen_salt",
+    "crypt",
+    "digest",
+    "hmac",
+    "citext",
+    "hstore",
+    "unaccent",
+    "text2ltree",
+    "ltree2text",
+    "nlevel",
+    "subpath",
+    "subltree",
+    "similarity",
+    "word_similarity",
+    "show_trgm",
+    "soundex",
+    "difference",
+    "metaphone",
+    "dmetaphone",
+    "levenshtein",
+    "ll_to_earth",
+    "earth_distance",
+    "earth_box",
+    "cube",
+    // PostGIS constructors and accessors (no buffering, segmentizing or
+    // generating points: those multiply their input).
+    "st_makepoint",
+    "st_point",
+    "st_pointz",
+    "st_setsrid",
+    "st_srid",
+    "st_geomfromtext",
+    "st_geometryfromtext",
+    "st_geogfromtext",
+    "st_geographyfromtext",
+    "st_geomfromewkt",
+    "st_geomfromgeojson",
+    "st_geomfromwkb",
+    "st_makeenvelope",
+    "st_transform",
+    "st_x",
+    "st_y",
+    "st_astext",
+    "st_isvalid",
+    // earthdistance's own constant (its `earth` domain calls it).
+    "earth",
 ];
 
 /// Identifier prefixes the text may not use: temporary schemas, and the
@@ -173,13 +410,27 @@ const HINT_FUNCTIONS: &str = "Functions and triggers are not part of the schema 
 const HINT_CLUSTER: &str =
     "Roles, databases, tablespaces and server settings are outside a schema: remove the statement.";
 
-/// Check every parsed statement against the allowlist.
-pub fn check(parsed: &ParsedSql, sql: &str) -> Vec<Diagnostic> {
+/// Check every parsed statement against the allowlist. The catalog says
+/// which names are built-in or extension functions (the others are the
+/// text's own, stubbed while compiling).
+pub fn check(parsed: &ParsedSql, sql: &str, catalog: &Catalog) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    let mut extensions = std::collections::HashSet::new();
     for statement in &parsed.statements {
         let mut problems = Vec::new();
         check_statement(&statement.node, &mut problems);
-        check_expressions(&statement.node, &mut problems);
+        // Each extension at most once: installing one locks thousands of
+        // objects until the compile ends, and the lock table is shared by
+        // every compile.
+        if let NodeEnum::CreateExtensionStmt(s) = &statement.node
+            && !extensions.insert(s.extname.clone())
+        {
+            problems.push(Problem::not_allowed(
+                format!("extension \"{}\" is created twice", s.extname),
+                "Create each extension once.",
+            ));
+        }
+        check_expressions(&statement.node, catalog, &mut problems);
         check_identifiers(sql, parsed.tokens_of(statement), &mut problems);
         let label = label(sql, parsed.tokens_of(statement));
         for problem in problems {
@@ -506,7 +757,7 @@ fn check_partition_bound(bound: &pg_query::protobuf::PartitionBoundSpec, out: &m
 /// anywhere in the statement. Views, materialized views (created without
 /// data) and policies are never evaluated while compiling, so amplifying
 /// calls are fine there.
-fn check_expressions(node: &NodeEnum, out: &mut Vec<Problem>) {
+fn check_expressions(node: &NodeEnum, catalog: &Catalog, out: &mut Vec<Problem>) {
     let Ok(value) = serde_json::to_value(node) else {
         return;
     };
@@ -516,40 +767,52 @@ fn check_expressions(node: &NodeEnum, out: &mut Vec<Problem>) {
             | NodeEnum::CreateTableAsStmt(_)
             | NodeEnum::CreatePolicyStmt(_)
             | NodeEnum::AlterPolicyStmt(_)
+            | NodeEnum::CommentStmt(_)
     );
     walk::visit(&value, &mut |kind, fields| {
+        if evaluated && let Some(problem) = constant_xml(kind, fields) {
+            out.push(problem);
+        }
         if kind != "FuncCall" {
             return;
         }
-        let name = walk::func_name(fields);
-        let builtin = match name.as_slice() {
-            [name] => Some(name.as_str()),
-            [schema, name] if schema == "pg_catalog" => Some(name.as_str()),
-            _ => None,
-        };
-        let Some(name) = builtin else {
-            return;
+        let names = walk::func_name(fields);
+        let (schema, name) = match names.as_slice() {
+            [name] => (None, name.as_str()),
+            [.., schema, name] => (Some(schema.as_str()), name.as_str()),
+            [] => return,
         };
         let at = walk::location(fields);
-        if DENIED_FUNCTIONS.contains(&name) {
+        // The text's own functions are stubs returning NULL; built-ins and
+        // extension functions really run.
+        let builtin = match schema {
+            Some(schema) => schema == "pg_catalog",
+            None => catalog.is_builtin_function(name),
+        };
+        let real = builtin || catalog.extension_with_function(name).is_some();
+        let denied = schema.is_none_or(|s| s == "pg_catalog") && DENIED_FUNCTIONS.contains(&name);
+        if evaluated
+            && real
+            && !denied
+            && !CONSTANT_CALLS.contains(&name)
+            && only_constants(&fields["args"])
+        {
+            out.push(Problem {
+                code: Code::FunctionNotAllowed,
+                message: format!("{name}() with only constant arguments is not allowed here"),
+                hint: Some(
+                    "Postgres evaluates constant calls while compiling the schema, so only a known-safe set may be (now(), gen_random_uuid(), lower()…): write the value itself, or pass a column."
+                        .to_owned(),
+                ),
+                at,
+            });
+        }
+        if denied {
             out.push(Problem {
                 code: Code::FunctionNotAllowed,
                 message: format!("{name}() is not allowed"),
                 hint: Some(
                     "It has effects outside the schema (waits, signals, locks, files, or SQL run from a string), so the sandbox never calls it."
-                        .to_owned(),
-                ),
-                at,
-            });
-        } else if evaluated
-            && AMPLIFYING_FUNCTIONS.contains(&name)
-            && only_constants(&fields["args"])
-        {
-            out.push(Problem {
-                code: Code::FunctionNotAllowed,
-                message: format!("{name}() with only constant arguments is not allowed"),
-                hint: Some(
-                    "Postgres may evaluate it while compiling the schema, and its result can be huge: write the value itself, or pass a column."
                         .to_owned(),
                 ),
                 at,
@@ -574,6 +837,31 @@ fn check_expressions(node: &NodeEnum, out: &mut Vec<Problem>) {
             });
         }
     });
+}
+
+/// XML parsed from a constant (`'<…>'::xml`, `XMLPARSE(…)`): libxml2 expands
+/// entities, which can multiply a small input.
+fn constant_xml(kind: &str, fields: &Value) -> Option<Problem> {
+    let xml = match kind {
+        "TypeCast" => {
+            let last = fields["type_name"]["names"]
+                .as_array()
+                .and_then(|n| n.last())
+                .and_then(|n| n["node"]["String"]["sval"].as_str());
+            last == Some("xml") && only_constants(&fields["arg"])
+        }
+        "XmlExpr" => only_constants(&fields["args"]) && only_constants(&fields["named_args"]),
+        _ => false,
+    };
+    xml.then(|| Problem {
+        code: Code::FunctionNotAllowed,
+        message: "an XML constant is not allowed here".to_owned(),
+        hint: Some(
+            "Postgres parses it while compiling the schema, and XML entities can expand a small text into a huge one."
+                .to_owned(),
+        ),
+        at: walk::location(fields),
+    })
 }
 
 /// No column (or parameter) anywhere in the arguments.
@@ -777,7 +1065,49 @@ fn hint_for_object(objtype: ObjectType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{check, check_statement};
-    use crate::{diagnostic::Code, parse, parse::Statement};
+    use crate::{
+        catalog::{Catalog, Extension},
+        diagnostic::Code,
+        parse,
+        parse::Statement,
+    };
+
+    /// Built-ins the tests call, and PostGIS.
+    fn catalog() -> Catalog {
+        Catalog::new(
+            [
+                "repeat",
+                "lpad",
+                "rpad",
+                "replace",
+                "array_fill",
+                "format",
+                "lower",
+                "now",
+                "generate_series",
+                "current_setting",
+                "count",
+                "pg_sleep",
+                "md5",
+                "upper",
+                "jsonb_build_object",
+                "regexp_replace",
+                "string_agg",
+                "nextval",
+            ]
+            .map(str::to_owned),
+            [(
+                "postgis".to_owned(),
+                Extension {
+                    functions: ["st_buffer", "st_makepoint", "st_segmentize"]
+                        .map(str::to_owned)
+                        .into_iter()
+                        .collect(),
+                    ..Extension::default()
+                },
+            )],
+        )
+    }
 
     fn allowed(statement: &Statement) -> bool {
         let mut problems = Vec::new();
@@ -788,7 +1118,7 @@ mod tests {
     fn problems(sql: &str) -> Vec<(Code, String, String)> {
         let parsed = parse(sql);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        check(&parsed, sql)
+        check(&parsed, sql, &catalog())
             .into_iter()
             .map(|d| {
                 let span = d.span.unwrap();
@@ -923,7 +1253,11 @@ mod tests {
              DROP FUNCTION f();
              ALTER FUNCTION f() RENAME TO g;
              CREATE EXTENSION dblink;
-             CREATE EXTENSION tablefunc;",
+             CREATE EXTENSION tablefunc;
+             CREATE EXTENSION postgis_raster;
+             CREATE EXTENSION IF NOT EXISTS citext;
+             DROP EXTENSION citext;
+             CREATE EXTENSION citext;",
         );
         let messages: Vec<&str> = found.iter().map(|(_, m, _)| m.as_str()).collect();
         assert_eq!(
@@ -946,6 +1280,8 @@ mod tests {
                 "ALTER FUNCTION is not allowed",
                 "extension \"dblink\" is not available",
                 "extension \"tablefunc\" is not available",
+                "extension \"postgis_raster\" is not available",
+                "extension \"citext\" is created twice",
             ]
         );
         let reserved = &found[8];
@@ -974,16 +1310,19 @@ mod tests {
                 ("pg_terminate_backend() is not allowed", "pg_catalog"),
                 ("query_to_xml() is not allowed", "query_to_xml"),
                 (
-                    "repeat() with only constant arguments is not allowed",
+                    "repeat() with only constant arguments is not allowed here",
                     "repeat"
                 ),
-                ("lpad() with only constant arguments is not allowed", "lpad"),
                 (
-                    "replace() with only constant arguments is not allowed",
+                    "lpad() with only constant arguments is not allowed here",
+                    "lpad"
+                ),
+                (
+                    "replace() with only constant arguments is not allowed here",
                     "replace"
                 ),
                 (
-                    "replace() with only constant arguments is not allowed",
+                    "replace() with only constant arguments is not allowed here",
                     "replace"
                 ),
             ]
@@ -1000,6 +1339,70 @@ mod tests {
                  CREATE INDEX ON t (replace(code, '-', ''));
                  CREATE VIEW calendar AS SELECT d::date, repeat('-', 10) FROM generate_series('2026-01-01'::date, '2026-12-31', '1 day') d;
                  CREATE POLICY p ON t USING (code <> repeat('x', 3));"
+            ),
+            []
+        );
+    }
+
+    #[test]
+    fn constant_calls_where_postgres_folds_them_must_be_known_safe() {
+        let found = problems(
+            "CREATE TABLE a (x text DEFAULT regexp_replace('x', 'x', 'xx', 'g'));
+             CREATE TABLE b (g geometry GENERATED ALWAYS AS (st_buffer(st_makepoint(0, 0), 1e9, 100000)) STORED);
+             CREATE INDEX ON b (st_segmentize(st_makepoint(0, 0), 0.0001));
+             -- public.repeat is the text's own function: a stub returning NULL.
+             CREATE TABLE c (x text DEFAULT public.repeat('x', 5));
+             CREATE TABLE d (x xml DEFAULT '<a/>'::xml, y xml DEFAULT XMLPARSE(DOCUMENT '<a/>'));
+             CREATE DOMAIN e AS text DEFAULT format('%1000000000s', 'x');",
+        );
+        let messages: Vec<(&str, &str)> = found
+            .iter()
+            .map(|(_, m, at)| (m.as_str(), at.as_str()))
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                (
+                    "regexp_replace() with only constant arguments is not allowed here",
+                    "regexp_replace"
+                ),
+                // PostGIS functions run like built-ins.
+                (
+                    "st_buffer() with only constant arguments is not allowed here",
+                    "st_buffer"
+                ),
+                (
+                    "st_segmentize() with only constant arguments is not allowed here",
+                    "st_segmentize"
+                ),
+                ("an XML constant is not allowed here", "::"),
+                ("an XML constant is not allowed here", "XMLPARSE"),
+                (
+                    "format() with only constant arguments is not allowed here",
+                    "format"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn safe_constant_calls_user_functions_and_unevaluated_statements_are_fine() {
+        assert_eq!(
+            problems(
+                "CREATE TABLE t (
+                    id bigint DEFAULT nextval('t_id_seq'),
+                    created timestamptz DEFAULT now(),
+                    meta jsonb DEFAULT jsonb_build_object('v', 1),
+                    code text DEFAULT md5(random()::text),
+                    tag text DEFAULT app.new_tag(8),
+                    owner uuid DEFAULT auth.uid(),
+                    at geometry DEFAULT st_makepoint(2.35, 48.85),
+                    padded text GENERATED ALWAYS AS (lpad(tag, 8, '0')) STORED
+                 );
+                 CREATE VIEW v AS SELECT repeat('-', 40), st_buffer(st_makepoint(0, 0), 10);
+                 CREATE MATERIALIZED VIEW mv AS SELECT array_fill(0, ARRAY[3]);
+                 CREATE POLICY p ON t USING (code <> repeat('x', 3));
+                 COMMENT ON TABLE t IS 'x';"
             ),
             []
         );

@@ -41,7 +41,7 @@ use std::{
 use remus_core::Schema;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, postgres::PgConnectOptions};
+use sqlx::{Connection, PgConnection, postgres::PgConnectOptions};
 use tokio::sync::{Semaphore, oneshot};
 
 use self::{
@@ -57,6 +57,10 @@ use crate::{
     refine,
     stubs::{Overrides, Stub},
 };
+
+/// Fresh connections tried after losing one mid-compile (100 ms, then
+/// doubling: about 6 s in all).
+const CONNECTION_RETRIES: u32 = 6;
 
 /// What the model's `database` field says until the caller sets it (the
 /// sandbox database a compile ran in is meaningless outside it).
@@ -92,6 +96,9 @@ pub struct SandboxConfig {
     pub max_stub_rounds: usize,
     /// Compile results kept by SHA-256 of their text. Default 256.
     pub cache_entries: usize,
+    /// How often the admin connection (which holds the prefix lock) is
+    /// checked, and re-established if lost. Default 10 s.
+    pub admin_check_interval: Duration,
 }
 
 impl SandboxConfig {
@@ -109,6 +116,7 @@ impl SandboxConfig {
             min_interval: Duration::from_millis(250),
             max_stub_rounds: 4,
             cache_entries: 256,
+            admin_check_interval: Duration::from_secs(10),
         }
     }
 }
@@ -121,6 +129,9 @@ pub enum SandboxError {
     Unavailable(String),
     #[error("sandbox setup failed: {0}")]
     Bootstrap(String),
+    /// Another process holds the prefix: at start, or after this one lost
+    /// its admin connection and could not take the prefix back (it then
+    /// stops compiling for good; restart it once the other one is gone).
     #[error("another process already uses the sandbox prefix {0:?}")]
     PrefixInUse(String),
     #[error("the sandbox runs PostgreSQL {server}, but the parser speaks PostgreSQL {parser}")]
@@ -258,10 +269,14 @@ pub struct Compiler {
 struct Inner {
     config: SandboxConfig,
     options: PgConnectOptions,
-    catalog: Catalog,
+    catalog: Arc<Catalog>,
     server_version: String,
-    /// Holds the prefix lock; terminates runaway backends.
-    admin: tokio::sync::Mutex<PgConnection>,
+    /// Holds the prefix lock; terminates runaway backends. `None` while
+    /// lost and not yet re-established.
+    admin: tokio::sync::Mutex<Option<PgConnection>>,
+    /// The prefix was taken by another process while the admin connection
+    /// was lost: compiling would share its databases.
+    prefix_lost: std::sync::atomic::AtomicBool,
     slots: Mutex<Vec<Slot>>,
     permits: Semaphore,
     keys: Mutex<HashMap<String, KeyState>>,
@@ -322,20 +337,33 @@ impl Compiler {
             extensions = catalog.extensions().count(),
             "sandbox compiler ready"
         );
-        Ok(Self {
+        let compiler = Self {
             inner: Arc::new(Inner {
                 permits: Semaphore::new(connected.len()),
                 slots: Mutex::new(connected),
-                admin: tokio::sync::Mutex::new(admin),
+                admin: tokio::sync::Mutex::new(Some(admin)),
+                prefix_lost: std::sync::atomic::AtomicBool::new(false),
                 options,
-                catalog,
+                catalog: Arc::new(catalog),
                 server_version,
                 keys: Mutex::new(HashMap::new()),
                 cache: Mutex::new(Cache::default()),
                 counters: Counters::default(),
                 config,
             }),
-        })
+        };
+        tokio::spawn(watch_admin(Arc::downgrade(&compiler.inner)));
+        Ok(compiler)
+    }
+
+    /// Check the admin connection that holds the prefix lock; if it was
+    /// lost (sandbox restart, a backend crash makes Postgres restart them
+    /// all), reconnect and take the lock again. Runs every
+    /// [`SandboxConfig::admin_check_interval`] on its own; call it from a
+    /// health check too. `PrefixInUse` means another process took the
+    /// prefix meanwhile: this compiler refuses to compile from then on.
+    pub async fn check_admin(&self) -> Result<(), SandboxError> {
+        self.inner.check_admin().await
     }
 
     /// What the sandbox provides (built-ins, extensions).
@@ -407,10 +435,10 @@ impl Compiler {
             slot.close().await;
         }
         self.inner.permits.close();
-        let mut admin = self.inner.admin.lock().await;
-        let _ = sqlx::query("SELECT pg_advisory_unlock_all()")
-            .execute(&mut *admin)
-            .await;
+        if let Some(admin) = self.inner.admin.lock().await.take() {
+            // Closing the session releases the prefix lock.
+            let _ = admin.close().await;
+        }
     }
 }
 
@@ -468,6 +496,9 @@ impl Inner {
         sql: &str,
         overrides: &mut Overrides,
     ) -> Result<Compilation, SandboxError> {
+        if self.prefix_lost.load(Ordering::Relaxed) {
+            return Err(SandboxError::PrefixInUse(self.config.prefix.clone()));
+        }
         let started = Instant::now();
         let sha256 = hex(&Sha256::digest(sql.as_bytes()));
         if let Some(mut hit) = lock(&self.cache).entries.get(&sha256).cloned() {
@@ -537,10 +568,11 @@ impl Inner {
         // Parsing a large text takes a few milliseconds of CPU: off the
         // async workers.
         let text = sql.to_owned();
+        let catalog = Arc::clone(&self.catalog);
         let (parsed, problems) = tokio::task::spawn_blocking(move || {
             let parsed = parse(&text);
             let problems = if parsed.errors.is_empty() {
-                allowlist::check(&parsed, &text)
+                allowlist::check(&parsed, &text, &catalog)
             } else {
                 Vec::new()
             };
@@ -643,14 +675,49 @@ impl Inner {
 
     async fn terminate(&self, pid: Option<i32>) {
         let Some(pid) = pid else { return };
+        let _ = self.check_admin().await;
         let mut admin = self.admin.lock().await;
+        let Some(admin) = admin.as_mut() else {
+            tracing::warn!(pid, "no admin connection to terminate a sandbox backend");
+            return;
+        };
         let terminated = sqlx::query("SELECT pg_terminate_backend($1)")
             .bind(pid)
-            .execute(&mut *admin)
+            .execute(admin)
             .await;
         if let Err(err) = terminated {
             tracing::warn!(pid, error = %err, "could not terminate a sandbox backend");
         }
+    }
+
+    async fn check_admin(&self) -> Result<(), SandboxError> {
+        let prefix = &self.config.prefix;
+        if self.prefix_lost.load(Ordering::Relaxed) {
+            return Err(SandboxError::PrefixInUse(prefix.clone()));
+        }
+        let mut admin = self.admin.lock().await;
+        if let Some(conn) = admin.as_mut()
+            && sqlx::query("SELECT 1").execute(conn).await.is_ok()
+        {
+            return Ok(());
+        }
+        // Lost: the lock went with the session.
+        *admin = None;
+        tracing::warn!(%prefix, "sandbox admin connection lost, reconnecting");
+        let mut conn = bootstrap::connect_admin(&self.options, prefix)
+            .await
+            .map_err(|e| SandboxError::Unavailable(e.to_string()))?;
+        let locked = bootstrap::lock_prefix(&mut conn, prefix)
+            .await
+            .map_err(|e| SandboxError::Unavailable(e.to_string()))?;
+        if !locked {
+            self.prefix_lost.store(true, Ordering::Relaxed);
+            tracing::error!(%prefix, "another process took the sandbox prefix; this compiler stops");
+            return Err(SandboxError::PrefixInUse(prefix.clone()));
+        }
+        tracing::info!(%prefix, "sandbox admin connection and prefix lock re-established");
+        *admin = Some(conn);
+        Ok(())
     }
 
     async fn attempts(
@@ -665,7 +732,7 @@ impl Inner {
             lock_timeout_ms: self.config.lock_timeout.as_millis(),
         };
         let mut round = 0;
-        let mut retried_connection = false;
+        let mut connection_retries = 0;
         loop {
             let prepared = prepare(sql, parsed, &self.catalog, overrides);
             match slot.attempt(&self.options, &settings, &prepared).await {
@@ -715,10 +782,14 @@ impl Inner {
                 }
                 Err(AttemptError::Connection(err)) => {
                     slot.discard();
-                    // A connection the sandbox dropped (restart, idle
-                    // timeout) gets one fresh try.
-                    if !retried_connection {
-                        retried_connection = true;
+                    // The backend went away: terminated, killed by the OOM
+                    // killer (the postmaster then restarts every backend
+                    // and recovers for a moment), or the sandbox restarted.
+                    // Try again on a fresh connection, backing off, for a
+                    // few seconds; the deadline still applies.
+                    if connection_retries < CONNECTION_RETRIES {
+                        tokio::time::sleep(Duration::from_millis(100 << connection_retries)).await;
+                        connection_retries += 1;
                         continue;
                     }
                     return Err(SandboxError::Unavailable(err.to_string()));
@@ -751,6 +822,24 @@ impl Inner {
             sha256: String::new(),
             duration_ms: 0,
             cached: false,
+        }
+    }
+}
+
+/// Check the admin connection periodically, for as long as the compiler
+/// lives.
+async fn watch_admin(inner: std::sync::Weak<Inner>) {
+    loop {
+        let Some(interval) = inner.upgrade().map(|i| i.config.admin_check_interval) else {
+            return;
+        };
+        tokio::time::sleep(interval).await;
+        let Some(inner) = inner.upgrade() else { return };
+        if inner.permits.is_closed() {
+            return;
+        }
+        if let Err(SandboxError::PrefixInUse(_)) = inner.check_admin().await {
+            return;
         }
     }
 }

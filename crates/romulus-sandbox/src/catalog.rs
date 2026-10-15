@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashSet};
 /// which every database has). Deliberately absent: anything that reaches
 /// outside the database (`dblink`, `postgres_fdw`, `file_fdw`), reads the
 /// server's files or statistics (`adminpack`, `pg_stat_statements`,
-/// `pgstattuple`), or runs
+/// `pgstattuple`, `postgis_raster` and its out-of-database rasters), or runs
 /// SQL given as a string (tablefunc's crosstab).
 pub const ALLOWED_EXTENSIONS: &[&str] = &[
     "btree_gin",
@@ -29,7 +29,6 @@ pub const ALLOWED_EXTENSIONS: &[&str] = &[
     "pgcrypto",
     "plpgsql",
     "postgis",
-    "postgis_raster",
     "postgis_topology",
     "seg",
     "tsm_system_rows",
@@ -158,7 +157,7 @@ mod tests {
             [
                 ("postgis".to_owned(), Extension::default()),
                 (
-                    "postgis_raster".to_owned(),
+                    "postgis_topology".to_owned(),
                     Extension {
                         requires: vec!["postgis".to_owned()],
                         ..Extension::default()
@@ -167,7 +166,7 @@ mod tests {
                 (
                     "both".to_owned(),
                     Extension {
-                        requires: vec!["postgis_raster".to_owned(), "postgis".to_owned()],
+                        requires: vec!["postgis_topology".to_owned(), "postgis".to_owned()],
                         ..Extension::default()
                     },
                 ),
@@ -175,7 +174,7 @@ mod tests {
         );
         assert_eq!(
             catalog.with_requirements("both"),
-            ["postgis", "postgis_raster", "both"]
+            ["postgis", "postgis_topology", "both"]
         );
         assert_eq!(catalog.with_requirements("unknown"), ["unknown"]);
     }
