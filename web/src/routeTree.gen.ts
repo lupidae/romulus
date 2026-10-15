@@ -15,6 +15,7 @@ import { Route as NewRouteImport } from './routes/new'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as OrgIndexRouteImport } from './routes/$org/index'
 import { Route as OrgDbRouteImport } from './routes/$org/$db'
+import { Route as DevDiffRouteImport } from './routes/dev/diff'
 import { Route as DevKitRouteImport } from './routes/dev/kit'
 import { Route as DevShellRouteImport } from './routes/dev/shell'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
@@ -28,6 +29,8 @@ import { Route as OrgSettingsMembersRouteImport } from './routes/$org/settings/m
 import { Route as DevShellIndexRouteImport } from './routes/dev/shell/index'
 import { Route as DevShellMembersRouteImport } from './routes/dev/shell/members'
 import { Route as DevShellSettingsRouteImport } from './routes/dev/shell/settings'
+import { Route as OrgDbDiffIndexRouteImport } from './routes/$org/$db/diff/index'
+import { Route as OrgDbDiffRangeRouteImport } from './routes/$org/$db/diff/$range'
 import { Route as OrgDbVNumberRouteImport } from './routes/$org/$db/v/$number'
 import { Route as OrgDbDraftsDraftRouteImport } from './routes/$org_.$db.drafts.$draft'
 
@@ -60,6 +63,11 @@ const OrgDbRoute = OrgDbRouteImport.update({
   id: '/$db',
   path: '/$db',
   getParentRoute: () => OrgRoute,
+} as any)
+const DevDiffRoute = DevDiffRouteImport.update({
+  id: '/dev/diff',
+  path: '/dev/diff',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const DevKitRoute = DevKitRouteImport.update({
   id: '/dev/kit',
@@ -126,6 +134,16 @@ const DevShellSettingsRoute = DevShellSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => DevShellRoute,
 } as any)
+const OrgDbDiffIndexRoute = OrgDbDiffIndexRouteImport.update({
+  id: '/diff/',
+  path: '/diff/',
+  getParentRoute: () => OrgDbRoute,
+} as any)
+const OrgDbDiffRangeRoute = OrgDbDiffRangeRouteImport.update({
+  id: '/diff/$range',
+  path: '/diff/$range',
+  getParentRoute: () => OrgDbRoute,
+} as any)
 const OrgDbVNumberRoute = OrgDbVNumberRouteImport.update({
   id: '/v/$number',
   path: '/v/$number',
@@ -143,6 +161,7 @@ export interface FileRoutesByFullPath {
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
+  '/dev/diff': typeof DevDiffRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
   '/dev/viewer': typeof DevViewerRoute
@@ -157,13 +176,16 @@ export interface FileRoutesByFullPath {
   '/$org/$db/': typeof OrgDbIndexRoute
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
+  '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
+  '/$org/$db/diff/': typeof OrgDbDiffIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
+  '/dev/diff': typeof DevDiffRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -177,8 +199,10 @@ export interface FileRoutesByTo {
   '/$org/$db': typeof OrgDbIndexRoute
   '/$org/settings': typeof OrgSettingsIndexRoute
   '/dev/shell': typeof DevShellIndexRoute
+  '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
+  '/$org/$db/diff': typeof OrgDbDiffIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -187,6 +211,7 @@ export interface FileRoutesById {
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
+  '/dev/diff': typeof DevDiffRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
   '/dev/viewer': typeof DevViewerRoute
@@ -201,8 +226,10 @@ export interface FileRoutesById {
   '/$org/$db/': typeof OrgDbIndexRoute
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
+  '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org_/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
+  '/$org/$db/diff/': typeof OrgDbDiffIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -212,6 +239,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/signin'
     | '/$org/$db'
+    | '/dev/diff'
     | '/dev/kit'
     | '/dev/shell'
     | '/dev/viewer'
@@ -226,13 +254,16 @@ export interface FileRouteTypes {
     | '/$org/$db/'
     | '/$org/settings/'
     | '/dev/shell/'
+    | '/$org/$db/diff/$range'
     | '/$org/$db/v/$number'
     | '/$org/$db/drafts/$draft'
+    | '/$org/$db/diff/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/new'
     | '/signin'
+    | '/dev/diff'
     | '/dev/kit'
     | '/dev/viewer'
     | '/invite/$token'
@@ -246,8 +277,10 @@ export interface FileRouteTypes {
     | '/$org/$db'
     | '/$org/settings'
     | '/dev/shell'
+    | '/$org/$db/diff/$range'
     | '/$org/$db/v/$number'
     | '/$org/$db/drafts/$draft'
+    | '/$org/$db/diff'
   id:
     | '__root__'
     | '/'
@@ -255,6 +288,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/signin'
     | '/$org/$db'
+    | '/dev/diff'
     | '/dev/kit'
     | '/dev/shell'
     | '/dev/viewer'
@@ -269,8 +303,10 @@ export interface FileRouteTypes {
     | '/$org/$db/'
     | '/$org/settings/'
     | '/dev/shell/'
+    | '/$org/$db/diff/$range'
     | '/$org/$db/v/$number'
     | '/$org_/$db/drafts/$draft'
+    | '/$org/$db/diff/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -278,6 +314,7 @@ export interface RootRouteChildren {
   OrgRoute: typeof OrgRouteWithChildren
   NewRoute: typeof NewRoute
   SigninRoute: typeof SigninRoute
+  DevDiffRoute: typeof DevDiffRoute
   DevKitRoute: typeof DevKitRoute
   DevShellRoute: typeof DevShellRouteWithChildren
   DevViewerRoute: typeof DevViewerRoute
@@ -328,6 +365,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/$org/$db'
       preLoaderRoute: typeof OrgDbRouteImport
       parentRoute: typeof OrgRoute
+    }
+    '/dev/diff': {
+      id: '/dev/diff'
+      path: '/dev/diff'
+      fullPath: '/dev/diff'
+      preLoaderRoute: typeof DevDiffRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/dev/kit': {
       id: '/dev/kit'
@@ -420,6 +464,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevShellSettingsRouteImport
       parentRoute: typeof DevShellRoute
     }
+    '/$org/$db/diff/': {
+      id: '/$org/$db/diff/'
+      path: '/diff'
+      fullPath: '/$org/$db/diff/'
+      preLoaderRoute: typeof OrgDbDiffIndexRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
+    '/$org/$db/diff/$range': {
+      id: '/$org/$db/diff/$range'
+      path: '/diff/$range'
+      fullPath: '/$org/$db/diff/$range'
+      preLoaderRoute: typeof OrgDbDiffRangeRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
     '/$org/$db/v/$number': {
       id: '/$org/$db/v/$number'
       path: '/v/$number'
@@ -441,14 +499,18 @@ interface OrgDbRouteChildren {
   OrgDbHistoryRoute: typeof OrgDbHistoryRoute
   OrgDbSettingsRoute: typeof OrgDbSettingsRoute
   OrgDbIndexRoute: typeof OrgDbIndexRoute
+  OrgDbDiffRangeRoute: typeof OrgDbDiffRangeRoute
   OrgDbVNumberRoute: typeof OrgDbVNumberRoute
+  OrgDbDiffIndexRoute: typeof OrgDbDiffIndexRoute
 }
 
 const OrgDbRouteChildren: OrgDbRouteChildren = {
   OrgDbHistoryRoute: OrgDbHistoryRoute,
   OrgDbSettingsRoute: OrgDbSettingsRoute,
   OrgDbIndexRoute: OrgDbIndexRoute,
+  OrgDbDiffRangeRoute: OrgDbDiffRangeRoute,
   OrgDbVNumberRoute: OrgDbVNumberRoute,
+  OrgDbDiffIndexRoute: OrgDbDiffIndexRoute,
 }
 
 const OrgDbRouteWithChildren = OrgDbRoute._addFileChildren(OrgDbRouteChildren)
@@ -492,6 +554,7 @@ const rootRouteChildren: RootRouteChildren = {
   OrgRoute: OrgRouteWithChildren,
   NewRoute: NewRoute,
   SigninRoute: SigninRoute,
+  DevDiffRoute: DevDiffRoute,
   DevKitRoute: DevKitRoute,
   DevShellRoute: DevShellRouteWithChildren,
   DevViewerRoute: DevViewerRoute,
