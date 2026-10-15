@@ -193,6 +193,7 @@ function GraphCanvas({
   className,
 }: SchemaGraphProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
+  const canEdit = editor !== undefined;
   const [store] = useState<GraphUiStore>(() => createGraphUiStore({ selected: selected ?? null }));
   const nodeState = useSyncExternalStore(store.subscribe, () => store.get().nodeState);
   const wrapper = useRef<HTMLDivElement>(null);
@@ -417,11 +418,11 @@ function GraphCanvas({
           schemaColor: schemaColors.get(table.schema),
           edges: byTable.get(table.key) ?? [],
           diffMode: diff !== undefined,
-          editable: !!editor && editableKind(table.entity),
+          editable: canEdit && editableKind(table.entity),
         },
       ]),
     );
-  }, [graph, schemaColors, diff, editor]);
+  }, [graph, schemaColors, diff, canEdit]);
 
   const nodes = useMemo(() => {
     const out: (TableFlowNode | GroupFlowNode | AreaLabelFlowNode)[] = [];
@@ -721,22 +722,27 @@ function GraphCanvas({
     if (!node || column === undefined) return node ?? null;
     return node.querySelector(`[data-column="${CSS.escape(column)}"]`) ?? node;
   }, []);
+  // The context's actions are stable (they read the latest state when
+  // called): a context value changing with every drag frame would redraw
+  // every node of a draft at each one.
+  const latestActions = useRef({ startEditing, stopEditing, emit, center });
+  useLayoutEffect(() => {
+    latestActions.current = { startEditing, stopEditing, emit, center };
+  }, [startEditing, stopEditing, emit, center]);
+  const actions = useMemo(
+    () => ({
+      start: (editing: Editing) => latestActions.current.startEditing(editing),
+      stop: () => latestActions.current.stopEditing(),
+      emit: (edit: GraphEdit, options?: { position?: { x: number; y: number } }) =>
+        latestActions.current.emit(edit, options),
+      center: () => latestActions.current.center(),
+    }),
+    [],
+  );
   const editContext = useMemo<EditContextValue | null>(
     () =>
-      editor
-        ? {
-            schema,
-            graph,
-            editor,
-            start: startEditing,
-            stop: stopEditing,
-            emit,
-            element: elementOf,
-            openMenu: setMenu,
-            center,
-          }
-        : null,
-    [editor, schema, graph, startEditing, stopEditing, emit, elementOf, center],
+      editor ? { schema, graph, editor, ...actions, element: elementOf, openMenu: setMenu } : null,
+    [editor, schema, graph, actions, elementOf],
   );
 
   /** Right click: the menu of what is under the pointer (a column, a table, the canvas). */

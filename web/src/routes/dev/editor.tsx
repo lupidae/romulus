@@ -18,16 +18,17 @@ import { devRoutes } from "@/lib/dev-routes";
 // onto the blog fixture. Dev builds only.
 //   ?role=reviewer       read-only
 //   ?fixture=empty       no SQL yet
+//   ?fixture=large       300 tables (frame times while editing)
 
 interface Search {
   role?: "reviewer";
-  fixture?: "empty";
+  fixture?: "empty" | "large";
 }
 
 export const Route = createFileRoute("/dev/editor")({
   validateSearch: (search: Record<string, unknown>): Search => ({
     role: search.role === "reviewer" ? "reviewer" : undefined,
-    fixture: search.fixture === "empty" ? "empty" : undefined,
+    fixture: search.fixture === "empty" || search.fixture === "large" ? search.fixture : undefined,
   }),
   beforeLoad: () => {
     if (!devRoutes) throw notFound();
@@ -79,13 +80,25 @@ function DevEditor() {
     failNextRef.current = failNext;
   }, [failNext]);
 
+  const [large, setLarge] = React.useState<{ schema: Schema; sql: string } | null>(null);
   React.useEffect(() => {
-    const base = fixture === "empty" ? EMPTY : BLOG;
+    if (fixture !== "large" || large) return;
+    void import("@/features/schema/fixtures/synthetic").then(
+      ({ largeFixture, renderFixtureSql }) => {
+        const schema = largeFixture(300);
+        setLarge({ schema, sql: renderFixtureSql(schema) });
+      },
+    );
+  }, [fixture, large]);
+
+  React.useEffect(() => {
+    if (fixture === "large" && !large) return;
+    const base = fixture === "empty" ? EMPTY : fixture === "large" ? large!.schema : BLOG;
     const failing = new Set<number>();
     const holder: { session?: DraftSession } = {};
     const created = new DraftSession("acme", "dev", {
       local: {
-        sql: fixture === "empty" ? "" : blogSql,
+        sql: fixture === "empty" ? "" : fixture === "large" ? large!.sql : blogSql,
         role: role ?? "developer",
         compile: (sql) => {
           let model = base;
@@ -127,7 +140,7 @@ function DevEditor() {
       created.destroy();
       setSession(null);
     };
-  }, [role, fixture]);
+  }, [role, fixture, large]);
 
   const state = useSessionState(session, (s) => s, null);
   return (

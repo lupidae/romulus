@@ -219,10 +219,10 @@ function TidyDescription({ sql }: { sql: string }) {
   const comments = sql.split("\n").filter((line) => /^\s*--/.test(line)).length;
   return (
     <>
-      Rewrites the SQL in canonical order for everyone in this draft, graph edits folded in. The
-      schema stays exactly the same, COMMENT ON included;{" "}
+      Rewrites the SQL in canonical order, for everyone here. The schema stays the same, table and
+      column comments included;{" "}
       {comments === 0
-        ? "-- line comments would be lost, and there are none."
+        ? "-- comments would be lost (there are none)."
         : `the ${comments} ${comments === 1 ? "line" : "lines"} of -- comments ${comments === 1 ? "is" : "are"} lost.`}
     </>
   );
