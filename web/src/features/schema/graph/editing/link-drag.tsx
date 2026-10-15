@@ -91,6 +91,7 @@ export function LinkDrag() {
       unmark();
       setDrag(null);
       document.body.style.removeProperty("user-select");
+      pane.closest(".schema-graph")?.removeAttribute("data-linking");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", end);
       window.removeEventListener("pointercancel", end);
@@ -117,7 +118,6 @@ export function LinkDrag() {
       const node = grip?.closest<HTMLElement>(".react-flow__node[data-id]");
       if (!grip || !row || !node) return;
       event.preventDefault();
-      event.stopPropagation();
       const box = grip.getBoundingClientRect();
       const start = flow.screenToFlowPosition({
         x: box.x + box.width / 2,
@@ -132,6 +132,7 @@ export function LinkDrag() {
       };
       setDrag(current);
       document.body.style.setProperty("user-select", "none");
+      pane.closest(".schema-graph")?.setAttribute("data-linking", "");
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);

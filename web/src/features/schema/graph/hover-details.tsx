@@ -32,11 +32,14 @@ export function HoverDetails({
   container,
   graph,
   pinned,
+  hidden = false,
 }: {
   container: React.RefObject<HTMLElement | null>;
   graph: GraphModel;
   /** Shown without a pointer (Space on the selected table); hover takes over. */
   pinned?: DetailsTarget | null;
+  /** Something else is open over the graph (an edit): no card meanwhile. */
+  hidden?: boolean;
 }) {
   const [target, setTarget] = useState<Target | null>(null);
   const openTimer = useRef<number | undefined>(undefined);
@@ -53,7 +56,8 @@ export function HoverDetails({
     if (!el) return;
     let current: Element | null = null;
     const find = (node: EventTarget | null) => {
-      if (!(node instanceof Element)) return null;
+      // A node's own buttons (a table's + and ⋯) say what they do themselves.
+      if (!(node instanceof Element) || node.closest("button, input")) return null;
       const row = node.closest("[data-column], [data-table-header]");
       const flowNode = row?.closest<HTMLElement>(".react-flow__node");
       const table = flowNode?.dataset.id ? graph.byKey.get(flowNode.dataset.id) : undefined;
@@ -106,7 +110,7 @@ export function HoverDetails({
 
   // Any pan or zoom since it opened has moved the row away from the card.
   const shown = target ?? pinned;
-  if (!shown || shown.transform !== transform) return null;
+  if (hidden || !shown || shown.transform !== transform) return null;
   return createPortal(<Card target={shown} graph={graph} />, document.body);
 }
 

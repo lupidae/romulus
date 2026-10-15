@@ -29,6 +29,8 @@ interface ComboboxProps extends Omit<
   empty?: React.ReactNode;
   /** Labels in the code font (types, names). */
   monospace?: boolean;
+  /** Select the text when the field takes the focus (to type over a current value). */
+  selectOnFocus?: boolean;
 }
 
 /**
@@ -44,6 +46,7 @@ export function Combobox({
   onPick,
   empty,
   monospace = false,
+  selectOnFocus = false,
   className,
   onKeyDown,
   onFocus,
@@ -95,10 +98,13 @@ export function Combobox({
             setActive(0);
             setOpen(true);
           }}
+          // The list opens on typing, a click or ↓: not on focus, where it
+          // would cover what comes after the field.
           onFocus={(event) => {
-            setOpen(true);
+            if (selectOnFocus) event.currentTarget.select();
             onFocus?.(event);
           }}
+          onClick={() => setOpen(true)}
           onBlur={(event) => {
             // A click in the list keeps the focus here (see the options).
             setOpen(false);

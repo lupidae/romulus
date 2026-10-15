@@ -42,9 +42,10 @@ export function TypePicker({ schema, value, onValueChange, ...props }: TypePicke
       description: c.hint,
       group: GROUPS[c.source],
     }));
+    // What was typed comes last: Enter on `varch` means varchar.
     const typed = customType(value);
     if (typed && !choices.some((c) => c.sql === typed.sql))
-      out.unshift({
+      out.push({
         value: typed.sql,
         label: typed.sql,
         description: "Use as typed",
@@ -63,6 +64,7 @@ export function TypePicker({ schema, value, onValueChange, ...props }: TypePicke
       placeholder="text, bigint, uuid…"
       className="font-mono"
       empty="Not a type name. Try text, integer or varchar(80)."
+      selectOnFocus
       {...props}
     />
   );

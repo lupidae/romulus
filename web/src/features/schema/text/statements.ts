@@ -20,6 +20,8 @@ export type StatementKind =
   | "other";
 
 export interface SqlStatement {
+  /** `ALTER … RENAME TO`: the name it gives (internal: targets are resolved through it). */
+  renamedTo?: RelationRef;
   /** Offset of the first character (comments before it excluded). */
   from: number;
   /** Offset just after the terminating semicolon, or the end of the text. */
@@ -48,8 +50,36 @@ function dollarTag(sql: string, i: number): string | null {
   return match ? match[0] : null;
 }
 
-/** Statement ranges of `sql`, in text order. */
+/**
+ * Statement ranges of `sql`, in text order. A table renamed further down
+ * (`ALTER TABLE … RENAME TO`, as graph edits append) is known by its last
+ * name: its CREATE, the rename and everything in between point at it.
+ */
 export function findStatements(sql: string): SqlStatement[] {
+  return followRenames(scan(sql));
+}
+
+function followRenames(statements: SqlStatement[]): SqlStatement[] {
+  if (!statements.some((s) => s.renamedTo)) return statements;
+  const key = (r: RelationRef) => `${r.schema}\u0000${r.name}`;
+  // Walking back: what each name is called at the end of the text.
+  const final = new Map<string, RelationRef>();
+  const follow = (r: RelationRef | undefined) => (r ? (final.get(key(r)) ?? r) : r);
+  const out = [...statements];
+  for (let i = out.length - 1; i >= 0; i--) {
+    const s = out[i]!;
+    if (s.renamedTo && s.target) final.set(key(s.target), follow(s.renamedTo)!);
+    const { renamedTo: _, ...rest } = s;
+    out[i] = {
+      ...rest,
+      target: follow(s.target),
+      ...(s.partitionOf ? { partitionOf: follow(s.partitionOf) } : {}),
+    };
+  }
+  return out;
+}
+
+function scan(sql: string): SqlStatement[] {
   const statements: SqlStatement[] = [];
   let start = -1;
   let i = 0;
@@ -246,7 +276,17 @@ function classify(sql: string, from: number, to: number): SqlStatement {
     if (w(i) === "table" || w(i) === "view") {
       i = skip(ts, i + 1, "if", "exists");
       i = skip(ts, i, "only");
-      return { ...base, kind: "alter", target: relation(dotted(ts, i).parts) };
+      const name = dotted(ts, i);
+      const target = relation(name.parts);
+      const to = ts[name.next + 2];
+      if (target && w(name.next) === "rename" && w(name.next + 1) === "to" && to && !to.punct)
+        return {
+          ...base,
+          kind: "alter",
+          target,
+          renamedTo: { schema: target.schema, name: to.text },
+        };
+      return { ...base, kind: "alter", target };
     }
   }
 

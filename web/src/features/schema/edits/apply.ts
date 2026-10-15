@@ -84,6 +84,8 @@ export function applyEdit(schema: Schema, edit: GraphEdit): Schema {
       });
     }
     case "addTable": {
+      // Already there (an undo and a redo crossing a compile): nothing to add.
+      if (findEntity(schema, edit.table)) return schema;
       const entity: Entity = {
         schema: edit.table.schema,
         name: edit.table.name,
@@ -123,6 +125,7 @@ export function applyEdit(schema: Schema, edit: GraphEdit): Schema {
     }
     case "addColumn": {
       const c = edit.column;
+      if (findColumn(findEntity(schema, edit.table), c.name)) return schema;
       const column: Column = {
         name: c.name,
         type: c.type.display,
@@ -211,6 +214,8 @@ export function applyEdit(schema: Schema, edit: GraphEdit): Schema {
         );
       return mapColumn(schema, edit.table, edit.column, (c) => ({ ...c, comment: edit.comment }));
     case "addForeignKey": {
+      if (findEntity(schema, edit.table)?.constraints?.some((c) => c.name === edit.name))
+        return schema;
       const action = ACTIONS[edit.onDelete];
       const constraint: Constraint = {
         name: edit.name,

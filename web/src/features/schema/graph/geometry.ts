@@ -142,3 +142,40 @@ export function columnAnchorY(
   if (index >= visible) return top + visible * NODE.row + NODE.padding + NODE.footer / 2;
   return top + index * NODE.row + NODE.row / 2;
 }
+
+/**
+ * The free place nearest to `at` for a box of this size: `at` itself when
+ * nothing there overlaps (with a margin), else the closest spot on rings
+ * around it. Where a new table goes.
+ */
+export function freeSpot(
+  at: { x: number; y: number },
+  size: { width: number; height: number },
+  taken: readonly { x: number; y: number; width: number; height: number }[],
+  margin = 24,
+): { x: number; y: number } {
+  const free = (x: number, y: number) =>
+    taken.every(
+      (b) =>
+        x + size.width + margin <= b.x ||
+        b.x + b.width + margin <= x ||
+        y + size.height + margin <= b.y ||
+        b.y + b.height + margin <= y,
+    );
+  if (free(at.x, at.y)) return at;
+  for (let ring = 1; ring <= 40; ring++) {
+    const r = ring * 48;
+    const steps = 8 * ring;
+    let best: { x: number; y: number; d: number } | null = null;
+    for (let i = 0; i < steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const x = at.x + Math.cos(angle) * r;
+      const y = at.y + Math.sin(angle) * r;
+      if (!free(x, y)) continue;
+      const d = Math.hypot(x - at.x, y - at.y);
+      if (!best || d < best.d) best = { x, y, d };
+    }
+    if (best) return { x: Math.round(best.x), y: Math.round(best.y) };
+  }
+  return at;
+}

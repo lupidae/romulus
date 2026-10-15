@@ -249,6 +249,13 @@ describe("applyEdit and reflects", () => {
     });
   });
 
+  test("adding what is there already changes nothing", () => {
+    const once = applyEdit(blog, { kind: "addTable", table: t("invoices") });
+    expect(applyEdit(once, { kind: "addTable", table: t("invoices") })).toBe(once);
+    const column = { name: "email", type: customType("text")!, notNull: false, default: null };
+    expect(applyEdit(blog, { kind: "addColumn", table: t("users"), column })).toBe(blog);
+  });
+
   test("adding a table gives it an identity primary key", () => {
     roundTrip({ kind: "addTable", table: t("invoices") }, (after) => {
       const added = entity(after, "invoices")!;

@@ -83,3 +83,11 @@
 .schema-graph[data-lod="overview"] .sg-marks {
   display: none;
 }
+
+/* Drawing a foreign key: every table is a possible target, none steps back. */
+.schema-graph[data-linking] .sg-node {
+  opacity: 1 !important;
+}
+.schema-graph[data-linking] .react-flow__pane {
+  cursor: crosshair;
+}

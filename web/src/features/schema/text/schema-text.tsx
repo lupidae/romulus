@@ -96,16 +96,26 @@ export function SchemaText({
   }, [statements, selected]);
 
   // Scroll targets: new objects when the selection changes, so each tab jumps
-  // once, and not when the selection came from this pane's own cursor.
+  // once, and not when the selection came from this pane's own cursor. The
+  // SQL's only when the selected table changes: not on every edit of the
+  // text (a draft's: someone typing, a graph edit), which would pull the
+  // reader back to the table's CREATE each time.
+  const selectedKey =
+    selected && !same(selected, cursorPick) ? `${selected.schema}.${selected.name}` : null;
+  const sqlReveal = useMemo(
+    () => (selectedKey && sqlHighlights.primary ? { ...sqlHighlights.primary } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the selection decides, see above
+    [selectedKey],
+  );
   const reveals = useMemo(() => {
     const out: Partial<Record<TextFormat, Range | null>> = {};
     if (!selected || same(selected, cursorPick)) return out;
-    out.sql = sqlHighlights.primary ? { ...sqlHighlights.primary } : null;
+    out.sql = sqlReveal;
     if (texts.json) out.json = locateInJson(texts.json, selected) ?? null;
     if (texts.dbml) out.dbml = locateInDbml(texts.dbml, selected) ?? null;
     if (texts.mermaid) out.mermaid = locateInMermaid(texts.mermaid, selected, multiSchema) ?? null;
     return out;
-  }, [selected, cursorPick, sqlHighlights, texts, multiSchema]);
+  }, [selected, cursorPick, sqlReveal, texts, multiSchema]);
 
   const otherHighlights = useMemo(() => {
     const out: Partial<Record<TextFormat, Highlights>> = {};

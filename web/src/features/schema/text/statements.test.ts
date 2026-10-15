@@ -91,4 +91,19 @@ describe("findStatements", () => {
     expect(statementAt(statements, sql.indexOf("y int"))?.target?.name).toBe("b");
     expect(statementAt(statements, sql.indexOf("\n\n") + 1)).toBeUndefined();
   });
+
+  test("a table renamed further down is known by its last name", () => {
+    const sql = [
+      "CREATE TABLE users (id int);",
+      "COMMENT ON TABLE users IS 'x';",
+      "CREATE TABLE orders (user_id int);",
+      "-- edits from the graph",
+      "ALTER TABLE public.users RENAME TO members;",
+      'ALTER TABLE public.members RENAME TO "People";',
+      "ALTER TABLE public.orders ADD COLUMN note text;",
+    ].join("\n");
+    const targets = findStatements(sql).map((s) => s.target?.name);
+    expect(targets).toEqual(["People", "People", "orders", "People", "People", "orders"]);
+    expect(findStatements(sql).every((s) => !("renamedTo" in s))).toBe(true);
+  });
 });

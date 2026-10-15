@@ -55,6 +55,7 @@ import { AreaLabel, type AreaLabelFlowNode, GroupNode, type GroupFlowNode } from
 import {
   columnAnchorY,
   FIT_VIEW,
+  freeSpot,
   GROUP_PADDING,
   NODE,
   type NodeState,
@@ -262,9 +263,16 @@ function GraphCanvas({
 
   // Zoom-driven styling, written to the element (see ZoomLevel).
   const applyZoom = useCallback(
-    (zoom: number) => {
+    function apply(zoom: number) {
       const el = wrapper.current;
-      if (!el) return;
+      // The flow can mount in the same commit as the graph's element (the
+      // first table of an empty draft), before its ref is set: next frame.
+      if (!el) {
+        requestAnimationFrame(() => {
+          if (wrapper.current) apply(zoom);
+        });
+        return;
+      }
       el.style.setProperty("--graph-zoom", String(zoom));
       const lod = nextLod(store.get().lod, zoom);
       if (el.dataset.lod !== lod) el.dataset.lod = lod;
@@ -372,14 +380,20 @@ function GraphCanvas({
     return () => cancelAnimationFrame(frame);
   }, [focus, initialized]);
 
+  // Read when the selection changes, not a reason to run again: a new model
+  // (each compile, each edit) must not pan the view back to the selection.
+  const revealRef = useRef(reveal);
+  useLayoutEffect(() => {
+    revealRef.current = reveal;
+  }, [reveal]);
   useEffect(() => {
     if (selected === undefined) return;
     store.set({ selected });
     // A selection made elsewhere (the text pane) brings the table into view.
     if (selected && localPick.current !== selected && zooming.current !== selected)
-      reveal(selected);
+      revealRef.current(selected);
     localPick.current = undefined;
-  }, [selected, store, reveal]);
+  }, [selected, store]);
 
   // ---- Nodes and edges ------------------------------------------------------
   const schemaColors = useMemo(() => {
@@ -613,6 +627,7 @@ function GraphCanvas({
     editorRef.current = editor;
   }, [editor]);
   const marks = editor?.marks ?? NO_MARKS;
+  const editingNow = useSyncExternalStore(store.subscribe, () => store.get().editing !== null);
   useEffect(() => {
     store.set({ marks });
   }, [marks, store]);
@@ -641,9 +656,21 @@ function GraphCanvas({
     };
   }, [flow]);
   const startEditing = useCallback(
-    (editing: Editing) => {
+    (asked: Editing) => {
       setMenu(null);
       setPinned(null);
+      // A new table goes where it overlaps nothing, nearest to where it was asked for.
+      const editing: Editing =
+        asked.kind === "newTable"
+          ? {
+              ...asked,
+              position: freeSpot(
+                asked.position,
+                { width: NODE.minWidth, height: NODE.header + NODE.row + NODE.padding * 2 },
+                graph.tables.map((t) => boxOf(t.key)).filter((b): b is Box => b !== undefined),
+              ),
+            }
+          : asked;
       if ("table" in editing) {
         if (store.get().selected !== editing.table) select(editing.table);
         // Rows are drawn from a readable zoom only: get there first.
@@ -655,11 +682,23 @@ function GraphCanvas({
             zoom: Math.max(zoom, 0.75),
             duration: 300,
           });
-        } else if (box) reveal(editing.table);
+        } else if (box) {
+          // Only if some of it is off screen: a table in view stays put.
+          const el = wrapper.current;
+          const left = box.x * zoom + flow.getViewport().x;
+          const top = box.y * zoom + flow.getViewport().y;
+          const visible =
+            !!el &&
+            left >= 0 &&
+            top >= 0 &&
+            left + box.width * zoom <= el.clientWidth &&
+            top + Math.min(box.height, 320) * zoom <= el.clientHeight;
+          if (!visible) reveal(editing.table);
+        }
       }
       store.set({ editing });
     },
-    [store, select, boxOf, flow, reveal],
+    [store, select, boxOf, flow, reveal, graph],
   );
   const stopEditing = useCallback(() => {
     store.set({ editing: null });
@@ -1064,7 +1103,12 @@ function GraphCanvas({
               <ActionsMenu target={menu} onClose={() => setMenu(null)} />
             </>
           )}
-          <HoverDetails container={wrapper} graph={graph} pinned={pinned} />
+          <HoverDetails
+            container={wrapper}
+            graph={graph}
+            pinned={pinned}
+            hidden={editingNow || menu !== null}
+          />
           <TableSearch
             open={searchOpen}
             onOpenChange={setSearchOpen}

@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from "react";
 
-import { ArrowLeftIcon, LinkIcon, WarningTriangleIcon } from "@/components/icons";
+import { LinkIcon, WarningTriangleIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -28,13 +28,8 @@ import {
 import { dropColumn, dropTable, foreignKey, setType, targetOf } from "../../edits/plan";
 import { nameProblem } from "../../edits/quote";
 import { baseType, comparable, typeFromText } from "../../edits/types";
-import {
-  type Column,
-  type Entity,
-  isView,
-  qualifiedName,
-  type ReferentialActionCode,
-} from "../../model";
+import { type Column, type Entity, isView, type ReferentialActionCode } from "../../model";
+import { useMediaQuery } from "../../viewer/use-preference";
 import { useGraphUi } from "../graph-ui";
 import { type EditContextValue, useEdit, virtualAnchor } from "./context";
 import { TypePicker } from "./type-picker";
@@ -74,7 +69,7 @@ const WIDTH: Partial<Record<Editing["kind"], string>> = {
   addColumn: "w-80",
   foreignKey: "w-80",
   comment: "w-80",
-  drop: "w-80",
+  drop: "w-96",
 };
 
 function EditPopover({
@@ -94,11 +89,13 @@ function EditPopover({
     () => virtualAnchor(() => edit.element(editing.table, column)),
     [edit, editing.table, column],
   );
+  // Beside the element on a wide screen, under it on a phone.
+  const wide = useMediaQuery("(min-width: 40rem)");
   return (
     <Popover open onOpenChange={(open) => !open && edit.stop()}>
       <PopoverAnchor virtualRef={anchor} />
       <PopoverContent
-        side="right"
+        side={wide ? "right" : "bottom"}
         align="start"
         sideOffset={10}
         collisionPadding={12}
@@ -115,7 +112,10 @@ function EditPopover({
           }
         }}
         onCloseAutoFocus={(event) => event.preventDefault()}
-        className={cn("grid gap-3", WIDTH[editing.kind] ?? "w-72")}
+        className={cn(
+          "grid max-h-(--radix-popover-content-available-height) max-w-[calc(100vw-1.5rem)] gap-3 overflow-y-auto",
+          WIDTH[editing.kind] ?? "w-72",
+        )}
         aria-label={TITLES[editing.kind]}
       >
         {editing.kind === "addColumn" && <AddColumnForm edit={edit} entity={entity} />}
@@ -768,18 +768,6 @@ function ForeignKeyForm({
         </Select>
       </Field>
       <Footer>
-        {to && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="mr-auto"
-            onClick={() => edit.start({ kind: "foreignKey", table: qualifiedName(entity), column })}
-          >
-            <ArrowLeftIcon />
-            Another column
-          </Button>
-        )}
         <Button type="button" variant="ghost" size="sm" onClick={edit.stop}>
           Cancel
         </Button>
