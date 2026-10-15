@@ -60,10 +60,12 @@ export async function requireUser(queryClient: QueryClient, href: string) {
     return await queryClient.ensureQueryData(meQuery);
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
+      const next = appPath(href);
       throw redirect({
         to: "/signin",
         search: {
-          next: appPath(href),
+          // The home page is where sign-in lands anyway.
+          next: next === `${APP_BASE}/` ? undefined : next,
           error: error.code === "session_expired" ? "session_expired" : undefined,
         },
       });
