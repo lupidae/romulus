@@ -103,11 +103,11 @@ test("a database, from its first upload to a push from CI, read-only for reviewe
 
   // The history has both; v1 opens read-only, marked as older.
   await admin.getByRole("link", { name: /History/ }).click();
-  const versions = admin.getByRole("list", { name: "Versions" }).getByRole("link");
+  const versions = admin.getByRole("list", { name: "Versions" }).getByRole("listitem");
   await expect(versions).toHaveCount(2);
   await expect(versions.first()).toContainText("Add invoices");
   await expect(versions.first()).toContainText("CI");
-  await versions.last().click();
+  await versions.last().getByRole("link", { name: /^v1/ }).click();
   await expect(admin).toHaveURL(new RegExp(`/app/${slug}/billing/v/1$`));
   await expect(admin.getByText("Older version")).toBeVisible();
   await expect(admin.locator(".react-flow__node", { hasText: "orders" })).toBeVisible();

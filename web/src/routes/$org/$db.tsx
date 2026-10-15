@@ -67,6 +67,8 @@ function DatabaseLayout() {
 
   const params = { org, db };
   const onVersion = !!matchRoute({ to: "/$org/$db/v/$number", params, fuzzy: true });
+  // A comparison is read from the history: its tab stays current.
+  const onDiff = !!matchRoute({ to: "/$org/$db/diff", params, fuzzy: true });
   const latest = database.latest?.number;
 
   return (
@@ -122,7 +124,11 @@ function DatabaseLayout() {
               </Link>
             </TabNavItem>
             <TabNavItem asChild>
-              <Link to="/$org/$db/history" params={params}>
+              <Link
+                to="/$org/$db/history"
+                params={params}
+                inactiveProps={onDiff ? { "aria-current": "page" } : undefined}
+              >
                 <ClockIcon />
                 History
                 {latest !== undefined && (
