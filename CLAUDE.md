@@ -228,7 +228,10 @@ Made in the skeleton (S0):
   `{}` reads as empty). The viewer gets `layout.layout` and `layout.groups`
   as `<SchemaViewer layout groups>`.
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
-  per person for SQL compiles), 429 `rate_limited` with `Retry-After`.
+  checked before the body is read; per person and per database for SQL
+  compiles), 429 `rate_limited` with `Retry-After`. Handlers that must decide
+  before reading a large body take `axum::body::Body` and read it with
+  `extract::read_body(headers, body, limit)` (413 in the API's format).
 - **CSRF** is global middleware: every non-GET request needs
   `X-Romulus-Csrf: 1` and an `Origin` equal to `ROMULUS_PUBLIC_URL`, unless it
   carries `Authorization: Bearer` (API tokens). Bearer requests must never fall
