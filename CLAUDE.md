@@ -218,7 +218,7 @@ Made in the skeleton (S0):
 ```
 src/routes/              TanStack file routes (only route + page code); -prefixed files are ignored
 src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field, Select
-                         (SelectItem `description`), Dialog, ConfirmDialog, Sheet, Menu,
+                         (SelectItem `description`), Dialog, ConfirmDialog, Popover, Sheet, Menu,
                          Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
                          EmptyState, Skeleton, Tooltip, Kbd, Alert, Card, Separator, Spinner,
                          Sidebar*
