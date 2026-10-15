@@ -140,14 +140,30 @@ services:
       ROMULUS_PUBLIC_URL: ${ROMULUS_PUBLIC_URL:?run scripts/dev-env}
       ROMULUS_API_PORT: ${ROMULUS_API_PORT:?run scripts/dev-env}
       ROMULUS_PREVIEW_PORT: ${ROMULUS_PREVIEW_PORT:?run scripts/dev-env}
+      MAIL_HOST: mail:1025
       OWNER: ${ROMULUS_UID:-1000}:${ROMULUS_GID:-1000}
     volumes:
       - ./deploy/zitadel/provision.sh:/provision.sh:ro
+      - ./deploy/zitadel/assets:/assets:ro
       - zitadel-bootstrap:/bootstrap:ro
       - ${ROMULUS_DEV_DIR:-./.dev}/zitadel:/out
     depends_on:
       zitadel:
         condition: service_healthy
+      mail:
+        condition: service_started
+
+  # Catches every email Zitadel sends (sign-up and password-reset codes):
+  # nothing leaves the machine. Read them at http://localhost:$ROMULUS_MAIL_PORT
+  # (web UI and the API end-to-end tests read codes from).
+  mail:
+    image: axllent/mailpit:v1.31.6
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - 127.0.0.1:${ROMULUS_MAIL_PORT:?run scripts/dev-env}:8025
 
 volumes:
   postgres-data:

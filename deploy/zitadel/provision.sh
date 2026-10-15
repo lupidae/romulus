@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Makes the dev Zitadel instance usable by romulus, with no clicking:
-#   project "romulus" → OIDC web app "romulus-web" → test users alice and bob.
+#   project "romulus" → OIDC web app "romulus-web" → test users alice and bob,
+#   the hosted login branded as romulus (logo, colors, font, texts), and its
+#   emails (sign-up codes) sent to the stack's mail catcher.
 # Then writes the contract other tools read:
 #   $OUT/oidc.env    ROMULUS_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET
 #   $OUT/users.json  [{email, password, name}]
@@ -20,6 +22,8 @@ OUT=${OUT:-/out}
 PAT_FILE=${PAT_FILE:-/bootstrap/admin.pat}
 OWNER=${OWNER:-}
 DEV_PASSWORD=${DEV_PASSWORD:-RomulusDev1!}
+ASSETS=${ASSETS:-/assets}       # deploy/zitadel/assets: logos, font, brand.json
+MAIL_HOST=${MAIL_HOST:-}        # host:port of an SMTP server without auth; empty: no email
 
 issuer="http://$ZITADEL_HOST"
 # Two browser origins per stack: the dev server ($ROMULUS_PUBLIC_URL) and the
@@ -134,6 +138,126 @@ ensure_user() {
 }
 ensure_user alice@romulus.test Alice Martin
 ensure_user bob@romulus.test Bob Durand
+
+# The hosted login looks like romulus: Zitadel's label policy (colors from the
+# app's tokens via brand.json, the logo per theme, Inter, no watermark) on the
+# instance default, which every organization inherits, and the project tells
+# the login to use its own organization's policy. `npm --prefix web run
+# zitadel:assets` regenerates the assets after a brand change.
+brand=$(cat "$ASSETS/brand.json")
+label_policy=$(jq -c '{
+    primaryColor: .light.primary, backgroundColor: .light.background,
+    warnColor: .light.destructive, fontColor: .light.foreground,
+    primaryColorDark: .dark.primary, backgroundColorDark: .dark.background,
+    warnColorDark: .dark.destructive, fontColorDark: .dark.foreground,
+    hideLoginNameSuffix: true, disableWatermark: true, themeMode: "THEME_MODE_AUTO"
+}' <<<"$brand")
+# INSTANCE-28fHe is "has not been changed".
+TOLERATE=INSTANCE-28fHe api PUT /admin/v1/policies/label "$label_policy" >/dev/null
+# upload FILE ASSET: one image or font into the (preview) label policy.
+upload() {
+    local response status
+    response=$(curl -sS -X POST "$ZITADEL_URL/assets/v1/instance/policy/label/$2" \
+        -H "Host: $ZITADEL_HOST" -H "Authorization: Bearer $pat" \
+        -F "file=@$ASSETS/$1" -w '\n%{http_code}')
+    status=${response##*$'\n'}
+    [ "${status:0:1}" = 2 ] || { log "upload $1 → $status: ${response%$'\n'*}"; return 1; }
+}
+upload logo-light.png logo
+upload logo-dark.png logo/dark
+upload icon-light.png icon
+upload icon-dark.png icon/dark
+upload inter.woff2 font
+TOLERATE=COMMAND-1m88i api POST /admin/v1/policies/label/_activate '{}' >/dev/null
+TOLERATE=COMMAND-1m88i api PUT "/management/v1/projects/$project_id" \
+    '{"name":"romulus","privateLabelingSetting":"PRIVATE_LABELING_SETTING_ENFORCE_PROJECT_RESOURCE_OWNER_POLICY"}' >/dev/null
+
+# The app speaks English only, so does its login (other languages would show
+# Zitadel's own texts). The texts say what romulus says: sentence case, plain.
+TOLERATE=COMMAND-1m88i api PUT /admin/v1/restrictions '{"allowedLanguages":{"list":["en"]}}' >/dev/null
+api PUT /admin/v1/text/login/en "$(jq -cn '{
+    loginText: {
+        title: "Sign in to romulus",
+        description: "Use your work email.",
+        loginNameLabel: "Email",
+        loginNamePlaceholder: "name@company.com",
+        registerButtonText: "Create account",
+        nextButtonText: "Continue"
+    },
+    passwordText: {
+        title: "Enter your password",
+        description: "Signing in to romulus.",
+        resetLinkText: "Forgot your password?",
+        nextButtonText: "Sign in"
+    },
+    selectAccountText: {
+        title: "Choose an account",
+        description: "Which account should romulus use?",
+        otherUser: "Use another account"
+    },
+    registrationUserText: {
+        title: "Create your romulus account",
+        description: "Invited? Use the email your invitation was sent to.",
+        firstnameLabel: "First name",
+        lastnameLabel: "Last name",
+        emailLabel: "Work email",
+        passwordConfirmLabel: "Confirm password",
+        nextButtonText: "Create account",
+        backButtonText: "Back to sign-in"
+    },
+    initializeUserText: {
+        title: "Check your email",
+        description: "We sent you a code. Enter it to verify your address and finish creating your account.",
+        resendButtonText: "Send a new code",
+        nextButtonText: "Verify"
+    },
+    initializeDoneText: {
+        title: "Your account is ready",
+        description: "Your email is verified.",
+        nextButtonText: "Continue to romulus"
+    },
+    emailVerificationText: {
+        title: "Check your email",
+        description: "We sent you a code. Enter it to verify your address.",
+        resendButtonText: "Send a new code",
+        nextButtonText: "Verify"
+    },
+    emailVerificationDoneText: {
+        title: "Email verified",
+        description: "You can continue to romulus.",
+        nextButtonText: "Continue to romulus"
+    },
+    logoutText: {
+        title: "Signed out",
+        description: "You signed out of romulus.",
+        loginButtonText: "Sign in again"
+    }
+}')" >/dev/null
+api PUT /admin/v1/text/message/init/en "$(jq -cn '{
+    title: "Verify your email",
+    preHeader: "Your romulus verification code",
+    subject: "Your romulus verification code: {{.Code}}",
+    greeting: "Hello {{.DisplayName}},",
+    text: "Your code is {{.Code}}. Enter it on the page that asked for it to finish creating your romulus account. If you did not ask for this, ignore this email.",
+    buttonText: "Verify my email"
+}')" >/dev/null
+log "login branded as romulus"
+
+# Sign-up and password-reset codes go by email. In dev the stack's mail
+# catcher receives them (its web UI: http://localhost:$ROMULUS_MAIL_PORT).
+if [ -n "$MAIL_HOST" ]; then
+    smtp_id=$(api POST /admin/v1/email/_search '{}' \
+        | jq -r '.result[]? | select(.description == "romulus dev mail") | .id' | head -1)
+    if [ -z "$smtp_id" ]; then
+        smtp_id=$(api POST /admin/v1/email/smtp "$(jq -cn --arg host "$MAIL_HOST" '{
+            description: "romulus dev mail", host: $host, tls: false,
+            senderAddress: "no-reply@romulus.localhost", senderName: "romulus"
+        }')" | jq -r .id)
+        log "added SMTP $MAIL_HOST ($smtp_id)"
+    fi
+    # COMMAND-vUHBSmBzaw is "already active": nothing to do.
+    TOLERATE=COMMAND-vUHBSmBzaw api POST "/admin/v1/email/$smtp_id/_activate" '{}' >/dev/null
+fi
 
 # Readers must never see half a file: write beside, then rename.
 mkdir -p "$OUT"

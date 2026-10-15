@@ -21,7 +21,8 @@
     "icons:add": "node scripts/add-icon.mjs",
     "e2e:dev": "playwright test -c playwright.dev.config.ts",
     "build:perf": "VITE_DEV_ROUTES=true vite build --outDir dist-perf",
-    "perf": "playwright test -c playwright.perf.config.ts --headed"
+    "perf": "playwright test -c playwright.perf.config.ts --headed",
+    "zitadel:assets": "node scripts/zitadel-assets.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

@@ -115,6 +115,7 @@ sandbox=$((base + 3))
 zitadel=$((base + 4))
 preview=$((base + 5))
 e2e_api=$((base + 6))
+mail=$((base + 7))
 site=$((base + 7))
 
 cat > .env <<EOF
@@ -132,6 +133,8 @@ ROMULUS_ZITADEL_PORT=$zitadel
 # Playwright: a production build on the preview port, served by its own API.
 ROMULUS_PREVIEW_PORT=$preview
 ROMULUS_E2E_API_PORT=$e2e_api
+# The mail catcher: emails Zitadel sends (sign-up codes), web UI and API.
+ROMULUS_MAIL_PORT=$mail
 # The static homepage (site/), served by \`just site\`.
 ROMULUS_SITE_PORT=$site
 

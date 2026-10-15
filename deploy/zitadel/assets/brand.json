@@ -1,0 +1,14 @@
+{
+  "light": {
+    "primary": "#c2410c",
+    "background": "#fbfaf7",
+    "destructive": "#b91c1c",
+    "foreground": "#1c1917"
+  },
+  "dark": {
+    "primary": "#fb923c",
+    "background": "#121110",
+    "destructive": "#f87171",
+    "foreground": "#e7e5e4"
+  }
+}
