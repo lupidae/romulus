@@ -9,20 +9,22 @@
 //! the characters around them), and concurrent typing elsewhere merges.
 //!
 //! Lines are diffed first (patience: statements that moved stay whole), then
-//! each changed run of lines character by character, so `users` becoming
-//! `public.users` inserts `public.` rather than replacing the line. Both
-//! diffs have a deadline: past it the result is coarser, never wrong.
+//! each changed run of lines token by token (words, runs of spaces, single
+//! punctuation), so `users` becoming `public.users` inserts `public.` and
+//! leaves `users` (and a caret on it) alone, where a character diff could
+//! match its `u` with the one in `public`. Both diffs have a deadline: past
+//! it the result is coarser, never wrong.
 
 use std::{
     ops::Range,
     time::{Duration, Instant},
 };
 
-use similar::{Algorithm, DiffTag, TextDiff};
+use similar::{Algorithm, DiffTag, TextDiff, capture_diff_slices_deadline};
 use yrs::{Text, TextRef, TransactionMut};
 
 /// A run of changed lines longer than this (in bytes) is replaced whole
-/// rather than diffed character by character.
+/// rather than diffed token by token.
 const REFINE_LIMIT: usize = 20_000;
 
 /// Each of the two diffs gives up refining after this long.
@@ -85,7 +87,44 @@ fn starts(slices: &[&str]) -> Vec<usize> {
     out
 }
 
-/// The changes within one changed run of lines, by character.
+/// The tokens of a text, in order, covering all of it: runs of word
+/// characters, runs of white space, and every other character on its own.
+fn tokens(text: &str) -> Vec<&str> {
+    #[derive(PartialEq)]
+    enum Class {
+        Word,
+        Space,
+        Other,
+    }
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' || c == '$' {
+            Class::Word
+        } else if c.is_whitespace() {
+            Class::Space
+        } else {
+            Class::Other
+        }
+    };
+    let mut out = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((start, c)) = chars.next() {
+        let kind = class(c);
+        let mut end = start + c.len_utf8();
+        if kind != Class::Other {
+            while let Some(&(at, next)) = chars.peek() {
+                if class(next) != kind {
+                    break;
+                }
+                end = at + next.len_utf8();
+                chars.next();
+            }
+        }
+        out.push(&text[start..end]);
+    }
+    out
+}
+
+/// The changes within one changed run of lines, by token.
 fn refine(
     old: &str,
     new: &str,
@@ -102,14 +141,13 @@ fn refine(
         });
         return;
     }
-    let chars = TextDiff::configure()
-        .algorithm(Algorithm::Myers)
-        .deadline(deadline)
-        .diff_chars(old_part, new_part);
-    let old_starts = starts(chars.old_slices());
-    let new_starts = starts(chars.new_slices());
+    let (old_tokens, new_tokens) = (tokens(old_part), tokens(new_part));
+    let ops =
+        capture_diff_slices_deadline(Algorithm::Myers, &old_tokens, &new_tokens, Some(deadline));
+    let old_starts = starts(&old_tokens);
+    let new_starts = starts(&new_tokens);
     let mut pending: Option<Change> = None;
-    for op in chars.ops() {
+    for op in ops {
         let (tag, co, cn) = op.as_tag_tuple();
         if tag == DiffTag::Equal {
             out.extend(pending.take());
@@ -190,6 +228,33 @@ mod tests {
         apply(&roots.sql, &mut doc.transact_mut(), old, &changes);
         assert_eq!(roots.sql.get_string(&doc.transact()), new);
         changes
+    }
+
+    #[test]
+    fn tokens_are_words_spaces_and_single_punctuation() {
+        assert_eq!(
+            tokens("CREATE TABLE public.users (id  int);\n"),
+            [
+                "CREATE", " ", "TABLE", " ", "public", ".", "users", " ", "(", "id", "  ", "int",
+                ")", ";", "\n"
+            ]
+        );
+        assert_eq!(tokens("café ☕"), ["café", " ", "☕"]);
+    }
+
+    #[test]
+    fn a_qualified_name_keeps_the_name() {
+        let changes = round_trip(
+            "CREATE TABLE users (id bigint);\n",
+            "CREATE TABLE public.users (\n);\n",
+        );
+        // `users` is never deleted.
+        assert!(
+            changes
+                .iter()
+                .all(|c| c.delete.end <= 13 || c.delete.start >= 18),
+            "{changes:?}"
+        );
     }
 
     #[test]

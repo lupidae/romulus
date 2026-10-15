@@ -161,10 +161,11 @@ fn foreign_compiler() -> SqlCompiler {
     SqlCompiler::from_fn(|sql| {
         let mut model = serde_json::to_value(model_of(sql)).unwrap();
         if sql.contains("CREATE FOREIGN TABLE remote") {
-            model["entities"].as_array_mut().unwrap().push(json!({
-                "schema": "public", "name": "remote", "kind": "f", "comment": null,
-                "partition_key": null, "view_definition": null,
-            }));
+            for entity in model["entities"].as_array_mut().unwrap() {
+                if entity["name"] == "remote" {
+                    entity["kind"] = json!("f");
+                }
+            }
         }
         Compiled {
             model: Some(<Schema as serde::Deserialize>::deserialize(model).unwrap()),
