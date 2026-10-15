@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE invitations SET expires_at = now() - interval '1 hour', created_at = now() - interval '8 days' WHERE email = 'old@romulus.test'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d1e0062a5ddacb0360f23387b24c58820bbf258c09198a4254351168c58ee90d"
+}

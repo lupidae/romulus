@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.name FROM memberships m JOIN users u ON u.id = m.user_id\n         WHERE m.org_id = $1 AND lower(u.email) = lower($2) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "61f2af1c17231641d44d306cf7c8de1a7abb885b4dc2b08350594afc58797093"
+}

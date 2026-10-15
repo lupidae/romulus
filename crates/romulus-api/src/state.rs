@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::extract::FromRef;
 use sqlx::PgPool;
 
-use crate::{Config, auth::oidc::Oidc};
+use crate::{Config, auth::oidc::Oidc, orgs::events::MembershipEvents};
 
 /// Shared by every handler. Cheap to clone: a pool handle and `Arc`s.
 ///
@@ -15,6 +15,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// The OIDC relying party and its discovery cache.
     pub oidc: Arc<Oidc>,
+    /// Role changes and removals, for the collab server to close sockets.
+    pub membership: MembershipEvents,
 }
 
 impl AppState {
@@ -23,6 +25,7 @@ impl AppState {
             db,
             oidc: Arc::new(Oidc::new(&config)),
             config: Arc::new(config),
+            membership: MembershipEvents::new(),
         }
     }
 }

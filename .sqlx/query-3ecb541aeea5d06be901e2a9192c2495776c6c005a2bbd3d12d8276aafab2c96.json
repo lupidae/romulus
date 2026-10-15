@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oidc_flows SET created_at = now() - interval '11 minutes'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "3ecb541aeea5d06be901e2a9192c2495776c6c005a2bbd3d12d8276aafab2c96"
+}

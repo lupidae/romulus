@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE invitations SET accepted_at = now()\n           WHERE id = $1 AND accepted_at IS NULL AND expires_at > now()\n           RETURNING role AS \"role: Role\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role: Role",
+        "type_info": {
+          "Custom": {
+            "name": "member_role",
+            "kind": {
+              "Enum": [
+                "admin",
+                "developer",
+                "reviewer"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "invitations",
+            "name": "role"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bc650e6e318c512ae3b27bb00fd8bb2f579c0f99b1df334ec584adb90cdde7fb"
+}

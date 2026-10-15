@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT oidc_refresh_token FROM sessions",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oidc_refresh_token",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "oidc_refresh_token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "e15de1dd8cf1199c26a79c51e3ec2efbba96123e3081a1a34f40df9527e01b62"
+}

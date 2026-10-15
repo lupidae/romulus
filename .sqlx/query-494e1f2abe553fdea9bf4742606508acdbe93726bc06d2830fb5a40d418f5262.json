@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO invitations (org_id, email, role, token_hash, expires_at)\n                 VALUES ($1, 'pending@romulus.test', 'reviewer', $2, now() + interval '7 days') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "invitations",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "494e1f2abe553fdea9bf4742606508acdbe93726bc06d2830fb5a40d418f5262"
+}

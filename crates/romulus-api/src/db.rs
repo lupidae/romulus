@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sqlx::{
-    PgPool,
+    PgPool, Postgres, Transaction,
     migrate::Migrator,
     postgres::{PgDatabaseError, PgPoolOptions},
 };
@@ -25,6 +25,16 @@ pub async fn connect(url: &str) -> Result<PgPool, sqlx::Error> {
         .acquire_timeout(Duration::from_secs(5))
         .connect(url)
         .await
+}
+
+/// A transaction at READ COMMITTED, whatever the server's default: the one
+/// membership changes (roles, removals, joins) run in. There the last-admin
+/// trigger makes a concurrent change wait and recount; at a higher level it
+/// would abort with 40001 instead (see `memberships_keep_an_admin`).
+pub async fn begin_read_committed(
+    db: &PgPool,
+) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    db.begin_with("BEGIN ISOLATION LEVEL READ COMMITTED").await
 }
 
 /// The constraint a database error names, if any: unique and foreign-key
