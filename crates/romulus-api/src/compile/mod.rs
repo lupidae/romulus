@@ -92,9 +92,10 @@ impl CompilerStatus {
     }
 }
 
-/// A text with conflict blocks from "Update draft" (or stray markers) is
-/// never compiled: it is not what anyone means yet, and refusing it is what
-/// keeps such a draft from being published.
+/// A draft's text with conflict blocks from "Update draft" (or stray
+/// markers) is never compiled: it is not what anyone means yet, and
+/// refusing it is what keeps such a draft from being published. Only
+/// drafts: an uploaded or pushed text is compiled whatever its comments say.
 fn refused(sql: &str) -> Option<Compiled> {
     let diagnostics = romulus_sandbox::merge::conflict_diagnostics(sql);
     (!diagnostics.is_empty()).then_some(Compiled {
@@ -135,9 +136,6 @@ impl SqlCompiler {
     }
 
     pub async fn compile(&self, sql: &str) -> ApiResult<Compiled> {
-        if let Some(refused) = refused(sql) {
-            return Ok(refused);
-        }
         match &self.0 {
             Backend::None => Err(unavailable()),
             Backend::Sandbox(sandbox) => {
@@ -168,6 +166,15 @@ impl SqlCompiler {
                 compiled.model = compiled.model.map(Schema::canonical);
                 Ok(compiled)
             }
+        }
+    }
+
+    /// [`SqlCompiler::compile`] of a draft's text: refused while it has
+    /// conflict blocks (publishing, Tidy).
+    pub async fn compile_draft(&self, sql: &str) -> ApiResult<Compiled> {
+        match refused(sql) {
+            Some(refused) => Ok(refused),
+            None => self.compile(sql).await,
         }
     }
 

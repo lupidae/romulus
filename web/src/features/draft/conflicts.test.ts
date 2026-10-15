@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { findConflicts, resolution } from "./conflicts";
+import vectors from "./conflict-markers.json";
+import { findConflicts, resolution, scanConflicts } from "./conflicts";
 
 const text = `CREATE TABLE users (id bigint);
 -- <<<<<<< yours
@@ -50,5 +51,21 @@ describe("conflict blocks", () => {
 
   it("are not looked for in text without markers", () => {
     expect(findConflicts("CREATE TABLE a (id int); -- <<< not one")).toEqual([]);
+  });
+});
+
+describe("the conflict marker spec shared with the server", () => {
+  // crates/romulus-sandbox runs the same vectors against its own reading.
+  it.each(vectors)("$name", ({ sql, blocks, stray }) => {
+    const found = scanConflicts(sql);
+    expect(
+      found.blocks.map((b) => ({
+        yours: sql.slice(b.yours.from, b.yours.to),
+        theirs: sql.slice(b.theirs.from, b.theirs.to),
+        label: b.label,
+        both: b.both,
+      })),
+    ).toEqual(blocks);
+    expect(found.stray.map((r) => sql.slice(r.from, r.to))).toEqual(stray);
   });
 });

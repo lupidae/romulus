@@ -1,0 +1,107 @@
+[
+  {
+    "name": "a block between statements",
+    "sql": "CREATE TABLE a (id int);\n-- <<<<<<< yours\nCREATE TABLE b (id int);\n-- ======= v2\nCREATE TABLE b (id bigint);\n-- >>>>>>> v2\nCREATE TABLE c (id int);\n",
+    "blocks": [
+      {
+        "yours": "CREATE TABLE b (id int);",
+        "theirs": "CREATE TABLE b (id bigint);",
+        "label": "v2",
+        "both": false
+      }
+    ],
+    "stray": []
+  },
+  {
+    "name": "both can be kept, yours empty, at the end with no line break",
+    "sql": "-- <<<<<<< yours (both can be kept)\n-- ======= v12\nCOMMENT ON TABLE a IS 'x';\n-- >>>>>>> v12",
+    "blocks": [
+      { "yours": "", "theirs": "COMMENT ON TABLE a IS 'x';", "label": "v12", "both": true }
+    ],
+    "stray": []
+  },
+  {
+    "name": "indented markers",
+    "sql": "  -- <<<<<<< yours\nCREATE TABLE a (id int);\n  -- ======= v2\n  -- >>>>>>> v2\n",
+    "blocks": [{ "yours": "CREATE TABLE a (id int);", "theirs": "", "label": "v2", "both": false }],
+    "stray": []
+  },
+  {
+    "name": "banners",
+    "sql": "-- ==========================================\n-- Users\n-- ==========================================\nCREATE TABLE users (id int);\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "comments that only start like markers",
+    "sql": "-- <<<<<<< yours truly\n-- ======= v2 and more\n-- >>>>>>> v2b\nCREATE TABLE a (id int);\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "markers in a string",
+    "sql": "COMMENT ON TABLE users IS '\n-- <<<<<<< yours\nx\n-- ======= v2\ny\n-- >>>>>>> v2\n';\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker in an escaped string",
+    "sql": "COMMENT ON TABLE users IS E'it\\'s\n-- ======= v2\n';\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker in a dollar-quoted body",
+    "sql": "CREATE TABLE a (id int);\nCREATE VIEW v AS SELECT $body$\n-- >>>>>>> v2\n$body$ AS x;\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker in a quoted name",
+    "sql": "CREATE TABLE \"a\n-- >>>>>>> v2\nb\" (id int);\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker in a block comment",
+    "sql": "/*\n-- ======= v2\n*/\nCREATE TABLE a (id int);\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker inside a statement",
+    "sql": "CREATE TABLE a (\n    id int,\n-- ======= v2\n    x int\n);\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker after a statement on its line",
+    "sql": "CREATE TABLE a (id int); -- ======= v2\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a middle marker alone",
+    "sql": "CREATE TABLE a (id int);\n-- ======= v5\n",
+    "blocks": [],
+    "stray": ["-- ======= v5"]
+  },
+  {
+    "name": "labels that do not match",
+    "sql": "-- <<<<<<< yours\nCREATE TABLE a (id int);\n-- ======= v2\nCREATE TABLE a (id bigint);\n-- >>>>>>> v3\n",
+    "blocks": [],
+    "stray": ["-- <<<<<<< yours", "-- ======= v2", "-- >>>>>>> v3"]
+  },
+  {
+    "name": "a block started twice",
+    "sql": "-- <<<<<<< yours\n-- <<<<<<< yours\nCREATE TABLE a (id int);\n-- ======= v2\n-- >>>>>>> v2\n",
+    "blocks": [{ "yours": "CREATE TABLE a (id int);", "theirs": "", "label": "v2", "both": false }],
+    "stray": ["-- <<<<<<< yours"]
+  },
+  {
+    "name": "an end with no middle",
+    "sql": "-- <<<<<<< yours\nCREATE TABLE a (id int);\n-- >>>>>>> v2\n",
+    "blocks": [],
+    "stray": ["-- <<<<<<< yours", "-- >>>>>>> v2"]
+  }
+]

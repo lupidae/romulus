@@ -67,12 +67,15 @@ use std::{
     ops::Range,
 };
 
-use pg_query::NodeEnum;
+use pg_query::{
+    NodeEnum,
+    protobuf::{ColumnDef, ConstrType, Constraint, RangeVar, Token as TokenKind},
+};
 
 use crate::{
     diagnostic::{Code, Diagnostic},
     key::{Action, Key, ObjectKind},
-    names::quote_ident,
+    names::{QualifiedName, quote_ident},
     parse::{ParsedSql, Statement, parse},
     source::LineIndex,
 };
@@ -85,7 +88,6 @@ pub const BOTH_NOTE: &str = "(both can be kept)";
 /// `features/schema/edits/append.ts`): appended statements merge by their
 /// own keys like any other, the marker stays put.
 pub const GRAPH_EDITS_MARKER: &str = "-- edits from the graph";
-const START: &str = "-- <<<<<<<";
 const MIDDLE: &str = "-- =======";
 const END: &str = "-- >>>>>>>";
 
@@ -106,32 +108,100 @@ pub struct Conflict {
     pub both: bool,
 }
 
+/// A marker line of a conflict block, as the merge writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Marker {
+    /// `-- <<<<<<< yours`, with whether `(both can be kept)` follows.
+    Yours(bool),
+    /// `-- ======= vN`.
+    Theirs(String),
+    /// `-- >>>>>>> vN`.
+    End(String),
+}
+
+impl Marker {
+    /// Only the exact lines the merge writes: a banner of `=` or a comment
+    /// that happens to start like a marker is not one.
+    fn read(line: &str) -> Option<Self> {
+        let line = line.trim();
+        let version = |label: &str| {
+            let label = label.strip_prefix(' ')?;
+            (label.len() > 1
+                && label.starts_with('v')
+                && label[1..].bytes().all(|b| b.is_ascii_digit()))
+            .then(|| label.to_owned())
+        };
+        if line == YOURS_MARKER {
+            Some(Self::Yours(false))
+        } else if line.strip_prefix(YOURS_MARKER) == Some(&format!(" {BOTH_NOTE}")) {
+            Some(Self::Yours(true))
+        } else if let Some(label) = line.strip_prefix(MIDDLE) {
+            version(label).map(Self::Theirs)
+        } else {
+            line.strip_prefix(END).and_then(version).map(Self::End)
+        }
+    }
+}
+
 /// The conflict blocks of a text, and the marker lines that belong to none
-/// (a block whose other markers were deleted).
+/// (a block whose other markers were deleted). See [`conflicts_in`].
 pub fn conflicts(sql: &str) -> (Vec<Conflict>, Vec<Range<usize>>) {
+    if !(sql.contains(YOURS_MARKER) || sql.contains(MIDDLE) || sql.contains(END)) {
+        return (Vec::new(), Vec::new());
+    }
+    conflicts_in(sql, &parse(sql))
+}
+
+/// The conflict blocks of a parsed text. A marker is a `--` comment that
+/// starts its line, outside every statement (so never in a string, a
+/// dollar-quoted body or a statement's own comments), reading exactly as
+/// the merge writes it ([`Marker::read`]); a block is yours, theirs and
+/// end markers in that order, the last two with one label. Markers out of
+/// that order are stray.
+pub(crate) fn conflicts_in(sql: &str, parsed: &ParsedSql) -> (Vec<Conflict>, Vec<Range<usize>>) {
+    let mut markers: Vec<(Line, Marker)> = Vec::new();
+    for token in &parsed.tokens {
+        if token.kind != TokenKind::SqlComment {
+            continue;
+        }
+        let line_start = sql[..token.start].rfind('\n').map_or(0, |n| n + 1);
+        let alone = sql[line_start..token.start].trim().is_empty();
+        let inside = parsed
+            .statements
+            .iter()
+            .any(|s| s.span.start < token.start && token.start < s.span.end);
+        if !alone || inside {
+            continue;
+        }
+        let end = sql[token.start..]
+            .find('\n')
+            .map_or(sql.len(), |n| token.start + n);
+        if let Some(marker) = Marker::read(&sql[token.start..end]) {
+            let line = Line {
+                text: line_start..end,
+                next: (end + 1).min(sql.len()),
+            };
+            markers.push((line, marker));
+        }
+    }
+
     let mut blocks = Vec::new();
     let mut stray = Vec::new();
-    if !(sql.contains(START) || sql.contains(MIDDLE) || sql.contains(END)) {
-        return (blocks, stray);
-    }
-    // (start line, middle line), as (line range, end of line incl. break).
-    let mut open: Option<(Line, Option<Line>)> = None;
-    for line in lines(sql) {
-        let text = sql[line.text.clone()].trim();
-        let marker = [START, MIDDLE, END]
-            .into_iter()
-            .position(|m| text.starts_with(m));
-        match (marker, open.take()) {
-            (None, state) => open = state,
-            (Some(0), state) => {
-                if let Some((start, middle)) = state {
-                    stray.push(start.text);
-                    stray.extend(middle.map(|m| m.text));
-                }
-                open = Some((line, None));
+    let mut open: Vec<(Line, Marker)> = Vec::new();
+    for (line, marker) in markers {
+        let complete = match (&marker, open.as_slice()) {
+            (Marker::Yours(_), _) => {
+                stray.extend(open.drain(..).map(|(l, _)| l.text));
+                open.push((line, marker));
+                continue;
             }
-            (Some(1), Some((start, None))) => open = Some((start, Some(line))),
-            (Some(2), Some((start, Some(middle)))) => {
+            (Marker::Theirs(_), [(_, Marker::Yours(_))]) => {
+                open.push((line, marker));
+                continue;
+            }
+            (Marker::End(label), [(start, Marker::Yours(both)), (middle, Marker::Theirs(t))])
+                if t == label =>
+            {
                 let content = |from: usize, to: usize| {
                     // Without the line break before the next marker.
                     let to = if to > from && sql.as_bytes()[to - 1] == b'\n' {
@@ -141,33 +211,36 @@ pub fn conflicts(sql: &str) -> (Vec<Conflict>, Vec<Range<usize>>) {
                     };
                     from..to.max(from)
                 };
-                blocks.push(Conflict {
+                Some(Conflict {
                     range: start.text.start..line.text.end,
                     yours: content(start.next, middle.text.start),
                     theirs: content(middle.next, line.text.start),
-                    label: text[END.len()..].trim().to_owned(),
-                    both: sql[start.text.clone()].contains(BOTH_NOTE),
-                });
+                    label: label.clone(),
+                    both: *both,
+                })
             }
-            (Some(_), state) => {
-                if let Some((start, middle)) = state {
-                    stray.push(start.text);
-                    stray.extend(middle.map(|m| m.text));
-                }
+            _ => None,
+        };
+        match complete {
+            Some(block) => {
+                open.clear();
+                blocks.push(block);
+            }
+            None => {
+                stray.extend(open.drain(..).map(|(l, _)| l.text));
                 stray.push(line.text);
             }
         }
     }
-    if let Some((start, middle)) = open {
-        stray.push(start.text);
-        stray.extend(middle.map(|m| m.text));
-    }
+    stray.extend(open.into_iter().map(|(l, _)| l.text));
     stray.sort_by_key(|r| r.start);
     (blocks, stray)
 }
 
-/// Why a text with conflict blocks (or stray markers) does not compile: one
-/// error per block, on its first marker, and one per stray marker.
+/// Why a draft's text with conflict blocks (or stray markers) does not
+/// compile: one error per block, on its first marker, and one per stray
+/// marker. For drafts only: an uploaded or pushed text is never refused
+/// for what looks like a marker.
 pub fn conflict_diagnostics(sql: &str) -> Vec<Diagnostic> {
     let (blocks, stray) = conflicts(sql);
     if blocks.is_empty() && stray.is_empty() {
@@ -207,22 +280,6 @@ pub fn conflict_diagnostics(sql: &str) -> Vec<Diagnostic> {
 struct Line {
     text: Range<usize>,
     next: usize,
-}
-
-fn lines(sql: &str) -> impl Iterator<Item = Line> + '_ {
-    let mut at = 0;
-    std::iter::from_fn(move || {
-        if at >= sql.len() {
-            return None;
-        }
-        let end = sql[at..].find('\n').map_or(sql.len(), |n| at + n);
-        let line = Line {
-            text: at..end,
-            next: (end + 1).min(sql.len()),
-        };
-        at = end + 1;
-        Some(line)
-    })
 }
 
 /// What [`merge`] works on. See the module documentation.
@@ -265,20 +322,26 @@ pub struct Edit {
     pub text: String,
 }
 
-/// Ours does not parse: a statement-level merge needs statements.
+/// Why [`merge`] merged nothing.
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("the draft's SQL has syntax errors")]
-pub struct Unparsable(pub Vec<Diagnostic>);
+pub enum MergeError {
+    /// Ours does not parse: a statement-level merge needs statements.
+    #[error("the draft's SQL has syntax errors")]
+    Unparsable(Vec<Diagnostic>),
+    /// Two of the merge's own edits overlap (a bug): nothing is applied.
+    #[error("the merge's edits overlap")]
+    Overlap,
+}
 
 /// The three-way merge. See the module documentation.
-pub fn merge(input: &Input<'_>) -> Result<Merged, Unparsable> {
+pub fn merge(input: &Input<'_>) -> Result<Merged, MergeError> {
     let ancestor = parse(input.ancestor);
     let ours = parse(input.ours);
     let theirs = parse(input.theirs);
     if !ours.errors.is_empty() {
-        return Err(Unparsable(ours.errors));
+        return Err(MergeError::Unparsable(ours.errors));
     }
-    let (blocks, _) = conflicts(input.ours);
+    let (blocks, _) = conflicts_in(input.ours, &ours);
     let units = units(
         [
             (Side::Ancestor, &ancestor, input.ancestor),
@@ -287,8 +350,8 @@ pub fn merge(input: &Input<'_>) -> Result<Merged, Unparsable> {
         ],
         &blocks,
     );
-    let facts = Facts::of(input);
     let (roots, matched) = components(&units);
+    let facts = Facts::of(input, &units, &matched);
     let mut components: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (i, root) in roots.iter().enumerate() {
         components.entry(*root).or_default().push(i);
@@ -318,9 +381,9 @@ pub fn merge(input: &Input<'_>) -> Result<Merged, Unparsable> {
         appended_ancestor,
         ..
     } = plan;
-    let edits = minimal(input.ours, &result);
-    let text = apply(input.ours, result);
-    let mut new_ancestor = apply(input.ours, ancestor_ops);
+    let edits = minimal(input.ours, &result)?;
+    let text = apply(input.ours, result)?;
+    let mut new_ancestor = apply(input.ours, ancestor_ops)?;
     for block in appended_ancestor {
         new_ancestor.push_str("\n\n");
         new_ancestor.push_str(&block);
@@ -353,9 +416,11 @@ fn units<'a>(sides: [(Side, &'a ParsedSql, &str); 3], blocks: &[Conflict]) -> Ve
                 *n += 1;
                 (stmt.key.clone(), *n - 1)
             });
+            let links = links(stmt);
             units.push(Unit {
                 side,
-                links: links(stmt),
+                refs: references(stmt, &links),
+                links,
                 norm: normalized(stmt, sql),
                 stmt,
                 block,
@@ -366,16 +431,21 @@ fn units<'a>(sides: [(Side, &'a ParsedSql, &str); 3], blocks: &[Conflict]) -> Ve
     units
 }
 
-/// The atoms of the base version, of the newer one and (when it compiles)
-/// of the draft; and those the newer version changed.
+/// The atoms of the newer version and (when it compiles) of the draft;
+/// those the newer version changed; and what each side dropped.
 struct Facts {
     theirs: BTreeMap<Atom, String>,
     ours: Option<BTreeMap<Atom, String>>,
     changed: BTreeSet<Atom>,
+    /// In the base version's model, not in the newer one's.
+    theirs_dropped: BTreeSet<Atom>,
+    /// Defined by the ancestor and by none of ours' statements, or dropped
+    /// by a statement ours added.
+    ours_dropped: BTreeSet<Atom>,
 }
 
 impl Facts {
-    fn of(input: &Input<'_>) -> Self {
+    fn of(input: &Input<'_>, units: &[Unit<'_>], matched: &[bool]) -> Self {
         let base = facts(input.base_model_sql);
         let theirs = facts(input.theirs_model_sql);
         let changed = base
@@ -384,10 +454,38 @@ impl Facts {
             .filter(|a| base.get(*a) != theirs.get(*a))
             .cloned()
             .collect();
+        let theirs_dropped = base
+            .keys()
+            .filter(|a| !theirs.contains_key(*a))
+            .cloned()
+            .collect();
+        let defined = |side: Side| -> BTreeSet<&Atom> {
+            units
+                .iter()
+                .filter(|u| u.side == side && !matches!(u.block, Some((_, true))))
+                .flat_map(|u| &u.links.defines)
+                .collect()
+        };
+        let in_ours = defined(Side::Ours);
+        let mut ours_dropped: BTreeSet<Atom> = defined(Side::Ancestor)
+            .into_iter()
+            .filter(|a| !in_ours.contains(a))
+            .cloned()
+            .collect();
+        for (i, unit) in units.iter().enumerate() {
+            if unit.side == Side::Ours
+                && !matched[i]
+                && unit.stmt.keys.iter().any(|k| k.action() == Action::Drop)
+            {
+                ours_dropped.extend(unit.links.touches.iter().cloned());
+            }
+        }
         Self {
             theirs,
             ours: input.ours_model_sql.map(facts),
             changed,
+            theirs_dropped,
+            ours_dropped,
         }
     }
 }
@@ -454,6 +552,27 @@ fn decide(
     let ours_changed = c.has_block
         || c.ours.iter().any(|&i| !matched[i])
         || c.ancestor.iter().any(|&i| !matched[i]);
+    // A change of one side to what depends on something the other side
+    // dropped (a column added to a table theirs dropped, an index on a
+    // table ours dropped): whatever else, a conflict. Both dropping it is
+    // agreement.
+    let drops = |unit: &Unit<'_>, dropped: &BTreeSet<Atom>, also: &BTreeSet<Atom>| {
+        unit.refs
+            .iter()
+            .any(|a| dropped.contains(a) && !also.contains(a))
+    };
+    let ours_on_theirs_drop = c
+        .ours
+        .iter()
+        .filter(|&&i| !matched[i])
+        .any(|&i| drops(&units[i], &facts.theirs_dropped, &facts.ours_dropped));
+    let theirs_on_ours_drop = theirs_changed
+        && c.theirs
+            .iter()
+            .any(|&i| drops(&units[i], &facts.ours_dropped, &facts.theirs_dropped));
+    if ours_on_theirs_drop || theirs_on_ours_drop {
+        return Decision::Conflict;
+    }
     match (theirs_changed, ours_changed) {
         (false, ours_changed) => {
             return Decision::Keep {
@@ -475,8 +594,22 @@ fn decide(
         };
         sorted(&c.ours) == sorted(&c.theirs)
     };
+    // Ours already has every statement of theirs (an update that ran twice,
+    // or whose base did not move after it rewrote the text): keep ours, now
+    // relative to theirs.
+    let has_theirs = !c.theirs.is_empty() && {
+        let mut mine: Vec<&str> = c.ours.iter().map(|&i| units[i].norm.as_str()).collect();
+        c.theirs.iter().all(|&i| {
+            mine.iter()
+                .position(|m| *m == units[i].norm)
+                .map(|at| mine.swap_remove(at))
+                .is_some()
+        })
+    };
     if same {
         Decision::Same
+    } else if has_theirs {
+        Decision::Enum(Vec::new())
     } else if let Some(adds) = enum_merge(units, c) {
         Decision::Enum(adds)
     } else if clean(units, c, matched, &facts.changed) {
@@ -505,6 +638,8 @@ struct Unit<'a> {
     id: Option<(Key, usize)>,
     /// Deparsed (whitespace, case and inner comments do not count).
     norm: String,
+    /// What it depends on besides what it defines ([`references`]).
+    refs: Vec<Atom>,
 }
 
 /// What a statement is about. See the module documentation.
@@ -611,6 +746,78 @@ fn map_key(key: &Key, links: &mut Links) {
         }
         (Action::Alter | Action::Drop, kind) => links.touches.push(object(kind, path)),
     }
+}
+
+/// What a statement depends on besides what it defines: what its atoms
+/// belong to (a column's table, a comment's object), what it renames, the
+/// table an index is on, the table a foreign key references. A side that
+/// drops one of these conflicts with the other side's change to the
+/// statement.
+fn references(stmt: &Statement, links: &Links) -> Vec<Atom> {
+    let mut out: Vec<Atom> = links.touches.clone();
+    out.extend(links.all().flat_map(owners));
+    for key in &stmt.keys {
+        if matches!(key.action(), Action::Rename | Action::Alter) {
+            let renamed = object(key.kind(), key.path());
+            out.extend(owners(&renamed));
+            out.push(renamed);
+        }
+    }
+    let table = |rv: &RangeVar| {
+        let (schema, name) = QualifiedName::from_range_var(rv).resolve(&stmt.search_path);
+        object(ObjectKind::Table, &[schema, name])
+    };
+    // The elements that can hold a foreign key: columns and constraints.
+    let elements: Vec<&NodeEnum> = match stmt.node() {
+        NodeEnum::IndexStmt(s) => {
+            out.extend(s.relation.as_ref().map(table));
+            Vec::new()
+        }
+        NodeEnum::CreateStmt(s) => s
+            .table_elts
+            .iter()
+            .filter_map(|e| e.node.as_ref())
+            .collect(),
+        NodeEnum::AlterTableStmt(s) => s
+            .cmds
+            .iter()
+            .filter_map(|cmd| match cmd.node.as_ref()? {
+                NodeEnum::AlterTableCmd(cmd) => cmd.def.as_ref()?.node.as_ref(),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut constraints: Vec<&Constraint> = Vec::new();
+    for element in elements {
+        match element {
+            NodeEnum::ColumnDef(column) => constraints.extend(column_constraints(column)),
+            NodeEnum::Constraint(c) => constraints.push(c),
+            _ => {}
+        }
+    }
+    out.extend(
+        constraints
+            .into_iter()
+            .filter(|c| c.contype() == ConstrType::ConstrForeign)
+            .filter_map(|c| c.pktable.as_ref())
+            .map(table),
+    );
+    // What it defines is not something it depends on.
+    out.retain(|a| !links.defines.contains(a));
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn column_constraints(column: &ColumnDef) -> impl Iterator<Item = &Constraint> {
+    column
+        .constraints
+        .iter()
+        .filter_map(|n| match n.node.as_ref()? {
+            NodeEnum::Constraint(c) => Some(&**c),
+            _ => None,
+        })
 }
 
 /// What an atom belongs to: a change to one of these and to the atom
@@ -796,7 +1003,9 @@ enum Decision {
     Same,
     /// Both, different atoms: theirs' statements and ours' changed ones.
     Partial,
-    /// Both added enum labels: ours, then these statements.
+    /// Ours, then these statements (theirs' enum labels ours lacks), relative
+    /// to theirs: both added enum labels; or ours already has all of theirs
+    /// (none to add).
     Enum(Vec<String>),
     Conflict,
 }
@@ -906,7 +1115,8 @@ fn enum_merge(units: &[Unit<'_>], c: &Component) -> Option<Vec<String>> {
         ));
         present.push(label.clone());
     }
-    (!adds.is_empty()).then_some(adds)
+    // None to add: ours has all of theirs' labels already.
+    Some(adds)
 }
 
 fn literal(text: &str) -> String {
@@ -1135,19 +1345,33 @@ impl Plan<'_, '_> {
                 } else {
                     self.put(false, &same, &theirs_tail);
                 }
-                if let Some(end) = last_end {
+                // What stays: theirs where ours' first unchanged statement
+                // was, and ours' changed ones (the other unchanged go).
+                let kept = slots
+                    .iter()
+                    .filter(|s| {
+                        !same
+                            .iter()
+                            .skip(1)
+                            .any(|d| self.slot_range(d, false) == self.slot_range(s, false))
+                    })
+                    .map(|s| self.slot_range(s, false).end)
+                    .max();
+                if let Some(end) = kept {
                     self.ends.insert(root, end);
                 }
                 self.put(true, &slots, &theirs_tail);
             }
             Decision::Enum(adds) => {
                 if let Some(end) = last_end {
-                    let seq = self.seq();
-                    self.result.push(Op {
-                        range: end..end,
-                        text: format!("\n{}", adds.join("\n")),
-                        seq,
-                    });
+                    if !adds.is_empty() {
+                        let seq = self.seq();
+                        self.result.push(Op {
+                            range: end..end,
+                            text: format!("\n{}", adds.join("\n")),
+                            seq,
+                        });
+                    }
                     self.ends.insert(root, end);
                 }
                 self.put(true, &slots, &theirs_tail);
@@ -1185,6 +1409,19 @@ impl Plan<'_, '_> {
         }
     }
 
+    /// `at`, or the end of an edit it would fall inside (an insertion must
+    /// never land in text another edit replaces).
+    fn outside(&self, mut at: usize) -> usize {
+        while let Some(op) = self
+            .result
+            .iter()
+            .find(|op| op.range.start < at && at < op.range.end)
+        {
+            at = op.range.end;
+        }
+        at
+    }
+
     /// Places components with nothing of ours to stand on: after the last
     /// place (in ours) of what precedes them in theirs; at the top when
     /// nothing does.
@@ -1209,7 +1446,7 @@ impl Plan<'_, '_> {
                 if !placed[n] {
                     placed[n] = true;
                     let (_, text, ancestor) = &anchored[n];
-                    let at = last.unwrap_or(0);
+                    let at = self.outside(last.unwrap_or(0));
                     let text = if last.is_some() {
                         format!("\n\n{text}")
                     } else {
@@ -1249,15 +1486,15 @@ impl Plan<'_, '_> {
 }
 
 /// Where a statement starts with the comments above it: its extent, but
-/// after the graph edits' marker line when it is among them. The marker
-/// stays where it is: never moved or deleted with the statement under it,
-/// never copied in from theirs.
+/// after the graph edits' marker line or a conflict marker when one is
+/// among them. Markers stay where they are: never moved or deleted with the
+/// statement under them, never copied in from theirs.
 fn lead_start(sql: &str, stmt: &Statement) -> usize {
     let mut start = stmt.extent.start;
     let mut at = stmt.extent.start;
     for line in sql[stmt.extent.start..stmt.span.start].split_inclusive('\n') {
         at += line.len();
-        if line.trim() == GRAPH_EDITS_MARKER {
+        if line.trim() == GRAPH_EDITS_MARKER || Marker::read(line).is_some() {
             start = at;
         }
     }
@@ -1305,39 +1542,55 @@ fn block_text(yours: &str, theirs: &str, label: &str, both: bool) -> String {
     out
 }
 
-fn apply(text: &str, mut ops: Vec<Op>) -> String {
+fn apply(text: &str, mut ops: Vec<Op>) -> Result<String, MergeError> {
     ops.sort_by_key(|op| (op.range.start, op.range.end, op.seq));
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     for op in ops {
-        if op.range.start < at {
-            debug_assert!(false, "overlapping merge edits");
-            continue;
-        }
+        let Some(start) = clip(text, &op.range, at) else {
+            return Err(MergeError::Overlap);
+        };
+        let op = Op {
+            range: start..op.range.end.max(start),
+            ..op
+        };
         out.push_str(&text[at..op.range.start]);
         out.push_str(&op.text);
         at = op.range.end;
     }
     out.push_str(&text[at..]);
-    out
+    Ok(out)
+}
+
+/// Where an edit may start given that the text before `at` is already
+/// taken by the previous one: where it starts when they do not overlap; at
+/// `at` when they share only white space (two deletions each taking the
+/// blank line between them); `None` otherwise.
+fn clip(text: &str, range: &Range<usize>, at: usize) -> Option<usize> {
+    if range.start >= at {
+        Some(range.start)
+    } else if text[range.start..at.min(range.end)].trim().is_empty() {
+        Some(at)
+    } else {
+        None
+    }
 }
 
 /// The ops as edits, each trimmed of what it keeps at both ends.
-fn minimal(text: &str, ops: &[Op]) -> Vec<Edit> {
+fn minimal(text: &str, ops: &[Op]) -> Result<Vec<Edit>, MergeError> {
     let mut sorted: Vec<&Op> = ops.iter().collect();
     sorted.sort_by_key(|op| (op.range.start, op.range.end, op.seq));
     let mut edits: Vec<Edit> = Vec::new();
     let mut at = 0;
     for op in sorted {
-        if op.range.start < at {
-            continue;
-        }
-        at = op.range.end;
-        let old = &text[op.range.clone()];
+        let start = clip(text, &op.range, at).ok_or(MergeError::Overlap)?;
+        let op_range = start..op.range.end.max(start);
+        at = op_range.end;
+        let old = &text[op_range.clone()];
         let new = op.text.as_str();
         let prefix = common_prefix(old, new);
         let suffix = common_suffix(&old[prefix..], &new[prefix..]);
-        let range = op.range.start + prefix..op.range.end - suffix;
+        let range = op_range.start + prefix..op_range.end - suffix;
         let insert = &new[prefix..new.len() - suffix];
         if range.is_empty() && insert.is_empty() {
             continue;
@@ -1356,7 +1609,7 @@ fn minimal(text: &str, ops: &[Op]) -> Vec<Edit> {
             text: insert.to_owned(),
         });
     }
-    edits
+    Ok(edits)
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
@@ -1997,7 +2250,10 @@ ALTER TABLE public.orders ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_i
             label: "v2",
         })
         .unwrap_err();
-        assert_eq!(err.0[0].code, Code::SyntaxError);
+        let MergeError::Unparsable(diagnostics) = err else {
+            panic!("{err:?}");
+        };
+        assert_eq!(diagnostics[0].code, Code::SyntaxError);
     }
 
     #[test]
@@ -2035,3 +2291,9 @@ ALTER TABLE a ADD COLUMN x int;
         );
     }
 }
+
+/// The cases of the review of #13, one test each (`sNN` names the case
+/// there).
+#[cfg(test)]
+#[path = "merge_review.rs"]
+mod review;

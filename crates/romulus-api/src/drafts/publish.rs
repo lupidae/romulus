@@ -329,7 +329,7 @@ pub(super) async fn compiled(
         let model = Schema::deserialize(&**model).map_err(ApiError::internal)?;
         return Ok((Some(model), Vec::new()));
     }
-    let compiled = hub.compiler().compile(&content.sql).await?;
+    let compiled = hub.compiler().compile_draft(&content.sql).await?;
     Ok((compiled.model, compiled.diagnostics))
 }
 
