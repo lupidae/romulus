@@ -473,6 +473,15 @@ async fn an_admins_invitations_die_with_their_admin_rights(db: PgPool) {
     // A second admin invites someone, then loses the role (or is removed).
     let second = signed_in(&db, "Second").await;
     crate::harness::member(&db, team.org, second.user, romulus_api::domain::Role::Admin).await;
+    // The address the departing admin controls, signed in and verified.
+    let accomplice = session(&db, user(&db, "Accomplice").await).await;
+    sqlx::query!(
+        "UPDATE users SET email = 'm2@personal.test' WHERE id = $1",
+        accomplice.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
     for remove in [false, true] {
         let response = app
             .as_user(&second)
@@ -504,6 +513,16 @@ async fn an_admins_invitations_die_with_their_admin_rights(db: PgPool) {
             app.get(&format!("/api/invitations/{link}")).await.status,
             StatusCode::NOT_FOUND,
             "remove: {remove}"
+        );
+        let accept = app
+            .as_user(&accomplice)
+            .post_empty(&format!("/api/invitations/{link}/accept"))
+            .await;
+        assert_eq!(accept.status, StatusCode::NOT_FOUND, "remove: {remove}");
+        assert_eq!(
+            app.as_user(&accomplice).get(&team.path("")).await.status,
+            StatusCode::NOT_FOUND,
+            "no way back in (remove: {remove})"
         );
         let pending = app
             .as_user(&team.admin)
@@ -553,7 +572,13 @@ async fn an_invitation_whose_author_is_no_longer_admin_cannot_be_accepted(db: Pg
 async fn addresses_match_whatever_their_case_beyond_ascii(db: PgPool) {
     let team = Team::new(&db, "acme").await;
     let app = TestApp::new(db.clone());
-    let link = invite(&app, &team, "Élodie@romulus.test", "developer").await;
+    // Typed with a combining accent ("E" + U+0301), upper case: still Élodie.
+    let link = invite(&app, &team, "E\u{301}LODIE@romulus.test", "developer").await;
+    let stored = sqlx::query_scalar!("SELECT email FROM invitations")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(stored, "ÉLODIE@romulus.test", "stored composed (NFC)");
     let elodie = signed_in(&db, "Elodie").await;
     sqlx::query!(
         "UPDATE users SET email = 'élodie@romulus.test' WHERE id = $1",

@@ -119,7 +119,7 @@ async fn list(
 /// A plausible address: something@something, no spaces, at most 254 bytes.
 /// Deliverability is not our problem (nothing is sent); matching is.
 fn checked_email(email: &str) -> ApiResult<String> {
-    let email = email.trim();
+    let email = &crate::email::normalize(email);
     let plausible = email.len() <= 254
         && !email.chars().any(char::is_whitespace)
         && email.split_once('@').is_some_and(|(local, domain)| {
@@ -160,7 +160,8 @@ async fn create(
     let email = checked_email(&body.email)?;
     let member = sqlx::query_scalar!(
         "SELECT u.name FROM memberships m JOIN users u ON u.id = m.user_id
-         WHERE m.org_id = $1 AND lower(u.email) = lower($2) LIMIT 1",
+         WHERE m.org_id = $1
+           AND lower(u.email COLLATE pg_unicode_fast) = lower($2 COLLATE pg_unicode_fast) LIMIT 1",
         admin.org.id,
         email,
     )
@@ -180,7 +181,7 @@ async fn create(
     let row = sqlx::query!(
         r#"INSERT INTO invitations (org_id, email, role, token_hash, expires_at, created_by)
            VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5), $6)
-           ON CONFLICT (org_id, lower(email)) WHERE accepted_at IS NULL DO UPDATE
+           ON CONFLICT (org_id, lower(email COLLATE pg_unicode_fast)) WHERE accepted_at IS NULL DO UPDATE
            SET email = EXCLUDED.email, role = EXCLUDED.role, token_hash = EXCLUDED.token_hash,
                expires_at = EXCLUDED.expires_at, created_by = EXCLUDED.created_by, created_at = now()
            RETURNING id, created_at, expires_at"#,
@@ -319,7 +320,8 @@ async fn find(db: &PgPool, link: &str, viewer: Option<&CurrentUser>) -> ApiResul
                   i.accepted_at IS NOT NULL AS "used!", i.expires_at <= now() AS "expired!",
                   o.name AS org_name, o.slug AS org_slug, u.name AS "invited_by?",
                   m.role AS "member_role?: Role",
-                  coalesce(lower(i.email) = lower($3), false) AS "viewer_is_invitee!"
+                  coalesce(lower(i.email COLLATE pg_unicode_fast) = lower($3 COLLATE pg_unicode_fast), false)
+                    AS "viewer_is_invitee!"
            FROM invitations i
            JOIN organizations o ON o.id = i.org_id
            LEFT JOIN users u ON u.id = i.created_by
@@ -483,22 +485,7 @@ async fn accept(
     }
 
     let mut tx = db::begin_read_committed(&state.db).await?;
-    // Claims the link: of two concurrent accepts, one finds it already used.
-    // The same token, still from an admin: inviting the address again (a new
-    // link, maybe another role) or demoting the author in between voids it.
-    let role = sqlx::query_scalar!(
-        r#"UPDATE invitations i SET accepted_at = now()
-           WHERE i.id = $1 AND i.token_hash = $2 AND i.accepted_at IS NULL AND i.expires_at > now()
-             AND EXISTS (SELECT 1 FROM memberships author
-                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by
-                           AND author.role = 'admin')
-           RETURNING i.role AS "role: Role""#,
-        found.id,
-        token::hash(&link),
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(used)?;
+    let role = claim(&mut tx, found.id, &link).await?.ok_or_else(used)?;
     sqlx::query!(
         "INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)
          ON CONFLICT (org_id, user_id) DO NOTHING",
@@ -514,6 +501,30 @@ async fn accept(
         org: org(role),
         already_member: false,
     }))
+}
+
+/// Marks the invitation accepted and answers its role, or `None` when the
+/// link can no longer be used. Of two concurrent accepts, one gets `None`.
+/// Bound to the link's token, not just the row: inviting the address again
+/// (a new link, perhaps another role) between the lookup and this claim
+/// voids the old link; and still from an admin.
+async fn claim(
+    tx: &mut sqlx::PgConnection,
+    id: Uuid,
+    link: &str,
+) -> Result<Option<Role>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"UPDATE invitations i SET accepted_at = now()
+           WHERE i.id = $1 AND i.token_hash = $2 AND i.accepted_at IS NULL AND i.expires_at > now()
+             AND EXISTS (SELECT 1 FROM memberships author
+                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by
+                           AND author.role = 'admin')
+           RETURNING i.role AS "role: Role""#,
+        id,
+        token::hash(link),
+    )
+    .fetch_optional(tx)
+    .await
 }
 
 /// Deletes the pending invitations `author` sent in `org_id`: run in the
@@ -540,5 +551,69 @@ fn used() -> ApiError {
         message:
             "This invitation was already used. Ask an admin of the organization for a new link."
                 .to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::PgPool;
+
+    use super::*;
+
+    /// An invitation for `email` from a fresh admin; answers its id.
+    async fn invitation(db: &PgPool, link: &str) -> Uuid {
+        let org = sqlx::query_scalar!(
+            "INSERT INTO organizations (name, slug) VALUES ('A', 'a') RETURNING id"
+        )
+        .fetch_one(db)
+        .await
+        .unwrap();
+        let admin = sqlx::query_scalar!(
+            "INSERT INTO users (oidc_subject, email, email_verified, name)
+             VALUES ('s', 'admin@a.test', true, 'Admin') RETURNING id"
+        )
+        .fetch_one(db)
+        .await
+        .unwrap();
+        sqlx::query!(
+            "INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, 'admin')",
+            org,
+            admin
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        sqlx::query_scalar!(
+            "INSERT INTO invitations (org_id, email, role, token_hash, expires_at, created_by)
+             VALUES ($1, 'bob@a.test', 'developer', $2, now() + interval '1 day', $3) RETURNING id",
+            org,
+            token::hash(link),
+            admin,
+        )
+        .fetch_one(db)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn a_link_replaced_after_the_lookup_cannot_be_claimed(db: PgPool) {
+        let old = token::generate();
+        let id = invitation(&db, &old).await;
+        // Between the lookup of `old` and its claim, the admin invites the
+        // address again: same row, new token, another role.
+        let new = token::generate();
+        sqlx::query!(
+            "UPDATE invitations SET token_hash = $2, role = 'admin' WHERE id = $1",
+            id,
+            token::hash(&new),
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let mut conn = db.acquire().await.unwrap();
+        assert_eq!(claim(&mut conn, id, &old).await.unwrap(), None);
+        assert_eq!(claim(&mut conn, id, &new).await.unwrap(), Some(Role::Admin));
+        assert_eq!(claim(&mut conn, id, &new).await.unwrap(), None, "once only");
     }
 }

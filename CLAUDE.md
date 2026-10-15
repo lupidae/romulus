@@ -97,7 +97,7 @@ Made in the skeleton (S0):
   signs in as that address (created if needed) without Zitadel, for QA and
   Playwright; the sign-in page lists alice and bob. Off, it is a 404 and not
   in the OpenAPI document. Config refuses it unless `ROMULUS_PUBLIC_URL` is
-  loopback. It reuses an existing user by email; a later real SSO login of
+  loopback and `ROMULUS_API_ADDR` a loopback IP (never `0.0.0.0`). It reuses an existing user by email; a later real SSO login of
   that address is another user (different `sub`).
 - **Sessions**: a random token in an httpOnly `SameSite=Lax` cookie
   (`Path=/api`, `Secure` on https), only its sha256 stored; expiry slides a
@@ -121,8 +121,10 @@ Made in the skeleton (S0):
   databases only among live rows (a deleted database frees its slug);
   `drafts.base_version_id` may be NULL (a database with no version yet);
   added `users.email_verified` and `versions.created_by_token`; added
-  `oidc_flows` (sign-ins in flight: PKCE verifier, nonce, `next`) and the
-  `organizations_slug_not_reserved` check.
+  `oidc_flows` (sign-ins in flight: PKCE verifier, nonce; where to land rides
+  in the flow cookie, so an invitation token never sits in the database; at
+  most 20 started per client IP, then one per 3 s), the
+  `organizations_slug_not_reserved` check and the `*_email_nfc` checks.
 - **Design system**: Tailwind v4 + Radix primitives, owned components in
   `web/src/components/ui` (shadcn-style, not a dependency). Chosen because
   every agent already knows the idiom, tokens are plain CSS variables, and
@@ -176,6 +178,11 @@ Made in the skeleton (S0):
   subscribes and closes when `change.concerns(org_id, user_id)`, or on
   `Lagged` (see the module docs). Membership writes go through
   `db::begin_read_committed`.
+- **Email addresses**: store `email::normalize(..)` (trimmed, NFC; the
+  database refuses other forms) and compare in SQL with
+  `lower(x COLLATE pg_unicode_fast)` on both sides (Unicode case mapping
+  whatever the database locale; the indexes use the same expression), or
+  `email::key` in Rust (a test keeps the two in agreement).
 - **Secrets handed out** (session ids, invitation links, later API tokens):
   `token::generate()` (32 random bytes, base64url) and store
   `token::hash(..)` (sha256, fits the `*_hash bytea` checks).

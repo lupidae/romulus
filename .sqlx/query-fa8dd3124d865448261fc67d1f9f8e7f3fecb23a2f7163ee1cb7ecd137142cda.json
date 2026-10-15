@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lower(normalize($1, NFC) COLLATE pg_unicode_fast)\n                            = lower(normalize($2, NFC) COLLATE pg_unicode_fast) AS \"same!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "same!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fa8dd3124d865448261fc67d1f9f8e7f3fecb23a2f7163ee1cb7ecd137142cda"
+}

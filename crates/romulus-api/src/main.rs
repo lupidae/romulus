@@ -128,7 +128,10 @@ async fn serve() -> Result<(), MainError> {
         listener.local_addr()?,
         config.public_url
     );
-    axum::serve(listener, app(AppState::new(pool, config)))
+    // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
+    let app = app(AppState::new(pool, config))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     tracing::info!("shut down cleanly");

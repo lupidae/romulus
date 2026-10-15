@@ -14,6 +14,7 @@ pub mod databases;
 pub mod db;
 pub mod domain;
 pub mod drafts;
+pub mod email;
 pub mod error;
 pub mod extract;
 pub mod health;

@@ -104,7 +104,9 @@ async fn login_redirects_to_the_idp_with_pkce_state_and_nonce(db: PgPool) {
         "no refresh token wanted: {scope}"
     );
     assert!(param("nonce").is_some());
-    assert_eq!(param("state").as_deref(), Some(login.flow_cookie.as_str()));
+    // The browser holds the state (and where to land), the IdP hands it back.
+    let (cookie_state, _) = login.flow_cookie.split_once('.').expect("state.next");
+    assert_eq!(param("state").as_deref(), Some(cookie_state));
     assert_eq!(param("prompt"), None);
 }
 
@@ -363,4 +365,86 @@ async fn methods_report_sso_once_configured(db: PgPool) {
         .get("/api/auth/methods")
         .await;
     assert_eq!(response.json()["sso"], true);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_invitation_link_signing_in_never_reaches_the_database(db: PgPool) {
+    let idp = FakeIdp::start().await;
+    let app = TestApp::with_config(db.clone(), idp.config());
+    let invitation = romulus_api::token::generate();
+    let next = format!("/app/invite/{invitation}");
+    let login = login(&app, &format!("?next={next}")).await;
+
+    let flows = sqlx::query_scalar!(r#"SELECT to_jsonb(f)::text AS "row!" FROM oidc_flows f"#)
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(flows.len(), 1);
+    assert!(!flows[0].contains(&invitation), "{}", flows[0]);
+
+    let (code, url) = idp.authorize(&login.authorize, Claims::verified("s", "a@b.test", "A"));
+    let response = callback(
+        &app,
+        &format!("code={code}&state={}", state_of(&url)),
+        Some(&login.flow_cookie),
+    )
+    .await;
+    assert_eq!(response.location(), next, "back to the invitation");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_tampered_landing_in_the_flow_cookie_is_checked_again(db: PgPool) {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let idp = FakeIdp::start().await;
+    let app = TestApp::with_config(db, idp.config());
+    let login = login(&app, "?next=/app/acme").await;
+    let (state, _) = login.flow_cookie.split_once('.').unwrap();
+    let forged = format!("{state}.{}", URL_SAFE_NO_PAD.encode("//evil.test/app/"));
+    let (code, url) = idp.authorize(&login.authorize, Claims::verified("s", "a@b.test", "A"));
+    let response = callback(
+        &app,
+        &format!("code={code}&state={}", state_of(&url)),
+        Some(&forged),
+    )
+    .await;
+    assert_eq!(response.location(), "/app/");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn one_client_cannot_start_sign_ins_without_end(db: PgPool) {
+    let idp = FakeIdp::start().await;
+    let app = TestApp::with_config(db.clone(), idp.config());
+    for _ in 0..romulus_api::auth::limit::BURST {
+        let response = app.get("/api/auth/login").await;
+        assert!(response.location().starts_with(idp.issuer.as_str()));
+    }
+    let refused = app.get("/api/auth/login?next=/app/acme").await;
+    assert_eq!(
+        refused.location(),
+        "/app/signin?error=too_many_sign_ins&next=%2Fapp%2Facme"
+    );
+    let flows = sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM oidc_flows"#)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        flows,
+        i64::from(romulus_api::auth::limit::BURST),
+        "no row for the refused one"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_address_from_the_idp_is_stored_composed(db: PgPool) {
+    let idp = FakeIdp::start().await;
+    let app = TestApp::with_config(db, idp.config());
+    let claims = Claims::verified("zitadel-9", " E\u{301}lodie@romulus.test", "Élodie");
+    let response = sign_in(&app, &idp, claims, "/app/").await;
+    let me = app
+        .as_user(&session_of(&response))
+        .get("/api/me")
+        .await
+        .json();
+    assert_eq!(me["email"], "Élodie@romulus.test");
 }

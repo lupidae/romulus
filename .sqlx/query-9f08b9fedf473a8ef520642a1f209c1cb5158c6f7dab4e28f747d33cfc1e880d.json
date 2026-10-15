@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM oidc_flows WHERE state_hash = $1\n         RETURNING pkce_verifier, nonce, next, created_at > now() - make_interval(secs => $2) AS \"fresh!\"",
+  "query": "DELETE FROM oidc_flows WHERE state_hash = $1\n         RETURNING pkce_verifier, nonce, created_at > now() - make_interval(secs => $2) AS \"fresh!\"",
   "describe": {
     "columns": [
       {
@@ -27,17 +27,6 @@
       },
       {
         "ordinal": 2,
-        "name": "next",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "oidc_flows",
-            "name": "next"
-          }
-        }
-      },
-      {
-        "ordinal": 3,
         "name": "fresh!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -52,9 +41,8 @@
     "nullable": [
       false,
       false,
-      false,
       null
     ]
   },
-  "hash": "bdf81eb18f201b99f02a4ecd2eef8bde85e089c35b9ac4c1e130344265f0b942"
+  "hash": "9f08b9fedf473a8ef520642a1f209c1cb5158c6f7dab4e28f747d33cfc1e880d"
 }

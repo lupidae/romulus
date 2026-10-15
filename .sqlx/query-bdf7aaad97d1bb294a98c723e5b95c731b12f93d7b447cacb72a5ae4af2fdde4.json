@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(f)::text AS \"row!\" FROM oidc_flows f",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bdf7aaad97d1bb294a98c723e5b95c731b12f93d7b447cacb72a5ae4af2fdde4"
+}

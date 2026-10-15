@@ -141,6 +141,8 @@ pub struct Oidc {
     http: reqwest::Client,
     /// Held across a fetch, so concurrent sign-ins share one discovery.
     cache: Mutex<Cache>,
+    /// How fast each client may start sign-ins (`GET /auth/login`).
+    pub sign_ins: super::limit::SignInLimiter,
 }
 
 impl Oidc {
@@ -171,6 +173,7 @@ impl Oidc {
             settings,
             http,
             cache: Mutex::new(Cache::default()),
+            sign_ins: super::limit::SignInLimiter::default(),
         }
     }
 

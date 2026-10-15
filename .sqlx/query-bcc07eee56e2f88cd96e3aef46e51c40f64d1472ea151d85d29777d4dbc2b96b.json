@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO oidc_flows (state_hash, pkce_verifier, nonce) VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bcc07eee56e2f88cd96e3aef46e51c40f64d1472ea151d85d29777d4dbc2b96b"
+}

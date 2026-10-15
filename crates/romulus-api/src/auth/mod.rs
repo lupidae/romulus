@@ -25,18 +25,21 @@
 //! Zitadel, for QA and the Playwright suite. Otherwise it answers 404 like any
 //! unknown path, and it is not in the OpenAPI document.
 
+pub mod limit;
 pub mod member;
 pub mod next;
 pub mod oidc;
 pub mod session;
 
 use axum::{
-    extract::State,
+    Extension,
+    extract::{ConnectInfo, State},
     http::Method,
     response::{IntoResponse, Redirect, Response},
     routing::any,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::{IntoParams, ToSchema};
@@ -69,13 +72,28 @@ pub fn router() -> OpenApiRouter<AppState> {
 const FLOW_TTL: std::time::Duration = std::time::Duration::from_mins(10);
 
 /// The cookie that ties a callback to the browser that started the sign-in
-/// (login CSRF): it holds the `state` the IdP must hand back.
+/// (login CSRF): it holds the `state` the IdP must hand back, and where to
+/// land afterwards. `next` lives here rather than in `oidc_flows` because it
+/// can carry a secret (an invitation link's token) that the database must
+/// not hold in clear; the browser already has it. It is checked again at
+/// the callback.
 fn flow_cookie_name(config: &Config) -> String {
     format!("{}_signin", config.session_cookie)
 }
 
-fn flow_cookie(config: &Config, state: String) -> Cookie<'static> {
-    Cookie::build((flow_cookie_name(config), state))
+fn flow_cookie_value(state: &str, next: &str) -> String {
+    format!("{state}.{}", URL_SAFE_NO_PAD.encode(next))
+}
+
+/// The state and the `next` a flow cookie holds, if it is well formed.
+fn read_flow_cookie(value: &str) -> Option<(&str, String)> {
+    let (state, next) = value.split_once('.')?;
+    let next = String::from_utf8(URL_SAFE_NO_PAD.decode(next).ok()?).ok()?;
+    Some((state, next))
+}
+
+fn flow_cookie(config: &Config, value: String) -> Cookie<'static> {
+    Cookie::build((flow_cookie_name(config), value))
         .http_only(true)
         .secure(config.public_url.scheme() == "https")
         .same_site(SameSite::Lax)
@@ -148,10 +166,16 @@ pub struct LoginQuery {
 )]
 async fn login(
     State(state): State<AppState>,
+    client: Option<Extension<ConnectInfo<std::net::SocketAddr>>>,
     jar: CookieJar,
     Query(query): Query<LoginQuery>,
 ) -> ApiResult<Response> {
     let next = next::or_home(query.next.as_deref());
+    let client = client.map(|Extension(ConnectInfo(addr))| addr.ip());
+    if !state.oidc.sign_ins.allow(client) {
+        tracing::warn!(?client, "sign-in: too many started by this client");
+        return Ok(to_signin("too_many_sign_ins", &next).into_response());
+    }
     let select_account = query.prompt.as_deref() == Some("select_account");
     let started = match state.oidc.start(select_account).await {
         Ok(started) => started,
@@ -160,22 +184,26 @@ async fn login(
             return Ok(to_signin("sso_unavailable", &next).into_response());
         }
     };
+    if state.oidc.sign_ins.sweep_due() {
+        sqlx::query!(
+            "DELETE FROM oidc_flows WHERE created_at < now() - make_interval(secs => $1)",
+            FLOW_TTL.as_secs_f64(),
+        )
+        .execute(&state.db)
+        .await?;
+    }
     sqlx::query!(
-        "DELETE FROM oidc_flows WHERE created_at < now() - make_interval(secs => $1)",
-        FLOW_TTL.as_secs_f64(),
-    )
-    .execute(&state.db)
-    .await?;
-    sqlx::query!(
-        "INSERT INTO oidc_flows (state_hash, pkce_verifier, nonce, next) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO oidc_flows (state_hash, pkce_verifier, nonce) VALUES ($1, $2, $3)",
         token::hash(&started.state),
         started.pkce_verifier,
         started.nonce,
-        next,
     )
     .execute(&state.db)
     .await?;
-    let jar = jar.add(flow_cookie(&state.config, started.state));
+    let jar = jar.add(flow_cookie(
+        &state.config,
+        flow_cookie_value(&started.state, &next),
+    ));
     Ok((jar, Redirect::to(started.url.as_str())).into_response())
 }
 
@@ -212,14 +240,20 @@ async fn callback(
 
     // The state must be the one this browser was given: a callback link
     // forged elsewhere (login CSRF) has the wrong one, or none.
-    let expected = jar.get(&flow_cookie_name(&state.config)).map(Cookie::value);
-    let Some(returned) = query.state.as_deref().filter(|s| Some(*s) == expected) else {
+    let started = jar
+        .get(&flow_cookie_name(&state.config))
+        .and_then(|cookie| read_flow_cookie(cookie.value()));
+    let Some((returned, next)) =
+        started.filter(|(expected, _)| query.state.as_deref() == Some(*expected))
+    else {
         tracing::info!("sign-in: callback without this browser's state");
         return fail("sign_in_expired", next::HOME);
     };
+    // Checked when the sign-in started, and again: a cookie is client input.
+    let next = next::or_home(Some(&next));
     let Some(flow) = sqlx::query!(
         "DELETE FROM oidc_flows WHERE state_hash = $1
-         RETURNING pkce_verifier, nonce, next, created_at > now() - make_interval(secs => $2) AS \"fresh!\"",
+         RETURNING pkce_verifier, nonce, created_at > now() - make_interval(secs => $2) AS \"fresh!\"",
         token::hash(returned),
         FLOW_TTL.as_secs_f64(),
     )
@@ -236,10 +270,10 @@ async fn callback(
         } else {
             "sso_failed"
         };
-        return fail(code, &flow.next);
+        return fail(code, &next);
     }
     let Some(code) = query.code else {
-        return fail("sso_failed", &flow.next);
+        return fail("sso_failed", &next);
     };
     let identity = match state
         .oidc
@@ -249,15 +283,15 @@ async fn callback(
         Ok(identity) => identity,
         Err(err) => {
             tracing::warn!(error = %Chain(&err), "sign-in: code exchange failed");
-            return fail("sso_failed", &flow.next);
+            return fail("sso_failed", &next);
         }
     };
     let Some(user_id) = upsert_user(&state.db, &identity).await? else {
-        return fail("email_unverified", &flow.next);
+        return fail("email_unverified", &next);
     };
 
     let jar = start_session(&state, jar_without_flow, user_id).await?;
-    Ok((jar, Redirect::to(&flow.next)).into_response())
+    Ok((jar, Redirect::to(&next)).into_response())
 }
 
 /// The user an IdP identity is, created or refreshed from its claims, or
@@ -275,6 +309,7 @@ pub async fn upsert_user(
         tracing::info!(subject = %identity.subject, "sign-in: refused, email not verified");
         return Ok(None);
     };
+    let email = &crate::email::normalize(email);
     let name = identity
         .name
         .clone()
@@ -414,14 +449,16 @@ async fn dev_signin(
             "dev sign-in: pass ?email=… (and optionally next, name, verified)".to_owned(),
         ));
     };
-    let email = query.email.trim();
+    let email = &crate::email::normalize(&query.email);
     if !email.contains('@') || email.len() > 254 {
         return Err(ApiError::BadRequest(format!(
             "dev sign-in: {email:?} is not an email address"
         )));
     }
     let existing = sqlx::query_scalar!(
-        "SELECT id FROM users WHERE lower(email) = lower($1) ORDER BY created_at, id LIMIT 1",
+        "SELECT id FROM users
+         WHERE lower(email COLLATE pg_unicode_fast) = lower($1 COLLATE pg_unicode_fast)
+         ORDER BY created_at, id LIMIT 1",
         email,
     )
     .fetch_optional(&state.db)
