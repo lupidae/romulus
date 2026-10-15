@@ -20,5 +20,6 @@ mod oidc;
 mod orgs;
 mod push;
 mod schema;
+mod tidy;
 mod tokens;
 mod versions;

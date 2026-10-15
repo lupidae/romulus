@@ -321,7 +321,10 @@ async fn published_as(db: &sqlx::PgPool, draft: Uuid) -> ApiResult<Option<versio
 
 /// The model of the content's SQL (the last compile's when it was of that
 /// very text), or the diagnostics that prevent one.
-async fn compiled(hub: &Hub, content: &Content) -> ApiResult<(Option<Schema>, Vec<Diagnostic>)> {
+pub(super) async fn compiled(
+    hub: &Hub,
+    content: &Content,
+) -> ApiResult<(Option<Schema>, Vec<Diagnostic>)> {
     if let Some(model) = &content.model {
         let model = Schema::deserialize(&**model).map_err(ApiError::internal)?;
         return Ok((Some(model), Vec::new()));
@@ -371,7 +374,7 @@ fn empty_like(model: &Schema) -> Schema {
     empty
 }
 
-fn hub_error(err: HubError) -> ApiError {
+pub(super) fn hub_error(err: HubError) -> ApiError {
     ApiError::Unavailable(match err {
         HubError::Closing => "The server is restarting. Try again in a moment.".into(),
         HubError::Unavailable => "The draft could not be loaded. Try again in a moment.".into(),

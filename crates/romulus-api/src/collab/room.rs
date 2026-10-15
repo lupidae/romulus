@@ -15,6 +15,10 @@
 //!   [`Settings::max_wait`] after the first); its result goes to everyone
 //!   and to `draft_compiles`. A rename typed in the text moves the table's
 //!   layout and group entries (docs/MVP.md "Renames").
+//! - **Rewrites**: the server replacing the SQL (Tidy) sends the changes
+//!   it computed against one text ([`super::patch`]); the room applies them
+//!   in one transaction if the text is still that one, and refuses
+//!   otherwise (the caller computes again).
 //! - **Publishing** freezes the room (every update dropped) until it is
 //!   published or the attempt fails; then every connection is asked to sync
 //!   again, which brings back what was dropped meanwhile. A frozen room
@@ -58,6 +62,7 @@ use super::{
     awareness::{Peer, sanitize},
     compile::{self, CompileState, Compiled, Rejected, SqlCompiler, sha256_hex},
     doc::{self, Roots},
+    patch,
     protocol::{self, LiveStatus, ServerEvent},
     store::{self, CompileRow, Job, Loaded, Writer},
 };
@@ -253,6 +258,16 @@ pub enum FreezeError {
     NotOpen(LiveStatus),
 }
 
+/// Why the server could not rewrite the SQL.
+#[derive(Debug, thiserror::Error)]
+pub enum RewriteError {
+    #[error("the draft is not open ({0:?})")]
+    NotOpen(LiveStatus),
+    /// Someone edited it since the changes were computed: compute again.
+    #[error("the SQL changed meanwhile")]
+    Changed,
+}
+
 pub enum Command {
     Join {
         conn: ConnId,
@@ -292,6 +307,13 @@ pub enum Command {
     },
     VersionCreated {
         number: i32,
+    },
+    /// Replace the SQL with `changes`, computed against the text whose
+    /// SHA-256 is `from`: whether anything changed.
+    Rewrite {
+        from: String,
+        changes: Vec<patch::Change>,
+        reply: oneshot::Sender<Result<bool, RewriteError>>,
     },
     Shutdown,
 }
@@ -559,6 +581,7 @@ impl Room {
         Ok(room)
     }
 
+    #[expect(clippy::too_many_lines, reason = "one short arm per command")]
     fn handle(&mut self, command: Command) {
         match command {
             Command::Join {
@@ -658,6 +681,13 @@ impl Room {
             }
             Command::VersionCreated { number } => {
                 self.broadcast_event(&ServerEvent::VersionCreated { number }, None);
+            }
+            Command::Rewrite {
+                from,
+                changes,
+                reply,
+            } => {
+                let _ = reply.send(self.rewrite(&from, &changes));
             }
             // Handled by the loop.
             Command::Shutdown => {}
@@ -861,8 +891,8 @@ impl Room {
         self.sql_may_have_changed();
     }
 
-    /// A change the server makes itself (moving a renamed table's entries),
-    /// sent to everyone and stored like any other.
+    /// A change the server makes itself (moving a renamed table's entries,
+    /// a rewrite), sent to everyone and stored like any other.
     fn server_edit(&mut self, edit: impl FnOnce(&Roots, &mut TransactionMut) -> bool) {
         let before = self.doc.transact().state_vector();
         let changed = {
@@ -873,8 +903,28 @@ impl Room {
             return;
         }
         let update = self.doc.transact().encode_state_as_update_v1(&before);
+        self.doc_bytes += update.len();
         self.broadcast(&protocol::update(update.clone()), None);
         self.queue_write(update.into());
+    }
+
+    /// Applies a rewrite of the SQL if the text is still the one it was
+    /// computed against (see [`Command::Rewrite`]).
+    fn rewrite(&mut self, from: &str, changes: &[patch::Change]) -> Result<bool, RewriteError> {
+        if self.status != LiveStatus::Open {
+            return Err(RewriteError::NotOpen(self.status));
+        }
+        let current = self.roots.sql(&self.doc.transact());
+        if sha256_hex(&current) != from {
+            return Err(RewriteError::Changed);
+        }
+        let mut edited = false;
+        self.server_edit(|roots, txn| {
+            edited = patch::apply(&roots.sql, txn, &current, changes);
+            edited
+        });
+        self.sql_may_have_changed();
+        Ok(edited)
     }
 
     fn content(&self) -> Content {

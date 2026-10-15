@@ -1701,6 +1701,110 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/tidy": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Rewrites the draft's SQL in canonical form.",
+        "operationId": "tidy_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tidied"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`compile_failed` (the SQL has errors, `details.diagnostics`), `tidy_unsafe` (the canonical form would change the schema)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The compiler is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/tokens": {
       "get": {
         "tags": [
@@ -5941,6 +6045,24 @@
           "y": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "Tidied": {
+        "type": "object",
+        "description": "What Tidy did.",
+        "required": [
+          "changed",
+          "sha256"
+        ],
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "Whether the SQL changed (false: it was tidy already)."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 of the SQL as Tidy left it."
           }
         }
       },

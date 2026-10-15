@@ -371,6 +371,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/tidy": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Rewrites the draft's SQL in canonical form. */
+    post: operations["tidy_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/tokens": {
     parameters: {
       query?: never;
@@ -1759,6 +1776,13 @@ export interface components {
       /** Format: double */
       y: number;
     };
+    /** @description What Tidy did. */
+    Tidied: {
+      /** @description Whether the SQL changed (false: it was tidy already). */
+      changed: boolean;
+      /** @description SHA-256 of the SQL as Tidy left it. */
+      sha256: string;
+    };
     /**
      * @description What an API token may do (`api_token_scope`).
      * @enum {string}
@@ -3103,6 +3127,80 @@ export interface operations {
       };
       /** @description The SQL does not compile (`details.diagnostics`) */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The compiler is unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  tidy_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Tidied"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `compile_failed` (the SQL has errors, `details.diagnostics`), `tidy_unsafe` (the canonical form would change the schema) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
         headers: {
           [name: string]: unknown;
         };

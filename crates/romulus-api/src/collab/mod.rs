@@ -29,6 +29,7 @@
 pub mod awareness;
 pub mod compile;
 pub mod doc;
+pub mod patch;
 pub mod protocol;
 pub mod room;
 mod socket;
@@ -54,7 +55,8 @@ use self::{
     awareness::Peer,
     compile::SqlCompiler,
     room::{
-        Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, Incoming, Outbox, Settings, Shared,
+        Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, Incoming, Outbox, RewriteError,
+        Settings, Shared,
     },
 };
 use crate::AppState;
@@ -219,6 +221,28 @@ impl Hub {
             draft,
             Command::Freeze {
                 by: by.to_owned(),
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
+    /// Replaces the draft's SQL by `changes` ([`patch::changes`] from the
+    /// text whose SHA-256 is `from` to the new one), in one transaction, if
+    /// nobody edited it since; answers whether anything changed. On
+    /// [`RewriteError::Changed`], read the content again and recompute.
+    pub async fn rewrite(
+        &self,
+        draft: Uuid,
+        from: String,
+        changes: Vec<patch::Change>,
+    ) -> Result<Result<bool, RewriteError>, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::Rewrite {
+                from,
+                changes,
                 reply,
             },
         )?;

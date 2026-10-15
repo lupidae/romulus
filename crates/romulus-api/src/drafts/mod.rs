@@ -15,6 +15,9 @@
 //!   (the diff against the base), and `POST …/drafts/{id}/publish`
 //!   [developer]: freeze, compile, store as the next version ([`publish`]).
 //!
+//! - `POST …/drafts/{id}/tidy` [developer]: rewrite the SQL in remus's
+//!   canonical form, as a minimal edit ([`tidy`]).
+//!
 //! "Update draft" (the three-way merge when someone published first) is
 //! milestone 6; until then a stale draft answers 409 `stale_base`.
 //!
@@ -22,6 +25,7 @@
 //! `draft_snapshots`).
 
 pub mod publish;
+pub mod tidy;
 pub mod versions;
 
 use axum::{extract::State, http::StatusCode};
@@ -50,6 +54,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list, create))
         .routes(routes!(get, rename, delete))
         .routes(routes!(publish::preview, publish::publish))
+        .routes(routes!(tidy::tidy))
 }
 
 /// A draft, as the database page and the editor show it.

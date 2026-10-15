@@ -43,7 +43,11 @@ fn every_graph_edit_parses_and_is_allowed() {
     let catalog = Catalog::default();
     for (case, sql) in &all {
         let parsed = parse(sql);
-        assert!(parsed.errors.is_empty(), "{case}: {sql}\n{:?}", parsed.errors);
+        assert!(
+            parsed.errors.is_empty(),
+            "{case}: {sql}\n{:?}",
+            parsed.errors
+        );
         assert_eq!(parsed.statements.len(), 1, "{case}: one statement: {sql}");
         let refused = allowlist::check(&parsed, sql, &catalog);
         assert!(refused.is_empty(), "{case}: {sql}\n{refused:?}");
