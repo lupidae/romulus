@@ -15,6 +15,11 @@ node_modules/
 /web/playwright/.cache/
 *.tsbuildinfo
 
+# Homepage
+/site/test-results/
+/site/playwright-report/
+/site/lighthouse/
+
 # OS / editors
 .DS_Store
 .idea/

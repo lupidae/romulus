@@ -12,6 +12,7 @@ crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tes
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
+site/                 the static homepage (tokens copied from web/; see site/README.md)
 deploy/zitadel/       the provisioner that sets Zitadel up on `just up`
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
 docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner
@@ -33,6 +34,7 @@ just e2e         # Playwright: production build + its own API, on the preview or
 just e2e-dev     # Playwright on dev-only screens (/app/dev/*, e.g. the schema viewer): dev server, no stack
 just perf        # schema viewer frame times at 300 tables: headed, production build with dev routes
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
+just site        # the homepage on $ROMULUS_SITE_PORT; `just site-check` = its CI gate
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
 ```
@@ -58,6 +60,7 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +4 | `ROMULUS_ZITADEL_PORT` | Zitadel, issuer `http://localhost:<port>` |
 | +5 | `ROMULUS_PREVIEW_PORT` | `vite preview`: the origin Playwright drives |
 | +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
+| +7 | `ROMULUS_SITE_PORT` | the static homepage (`just site`, site/'s Playwright) |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
 the worktree path>`, computed by `scripts/dev-env --project-name` and passed

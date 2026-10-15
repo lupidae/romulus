@@ -1,0 +1,23 @@
+# Cloudflare Pages response headers (https://developers.cloudflare.com/pages/configuration/headers/).
+# serve.mjs applies the same file locally. When the API serves this site at
+# `/` instead, it must send equivalent headers itself.
+#
+# The script hash is the inline theme script in index.html and 404.html; the
+# site's e2e test fails if they drift apart. Inline style attributes position
+# the hero's graph nodes, hence style-src-attr.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-iP734kVzn25bH+W48aL1xXdobLCoh9E/E+HburCSrkQ='; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), browsing-topics=()
+
+# Unhashed names, so a month rather than immutable: a font or icon update
+# reaches returning visitors within weeks, and HTML, CSS and JS always revalidate.
+/fonts/*
+  Cache-Control: public, max-age=2592000
+/*.png
+  Cache-Control: public, max-age=2592000
+/favicon.*
+  Cache-Control: public, max-age=2592000

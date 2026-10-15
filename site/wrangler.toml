@@ -1,0 +1,10 @@
+# Cloudflare Pages project for the homepage. Nothing to build: public/ is the
+# site as served (_headers for response headers, 404.html for unknown paths).
+#
+#   just site-deploy     (npx wrangler login once; CI never deploys)
+#
+# The custom domain (romulus.lupidae.com) is attached once in the Pages
+# dashboard: Pages has no wrangler.toml setting for it. See site/README.md.
+name = "romulus-site"
+pages_build_output_dir = "./public"
+compatibility_date = "2026-10-01"

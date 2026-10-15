@@ -1,0 +1,21 @@
+{
+  "name": "romulus-site",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The romulus homepage: static files in public/, no build step.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "serve": "node serve.mjs",
+    "sync": "node tools/sync.mjs",
+    "sync:check": "node tools/sync.mjs --check",
+    "assets": "node tools/assets.mjs",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.64.1"
+  }
+}

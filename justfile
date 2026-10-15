@@ -106,3 +106,46 @@ e2e-dev:
 # frame times of the schema viewer at 300 tables, headed, on a production build
 perf:
     npm --prefix web run perf
+
+# serve the homepage (site/public) the way Cloudflare Pages will, on this worktree's site port
+site: env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Not $ROMULUS_SITE_PORT: on a first run just loaded no .env yet.
+    port=$(sed -n 's/^ROMULUS_SITE_PORT=//p' .env)
+    node site/serve.mjs "$port"
+
+# the homepage's checks: tokens and fonts in sync with web/, then Playwright and axe
+site-check: env
+    node site/tools/sync.mjs --check
+    npm --prefix site run e2e
+
+# re-copy tokens and fonts from web/, re-render the social image and the icons
+site-gen:
+    node site/tools/sync.mjs
+    node site/tools/assets.mjs
+
+# Lighthouse, mobile and desktop, against the homepage; reports in site/lighthouse/
+site-lighthouse: env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    port=$(sed -n 's/^ROMULUS_SITE_PORT=//p' .env)
+    url="http://localhost:$port/"
+    if ! curl -fs -o /dev/null "$url"; then
+        node site/serve.mjs "$port" >/dev/null & server=$!
+        trap 'kill $server' EXIT
+        until curl -fs -o /dev/null "$url"; do sleep 0.2; done
+    fi
+    mkdir -p site/lighthouse
+    for preset in mobile desktop; do
+        flag=""
+        if [ "$preset" = desktop ]; then flag="--preset=desktop"; fi
+        npx --yes lighthouse@13.5.0 "$url" $flag --quiet --chrome-flags=--headless=new \
+            --output=html --output=json --output-path="site/lighthouse/$preset"
+        node -e 'const r = require(process.argv[1]); console.log(process.argv[2].padEnd(8), Object.values(r.categories).map((c) => `${c.title} ${Math.round(c.score * 100)}`).join(" · "))' \
+            "$PWD/site/lighthouse/$preset.report.json" "$preset"
+    done
+
+# publish the homepage to Cloudflare Pages (site/wrangler.toml; `npx wrangler login` once)
+site-deploy:
+    cd site && npx --yes wrangler@4 pages deploy

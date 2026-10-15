@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>romulus: design, version and review your Postgres schema together</title>
+<meta name="description" content="DBA as a service for teams on Postgres. Keep every version of your schema, review any change as a diff, and design the next one live, in SQL and on the table graph.">
+<link rel="canonical" href="https://romulus.lupidae.com/">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+<script>
+  // Before first paint: the theme the visitor chose here or in the app (same
+  // key; without one, tokens.css follows the system), and a flag for the CSS
+  // that waits on app.js.
+  (function (root) {
+    root.classList.add("js");
+    try {
+      var t = localStorage.getItem("romulus-theme");
+      if (t === "light" || t === "dark") root.classList.add(t);
+    } catch (e) {}
+  })(document.documentElement);
+</script>
+<link rel="preload" href="/fonts/inter-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="romulus">
+<meta property="og:url" content="https://romulus.lupidae.com/">
+<meta property="og:title" content="romulus: design, version and review your Postgres schema together">
+<meta property="og:description" content="DBA as a service for teams on Postgres. Every version kept, any two diffed, and the next one designed live, in SQL and on the table graph.">
+<meta property="og:image" content="https://romulus.lupidae.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="romulus: SQL on one side, the table graph on the other, with two teammates' cursors.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="romulus: design, version and review your Postgres schema together">
+<meta name="twitter:description" content="DBA as a service for teams on Postgres. Every version kept, any two diffed, and the next one designed live.">
+<meta name="twitter:image" content="https://romulus.lupidae.com/og.png">
+<meta name="twitter:image:alt" content="romulus: SQL on one side, the table graph on the other, with two teammates' cursors.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "romulus",
+  "url": "https://romulus.lupidae.com/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Web",
+  "description": "DBA as a service for teams on Postgres: version, diff and design your schema together.",
+  "publisher": { "@type": "Organization", "name": "lupidae", "url": "https://github.com/lupidae" }
+}
+</script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <!-- Iconoir, the app's icon set (web/src/components/icons). -->
+  <symbol id="i-mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" class="mark-bg"/><path d="M11.5 23V13.75A4.75 4.75 0 0 1 16.25 9H17" fill="none" stroke-width="2.75" stroke-linecap="round" class="mark-fg-stroke"/><circle cx="21.5" cy="9" r="2.4" class="mark-fg"/></symbol>
+  <symbol id="i-git-branch" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M18 8a2 2 0 1 0 0-4a2 2 0 0 0 0 4M6 20a2 2 0 1 0 0-4a2 2 0 0 0 0 4m0-4V3"/><path d="M8 18h1c3.5 0 9-2.1 9-8.5V8"/></g></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 17h7M5 7l5 5l-5 5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m5 13l4 4L19 7"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="m7 12.5l3 3l7-7"/><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2S2 6.477 2 12s4.477 10 10 10"/></g></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 12h6m6 0h-6m0 0V6m0 6v6"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 12h12"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M19.4 20H9.6a.6.6 0 0 1-.6-.6V9.6a.6.6 0 0 1 .6-.6h9.8a.6.6 0 0 1 .6.6v9.8a.6.6 0 0 1-.6.6"/><path d="M15 9V4.6a.6.6 0 0 0-.6-.6H4.6a.6.6 0 0 0-.6.6v9.8a.6.6 0 0 0 .6.6H9"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18a6 6 0 1 0 0-12a6 6 0 0 0 0 12m10-6h1M12 2V1m0 22v-1m8-2l-1-1m1-15l-1 1M4 20l1-1M4 4l1 1m-4 7h1"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 11.507a9.493 9.493 0 0 0 18 4.219c-8.507 0-12.726-4.22-12.726-12.726A9.49 9.49 0 0 0 3 11.507"/></symbol>
+  <symbol id="i-computer" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 21h15m4 0h1"/><path d="M2 16.4V3.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v12.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 12h1.4a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H6.6a.6.6 0 0 1-.6-.6v-6.8a.6.6 0 0 1 .6-.6H8m8 0V8c0-1.333-.8-4-4-4S8 6.667 8 8v4m8 0H8"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 12h18m0 0l-8.5-8.5M21 12l-8.5 8.5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M21.168 8A10 10 0 0 0 12 2c-5.185 0-9.45 3.947-9.95 9"/><path d="M17 8h4.4a.6.6 0 0 0 .6-.6V3M2.881 16c1.544 3.532 5.068 6 9.168 6c5.186 0 9.45-3.947 9.951-9"/><path d="M7.05 16h-4.4a.6.6 0 0 0-.6.6V21"/></g></symbol>
+  <symbol id="i-cursor" viewBox="0 0 16 16"><path d="M1 1l5.5 13.5 1.9-5.6L14 7z"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" data-header>
+  <div class="container header-inner">
+    <a class="wordmark" href="/" aria-label="romulus, home">
+      <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+      <span>romulus</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="#versions">Versions</a>
+      <a href="#drafts">Drafts</a>
+      <a href="#ci">CI</a>
+      <a href="#postgres">Postgres</a>
+      <a href="#teams">Teams</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <a class="button ghost" href="/app/signin">Sign in</a>
+      <a class="button secondary header-cta" href="mailto:romulus@lupidae.com?subject=romulus%20early%20access">Request access</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="container hero-copy">
+    <h1 id="hero-title">Design, version and review your Postgres schema together.</h1>
+    <p class="lead">DBA as a service for Postgres teams. Keep every version, compare any two, design the next one live.</p>
+    <div class="cta-row">
+      <a class="button primary large" href="mailto:romulus@lupidae.com?subject=romulus%20early%20access">Request access</a>
+      <a class="button secondary large" href="/app/signin">Sign in</a>
+    </div>
+    <p class="fineprint"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>romulus never connects to your database.</p>
+  </div>
+
+  <div class="container hero-visual">
+    <figure class="product" role="img" aria-label="A romulus draft of a billing schema. On the left, the SQL; on the right, the table graph. Ada types a foreign key from invoices to customers in the SQL, it compiles, and the graph draws the new column and its edge, while Sam's pointer selects it and Lin, a reviewer, follows along.">
+      <div class="window">
+        <div class="window-bar">
+          <div class="crumbs">
+            <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+            <span class="crumb hide-sm">acme</span><span class="sep hide-sm">/</span>
+            <span class="crumb">billing</span><span class="sep">/</span>
+            <span class="branch"><svg class="icon"><use href="#i-git-branch"/></svg>add-invoices</span>
+            <span class="base hide-sm">from v12</span>
+          </div>
+          <div class="bar-right">
+            <span class="avatars">
+              <span class="avatar p1">A</span><span class="avatar p3">S</span><span class="avatar p4">L</span>
+            </span>
+            <span class="fake-button hide-sm">Publish v13</span>
+          </div>
+        </div>
+
+        <div class="panes">
+          <div class="pane pane-sql">
+            <div class="pane-head">
+              <div class="tabs">
+                <span class="tab active">schema.sql</span>
+                <span class="tab">JSON</span>
+                <span class="tab hide-xs">DBML</span>
+                <span class="tab hide-xs">Mermaid</span>
+              </div>
+              <div class="compile">
+                <span class="compile-state compiling"><span class="pulse"></span>Compiling</span>
+                <span class="compile-state compiled"><svg class="icon"><use href="#i-check-circle"/></svg>Compiled</span>
+              </div>
+            </div>
+            <div class="editor">
+              <div class="lines">
+                <div class="l"><span class="ln">1</span><span class="lc"><span class="k">CREATE TYPE</span> <span class="i">invoice_status</span> <span class="k">AS ENUM</span></span></div>
+                <div class="l"><span class="ln">2</span><span class="lc">  <span class="p">(</span><span class="s">'draft'</span><span class="p">,</span> <span class="s">'open'</span><span class="p">,</span> <span class="s">'paid'</span><span class="p">,</span> <span class="s">'void'</span><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">3</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">4</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">customers</span> <span class="p">(</span></span></div>
+                <div class="l"><span class="ln">5</span><span class="lc">  <span class="i">id</span>    <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">citext</span> <span class="k">NOT NULL UNIQUE</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">7</span><span class="lc">  <span class="i">name</span>  <span class="t">text</span> <span class="k">NOT NULL</span></span></div>
+                <div class="l"><span class="ln">8</span><span class="lc"><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">9</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">10</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">invoices</span> <span class="p">(</span></span></div>
+                <div class="l"><span class="ln">11</span><span class="lc">  <span class="i">id</span>          <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+                <div class="l active-line"><span class="ln">12</span><span class="lc">  <span class="typed"><span class="i">customer_id</span> <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">customers</span><span class="p">,</span></span><span class="caret c1"><span class="flag">Ada</span></span></span></div>
+                <div class="l"><span class="ln">13</span><span class="lc">  <span class="i">status</span>      <span class="t">invoice_status</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">14</span><span class="lc">  <span class="i">total_cents</span> <span class="t">bigint</span> <span class="k">CHECK</span> <span class="p">(</span><span class="i">total_cents</span> <span class="p">&gt;=</span> <span class="n">0</span><span class="p">),</span></span></div>
+                <div class="l"><span class="ln">15</span><span class="lc">  <span class="i">issued_at</span>   <span class="t">timestamptz</span></span></div>
+                <div class="l"><span class="ln">16</span><span class="lc"><span class="p">);</span></span></div>
+                <div class="l"><span class="ln">17</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">18</span><span class="lc"><span class="k">COMMENT ON COLUMN</span> <span class="sel c4"><span class="i">invoices</span><span class="p">.</span><span class="i">total_cents</span></span><span class="caret c4 still"><span class="flag">Lin</span></span></span></div>
+                <div class="l"><span class="ln">19</span><span class="lc">  <span class="k">IS</span> <span class="s">'Sum of the lines, in cents'</span><span class="p">;</span></span></div>
+                <div class="l"><span class="ln">20</span><span class="lc"></span></div>
+                <div class="l"><span class="ln">21</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">payments</span> <span class="p">(</span></span></div>
+                <div class="l"><span class="ln">22</span><span class="lc">  <span class="i">id</span>         <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">23</span><span class="lc">  <span class="i">invoice_id</span> <span class="t">uuid</span> <span class="k">NOT NULL REFERENCES</span> <span class="i">invoices</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">24</span><span class="lc">  <span class="i">amount</span>     <span class="t">numeric</span><span class="p">(</span><span class="n">12</span><span class="p">,</span> <span class="n">2</span><span class="p">)</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+                <div class="l"><span class="ln">25</span><span class="lc">  <span class="i">paid_at</span>    <span class="t">timestamptz</span> <span class="k">DEFAULT</span> <span class="i">now</span><span class="p">()</span></span></div>
+                <div class="l"><span class="ln">26</span><span class="lc"><span class="p">);</span></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pane pane-graph">
+            <div class="pane-head">
+              <div class="tabs"><span class="tab active">Graph</span></div>
+              <span class="graph-meta">4 tables, 1 enum</span>
+            </div>
+            <div class="canvas">
+              <div class="board">
+                <svg class="edges" viewBox="0 0 640 400" preserveAspectRatio="xMinYMin meet">
+                  <path class="edge" d="M456 99 C 428 99, 428 149, 400 149"/>
+                  <path class="edge" d="M456 315 C 424 315, 432 149, 400 149"/>
+                  <path class="edge type" d="M240 119 C 204 119, 220 263, 184 263"/>
+                  <path class="edge new" pathLength="1" d="M240 171 C 212 171, 212 77, 184 77"/>
+                  <circle class="end" cx="400" cy="149" r="3"/>
+                  <circle class="end" cx="456" cy="99" r="3"/>
+                  <circle class="end" cx="456" cy="315" r="3"/>
+                  <circle class="end" cx="184" cy="263" r="3"/>
+                  <circle class="end new-end" cx="184" cy="77" r="3"/>
+                  <circle class="end new-end" cx="240" cy="171" r="3"/>
+                </svg>
+
+                <div class="node" style="--x:24;--y:32">
+                  <div class="node-head"><span class="node-dot"></span>customers</div>
+                  <div class="row"><span>id</span><b class="key pk">PK</b><i>uuid</i></div>
+                  <div class="row"><span>email</span><i>citext</i></div>
+                  <div class="row"><span>name</span><i>text</i></div>
+                </div>
+
+                <div class="node node-invoices" style="--x:240;--y:104">
+                  <div class="node-head"><span class="node-dot"></span>invoices<span class="node-presence c1">A</span></div>
+                  <div class="row"><span>id</span><b class="key pk">PK</b><i>uuid</i></div>
+                  <div class="row row-new"><span>customer_id</span><b class="key fk">FK</b><i>uuid</i></div>
+                  <div class="rows-after">
+                    <div class="row"><span>status</span><i>invoice_status</i></div>
+                    <div class="row"><span>total_cents</span><i>bigint</i></div>
+                    <div class="row"><span>issued_at</span><i>timestamptz</i></div>
+                  </div>
+                </div>
+
+                <div class="node" style="--x:456;--y:32">
+                  <div class="node-head"><span class="node-dot"></span>payments</div>
+                  <div class="row"><span>id</span><b class="key pk">PK</b><i>uuid</i></div>
+                  <div class="row"><span>invoice_id</span><b class="key fk">FK</b><i>uuid</i></div>
+                  <div class="row"><span>amount</span><i>numeric</i></div>
+                  <div class="row"><span>paid_at</span><i>timestamptz</i></div>
+                </div>
+
+                <div class="node node-enum" style="--x:24;--y:248">
+                  <div class="node-head"><span class="node-dot"></span>invoice_status<span class="node-tag">enum</span></div>
+                  <div class="row"><span>draft</span></div>
+                  <div class="row"><span>open</span></div>
+                  <div class="row"><span>paid</span></div>
+                  <div class="row"><span>void</span></div>
+                </div>
+
+                <div class="node" style="--x:456;--y:248">
+                  <div class="node-head"><span class="node-dot"></span>invoice_lines</div>
+                  <div class="row"><span>id</span><b class="key pk">PK</b><i>uuid</i></div>
+                  <div class="row"><span>invoice_id</span><b class="key fk">FK</b><i>uuid</i></div>
+                  <div class="row"><span>description</span><i>text</i></div>
+                  <div class="row"><span>amount</span><i>numeric</i></div>
+                </div>
+
+                <div class="pointer c3">
+                  <div class="pointer-idle">
+                    <svg viewBox="0 0 16 16"><use href="#i-cursor"/></svg>
+                    <span class="flag">Sam</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<section class="section" id="versions" aria-labelledby="versions-title">
+  <div class="container split">
+    <div class="copy">
+      <h2 id="versions-title">Every version kept. Any two compared.</h2>
+      <p>Each upload, CI push and published draft becomes a version that can't be edited afterwards. Pick any two to see what changed, as a list, on the graph and in SQL.</p>
+      <ul class="points">
+        <li><strong>Diffs of the schema itself</strong><span>A column that became <code>NOT NULL</code> shows up. Reformatting the SQL shows nothing.</span></li>
+        <li><strong>A history nobody rewrites</strong><span>Each version records who made it and where it came from.</span></li>
+      </ul>
+    </div>
+
+    <div class="visual card versions" role="img" aria-label="The billing database's versions: v14 pushed from CI, v13 published from a draft by Ada, v12 uploaded by Sam. The diff from v12 to v14 lists four additions, two changes and one removal.">
+      <div class="versions-list">
+        <div class="vlist-head">Versions</div>
+        <div class="vrow is-to"><span class="vnum">v14</span><span class="vmeta"><span class="vtitle">Pushed from CI</span><span class="vsub">main, 2 hours ago</span></span><span class="vpin">to</span></div>
+        <div class="vrow is-between"><span class="vnum">v13</span><span class="vmeta"><span class="vtitle">add-invoices</span><span class="vsub">Ada, yesterday</span></span></div>
+        <div class="vrow is-from"><span class="vnum">v12</span><span class="vmeta"><span class="vtitle">Uploaded SQL</span><span class="vsub">Sam, Oct 9</span></span><span class="vpin">from</span></div>
+        <div class="vrow"><span class="vnum">v11</span><span class="vmeta"><span class="vtitle">Pushed from CI</span><span class="vsub">main, Oct 2</span></span></div>
+      </div>
+      <div class="diff">
+        <div class="diff-head">
+          <span class="diff-range">v12 <svg class="icon"><use href="#i-arrow-right"/></svg> v14</span>
+          <span class="diff-counts"><span class="count add">4 added</span><span class="count change">2 changed</span><span class="count remove">1 removed</span></span>
+        </div>
+        <ul class="changes">
+          <li class="add"><span class="badge">Added</span><span class="obj">table <b>invoices</b></span></li>
+          <li class="add"><span class="badge">Added</span><span class="obj">column <b>invoices.customer_id</b> <i>uuid</i></span></li>
+          <li class="add"><span class="badge">Added</span><span class="obj">foreign key <b>invoices → customers</b></span></li>
+          <li class="change"><span class="badge">Changed</span><span class="obj">column <b>customers.email</b> <i>text → citext</i></span></li>
+          <li class="change"><span class="badge">Changed</span><span class="obj">enum <b>invoice_status</b> <i>+ 'void'</i></span></li>
+          <li class="add"><span class="badge">Added</span><span class="obj">policy <b>invoices_by_org</b> <i>on invoices</i></span></li>
+          <li class="remove"><span class="badge">Removed</span><span class="obj">index <b>customers_email_idx</b></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="drafts" aria-labelledby="drafts-title">
+  <div class="container split reverse">
+    <div class="copy">
+      <h2 id="drafts-title">Design the next version together.</h2>
+      <p>A draft is a branch of your schema the whole team can open at once. Type SQL or work on the graph; both edit the same draft, and everyone's cursor shows in both.</p>
+      <ul class="points">
+        <li><strong>Checked by Postgres as you type</strong><span>Each change compiles in a real Postgres sandbox, and errors point at the line that caused them.</span></li>
+        <li><strong>Edit on the graph, get SQL</strong><span>Rename, add or drop tables and columns, or draw a foreign key, and romulus writes the statement.</span></li>
+        <li><strong>Publish in one step</strong><span>If a new version landed first, Update draft merges statement by statement and leaves you only the real conflicts.</span></li>
+      </ul>
+    </div>
+
+    <div class="visual card merge" role="img" aria-label="Updating a draft after CI pushed v14: one statement changed on both sides and is shown as a conflict with Keep mine and Keep theirs buttons. Publishing waits until it is resolved.">
+      <div class="merge-head">
+        <span class="merge-title"><svg class="icon"><use href="#i-refresh"/></svg>Update draft</span>
+        <span class="merge-sub">v14 was pushed while you worked<span class="conflict-count">1 conflict</span></span>
+      </div>
+      <div class="code-block">
+        <div class="l"><span class="ln">4</span><span class="lc"><span class="k">CREATE TABLE</span> <span class="i">customers</span> <span class="p">(</span></span></div>
+        <div class="l"><span class="ln">5</span><span class="lc">  <span class="i">id</span>    <span class="t">uuid</span> <span class="k">PRIMARY KEY</span><span class="p">,</span></span></div>
+        <div class="conflict">
+          <div class="side mine">
+            <div class="side-label">Yours</div>
+            <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">citext</span> <span class="k">NOT NULL UNIQUE</span><span class="p">,</span></span></div>
+          </div>
+          <div class="side theirs">
+            <div class="side-label">v14, pushed from CI</div>
+            <div class="l"><span class="ln">6</span><span class="lc">  <span class="i">email</span> <span class="t">text</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+          </div>
+          <div class="conflict-actions"><span class="fake-button small">Keep mine</span><span class="fake-button small">Keep theirs</span></div>
+        </div>
+        <div class="l"><span class="ln">7</span><span class="lc">  <span class="i">name</span>  <span class="t">text</span> <span class="k">NOT NULL</span><span class="p">,</span></span></div>
+        <div class="l merged"><span class="ln">8</span><span class="lc">  <span class="i">phone</span> <span class="t">text</span></span><span class="merged-tag">from v14</span></div>
+        <div class="l"><span class="ln">9</span><span class="lc"><span class="p">);</span></span></div>
+      </div>
+      <div class="merge-foot"><span class="dot-warn" aria-hidden="true"></span>Publishing waits until every conflict is resolved.</div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="ci" aria-labelledby="ci-title">
+  <div class="container split">
+    <div class="copy">
+      <h2 id="ci-title">Push the real schema from CI.</h2>
+      <p><a href="https://remus.lupidae.com">remus</a>, the open-source twin of romulus, reads your database's catalog inside your own pipeline and sends the result. romulus never sees a connection string or a row of data.</p>
+      <ul class="points">
+        <li><strong>Push on every run</strong><span>When nothing changed, the push answers <code>200 unchanged</code> and the history stays clean.</span></li>
+        <li><strong>Tokens with one job</strong><span>A push token belongs to one database and can only push.</span></li>
+      </ul>
+    </div>
+
+    <div class="visual terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>In CI, after your migrations</span></span>
+        <button class="copy-button" type="button" data-copy="#push-snippet" aria-label="Copy the push command"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span data-copy-label>Copy</span></button>
+      </div>
+<pre class="terminal-body" tabindex="0" role="region" aria-label="Push command"><code id="push-snippet">remus -u <span class="ts">"$DATABASE_URL"</span> -f json \
+  | curl -fsS --data-binary @- \
+      -H <span class="ts">"Authorization: Bearer $ROMULUS_TOKEN"</span> \
+      -H <span class="ts">"Content-Type: application/json"</span> \
+      <span class="ts">"$ROMULUS_URL/api/orgs/acme/databases/billing/versions"</span></code></pre>
+      <div class="terminal-out">
+        <div><span class="status ok">201</span><span>Created v14</span><span class="out-dim">3 changes since v13</span></div>
+        <div><span class="status same">200</span><span>Unchanged</span><span class="out-dim">nothing new to keep</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="postgres" aria-labelledby="postgres-title">
+  <div class="container">
+    <div class="section-head">
+      <h2 id="postgres-title">Postgres, down to the last policy.</h2>
+      <p>romulus keeps what the Postgres catalog says, with remus's model. Drafts compile in PostgreSQL 17, so the graph shows what Postgres accepted.</p>
+    </div>
+    <ul class="features" aria-label="Postgres features romulus models">
+      <li><code>ENUM</code><span>Enums, with their values in order</span></li>
+      <li><code>DOMAIN</code><span>Domains, with their base type and checks</span></li>
+      <li><code>PARTITION BY</code><span>Partitioned tables, partitions kept under their parent</span></li>
+      <li><code>CREATE POLICY</code><span>Row level security policies and their roles</span></li>
+      <li><code>GENERATED</code><span>Identity and generated columns</span></li>
+      <li><code>CHECK</code><span>Check, unique and exclusion constraints</span></li>
+      <li><code>WHERE</code><span>Partial and expression indexes</span></li>
+      <li><code>COMMENT ON</code><span>Comments on tables and columns, shown on the graph</span></li>
+      <li><code>CREATE VIEW</code><span>Views, with the tables they read</span></li>
+      <li><code>citext[]</code><span>Arrays and composite types</span></li>
+    </ul>
+    <p class="note"><svg class="icon" aria-hidden="true"><use href="#i-check-circle"/></svg>Roles, functions and extensions your SQL uses without creating are stubbed for the compile, and never reach your model.</p>
+  </div>
+</section>
+
+<section class="section" id="teams" aria-labelledby="teams-title">
+  <div class="container split">
+    <div class="copy">
+      <h2 id="teams-title">Roles that match how teams review.</h2>
+      <p>Each organization has three roles. Reviewers see every version and follow drafts live without editing them; their cursor stays visible, so you know who's looking.</p>
+      <ul class="points">
+        <li><strong>Read-only, enforced by the server</strong><span>A reviewer's edits are dropped before they reach the draft.</span></li>
+        <li><strong>Single sign-on, invite links</strong><span>An invitation works once, and only for the verified email it was made for.</span></li>
+      </ul>
+    </div>
+    <div class="visual card roles-card">
+      <table class="roles">
+        <caption class="sr-only">What each role can do</caption>
+        <thead>
+          <tr><th scope="col"><span class="sr-only">Permission</span></th><th scope="col">Admin</th><th scope="col">Developer</th><th scope="col">Reviewer</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Read versions and diffs</th><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td></tr>
+          <tr><th scope="row">Follow drafts live</th><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td></tr>
+          <tr><th scope="row">Edit drafts and publish</th><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="no" role="img" aria-label="No"><use href="#i-minus"/></svg></td></tr>
+          <tr><th scope="row">Upload, push tokens</th><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="no" role="img" aria-label="No"><use href="#i-minus"/></svg></td></tr>
+          <tr><th scope="row">Create and delete databases</th><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="no" role="img" aria-label="No"><use href="#i-minus"/></svg></td></tr>
+          <tr><th scope="row">Invite and manage members</th><td><svg class="yes" role="img" aria-label="Yes"><use href="#i-check"/></svg></td><td><svg class="no" role="img" aria-label="No"><use href="#i-minus"/></svg></td><td><svg class="no" role="img" aria-label="No"><use href="#i-minus"/></svg></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="faq" aria-labelledby="faq-title">
+  <div class="container faq-layout">
+    <div class="section-head faq-head">
+      <h2 id="faq-title">Questions</h2>
+      <p>Something else? <a href="mailto:romulus@lupidae.com?subject=romulus%20question">Write to us</a>.</p>
+    </div>
+    <div class="faq">
+      <details>
+        <summary>What does “DBA as a service” mean here?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>romulus does the schema work a DBA would keep for a team: it keeps every version, shows exactly what changed, checks each proposal in real Postgres before anyone publishes it, and gives everyone one place to design and review the next change.</p>
+      </details>
+      <details>
+        <summary>Does romulus connect to our production database?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>No. You upload SQL, or remus reads your database inside your own CI and pushes the schema. romulus never holds a connection string and never sees your data.</p>
+      </details>
+      <details>
+        <summary>Does it replace our migrations?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>No. Keep your migration tool; romulus versions the schema it produces. Push the result from CI after each run, and use drafts to agree on what the next migration should do.</p>
+      </details>
+      <details>
+        <summary>Which is the source of truth, the SQL or the graph?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>The SQL. Edits on the graph are written back as SQL statements, so the text is always what gets compiled and versioned. Table positions and groups are saved next to it.</p>
+      </details>
+      <details>
+        <summary>Which Postgres versions does it understand?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>Drafts compile in a PostgreSQL 17 sandbox, and pushes from remus carry whatever your own server's catalog says. Enums, domains, partitions, policies and generated columns all come through as themselves.</p>
+      </details>
+      <details>
+        <summary>How do people sign in?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>With single sign-on. An admin invites teammates with a one-time link, which only works for the verified email address it was made for.</p>
+      </details>
+      <details>
+        <summary>What does it cost?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>Nothing during early access, since there is no billing yet. <a href="mailto:romulus@lupidae.com?subject=romulus%20early%20access">Request access</a> and we'll set up your organization.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section class="closing" aria-labelledby="closing-title">
+  <div class="container closing-inner">
+    <h2 id="closing-title">Bring the schema you have.</h2>
+    <p>Upload your SQL or push it from CI. That becomes version 1, and your team can open the first draft on it right away.</p>
+    <div class="cta-row">
+      <a class="button primary large" href="mailto:romulus@lupidae.com?subject=romulus%20early%20access">Request access</a>
+      <a class="button secondary large" href="/app/signin">Sign in</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a class="wordmark" href="/" aria-label="romulus, home">
+        <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+        <span>romulus</span>
+      </a>
+      <p>Made by <a href="https://github.com/lupidae">lupidae</a>, with its twin, <a href="https://remus.lupidae.com">remus</a>.</p>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="/app/signin">Sign in</a>
+      <a href="mailto:romulus@lupidae.com">Contact</a>
+      <a href="https://remus.lupidae.com">remus</a>
+    </nav>
+    <fieldset class="theme-switch" data-theme-switch>
+      <legend class="sr-only">Theme</legend>
+      <label title="System"><input type="radio" name="theme" value="system" checked><svg class="icon" aria-hidden="true"><use href="#i-computer"/></svg><span class="sr-only">System</span></label>
+      <label title="Light"><input type="radio" name="theme" value="light"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></label>
+      <label title="Dark"><input type="radio" name="theme" value="dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></label>
+    </fieldset>
+  </div>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

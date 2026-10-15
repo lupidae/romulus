@@ -1,0 +1,1861 @@
+/*
+ * The romulus homepage. Colors, shadows, radii, fonts and easing come from
+ * tokens.css, which is generated from the app's own globals.css: this file
+ * holds layout and the marketing type scale only, never a raw color.
+ */
+
+/* ---- Fonts: the app's two variable fonts, latin subset ----------------- */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/fonts/inter-latin-opsz-normal.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+/* ---- Marketing scale: app tokens are sized for dense UI ---------------- */
+:root {
+  --container: 72rem;
+  --gutter: clamp(1rem, 3.5vw, 2rem);
+  --header-height: 3.5rem;
+
+  --text-h1: clamp(2.375rem, 1.45rem + 3.9vw, 4.25rem);
+  --text-h2: clamp(1.75rem, 1.3rem + 1.7vw, 2.625rem);
+  --text-lead: clamp(1.125rem, 1.06rem + 0.3vw, 1.3125rem);
+  --text-body: 1.0625rem;
+  --text-small: 0.875rem;
+  --text-code: 0.8125rem;
+
+  --section-space: clamp(5rem, 3.5rem + 6vw, 9rem);
+}
+
+/* ---- Base --------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+* {
+  margin: 0;
+}
+html {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--header-height) + 1.5rem);
+}
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+body {
+  min-height: 100dvh;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.6;
+  overflow-x: clip;
+}
+::selection {
+  background: var(--selection);
+}
+:focus-visible {
+  outline: 0.125rem solid var(--ring);
+  outline-offset: 0.1875rem;
+  border-radius: var(--radius-sm);
+}
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+  font-feature-settings: normal;
+  /* ">=" stays two characters: this is code people will type. */
+  font-variant-ligatures: none;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+.lead,
+.copy > p,
+.section-head > p,
+.faq p {
+  text-wrap: pretty;
+}
+a {
+  color: inherit;
+}
+p a,
+.faq a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 0.0625rem;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color var(--duration-fast) var(--ease-out);
+}
+p a:hover,
+.faq a:hover {
+  text-decoration-color: currentColor;
+}
+
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+}
+.mark-bg {
+  fill: var(--primary);
+}
+.mark-fg {
+  fill: var(--primary-foreground);
+}
+.mark-fg-stroke {
+  stroke: var(--primary-foreground);
+}
+
+.container {
+  width: 100%;
+  max-width: calc(var(--container) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: max(var(--gutter), env(safe-area-inset-left)) max(var(--gutter), env(safe-area-inset-right));
+}
+
+.skip-link {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: var(--text-small);
+  font-weight: 550;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* ---- Buttons: the app's Button, as plain CSS ---------------------------- */
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border: 0.0625rem solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--text-small);
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.button:focus-visible {
+  outline-offset: 0.125rem;
+  border-radius: var(--radius-md);
+}
+.button.large {
+  height: 2.75rem;
+  padding: 0 1.25rem;
+  font-size: 0.9375rem;
+}
+.button.primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: var(--elevation-control);
+}
+.button.primary:hover {
+  background: var(--primary-hover);
+}
+.button.secondary {
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--elevation-control);
+}
+.button.secondary:hover {
+  border-color: var(--border-strong);
+  background: var(--secondary);
+}
+.button.ghost {
+  color: var(--muted-foreground);
+}
+.button.ghost:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+/* Touch: a 44px target around the compact header buttons. */
+@media (pointer: coarse) {
+  .site-nav a {
+    padding-block: 0.75rem;
+  }
+  .button::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    width: 100%;
+    height: 100%;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* ---- Header ------------------------------------------------------------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 0.0625rem solid transparent;
+  background: color-mix(in oklab, var(--background) 84%, transparent);
+  -webkit-backdrop-filter: saturate(1.4) blur(0.75rem);
+  backdrop-filter: saturate(1.4) blur(0.75rem);
+  transition: border-color var(--duration-base) var(--ease-out);
+}
+.site-header.is-scrolled {
+  border-bottom-color: var(--border);
+}
+.header-inner {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  height: var(--header-height);
+}
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+.wordmark .mark {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+.site-nav {
+  display: none;
+  gap: 0.25rem;
+}
+.site-nav a {
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+.site-nav a:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.header-cta {
+  display: none;
+}
+@media (min-width: 30rem) {
+  .header-cta {
+    display: inline-flex;
+  }
+}
+@media (min-width: 60rem) {
+  .site-nav {
+    display: flex;
+  }
+}
+
+/* ---- Hero --------------------------------------------------------------- */
+.hero {
+  position: relative;
+  padding-block: clamp(3rem, 1.5rem + 5vw, 6rem) calc(var(--section-space) / 2);
+  isolation: isolate;
+}
+/* A dot grid, like the app's graph canvas, fading out around the product. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: -1;
+  height: min(60rem, 100%);
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 30%, transparent 10%, var(--background) 75%),
+    radial-gradient(color-mix(in oklab, var(--border-strong) 70%, transparent) 0.0625rem, transparent 0.0625rem)
+      0 0 / 1.375rem 1.375rem;
+}
+.hero-copy {
+  display: grid;
+  justify-items: start;
+}
+.hero h1 {
+  max-width: 22ch;
+  font-size: var(--text-h1);
+  font-weight: 640;
+  line-height: 1.02;
+  letter-spacing: -0.042em;
+}
+.lead {
+  max-width: 40rem;
+  margin-top: 1.5rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-lead);
+  line-height: 1.55;
+}
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+.fineprint {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  color: var(--faint-foreground);
+  font-size: var(--text-small);
+  line-height: 1.45;
+}
+.fineprint .icon {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.0625rem;
+}
+.hero-visual {
+  position: relative;
+  margin-top: clamp(3rem, 2rem + 4vw, 5rem);
+}
+/* A warm glow behind the window, from the accent. */
+.hero-visual::before {
+  content: "";
+  position: absolute;
+  inset: -10% 10% 20%;
+  z-index: -1;
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--primary) 12%, transparent), transparent);
+}
+
+/* ---- The product window ------------------------------------------------- */
+.product {
+  container: window / inline-size;
+}
+/* With JavaScript, the scene waits until it is on screen (app.js). */
+.js .product:not(.is-playing) {
+  --play: paused;
+}
+.window {
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--elevation-4);
+  font-size: var(--text-code);
+  line-height: 1.25;
+  user-select: none;
+}
+.window-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 2.75rem;
+  padding: 0 0.75rem 0 0.875rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-code);
+  white-space: nowrap;
+}
+.crumbs .mark {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  margin-right: 0.25rem;
+}
+.crumbs .crumb {
+  color: var(--muted-foreground);
+}
+.crumbs .sep {
+  color: var(--border-strong);
+}
+.branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--foreground);
+  font-weight: 550;
+}
+.branch .icon {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  color: var(--primary);
+}
+.base {
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--faint-foreground);
+  font-size: 0.75rem;
+}
+.bar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.avatars {
+  display: flex;
+}
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  background: var(--who);
+  margin-left: -0.375rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0.125rem var(--card);
+  color: var(--presence-foreground);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.avatar:first-child {
+  margin-left: 0;
+}
+.p1,
+.c1 {
+  --who: var(--presence-1);
+}
+.p3,
+.c3 {
+  --who: var(--presence-3);
+}
+.p4,
+.c4 {
+  --who: var(--presence-4);
+}
+.fake-button {
+  display: inline-flex;
+  align-items: center;
+  height: 1.75rem;
+  padding: 0 0.625rem;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.pane-sql {
+  container: sql / inline-size;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.pane-graph {
+  container: graph / inline-size;
+  background: var(--muted);
+}
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  height: 2.25rem;
+  padding: 0 0.75rem 0 0.5rem;
+  border-bottom: 0.0625rem solid var(--border);
+  background: var(--card);
+}
+.tabs {
+  display: flex;
+  gap: 0.125rem;
+}
+.tab {
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--faint-foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.tab.active {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.graph-meta {
+  color: var(--faint-foreground);
+  font-size: 0.75rem;
+}
+.compile {
+  display: grid;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.compile-state {
+  display: inline-flex;
+  grid-area: 1 / 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+.compiled {
+  color: var(--success);
+}
+.compiled .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.compiling {
+  color: var(--muted-foreground);
+  opacity: 0;
+}
+.pulse {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+/* SQL pane: the font follows the pane, so the longest line always fits. */
+.editor {
+  position: relative;
+  height: 17.5rem;
+  overflow: hidden;
+  padding: 0.625rem 0;
+}
+.lines {
+  font-variant-ligatures: none;
+  --code-size: clamp(0.5625rem, calc((100cqi - 1.75rem) / 33.5), 0.8125rem);
+  font-family: var(--font-mono);
+  font-size: var(--code-size);
+  line-height: 1.6;
+  /* On a phone the editor is scrolled to the table being edited. */
+  transform: translateY(-8lh);
+}
+.l {
+  display: flex;
+  padding-right: 0.75rem;
+}
+.ln {
+  flex: 0 0 4.5ch;
+  padding-right: 1.5ch;
+  color: var(--faint-foreground);
+  text-align: right;
+  opacity: 0.7;
+}
+.lc {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  white-space: pre;
+}
+.k {
+  color: var(--primary);
+}
+.t {
+  color: var(--info);
+}
+.s {
+  color: var(--success);
+}
+.n {
+  color: var(--presence-2);
+}
+.p {
+  color: var(--muted-foreground);
+}
+.i {
+  color: var(--foreground);
+}
+.active-line {
+  background: color-mix(in oklab, var(--presence-1) 7%, transparent);
+}
+.typed {
+  display: inline-block;
+  width: 47ch;
+  vertical-align: top;
+}
+.caret {
+  position: absolute;
+  top: 0.15em;
+  bottom: 0.15em;
+  left: 2ch;
+  width: 0.125rem;
+  border-radius: 0.0625rem;
+  background: var(--who);
+  transform: translateX(47ch);
+}
+.caret.still {
+  position: relative;
+  display: inline-block;
+  left: 0;
+  height: 1.3em;
+  margin-left: 0.0625rem;
+  vertical-align: -0.25em;
+  transform: none;
+}
+.flag {
+  position: absolute;
+  top: 50%;
+  left: 0.3125rem;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-xs);
+  background: var(--who);
+  color: var(--presence-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+.sel {
+  border-radius: 0.125rem;
+  background: color-mix(in oklab, var(--who) 22%, transparent);
+}
+
+/* Graph pane: one unit of the 640×400 board is --u, so nodes, text and
+   edges scale together with the pane, like a zoomed canvas. */
+.canvas {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  overflow: hidden;
+  background-image: radial-gradient(var(--border-strong) 0.0625rem, transparent 0.0625rem);
+  background-size: 1.25rem 1.25rem;
+}
+.board {
+  --u: calc(100cqi / 440);
+  position: relative;
+  width: 100%;
+  height: calc(400 * var(--u));
+  margin-block: 0.75rem;
+}
+.edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(640 * var(--u));
+  height: calc(400 * var(--u));
+  max-width: none;
+  overflow: visible;
+}
+.edge {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+.edge.type {
+  stroke-dasharray: 4 4;
+}
+.edge.new {
+  stroke: var(--presence-1);
+  stroke-width: 1.75;
+}
+.end {
+  fill: var(--card);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+.new-end {
+  stroke: var(--presence-1);
+}
+.node {
+  position: absolute;
+  top: calc(var(--y) * var(--u));
+  left: calc(var(--x) * var(--u));
+  width: calc(160 * var(--u));
+  padding-bottom: calc(4 * var(--u));
+  border-radius: calc(8 * var(--u));
+  background: var(--card);
+  box-shadow:
+    0 0 0 0.0625rem var(--border),
+    0 calc(2 * var(--u)) calc(6 * var(--u)) -0.0625rem rgb(0 0 0 / 0.06);
+  font-family: var(--font-mono);
+  font-size: calc(10.5 * var(--u));
+}
+.node-head {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  height: calc(30 * var(--u));
+  margin-bottom: calc(4 * var(--u));
+  padding: 0 calc(10 * var(--u));
+  border-bottom: 0.0625rem solid var(--border);
+  color: var(--foreground);
+  font-weight: 650;
+}
+.node-dot {
+  width: calc(7 * var(--u));
+  height: calc(7 * var(--u));
+  border-radius: calc(2 * var(--u));
+  background: var(--primary);
+}
+.node-enum .node-dot {
+  background: var(--presence-2);
+}
+.node-tag {
+  margin-left: auto;
+  color: var(--faint-foreground);
+  font-family: var(--font-sans);
+  font-weight: 500;
+}
+.node-presence {
+  display: grid;
+  place-items: center;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--who);
+  color: var(--presence-foreground);
+  font-family: var(--font-sans);
+  font-size: calc(9 * var(--u));
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  height: calc(22 * var(--u));
+  padding: 0 calc(10 * var(--u));
+  color: var(--foreground);
+}
+.row span {
+  flex: 1;
+  min-width: 0;
+}
+.row i {
+  color: var(--faint-foreground);
+  font-style: normal;
+}
+.key {
+  padding: 0 calc(3 * var(--u));
+  border-radius: calc(2 * var(--u));
+  font-family: var(--font-sans);
+  font-size: calc(8.5 * var(--u));
+  font-weight: 600;
+  line-height: 1.5;
+}
+.key.pk {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+.key.fk {
+  background: color-mix(in oklab, var(--info) 12%, transparent);
+  color: var(--info);
+}
+.node-invoices::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 0.125rem var(--presence-3),
+    0 0 0 calc(5 * var(--u)) color-mix(in oklab, var(--presence-3) 18%, transparent);
+  pointer-events: none;
+}
+.row-new {
+  background: color-mix(in oklab, var(--success) 9%, transparent);
+}
+.pointer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  transform: translate(calc(384 * var(--u)), calc(168 * var(--u)));
+}
+.pointer svg {
+  width: calc(16 * var(--u));
+  min-width: 0.75rem;
+  height: auto;
+  fill: var(--who);
+  stroke: var(--card);
+  stroke-width: 1;
+  filter: drop-shadow(0 0.0625rem 0.0625rem rgb(0 0 0 / 0.2));
+}
+.pointer-idle {
+  display: flex;
+  align-items: flex-start;
+}
+.pointer .flag {
+  position: static;
+  margin: calc(12 * var(--u)) 0 0 calc(-3 * var(--u));
+  transform: none;
+}
+
+@container window (min-width: 50rem) {
+  .panes {
+    grid-template-columns: minmax(0, 44fr) minmax(0, 56fr);
+    height: 30rem;
+  }
+  .pane-sql {
+    border-bottom: 0;
+    border-right: 0.0625rem solid var(--border);
+  }
+  .editor {
+    flex: 1;
+    height: auto;
+  }
+  .lines {
+    transform: none;
+  }
+  .board {
+    --u: calc(100cqi / 664);
+    width: calc(640 * var(--u));
+    margin-inline: auto;
+  }
+}
+@container window (max-width: 34rem) {
+  .hide-sm {
+    display: none;
+  }
+}
+@container window (max-width: 24rem) {
+  .hide-xs {
+    display: none;
+  }
+}
+
+/* The scene: Ada types a foreign key, it compiles, the graph grows the column
+   and its edge, and Sam's pointer selects it. Base styles are the end state,
+   so reduced motion (or no JavaScript) shows the finished picture. The
+   animations hold their first frame until the window scrolls into view. */
+@media (prefers-reduced-motion: no-preference) {
+  .typed {
+    animation: type 2.6s steps(47, end) 0.8s both;
+    animation-play-state: var(--play, running);
+  }
+  .caret:not(.still) {
+    animation: caret 2.6s steps(47, end) 0.8s both;
+    animation-play-state: var(--play, running);
+  }
+  .compiling {
+    animation: blip-in 0.75s linear 3.4s both;
+    animation-play-state: var(--play, running);
+  }
+  .compiled {
+    animation: blip-out 0.75s linear 3.4s both;
+    animation-play-state: var(--play, running);
+  }
+  .row-new {
+    animation:
+      fade-in 0.35s var(--ease-out) 4.15s both,
+      settle 1.6s var(--ease-out) 6s both;
+    animation-play-state: var(--play, running);
+  }
+  .rows-after {
+    animation: rows-down 0.45s var(--ease-out) 4.15s both;
+    animation-play-state: var(--play, running);
+  }
+  .edge.new {
+    stroke-dasharray: 1;
+    animation: draw 0.8s var(--ease-out) 4.25s both;
+    animation-play-state: var(--play, running);
+  }
+  .new-end {
+    animation: fade-in 0.3s var(--ease-out) 4.6s both;
+    animation-play-state: var(--play, running);
+  }
+  .node-invoices::after {
+    animation: fade-in 0.25s var(--ease-out) 5.85s both;
+    animation-play-state: var(--play, running);
+  }
+  .pointer {
+    animation: pointer-move 1s var(--ease-in-out) 4.8s both;
+    animation-play-state: var(--play, running);
+  }
+  .pointer svg {
+    animation: press 0.3s var(--ease-out) 5.75s both;
+    animation-play-state: var(--play, running);
+  }
+  .pointer-idle {
+    animation: idle 5s var(--ease-in-out) 7s infinite alternate both;
+    animation-play-state: var(--play, running);
+  }
+
+  @keyframes type {
+    from {
+      clip-path: inset(0 100% 0 0);
+    }
+    to {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+  @keyframes caret {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(47ch);
+    }
+  }
+  @keyframes blip-in {
+    0%,
+    100% {
+      opacity: 0;
+    }
+    8%,
+    92% {
+      opacity: 1;
+    }
+  }
+  @keyframes blip-out {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    8%,
+    92% {
+      opacity: 0;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes settle {
+    from {
+      background: color-mix(in oklab, var(--success) 22%, transparent);
+    }
+  }
+  @keyframes rows-down {
+    from {
+      transform: translateY(calc(-22 * var(--u)));
+    }
+  }
+  @keyframes draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @keyframes pointer-move {
+    from {
+      transform: translate(calc(560 * var(--u)), calc(214 * var(--u)));
+    }
+  }
+  @keyframes press {
+    40% {
+      transform: scale(0.82);
+    }
+  }
+  @keyframes idle {
+    to {
+      transform: translate(calc(14 * var(--u)), calc(-6 * var(--u)));
+    }
+  }
+}
+
+/* ---- Sections ----------------------------------------------------------- */
+/* Each section owns half the gap above it and half below. */
+.section {
+  padding-block: calc(var(--section-space) / 2);
+}
+.section h2,
+.closing h2 {
+  font-size: var(--text-h2);
+  font-weight: 640;
+  line-height: 1.1;
+  letter-spacing: -0.032em;
+}
+.copy > p,
+.section-head > p {
+  max-width: 34rem;
+  margin-top: 1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.65;
+}
+.split {
+  display: grid;
+  gap: 2.75rem;
+  align-items: center;
+}
+@media (min-width: 64rem) {
+  .split {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(3rem, 6vw, 6rem);
+  }
+  .split.reverse {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  }
+  .split.reverse .copy {
+    order: 2;
+  }
+}
+.points {
+  display: grid;
+  gap: 1.25rem;
+  max-width: 34rem;
+  margin-top: 2rem;
+  padding: 1.5rem 0 0;
+  border-top: 0.0625rem solid var(--border);
+  list-style: none;
+}
+.points li {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+.points strong {
+  color: var(--foreground);
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+code {
+  font-size: 0.875em;
+}
+.points code,
+.copy p code {
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--foreground);
+  white-space: nowrap;
+}
+.card {
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--elevation-3);
+}
+
+/* Versions and diff. */
+.versions {
+  display: grid;
+  overflow: hidden;
+  font-size: var(--text-code);
+}
+@media (min-width: 40rem) {
+  .versions {
+    grid-template-columns: 13.5rem minmax(0, 1fr);
+  }
+}
+.versions-list {
+  position: relative;
+  padding: 0.875rem 0.625rem;
+  border-bottom: 0.0625rem solid var(--border);
+  background: var(--background);
+}
+@media (min-width: 40rem) {
+  .versions-list {
+    border-right: 0.0625rem solid var(--border);
+    border-bottom: 0;
+  }
+}
+.vlist-head {
+  padding: 0 0.5rem 0.625rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.vrow {
+  --tone: var(--primary);
+  --tone-text: color-mix(in oklab, var(--tone) 68%, var(--foreground));
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+}
+.vrow + .vrow::before {
+  content: "";
+  position: absolute;
+  top: -0.6rem;
+  left: 1.25rem;
+  height: 0.9rem;
+  border-left: 0.0625rem solid var(--border-strong);
+}
+.vnum {
+  justify-self: start;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.vmeta {
+  display: grid;
+  min-width: 0;
+}
+.vtitle {
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vsub {
+  color: var(--faint-foreground);
+  font-size: 0.75rem;
+}
+.vrow.is-from,
+.vrow.is-to {
+  background: var(--card);
+  box-shadow: var(--elevation-1);
+}
+.vrow.is-from .vnum,
+.vrow.is-to .vnum {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  color: var(--tone-text);
+}
+.vpin {
+  color: var(--primary);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.diff {
+  padding: 0.875rem 1rem 1rem;
+}
+.diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  gap: 0.5rem 1rem;
+  padding-bottom: 0.75rem;
+}
+.diff-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+}
+.diff-range .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--faint-foreground);
+}
+.diff-counts {
+  display: flex;
+  gap: 0.75rem;
+  font-weight: 500;
+}
+.count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  color: var(--tone);
+}
+.count::before {
+  content: "";
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* --tone-text: a status tone pulled toward the text color, so it keeps AA
+   contrast on its own tint in both themes. */
+.add,
+.change,
+.remove {
+  --tone-text: color-mix(in oklab, var(--tone) 68%, var(--foreground));
+}
+.add {
+  --tone: var(--success);
+}
+.change {
+  --tone: var(--warning);
+}
+.remove {
+  --tone: var(--destructive);
+}
+.changes {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0;
+  list-style: none;
+}
+.changes li {
+  display: grid;
+  grid-template-columns: 4.25rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4375rem 0.5rem;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--tone) 6%, transparent);
+}
+.badge {
+  justify-self: start;
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--tone) 14%, transparent);
+  color: var(--tone-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.obj {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.obj b {
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.obj i {
+  margin-left: 0.25rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-style: normal;
+}
+
+/* Update draft: an inline conflict, as the editor shows it. */
+.merge {
+  overflow: hidden;
+  font-size: var(--text-code);
+}
+.merge-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.merge-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--foreground);
+  font-weight: 600;
+}
+.merge-title .icon {
+  width: 1rem;
+  height: 1rem;
+  color: var(--primary);
+}
+.merge-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.conflict-count {
+  --tone: var(--warning);
+  --tone-text: color-mix(in oklab, var(--tone) 68%, var(--foreground));
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--tone) 14%, transparent);
+  color: var(--tone-text);
+  font-weight: 600;
+}
+.code-block {
+  --code-size: 0.8125rem;
+  font-variant-ligatures: none;
+  padding: 0.75rem 0;
+  font-family: var(--font-mono);
+  font-size: var(--code-size);
+  line-height: 1.7;
+  overflow: hidden;
+}
+@media (max-width: 26rem) {
+  .code-block {
+    --code-size: 0.75rem;
+  }
+}
+.conflict {
+  margin: 0.375rem 0.75rem;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 0.0625rem var(--border-strong);
+}
+.side {
+  padding: 0.375rem 0 0.25rem;
+}
+.side.mine {
+  --tone: var(--info);
+  background: color-mix(in oklab, var(--info) 8%, transparent);
+}
+.side.theirs {
+  --tone: var(--presence-2);
+  border-top: 0.0625rem dashed var(--border-strong);
+  background: color-mix(in oklab, var(--presence-2) 8%, transparent);
+}
+.side-label {
+  padding: 0 0.75rem;
+  color: var(--tone);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.side .l {
+  padding-left: 0;
+}
+.conflict .ln {
+  flex-basis: 3.75ch;
+}
+.code-block .ln {
+  flex-basis: 4.5ch;
+}
+.conflict-actions {
+  display: flex;
+  gap: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border-top: 0.0625rem solid var(--border);
+  background: var(--card);
+  font-family: var(--font-sans);
+}
+.fake-button.small {
+  height: 1.5rem;
+  border: 0.0625rem solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--elevation-control);
+}
+.merged {
+  align-items: center;
+  background: color-mix(in oklab, var(--success) 7%, transparent);
+}
+.merged-tag {
+  --tone: var(--success);
+  --tone-text: color-mix(in oklab, var(--tone) 68%, var(--foreground));
+  margin-left: auto;
+  padding: 0 0.375rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--success) 14%, transparent);
+  color: var(--tone-text);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.merge-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border-top: 0.0625rem solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.dot-warn {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+/* The push snippet: a terminal, dark in both themes (the app's dark tokens). */
+.terminal {
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--elevation-4);
+  color: var(--foreground);
+}
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 2.75rem;
+  padding: 0 0.5rem 0 1rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.terminal-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.terminal-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-title .icon {
+  width: 1rem;
+  height: 1rem;
+}
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.875rem;
+  padding: 0 0.625rem;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+.copy-button:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.copy-button .icon {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+.copy-button[data-copied] {
+  color: var(--success);
+}
+.terminal-body {
+  margin: 0;
+  padding: 1.125rem 1.25rem;
+  overflow-x: auto;
+  font-size: clamp(0.71875rem, 0.66rem + 0.25vw, 0.8125rem);
+  line-height: 1.75;
+  scrollbar-width: thin;
+}
+.terminal-body code {
+  font-size: inherit;
+}
+.tc {
+  color: var(--faint-foreground);
+}
+.ts {
+  color: var(--primary);
+}
+.terminal-out {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.875rem 1.25rem 1rem;
+  border-top: 0.0625rem solid var(--border);
+  font-size: 0.8125rem;
+}
+.terminal-out div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+  color: var(--foreground);
+}
+.status {
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status.ok {
+  background: color-mix(in oklab, var(--success) 16%, transparent);
+  color: var(--success);
+}
+.status.same {
+  background: var(--accent);
+  color: var(--muted-foreground);
+}
+.out-dim {
+  color: var(--faint-foreground);
+}
+
+/* Postgres features: a ledger of what the model keeps. */
+.section-head {
+  max-width: 40rem;
+}
+.features {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.0625rem;
+  margin-top: 3rem;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--border);
+  box-shadow: 0 0 0 0.0625rem var(--border);
+  list-style: none;
+}
+@media (min-width: 64rem) {
+  .features {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+.features li {
+  display: grid;
+  align-content: start;
+  gap: 0.625rem;
+  padding: 1rem 1rem 1.125rem;
+  background: var(--card);
+}
+@media (min-width: 36rem) {
+  .features li {
+    padding: 1.25rem 1.25rem 1.375rem;
+  }
+}
+.features code {
+  justify-self: start;
+  color: var(--primary);
+  font-size: 0.8125rem;
+  font-weight: 550;
+}
+.features span {
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+@media (min-width: 36rem) {
+  .features span {
+    font-size: 0.9375rem;
+  }
+}
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  max-width: 44rem;
+  margin-top: 1.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+}
+.note .icon {
+  margin-top: 0.1875rem;
+  color: var(--success);
+}
+
+/* Roles. */
+.roles-card {
+  overflow-x: auto;
+}
+.roles {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+.roles th,
+.roles td {
+  padding: 0.875rem 1rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.roles tbody tr:last-child th,
+.roles tbody tr:last-child td {
+  border-bottom: 0;
+}
+.roles thead th {
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  font-weight: 600;
+  text-align: center;
+}
+.roles tbody th {
+  color: var(--foreground);
+  font-weight: 500;
+  text-align: left;
+}
+.roles td svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0 auto;
+}
+.roles .yes {
+  color: var(--success);
+}
+.roles .no {
+  color: var(--faint-foreground);
+}
+@media (max-width: 30rem) {
+  .roles th,
+  .roles td {
+    padding: 0.75rem 0.5rem;
+  }
+  .roles tbody th {
+    padding-left: 1rem;
+    font-size: var(--text-small);
+  }
+  .roles thead th {
+    font-size: 0.75rem;
+  }
+}
+
+/* FAQ. */
+.faq-layout {
+  display: grid;
+  gap: 2rem;
+}
+@media (min-width: 64rem) {
+  .faq-layout {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: clamp(3rem, 6vw, 6rem);
+  }
+  .faq-head {
+    position: sticky;
+    top: calc(var(--header-height) + 2rem);
+    align-self: start;
+  }
+}
+.faq {
+  border-top: 0.0625rem solid var(--border);
+}
+.faq details {
+  border-bottom: 0.0625rem solid var(--border);
+}
+.faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.25rem 0;
+  color: var(--foreground);
+  font-size: var(--text-body);
+  font-weight: 550;
+  line-height: 1.4;
+  list-style: none;
+  cursor: pointer;
+}
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+.faq summary .icon {
+  color: var(--muted-foreground);
+  transition: transform var(--duration-slow) var(--ease-out);
+}
+/* The plus turns into a cross when open. */
+.faq details[open] summary .icon {
+  transform: rotate(45deg);
+}
+.faq summary:focus-visible {
+  outline-offset: 0.25rem;
+}
+.faq details p {
+  max-width: 40rem;
+  padding: 0 0 1.5rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.65;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .faq {
+    interpolate-size: allow-keywords;
+  }
+  .faq details::details-content {
+    block-size: 0;
+    overflow: clip;
+    transition:
+      block-size var(--duration-slow) var(--ease-out),
+      content-visibility var(--duration-slow) allow-discrete;
+  }
+  .faq details[open]::details-content {
+    block-size: auto;
+  }
+}
+
+/* Closing call to action. */
+.closing {
+  padding-block: calc(var(--section-space) / 2) var(--section-space);
+}
+.closing-inner {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+.closing p {
+  max-width: 32rem;
+  margin-top: 1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-lead);
+  line-height: 1.55;
+}
+.closing .cta-row {
+  justify-content: center;
+}
+
+/* ---- Footer ------------------------------------------------------------- */
+.site-footer {
+  border-top: 0.0625rem solid var(--border);
+  padding-block: 2.5rem calc(2.5rem + env(safe-area-inset-bottom));
+}
+.footer-inner {
+  display: grid;
+  gap: 1.5rem;
+  align-items: center;
+}
+@media (min-width: 48rem) {
+  .footer-inner {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 2.5rem;
+  }
+}
+.footer-brand p {
+  margin-top: 0.5rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+}
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 1.5rem;
+  font-size: var(--text-small);
+}
+.footer-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.footer-links a:hover {
+  color: var(--foreground);
+}
+
+/* Theme: a three-way segmented control of native radios. */
+.theme-switch {
+  display: inline-flex;
+  justify-self: start;
+  gap: 0.125rem;
+  padding: 0.1875rem;
+  border: 0;
+  border-radius: calc(var(--radius-md) + 0.1875rem);
+  background: var(--muted);
+  box-shadow: inset 0 0 0 0.0625rem var(--border);
+}
+.theme-switch label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 1.75rem;
+  border-radius: var(--radius-md);
+  color: var(--faint-foreground);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+.theme-switch label:hover {
+  color: var(--foreground);
+}
+.theme-switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.theme-switch label:has(input:checked) {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--elevation-1);
+}
+.theme-switch label:has(input:focus-visible) {
+  outline: 0.125rem solid var(--ring);
+  outline-offset: 0.0625rem;
+}
+.theme-switch .icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* ---- 404 ---------------------------------------------------------------- */
+.not-found {
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  min-height: calc(100dvh - var(--header-height));
+  padding-block: 4rem;
+}
+.not-found .code {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.not-found h1 {
+  margin-top: 0.75rem;
+  font-size: var(--text-h2);
+  font-weight: 640;
+  line-height: 1.1;
+  letter-spacing: -0.032em;
+}
+.not-found p {
+  max-width: 28rem;
+  margin-top: 1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+}

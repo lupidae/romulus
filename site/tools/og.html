@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" class="light">
+<head>
+<meta charset="utf-8">
+<title>romulus social image</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* 1200×630, the size every network crops to. The product window is the
+     homepage's own markup (assets.mjs inserts it), in its finished state. */
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body { position: relative; isolation: isolate; }
+  body::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image: radial-gradient(var(--border-strong) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: radial-gradient(ellipse 80% 90% at 70% 60%, black 20%, transparent 80%);
+    opacity: 0.8;
+  }
+  .og-top {
+    position: absolute;
+    top: 52px;
+    left: 72px;
+    right: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .og-top .wordmark { font-size: 26px; gap: 12px; }
+  .og-top .wordmark .mark { width: 36px; height: 36px; }
+  .og-top p { color: var(--muted-foreground); font-size: 22px; }
+  h1 {
+    position: absolute;
+    top: 128px;
+    left: 72px;
+    width: 1056px;
+    font-size: 60px;
+    font-weight: 640;
+    line-height: 1.04;
+    letter-spacing: -0.042em;
+  }
+  .og-shot {
+    position: absolute;
+    top: 300px;
+    left: 72px;
+    width: 1056px;
+  }
+  .og-shot::before {
+    content: "";
+    position: absolute;
+    inset: -30% 10% 0;
+    z-index: -1;
+    background: radial-gradient(closest-side, color-mix(in oklab, var(--primary) 16%, transparent), transparent);
+    filter: blur(40px);
+  }
+</style>
+</head>
+<body>
+<!-- sprite -->
+<div class="og-top">
+  <span class="wordmark"><svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg><span>romulus</span></span>
+  <p>DBA as a service for teams on Postgres</p>
+</div>
+<h1>Design, version and review your Postgres schema together.</h1>
+<div class="og-shot">
+  <!-- product -->
+</div>
+</body>
+</html>
