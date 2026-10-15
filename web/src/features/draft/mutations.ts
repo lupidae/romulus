@@ -86,3 +86,18 @@ export function usePublishDraft(org: string, db: string, id: string) {
     },
   });
 }
+
+/**
+ * Rewrites the draft's SQL in canonical form, on the server: everyone in the
+ * draft sees the rewrite arrive like any edit.
+ */
+export function useTidyDraft(org: string, db: string, id: string) {
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/tidy", {
+          params: { path: { org, db, id } },
+        }),
+      ),
+  });
+}

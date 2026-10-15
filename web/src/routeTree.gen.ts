@@ -16,6 +16,7 @@ import { Route as SigninRouteImport } from './routes/signin'
 import { Route as OrgIndexRouteImport } from './routes/$org/index'
 import { Route as OrgDbRouteImport } from './routes/$org/$db'
 import { Route as DevDiffRouteImport } from './routes/dev/diff'
+import { Route as DevEditorRouteImport } from './routes/dev/editor'
 import { Route as DevKitRouteImport } from './routes/dev/kit'
 import { Route as DevShellRouteImport } from './routes/dev/shell'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
@@ -67,6 +68,11 @@ const OrgDbRoute = OrgDbRouteImport.update({
 const DevDiffRoute = DevDiffRouteImport.update({
   id: '/dev/diff',
   path: '/dev/diff',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevEditorRoute = DevEditorRouteImport.update({
+  id: '/dev/editor',
+  path: '/dev/editor',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DevKitRoute = DevKitRouteImport.update({
@@ -162,6 +168,7 @@ export interface FileRoutesByFullPath {
   '/signin': typeof SigninRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/diff': typeof DevDiffRoute
+  '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
   '/dev/viewer': typeof DevViewerRoute
@@ -186,6 +193,7 @@ export interface FileRoutesByTo {
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
   '/dev/diff': typeof DevDiffRoute
+  '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
@@ -212,6 +220,7 @@ export interface FileRoutesById {
   '/signin': typeof SigninRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/diff': typeof DevDiffRoute
+  '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
   '/dev/viewer': typeof DevViewerRoute
@@ -240,6 +249,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/$org/$db'
     | '/dev/diff'
+    | '/dev/editor'
     | '/dev/kit'
     | '/dev/shell'
     | '/dev/viewer'
@@ -264,6 +274,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/signin'
     | '/dev/diff'
+    | '/dev/editor'
     | '/dev/kit'
     | '/dev/viewer'
     | '/invite/$token'
@@ -289,6 +300,7 @@ export interface FileRouteTypes {
     | '/signin'
     | '/$org/$db'
     | '/dev/diff'
+    | '/dev/editor'
     | '/dev/kit'
     | '/dev/shell'
     | '/dev/viewer'
@@ -315,6 +327,7 @@ export interface RootRouteChildren {
   NewRoute: typeof NewRoute
   SigninRoute: typeof SigninRoute
   DevDiffRoute: typeof DevDiffRoute
+  DevEditorRoute: typeof DevEditorRoute
   DevKitRoute: typeof DevKitRoute
   DevShellRoute: typeof DevShellRouteWithChildren
   DevViewerRoute: typeof DevViewerRoute
@@ -371,6 +384,13 @@ declare module '@tanstack/react-router' {
       path: '/dev/diff'
       fullPath: '/dev/diff'
       preLoaderRoute: typeof DevDiffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev/editor': {
+      id: '/dev/editor'
+      path: '/dev/editor'
+      fullPath: '/dev/editor'
+      preLoaderRoute: typeof DevEditorRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dev/kit': {
@@ -555,6 +575,7 @@ const rootRouteChildren: RootRouteChildren = {
   NewRoute: NewRoute,
   SigninRoute: SigninRoute,
   DevDiffRoute: DevDiffRoute,
+  DevEditorRoute: DevEditorRoute,
   DevKitRoute: DevKitRoute,
   DevShellRoute: DevShellRouteWithChildren,
   DevViewerRoute: DevViewerRoute,

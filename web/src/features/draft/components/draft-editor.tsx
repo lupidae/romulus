@@ -19,6 +19,7 @@ import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
 import { draftExtensions, jumpTo, showDiagnostics } from "../collab";
 import { type Diagnostic, type Draft, draftKeys, draftQuery } from "../queries";
 import { type DraftSession, mayEdit, type SessionState } from "../session";
+import { useGraphEdits } from "../use-graph-edits";
 import {
   useDraftSession,
   usePeers,
@@ -28,6 +29,7 @@ import {
   useYText,
 } from "../use-session";
 import { EditorBar } from "./editor-bar";
+import { FirstTable } from "./first-table";
 import { GroupsMenu, PickBar } from "./groups";
 import { LiveGraph } from "./live-graph";
 import { PublishDialog } from "./publish-dialog";
@@ -45,6 +47,13 @@ const emptySchema = (database: string): Schema => ({
 });
 
 const noLayoutChange = () => {};
+
+const WAITING: SessionState["compile"] = {
+  state: "waiting",
+  stale: true,
+  diagnostics: [],
+  model: null,
+};
 
 /**
  * A draft, live: SQL and graph side by side, everyone's cursors, compile on
@@ -154,7 +163,7 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
   );
 }
 
-interface WorkspaceProps {
+export interface WorkspaceProps {
   org: string;
   db: string;
   draft: Draft;
@@ -166,7 +175,7 @@ interface WorkspaceProps {
   onDeleted: () => void;
 }
 
-function Workspace({
+export function Workspace({
   org,
   db,
   draft,
@@ -196,8 +205,18 @@ function Workspace({
     !(state?.tooLarge ?? false) &&
     (state ? state.role === null || mayEdit(state) : true) &&
     status === "open";
-  const compile = state?.compile ?? { state: "waiting", stale: true, diagnostics: [], model: null };
-  const schema = compile.model ?? emptySchema(db);
+  const compile = state?.compile ?? WAITING;
+  // The compiled model, with this tab's schema edits in flight (and an
+  // editor to make them, for those who may).
+  const { schema: shown, editor } = useGraphEdits({
+    session,
+    compile,
+    edits: state?.edits,
+    sql,
+    view,
+    canEdit,
+  });
+  const schema = shown ?? emptySchema(db);
 
   const sqlExtensions = React.useMemo(
     () => (session ? draftExtensions(session, setView) : undefined),
@@ -270,6 +289,7 @@ function Workspace({
         canRedo={canRedo}
         onUndo={() => session?.undo.undo()}
         onRedo={() => session?.undo.redo()}
+        sql={sql}
         onJump={jump}
         onPublish={() => setPublishing(true)}
         onDeleted={onDeleted}
@@ -297,17 +317,25 @@ function Workspace({
             onSelectedChange={select}
             picked={canEdit ? picked : undefined}
             onPickedChange={canEdit ? setPicked : undefined}
+            editor={editor}
             storageKey="romulus:draft-editor"
             graphEmpty={
-              <EmptyState
-                icon={<TableIcon />}
-                title="No tables yet"
-                description={
-                  canEdit
-                    ? "Write CREATE TABLE in the SQL: tables appear here as you type."
-                    : "Tables appear here as soon as someone writes them in the SQL."
-                }
-              />
+              editor ? (
+                <FirstTable
+                  onCreate={(name) =>
+                    editor.onEdit(
+                      { kind: "addTable", table: { schema: "public", name } },
+                      { position: { x: 0, y: 0 } },
+                    )
+                  }
+                />
+              ) : (
+                <EmptyState
+                  icon={<TableIcon />}
+                  title="No tables yet"
+                  description="Tables appear here as soon as someone writes them in the SQL."
+                />
+              )
             }
             graphControls={
               canEdit && (

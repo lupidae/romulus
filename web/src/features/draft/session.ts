@@ -11,15 +11,19 @@
 // coordinates) and `selection` (a table); the server stamps `user`.
 
 import * as decoding from "lib0/decoding";
-import type { Awareness } from "y-protocols/awareness";
+import { Awareness } from "y-protocols/awareness";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 
+import { appendTo } from "@/features/schema/edits/append";
+import { applyEdit, layoutChange, type LayoutChange } from "@/features/schema/edits/apply";
+import { type GraphEdit, sqlFor } from "@/features/schema/edits/edits";
 import { type Group, type GroupColor, type Layout, type Position } from "@/features/schema/layout";
 import { parseSchema, type Schema } from "@/features/schema/model";
 
 import type { Role } from "@/features/orgs/queries";
 
+import { type EditEntry, KEPT_EDITS, touchedEntities } from "./graph-edits";
 import type { CompileState, Diagnostic, LiveStatus, ServerEvent } from "./queries";
 
 /** The server's own messages on the socket (crates/romulus-api/src/collab/protocol.rs). */
@@ -35,7 +39,8 @@ export const CLOSE_TOO_LARGE = 4413;
 /**
  * Transaction origins. Graph edits made here are `LOCAL`: the undo manager
  * tracks them (with y-codemirror's own origin for typing), so one ⌘Z undoes
- * a move, a group change or typing, and never someone else's work.
+ * a move, a group change, a schema edit (its SQL and its layout move
+ * together) or typing, and never someone else's work.
  * Positions the graph picks for tables that had none are `PLACED`: not an
  * action of anyone's, never undone.
  */
@@ -80,6 +85,8 @@ export interface SessionState {
   saveFailed: boolean;
   /** Edits made here while disconnected, not on the server yet. */
   unsynced: boolean;
+  /** Schema edits made from the graph in this tab, oldest first (see graph-edits.ts). */
+  edits: readonly EditEntry[];
 }
 
 /**
@@ -166,6 +173,18 @@ export interface DraftSessionOptions {
   origin?: string;
   /** A failed connection attempt (the upgrade refused, the network down). */
   onConnectionFailed?: () => void;
+  /** No server: a draft held in this tab only (dev screens, tests). */
+  local?: LocalDraft;
+}
+
+/** A draft without a server: its content, and what stands in for the compile. */
+export interface LocalDraft {
+  sql: string;
+  layout?: Layout;
+  groups?: Record<string, Group>;
+  role: Role;
+  /** Compiles the text, as the server would, when typing pauses. */
+  compile: (sql: string) => { model: unknown; diagnostics: Diagnostic[] };
 }
 
 let sessions = 0;
@@ -189,7 +208,8 @@ export class DraftSession {
   readonly sql: Y.Text;
   readonly layout: Y.Map<Position>;
   readonly groups: Y.Map<Group>;
-  readonly provider: WebsocketProvider;
+  /** Null for a local draft. */
+  readonly provider: WebsocketProvider | null;
   readonly awareness: Awareness;
   /** One per client, over the text, the layout and the groups; local origins only. */
   readonly undo: Y.UndoManager;
@@ -209,7 +229,11 @@ export class DraftSession {
     tooLarge: false,
     saveFailed: false,
     unsynced: false,
+    edits: [],
   };
+  /** Each schema edit's entry in the undo history. */
+  private undoItems = new Map<number, unknown>();
+  private lastEdit = 0;
   private listeners = new Set<() => void>();
   private destroyed = false;
   private opened = false;
@@ -226,8 +250,15 @@ export class DraftSession {
       trackedOrigins: new Set([LOCAL]),
     });
 
+    if (options.local) {
+      this.provider = null;
+      this.awareness = new Awareness(this.doc);
+      this.startLocal(options.local);
+      this.sql.observe(this.onText);
+      return;
+    }
     const origin = options.origin ?? window.location.origin.replace(/^http/, "ws");
-    this.provider = new WebsocketProvider(
+    const provider = new WebsocketProvider(
       `${origin}/api/orgs/${encodeURIComponent(org)}/drafts`,
       `${encodeURIComponent(draftId)}/ws`,
       this.doc,
@@ -235,13 +266,14 @@ export class DraftSession {
       // decides what a reviewer's tab may change.
       { disableBc: true, maxBackoffTime: 5000 },
     );
-    this.awareness = this.provider.awareness;
+    this.provider = provider;
+    this.awareness = provider.awareness;
     // Receivers ignore a first state at clock 0 from a client they do not
     // know (y-protocols): set one field now, so this one starts at 1 and
     // everyone sees who joined before they move.
     this.awareness.setLocalStateField("selection", null);
 
-    this.provider.messageHandlers[MESSAGE_EVENT] = (_encoder, decoder) => {
+    provider.messageHandlers[MESSAGE_EVENT] = (_encoder, decoder) => {
       const body = decoding.readVarUint8Array(decoder);
       try {
         this.onEvent(JSON.parse(new TextDecoder().decode(body)) as ServerEvent);
@@ -249,11 +281,11 @@ export class DraftSession {
         console.error("draft: unreadable server event", error);
       }
     };
-    this.provider.on("status", ({ status }) => {
+    provider.on("status", ({ status }) => {
       if (status === "connected") this.opened = true;
       this.set({ connection: this.connection(status) });
     });
-    this.provider.on("sync", (synced) => {
+    provider.on("sync", (synced) => {
       // Our missing edits went with the answer to the server's step 1, before this.
       if (synced) {
         this.set({ synced: true, unsynced: false });
@@ -261,15 +293,15 @@ export class DraftSession {
       }
     });
     this.doc.on("update", (_update: Uint8Array, origin: unknown) => {
-      if (origin !== this.provider && !this.provider.wsconnected && !this.state.unsynced) {
+      if (origin !== provider && !provider.wsconnected && !this.state.unsynced) {
         this.set({ unsynced: true });
       }
     });
-    this.provider.on("connection-close", (event) => {
+    provider.on("connection-close", (event) => {
       if (!this.opened && event) options.onConnectionFailed?.();
       this.opened = false;
     });
-    this.provider.on("closed", ({ code }) => {
+    provider.on("closed", ({ code }) => {
       if (code === CLOSE_DELETED) this.set({ deleted: true, status: "deleted" });
       else if (code === CLOSE_SESSION) this.set({ signedOut: true });
       else if (code === CLOSE_TOO_LARGE) this.set({ tooLarge: true });
@@ -301,15 +333,51 @@ export class DraftSession {
   }
 
   private onNetwork = () => {
+    const provider = this.provider;
+    if (!provider) return;
     this.set({
-      connection: this.connection(this.provider.wsconnected ? "connected" : "disconnected"),
+      connection: this.connection(provider.wsconnected ? "connected" : "disconnected"),
     });
     // Back online: try now rather than at the end of the backoff.
-    if (navigator.onLine && !this.provider.wsconnected && this.provider.shouldConnect) {
-      this.provider.disconnect();
-      this.provider.connect();
+    if (navigator.onLine && !provider.wsconnected && provider.shouldConnect) {
+      provider.disconnect();
+      provider.connect();
     }
   };
+
+  /** A local draft: seeded, "connected", compiled by `local.compile` when typing pauses. */
+  private startLocal(local: LocalDraft) {
+    this.doc.transact(() => {
+      this.sql.insert(0, local.sql);
+      for (const [key, p] of Object.entries(local.layout ?? {})) this.layout.set(key, p);
+      for (const [id, g] of Object.entries(local.groups ?? {})) this.groups.set(id, g);
+    });
+    this.set({ connection: "connected", synced: true });
+    this.onEvent({
+      type: "welcome",
+      role: local.role,
+      read_only: local.role === "reviewer",
+      status: "open",
+    });
+    let timer = 0;
+    const compile = async () => {
+      const sql = this.sql.toJSON();
+      const { model, diagnostics } = local.compile(sql);
+      const event: ServerEvent = {
+        type: "compile",
+        state: model ? "ok" : "failed",
+        sha256: await sha256(sql),
+        diagnostics,
+        model: model as Record<string, never> | null,
+      };
+      if (!this.destroyed) this.onEvent(event);
+    };
+    this.sql.observe(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void compile(), 300);
+    });
+    void compile();
+  }
 
   // ---- Server events -----------------------------------------------------------
 
@@ -321,7 +389,7 @@ export class DraftSession {
     this.set(eventPatch(this.state, event));
     if (event.type === "status" && (event.status === "published" || event.status === "deleted")) {
       // Nothing will change it any more: stop reconnecting.
-      this.provider.disconnect();
+      this.provider?.disconnect();
     }
   }
 
@@ -453,6 +521,87 @@ export class DraftSession {
     this.doc.transact(() => this.groups.delete(id), LOCAL);
   }
 
+  /**
+   * A schema edit from the graph (docs/MVP.md "Schema edits from the graph
+   * append SQL"): its statements appended under the marker, and the layout
+   * change that goes with it (a renamed table's entries move, a new table is
+   * placed), in one transaction that one undo takes back. `model` is what
+   * the graph showed: the edit's effect is measured against it.
+   */
+  editSchema(edit: GraphEdit, model: Schema, position?: Position): EditEntry {
+    const statements = sqlFor(edit);
+    const append = appendTo(this.sql.toJSON(), statements);
+    const change = layoutChange(
+      edit,
+      position && { x: Math.round(position.x), y: Math.round(position.y) },
+    );
+    // Its own step in the history, whatever came just before or after.
+    this.undo.stopCapturing();
+    this.doc.transact(() => {
+      this.sql.insert(append.at, append.insert);
+      this.moveLayout(change);
+    }, LOCAL);
+    this.undo.stopCapturing();
+    const entry: EditEntry = {
+      id: ++this.lastEdit,
+      edit,
+      sql: statements.join("\n"),
+      touched: touchedEntities(model, applyEdit(model, edit)),
+    };
+    this.undoItems.set(entry.id, this.undo.undoStack.at(-1));
+    const edits = [...this.state.edits, entry];
+    for (const gone of edits.splice(0, Math.max(0, edits.length - KEPT_EDITS)))
+      this.undoItems.delete(gone.id);
+    this.set({ edits });
+    return entry;
+  }
+
+  /**
+   * Takes back one schema edit (one that failed): an undo when it is the
+   * last thing done here; otherwise its statements leave the text (a
+   * renamed table moving back), as a step of its own.
+   */
+  undoSchemaEdit(id: number) {
+    const entry = this.state.edits.find((e) => e.id === id);
+    if (!entry) return;
+    const item = this.undoItems.get(id);
+    if (item !== undefined && this.undo.undoStack.at(-1) === item) {
+      this.undo.undo();
+      return;
+    }
+    const text = this.sql.toJSON();
+    const at = text.lastIndexOf(entry.sql);
+    if (at < 0) return;
+    const end = at + entry.sql.length + (text[at + entry.sql.length] === "\n" ? 1 : 0);
+    const change = layoutChange(entry.edit);
+    this.undo.stopCapturing();
+    this.doc.transact(() => {
+      this.sql.delete(at, end - at);
+      if (change.rename) this.moveLayout({ rename: [change.rename[1], change.rename[0]] });
+    }, LOCAL);
+    this.undo.stopCapturing();
+  }
+
+  private moveLayout(change: LayoutChange) {
+    if (change.rename) {
+      const [from, to] = change.rename;
+      const position = this.layout.get(from);
+      if (position) {
+        this.layout.set(to, position);
+        this.layout.delete(from);
+      }
+      for (const [id, group] of this.groups.entries()) {
+        if (!group.members.includes(from)) continue;
+        const members = [...new Set(group.members.map((m) => (m === from ? to : m)))];
+        this.groups.set(id, { ...group, members });
+      }
+    }
+    if (change.place) {
+      const { key, x, y } = change.place;
+      this.layout.set(key, { x, y });
+    }
+  }
+
   destroy() {
     this.destroyed = true;
     window.clearTimeout(this.recheck);
@@ -461,7 +610,8 @@ export class DraftSession {
     this.sql.unobserve(this.onText);
     this.listeners.clear();
     this.undo.destroy();
-    this.provider.destroy();
+    this.provider?.destroy();
+    if (!this.provider) this.awareness.destroy();
     this.doc.destroy();
   }
 }

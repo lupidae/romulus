@@ -241,3 +241,10 @@ export function needsUsing(from: string, to: string): boolean {
   if (b === "string") return false;
   return true;
 }
+
+/** The type a picker's text stands for: the model's enum or domain, a known or typed name; or null. */
+export function typeFromText(schema: Schema, value: string): TypeChoice | null {
+  const text = value.trim();
+  if (!text) return null;
+  return modelTypes(schema).find((c) => c.sql === text) ?? customType(text);
+}

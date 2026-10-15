@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { eventPatch, mayEdit, type SessionState } from "./session";
+import blogJson from "@/features/schema/fixtures/blog.json";
+import { MARKER } from "@/features/schema/edits/append";
+import { parseSchema } from "@/features/schema/model";
+
+import { DraftSession, eventPatch, mayEdit, type SessionState } from "./session";
 
 const initial: SessionState = {
   connection: "connected",
@@ -17,6 +21,7 @@ const initial: SessionState = {
   tooLarge: false,
   saveFailed: false,
   unsynced: false,
+  edits: [],
 };
 
 const apply = (state: SessionState, ...events: Parameters<typeof eventPatch>[1][]) =>
@@ -57,5 +62,70 @@ describe("a draft session's state", () => {
 
   it("says when the server could not save", () => {
     expect(apply(initial, { type: "save_failed" }).saveFailed).toBe(true);
+  });
+});
+
+describe("schema edits from the graph", () => {
+  const blog = parseSchema(blogJson);
+  const users = { schema: "public", name: "users", kind: "r" as const };
+  const local = () =>
+    new DraftSession("acme", "draft", {
+      local: {
+        sql: "CREATE TABLE users (id bigint);\n",
+        layout: { "public.users": { x: 10, y: 20 } },
+        groups: { g: { name: "People", color: "blue", members: ["public.users", "public.x"] } },
+        role: "developer",
+        compile: () => ({ model: null, diagnostics: [] }),
+      },
+    });
+
+  it("append their SQL and move the layout in one step that one undo takes back", () => {
+    const session = local();
+    session.editSchema({ kind: "renameTable", table: users, to: "members" }, blog);
+    expect(session.sql.toJSON()).toBe(
+      `CREATE TABLE users (id bigint);\n\n${MARKER}\nALTER TABLE public.users RENAME TO members;\n`,
+    );
+    expect(session.layout.toJSON()).toEqual({ "public.members": { x: 10, y: 20 } });
+    expect(session.groups.get("g")?.members).toEqual(["public.members", "public.x"]);
+    expect(session.getState().edits).toHaveLength(1);
+
+    session.undo.undo();
+    expect(session.sql.toJSON()).toBe("CREATE TABLE users (id bigint);\n");
+    expect(session.layout.toJSON()).toEqual({ "public.users": { x: 10, y: 20 } });
+    expect(session.groups.get("g")?.members).toEqual(["public.users", "public.x"]);
+    session.undo.redo();
+    expect(session.sql.toJSON()).toContain("RENAME TO members");
+    session.destroy();
+  });
+
+  it("each edit is its own step, and a new table is placed with it", () => {
+    const session = local();
+    session.editSchema({ kind: "addTable", table: { schema: "public", name: "invoices" } }, blog, {
+      x: 100.4,
+      y: 200.6,
+    });
+    session.editSchema({ kind: "setComment", table: users, comment: "People" }, blog);
+    expect(session.layout.get("public.invoices")).toEqual({ x: 100, y: 201 });
+    session.undo.undo();
+    expect(session.sql.toJSON()).toContain("CREATE TABLE public.invoices");
+    expect(session.sql.toJSON()).not.toContain("COMMENT ON");
+    session.undo.undo();
+    expect(session.sql.toJSON()).not.toContain("invoices");
+    expect(session.layout.has("public.invoices")).toBe(false);
+    session.destroy();
+  });
+
+  it("an edit that is not the last one is taken back on its own", () => {
+    const session = local();
+    const rename = session.editSchema({ kind: "renameTable", table: users, to: "members" }, blog);
+    session.editSchema({ kind: "setComment", table: users, comment: "x" }, blog);
+    session.undoSchemaEdit(rename.id);
+    expect(session.sql.toJSON()).not.toContain("RENAME");
+    expect(session.sql.toJSON()).toContain("COMMENT ON TABLE public.users IS 'x';");
+    expect(session.layout.toJSON()).toEqual({ "public.users": { x: 10, y: 20 } });
+    // As a step of its own: undo brings it back.
+    session.undo.undo();
+    expect(session.sql.toJSON()).toContain("RENAME TO members");
+    session.destroy();
   });
 });

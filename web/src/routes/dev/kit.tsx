@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Combobox } from "@/components/ui/combobox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CodeBlock } from "@/components/ui/code-block";
 import { CopyField } from "@/components/ui/copy-field";
@@ -92,7 +93,7 @@ const sections = [
   ["type", "Type"],
   ["shape", "Radius and depth"],
   ["buttons", "Button"],
-  ["forms", "Input, Select, Field"],
+  ["forms", "Input, Select, Combobox, Field"],
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
@@ -400,7 +401,7 @@ function Buttons() {
 
 function Forms() {
   return (
-    <Section id="forms" title="Input, Select, Field">
+    <Section id="forms" title="Input, Select, Combobox, Field">
       <Card className="grid gap-5 p-4 sm:grid-cols-2">
         <Field label="Database name" description="Lowercase, used in links.">
           <Input placeholder="billing" />
@@ -439,8 +440,34 @@ function Forms() {
         >
           <Textarea placeholder="Add billing tables" />
         </Field>
+        <ComboboxDemo />
       </Card>
     </Section>
+  );
+}
+
+const TYPES = ["text", "bigint", "integer", "boolean", "timestamptz", "uuid", "jsonb", "date"];
+
+function ComboboxDemo() {
+  const [value, setValue] = React.useState("");
+  const options = TYPES.filter((t) => t.includes(value.trim().toLowerCase())).map((t) => ({
+    value: t,
+    label: t,
+    group: "Common",
+  }));
+  return (
+    <Field label="Combobox" description="Type to narrow, arrows and Enter to pick.">
+      <Combobox
+        value={value}
+        onValueChange={setValue}
+        options={options}
+        onPick={(option) => setValue(option.value)}
+        monospace
+        placeholder="text, bigint…"
+        className="font-mono"
+        empty="No type matches."
+      />
+    </Field>
   );
 }
 

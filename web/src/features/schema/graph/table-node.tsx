@@ -6,16 +6,25 @@ import {
   HashtagIcon,
   KeyIcon,
   LinkIcon,
+  MoreHorizIcon,
   NavArrowDownIcon,
   NavArrowRightIcon,
+  PlusIcon,
   SparksIcon,
+  WarningTriangleIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { type ChangeStatus, statusGlyph } from "../diff";
+import { columnNameTaken, relationNameTaken } from "../edits/inspect";
+import { targetOf } from "../edits/plan";
+import { nameProblem } from "../edits/quote";
 import type { ColumnModel, EdgeModel, TableModel } from "./build";
 import { requestDetail } from "./detail-scheduler";
+import { type EditContextValue, useEdit } from "./editing/context";
+import { InlineName } from "./editing/inline-name";
+import { type ElementMark, markKey } from "./editing/types";
 import { hasFooter, NODE, showsNullable, visibleColumnCount } from "./geometry";
 import { useGraphUi, useGraphUiStore } from "./graph-ui";
 import { KIND_ICON, KIND_LABEL } from "./kind";
@@ -30,6 +39,8 @@ export interface TableNodeData extends Record<string, unknown> {
   edges: EdgeModel[];
   /** Diff mode: unchanged tables step back so changes stand out. */
   diffMode: boolean;
+  /** Its schema can be edited from the graph (a draft's editors; not foreign tables). */
+  editable?: boolean;
 }
 
 export type TableFlowNode = Node<TableNodeData, "table">;
@@ -62,6 +73,14 @@ const ELSEWHERE = "\u0000elsewhere";
 
 function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
   const { table, multiSchema, schemaColor, edges, diffMode } = data;
+  const edit = useEdit();
+  const canEdit = !!edit && data.editable === true;
+  const renaming = useGraphUi(
+    (s) => canEdit && s.editing?.kind === "renameTable" && s.editing.table === id,
+  );
+  // The + and ⋯ of the header: on the table under the pointer or selected.
+  const tools = useGraphUi((s) => canEdit && !s.editing && (s.hovered === id || s.selected === id));
+  const mark = useGraphUi((s) => (canEdit ? s.marks.get(id) : undefined));
 
   // The selected table when it is this one or a neighbour, "elsewhere" when it
   // is unrelated: the node re-renders only when that answer changes.
@@ -114,8 +133,11 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
       <div
         data-table-header=""
         className={cn(
-          "sg-header flex shrink-0 items-center gap-2 border-b border-border px-3",
+          "sg-header relative flex shrink-0 items-center gap-2 border-b border-border px-3",
           isView ? "bg-muted" : "bg-card",
+          mark?.status === "pending" && "bg-primary/6",
+          mark?.status === "failed" && "bg-destructive/8",
+          "data-[link-target=bad]:bg-destructive/10 data-[link-target=ok]:bg-success/15",
         )}
         style={{ height: NODE.header }}
       >
@@ -126,17 +148,39 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
           />
         ) : null}
         <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-        <span
-          className={cn(
-            "sg-name min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground",
-            table.status === "removed" && "line-through decoration-destructive/60",
-          )}
-        >
-          {multiSchema && (
-            <span className="font-normal text-faint-foreground">{table.schema}.</span>
-          )}
-          {table.name}
-        </span>
+        {renaming && edit ? (
+          <InlineName
+            aria-label={`Rename ${table.name}`}
+            initial={table.name}
+            validate={(name) =>
+              nameProblem(name) ?? relationNameTaken(edit.schema, table.schema, name)
+            }
+            onCommit={(to) => edit.emit({ kind: "renameTable", table: targetOf(table.entity), to })}
+            onCancel={edit.stop}
+            className="font-mono text-sm font-semibold sm:text-sm"
+          />
+        ) : (
+          // A pointer shortcut: F2 and the menu are the keyboard's.
+          <span
+            className={cn(
+              "sg-name min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground",
+              table.status === "removed" && "line-through decoration-destructive/60",
+            )}
+            onDoubleClick={
+              canEdit
+                ? (event) => {
+                    event.stopPropagation();
+                    edit.start({ kind: "renameTable", table: id });
+                  }
+                : undefined
+            }
+          >
+            {multiSchema && (
+              <span className="font-normal text-faint-foreground">{table.schema}.</span>
+            )}
+            {table.name}
+          </span>
+        )}
         {kindLabel && (
           <span className="sg-kind shrink-0 rounded-sm px-1.5 text-xs text-muted-foreground ring-1 ring-border-strong ring-inset">
             {kindLabel === "materialized view"
@@ -147,10 +191,19 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
           </span>
         )}
         {table.status && <StatusBadge status={table.status} />}
+        {mark && edit && <MarkIcon mark={mark} edit={edit} table={id} />}
+        {tools && edit && !renaming && <HeaderTools edit={edit} table={table} />}
       </div>
 
       <OverviewBody table={table} width={width ?? NODE.minWidth} />
-      <DetailSlot id={id} table={table} edges={edges} diffMode={diffMode} related={related} />
+      <DetailSlot
+        id={id}
+        table={table}
+        edges={edges}
+        diffMode={diffMode}
+        related={related}
+        canEdit={canEdit}
+      />
     </div>
   );
 }
@@ -177,12 +230,28 @@ interface DetailProps {
   edges: EdgeModel[];
   diffMode: boolean;
   related: string | null;
+  canEdit: boolean;
 }
 
 /** Comment, rows and footer: what a readable zoom shows. */
-const DetailBody = memo(function DetailBody({ id, table, edges, diffMode, related }: DetailProps) {
+const DetailBody = memo(function DetailBody({
+  id,
+  table,
+  edges,
+  diffMode,
+  related,
+  canEdit,
+}: DetailProps) {
   const store = useGraphUiStore();
+  const edit = useEdit();
   const nodeState = useGraphUi((s) => s.nodeState[id]);
+  // Editing: the column renamed in place here, and the marks of edits in flight.
+  const renaming = useGraphUi((s) =>
+    canEdit && s.editing?.kind === "renameColumn" && s.editing.table === id
+      ? s.editing.column
+      : null,
+  );
+  const marks = useGraphUi((s) => (canEdit ? s.marks : null));
   const visible = visibleColumnCount(table, nodeState);
 
   // Columns that join this table to the selected one (or, selected, to anything).
@@ -213,6 +282,15 @@ const DetailBody = memo(function DetailBody({ id, table, edges, diffMode, relate
         <p
           className="shrink-0 truncate border-b border-border bg-muted/60 px-3 text-xs leading-5 text-muted-foreground"
           style={{ height: NODE.comment }}
+          title={table.comment}
+          onDoubleClick={
+            canEdit
+              ? (event) => {
+                  event.stopPropagation();
+                  edit?.start({ kind: "comment", table: id });
+                }
+              : undefined
+          }
         >
           {table.comment}
         </p>
@@ -225,6 +303,16 @@ const DetailBody = memo(function DetailBody({ id, table, edges, diffMode, relate
             joined={joined.has(c.name)}
             diffMode={diffMode}
             nullable={showsNullable(table)}
+            editing={
+              canEdit
+                ? {
+                    table: id,
+                    renaming: renaming === c.name,
+                    mark: marks?.get(markKey(id, c.name)),
+                    linkable: !isViewTable(table),
+                  }
+                : undefined
+            }
           />
         ))}
       </ul>
@@ -283,27 +371,54 @@ function overviewLines(name: string): string[] {
   return best < 0 ? [name] : [name.slice(0, best + 1), name.slice(best + 1)];
 }
 
+interface RowEditing {
+  table: string;
+  /** Its name is being edited in place. */
+  renaming: boolean;
+  /** An edit in flight here, or one that failed. */
+  mark?: ElementMark;
+  /** It may reference another column (a table's, not a view's). */
+  linkable: boolean;
+}
+
+const isViewTable = (table: TableModel) => table.kind === "view" || table.kind === "materialized";
+
 const ColumnRow = memo(function ColumnRow({
   column: c,
   joined,
   diffMode,
   nullable,
+  editing,
 }: {
   column: ColumnModel;
   joined: boolean;
   diffMode: boolean;
   /** Mark nullable columns (not in views, where every column is). */
   nullable: boolean;
+  /** Set when the schema can be edited from the graph. */
+  editing?: RowEditing;
 }) {
+  const edit = useEdit();
+  const mark = editing?.mark;
+  const start = (kind: "renameColumn" | "type") => (event: React.MouseEvent) => {
+    if (!editing || !edit) return;
+    event.stopPropagation();
+    edit.start({ kind, table: editing.table, column: c.name });
+  };
   return (
     <li
       data-column={c.name}
+      data-pending={mark?.status === "pending" ? "" : undefined}
       className={cn(
-        "relative flex items-center gap-1.5 pr-3 font-mono text-xs",
+        "group/row relative flex items-center gap-1.5 pr-3 font-mono text-xs",
         diffMode ? "pl-4" : "pl-3",
         "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
         c.status && ROW_STATUS[c.status],
         joined && !c.status && "bg-primary/8",
+        mark?.status === "pending" && "bg-primary/6",
+        mark?.status === "failed" && "bg-destructive/8 before:bg-destructive",
+        "data-[link-target=ok]:bg-success/15 data-[link-target=ok]:before:bg-success",
+        "data-[link-target=bad]:bg-destructive/10 data-[link-target=bad]:before:bg-destructive",
       )}
       style={{ height: NODE.row }}
     >
@@ -327,21 +442,44 @@ const ColumnRow = memo(function ColumnRow({
           <LinkIcon aria-label="Foreign key" className="text-info" />
         ) : null}
       </span>
-      <span
-        className={cn(
-          "min-w-0 truncate",
-          joined ? "font-semibold text-foreground" : "text-foreground",
-          c.status === "removed" && "text-muted-foreground line-through decoration-destructive/60",
-        )}
-      >
-        {c.name}
-      </span>
+      {editing?.renaming && edit ? (
+        <InlineName
+          aria-label={`Rename ${c.name}`}
+          initial={c.name}
+          validate={(name) => {
+            const entity = edit.graph.byKey.get(editing.table)?.entity;
+            return nameProblem(name) ?? (entity ? columnNameTaken(entity, name) : null);
+          }}
+          onCommit={(to) => {
+            const entity = edit.graph.byKey.get(editing.table)?.entity;
+            if (entity)
+              edit.emit({ kind: "renameColumn", table: targetOf(entity), column: c.name, to });
+          }}
+          onCancel={edit.stop}
+          className="h-5 text-xs sm:h-5 sm:text-xs"
+        />
+      ) : (
+        <span
+          className={cn(
+            "min-w-0 truncate",
+            joined ? "font-semibold text-foreground" : "text-foreground",
+            c.status === "removed" &&
+              "text-muted-foreground line-through decoration-destructive/60",
+          )}
+          onDoubleClick={editing ? start("renameColumn") : undefined}
+        >
+          {c.name}
+        </span>
+      )}
       {(c.unique || c.identity || c.generated) && (
         <span className="flex shrink-0 items-center gap-1 text-faint-foreground [&_svg]:size-3">
           {c.unique && <FingerprintIcon aria-label="Unique" />}
           {c.identity && <HashtagIcon aria-label="Identity" />}
           {c.generated && <SparksIcon aria-label="Generated" />}
         </span>
+      )}
+      {mark && edit && editing && (
+        <MarkIcon mark={mark} edit={edit} table={editing.table} column={c.name} />
       )}
       <span
         className={cn(
@@ -350,13 +488,104 @@ const ColumnRow = memo(function ColumnRow({
             ? "text-syntax-type underline decoration-dotted underline-offset-2"
             : "text-faint-foreground",
         )}
+        onDoubleClick={editing && !editing.renaming ? start("type") : undefined}
       >
         {c.display}
         {nullable && !c.notNull && <span className="text-faint-foreground">?</span>}
       </span>
+      {editing?.linkable && !editing.renaming && (
+        <span
+          data-link-grip=""
+          aria-hidden
+          title="Drag to a column to add a foreign key"
+          className={cn(
+            "nodrag nopan absolute top-1/2 right-0.5 size-2.5 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-info bg-card",
+            "opacity-0 transition-opacity duration-(--duration-fast) group-hover/row:opacity-100",
+            "pointer-coarse:hidden",
+          )}
+        />
+      )}
     </li>
   );
 });
+
+/** A pending edit's quiet dot, or a failed one's warning (which opens its message). */
+function MarkIcon({
+  mark,
+  edit,
+  table,
+  column,
+}: {
+  mark: ElementMark;
+  edit: EditContextValue;
+  table: string;
+  column?: string;
+}) {
+  if (mark.status === "pending") {
+    return (
+      <span className="flex shrink-0 items-center" data-testid="edit-pending">
+        <span aria-hidden className="size-1.5 rounded-full bg-primary motion-safe:animate-pulse" />
+        <span className="sr-only">{mark.label}: being applied</span>
+      </span>
+    );
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      {...outOfTabOrder}
+      aria-label={`${mark.label} failed: ${mark.message ?? ""}`}
+      data-testid="edit-failed"
+      onClick={(event) => {
+        event.stopPropagation();
+        edit.start({ kind: "failure", table, column });
+      }}
+      className="nodrag -my-1 size-5 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive [&_svg]:size-3.5"
+    >
+      <WarningTriangleIcon />
+    </Button>
+  );
+}
+
+/** Add a column, and the table's actions: on the header of the table under the pointer. */
+function HeaderTools({ edit, table }: { edit: EditContextValue; table: TableModel }) {
+  const view = isViewTable(table);
+  return (
+    <div className="nodrag absolute inset-y-0 right-0 flex items-center gap-0.5 bg-linear-to-l from-card from-70% pr-1.5 pl-6">
+      {!view && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          {...outOfTabOrder}
+          aria-label={`Add a column to ${table.name}`}
+          title="Add column (A)"
+          onClick={(event) => {
+            event.stopPropagation();
+            edit.start({ kind: "addColumn", table: table.key });
+          }}
+          className="size-6"
+        >
+          <PlusIcon />
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        {...outOfTabOrder}
+        aria-label={`Actions for ${table.name}`}
+        title="Actions (M)"
+        onClick={(event) => {
+          event.stopPropagation();
+          const box = event.currentTarget.getBoundingClientRect();
+          edit.openMenu({ table: table.key, x: box.left, y: box.bottom });
+        }}
+        className="size-6"
+      >
+        <MoreHorizIcon />
+      </Button>
+    </div>
+  );
+}
 
 /**
  * The graph is one tab stop (arrow keys between tables, E unfolds the

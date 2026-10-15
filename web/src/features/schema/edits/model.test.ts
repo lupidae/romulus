@@ -1,6 +1,6 @@
 import blogJson from "../fixtures/blog.json";
 import { parseSchema, type Schema } from "../model";
-import { applyEdit, failedMark, layoutChange, pendingMark, reflects } from "./apply";
+import { applyEdit, layoutChange, markOf, reflects } from "./apply";
 import type { GraphEdit, Target } from "./edits";
 import {
   checkForeignKey,
@@ -21,6 +21,7 @@ const blog = parseSchema(blogJson);
 const t = (name: string, kind: Target["kind"] = "r"): Target => ({ schema: "public", name, kind });
 const entity = (schema: Schema, name: string) => schema.entities!.find((e) => e.name === name);
 const columns = (schema: Schema, name: string) => entity(schema, name)?.columns?.map((c) => c.name);
+const reason = (check: ReturnType<typeof checkForeignKey>) => (check.ok ? "" : check.reason);
 
 describe("what depends on what", () => {
   test("a table: the foreign keys pointing at it and the views reading it", () => {
@@ -93,21 +94,19 @@ describe("foreign keys", () => {
       ok: false,
       fix: "unique",
     });
-    expect(checkForeignKey(blog, t("comments"), "body", t("users"), "id")).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining("cannot compare"),
-    });
+    expect(reason(checkForeignKey(blog, t("comments"), "body", t("users"), "id"))).toContain(
+      "cannot compare",
+    );
     expect(checkForeignKey(blog, t("users"), "id", t("users"), "id")).toMatchObject({ ok: false });
-    expect(checkForeignKey(blog, t("comments"), "author_id", t("users"), "id")).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining("comments_author_id_fkey"),
-    });
+    expect(reason(checkForeignKey(blog, t("comments"), "author_id", t("users"), "id"))).toContain(
+      "comments_author_id_fkey",
+    );
     // integer → bigint compare; text → a unique text column is fine.
     expect(checkForeignKey(blog, t("post_tags"), "tag_id", t("posts"), "id")).toEqual({ ok: true });
     expect(checkForeignKey(blog, t("comments"), "body", t("tags"), "name")).toEqual({ ok: true });
     expect(
-      checkForeignKey(blog, t("comments"), "author_id", t("published_posts", "v"), "id"),
-    ).toMatchObject({ ok: false, reason: expect.stringContaining("views") });
+      reason(checkForeignKey(blog, t("comments"), "author_id", t("published_posts", "v"), "id")),
+    ).toContain("views");
   });
 
   test("a unique index counts as unique", () => {
@@ -349,25 +348,25 @@ describe("applyEdit and reflects", () => {
 });
 
 describe("marks and layout", () => {
-  test("pending marks sit on the result, failures on the original", () => {
+  test("marks sit on the result of the edit, or on what a drop drops", () => {
     const rename: GraphEdit = { kind: "renameColumn", table: t("users"), column: "id", to: "uid" };
-    expect(pendingMark(rename)).toEqual({ table: "public.users", column: "uid" });
-    expect(failedMark(rename)).toEqual({ table: "public.users", column: "id" });
+    expect(markOf(rename)).toEqual({ table: "public.users", column: "uid" });
     const table: GraphEdit = { kind: "renameTable", table: t("users"), to: "people" };
-    expect(pendingMark(table)).toEqual({ table: "public.people" });
-    expect(failedMark(table)).toEqual({ table: "public.users" });
+    expect(markOf(table)).toEqual({ table: "public.people" });
+    expect(markOf({ kind: "dropColumn", table: t("users"), column: "id", cascade: true })).toEqual({
+      table: "public.users",
+      column: "id",
+    });
   });
 
-  test("renames move the layout, new tables are placed, dropped ones leave", () => {
+  test("renames move the layout, new tables are placed, dropped ones stay put", () => {
     expect(layoutChange({ kind: "renameTable", table: t("users"), to: "people" })).toEqual({
       rename: ["public.users", "public.people"],
     });
     expect(layoutChange({ kind: "addTable", table: t("x") }, { x: 1, y: 2 })).toEqual({
       place: { key: "public.x", x: 1, y: 2 },
     });
-    expect(layoutChange({ kind: "dropTable", table: t("x"), cascade: false })).toEqual({
-      remove: "public.x",
-    });
+    expect(layoutChange({ kind: "dropTable", table: t("x"), cascade: false })).toEqual({});
     expect(layoutChange({ kind: "renameColumn", table: t("x"), column: "a", to: "b" })).toEqual({});
   });
 });

@@ -330,3 +330,14 @@ export function referenceableColumns(entity: Entity): Column[] {
   const unique = columns.filter((c) => !pk.includes(c) && isUniqueColumn(entity, c.name));
   return [...pk, ...unique];
 }
+
+/**
+ * Where a table named as typed goes: in the schema before a dot when the
+ * model has that schema (`billing.invoices`), otherwise in public.
+ */
+export function newTableRef(schema: Schema, typed: string): RelationRef {
+  const match = /^([a-z_][a-z0-9_$]*)\.(.+)$/.exec(typed);
+  const schemas = new Set((schema.entities ?? []).map((e) => e.schema));
+  if (match && schemas.has(match[1]!)) return { schema: match[1]!, name: match[2]! };
+  return { schema: "public", name: typed };
+}

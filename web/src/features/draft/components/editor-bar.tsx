@@ -7,6 +7,7 @@ import {
   EditPencilIcon,
   MoreHorizIcon,
   RedoIcon,
+  SparksIcon,
   TrashIcon,
   UndoIcon,
   WifiOffIcon,
@@ -19,6 +20,7 @@ import {
   MenuContent,
   MenuItem,
   MenuSeparator,
+  MenuShortcut,
   MenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -28,7 +30,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
-import { useDeleteDraft, useRenameDraft } from "../mutations";
+import { useDeleteDraft, useRenameDraft, useTidyDraft } from "../mutations";
 import type { Diagnostic, Draft } from "../queries";
 import type { CompileView, Connection, Peer } from "../session";
 import { CompileStatus } from "./compile-status";
@@ -52,6 +54,8 @@ interface EditorBarProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  /** The SQL now (Tidy says what it would lose). */
+  sql: string;
   onJump: (diagnostic: Diagnostic) => void;
   onPublish: () => void;
   onDeleted: () => void;
@@ -66,7 +70,10 @@ export function EditorBar(props: EditorBarProps) {
   const { org, db, draft, isWriter, compile, connection, synced, peers, meId } = props;
   const [renaming, setRenaming] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [tidying, setTidying] = React.useState(false);
   const remove = useDeleteDraft(org, db, draft.id);
+  const tidy = useTidyDraft(org, db, draft.id);
+  const hasErrors = compile.state === "failed";
   const open = draft.status === "open";
 
   return (
@@ -142,6 +149,11 @@ export function EditorBar(props: EditorBarProps) {
               </MenuTrigger>
             </Tooltip>
             <MenuContent align="end">
+              <MenuItem onSelect={() => setTidying(true)} disabled={!props.canEdit || hasErrors}>
+                <SparksIcon />
+                Tidy SQL…
+                {hasErrors && <MenuShortcut>Fix errors first</MenuShortcut>}
+              </MenuItem>
               <MenuItem onSelect={() => setRenaming(true)}>
                 <EditPencilIcon />
                 Rename draft
@@ -157,6 +169,28 @@ export function EditorBar(props: EditorBarProps) {
         {isWriter && open && <PublishButton draft={draft} onPublish={props.onPublish} />}
       </div>
 
+      <ConfirmDialog
+        open={tidying}
+        onOpenChange={setTidying}
+        title="Tidy the SQL?"
+        description={<TidyDescription sql={props.sql} />}
+        confirmLabel="Tidy SQL"
+        onConfirm={async () => {
+          try {
+            const result = await tidy.mutateAsync();
+            toast.success(result.changed ? "SQL tidied" : "Already tidy", {
+              description: result.changed
+                ? "Everyone in the draft has the canonical SQL now. The schema is the same."
+                : "The SQL is in canonical order already.",
+            });
+          } catch (error) {
+            toast.error(tidyFailure(error), {
+              description: error instanceof ApiError ? error.message : "Check your connection.",
+            });
+            throw error;
+          }
+        }}
+      />
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -178,6 +212,34 @@ export function EditorBar(props: EditorBarProps) {
       />
     </header>
   );
+}
+
+/** What Tidy keeps and what it loses, for the confirm. */
+function TidyDescription({ sql }: { sql: string }) {
+  const comments = sql.split("\n").filter((line) => /^\s*--/.test(line)).length;
+  return (
+    <>
+      Rewrites the SQL in canonical order for everyone in this draft, graph edits folded in. The
+      schema stays exactly the same, COMMENT ON included;{" "}
+      {comments === 0
+        ? "-- line comments would be lost, and there are none."
+        : `the ${comments} ${comments === 1 ? "line" : "lines"} of -- comments ${comments === 1 ? "is" : "are"} lost.`}
+    </>
+  );
+}
+
+function tidyFailure(error: unknown): string {
+  if (!(error instanceof ApiError)) return "Could not tidy the SQL";
+  switch (error.code) {
+    case "compile_failed":
+      return "Fix the SQL's errors first";
+    case "tidy_unsafe":
+      return "Tidy would change the schema";
+    case "draft_changed":
+      return "The SQL kept changing";
+    default:
+      return "Could not tidy the SQL";
+  }
 }
 
 function PublishButton({ draft, onPublish }: { draft: Draft; onPublish: () => void }) {

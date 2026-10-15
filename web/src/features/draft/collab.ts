@@ -4,8 +4,15 @@
 // compile's diagnostics. Loaded with the editor chunk.
 
 import { type Diagnostic as CmDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
-import { type Extension, Prec } from "@codemirror/state";
-import { EditorView, keymap, placeholder, ViewPlugin } from "@codemirror/view";
+import { type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  keymap,
+  placeholder,
+  ViewPlugin,
+} from "@codemirror/view";
 import {
   yCollab,
   ySyncAnnotation,
@@ -68,6 +75,37 @@ const theme = EditorView.theme({
     maxWidth: "28rem",
   },
   ".cm-diagnostic": { padding: "0.375rem 0.625rem", borderLeft: "none", whiteSpace: "pre-wrap" },
+  // SQL a graph edit just wrote: lit, then fading back.
+  ".cm-graphEdit": {
+    backgroundColor: "color-mix(in oklab, var(--color-primary) 16%, transparent)",
+    borderRadius: "0.125rem",
+    animation: "cm-graph-edit 2.4s ease-out forwards",
+  },
+  "@keyframes cm-graph-edit": {
+    "0%, 50%": { backgroundColor: "color-mix(in oklab, var(--color-primary) 16%, transparent)" },
+    "100%": { backgroundColor: "transparent" },
+  },
+});
+
+const flash = StateEffect.define<{ from: number; to: number } | null>();
+/** The latest flash per editor: a timer only clears its own. */
+const flashes = new WeakMap<EditorView, number>();
+const graphEditMark = Decoration.mark({ class: "cm-graphEdit" });
+
+/** Where SQL written from the graph is lit for a moment (mapped through later edits). */
+const flashed = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    let next = marks.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(flash)) continue;
+      next = effect.value
+        ? Decoration.set([graphEditMark.range(effect.value.from, effect.value.to)])
+        : Decoration.none;
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
 });
 
 /**
@@ -106,6 +144,7 @@ export function draftExtensions(
     seedGuard(session.sql),
     Prec.high(keymap.of(yUndoManagerKeymap)),
     lintGutter(),
+    flashed,
     // The SQL pane is narrow next to the graph: long lines wrap.
     EditorView.lineWrapping,
     placeholder("No SQL yet. CREATE TABLE statements written here become tables in the graph."),
@@ -143,4 +182,27 @@ export function jumpTo(view: EditorView, diagnostic: Diagnostic) {
     effects: EditorView.scrollIntoView(from, { y: "center" }),
   });
   view.focus();
+}
+
+/**
+ * Shows SQL the graph just appended: scrolled into view (unless this person
+ * is typing in the editor) and lit for a moment.
+ */
+export function showGraphEdit(view: EditorView, sql: string) {
+  const text = view.state.doc.toString();
+  const from = text.lastIndexOf(sql);
+  if (from < 0) return;
+  const to = from + sql.length;
+  view.dispatch({
+    effects: [
+      flash.of({ from, to }),
+      ...(view.hasFocus ? [] : [EditorView.scrollIntoView(from, { y: "nearest", yMargin: 48 })]),
+    ],
+  });
+  const id = (flashes.get(view) ?? 0) + 1;
+  flashes.set(view, id);
+  window.setTimeout(() => {
+    if (view.dom.isConnected && flashes.get(view) === id)
+      view.dispatch({ effects: flash.of(null) });
+  }, 2600);
 }

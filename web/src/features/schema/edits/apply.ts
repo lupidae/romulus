@@ -284,8 +284,12 @@ export interface EditMark {
   column?: string;
 }
 
-/** Where the graph shows an edit while it is pending (on the model after it). */
-export function pendingMark(edit: GraphEdit): EditMark {
+/**
+ * The element of the graph an edit shows on, pending or failed: the
+ * result of the edit (a renamed column under its new name), or for a drop
+ * the element itself.
+ */
+export function markOf(edit: GraphEdit): EditMark {
   const key = qualifiedName(edit.table);
   switch (edit.kind) {
     case "renameTable":
@@ -308,37 +312,17 @@ export function pendingMark(edit: GraphEdit): EditMark {
   }
 }
 
-/** Where the graph shows an edit that failed (on the model before it). */
-export function failedMark(edit: GraphEdit): EditMark {
-  const key = qualifiedName(edit.table);
-  switch (edit.kind) {
-    case "renameTable":
-    case "addTable":
-    case "dropTable":
-      return { table: key };
-    case "addColumn":
-      return { table: key };
-    case "setComment":
-      return edit.column === undefined ? { table: key } : { table: key, column: edit.column };
-    case "renameColumn":
-    case "dropColumn":
-    case "setType":
-    case "setNotNull":
-    case "setDefault":
-    case "addForeignKey":
-      return { table: key, column: edit.column };
-  }
-}
-
 /** The presentation changes that go with an edit, in the same transaction. */
 export interface LayoutChange {
   /** Layout and group entries to move: `[old key, new key]`. */
   rename?: [string, string];
   /** A position for a table that has none yet. */
   place?: { key: string; x: number; y: number };
-  /** A table that leaves the layout and its groups. */
-  remove?: string;
 }
+
+// A dropped table keeps its layout and group entries (docs/MVP.md "Renames":
+// orphans stay until the version is saved, which prunes them), so undoing the
+// drop, or a drop that fails, puts it back where it was.
 
 export function layoutChange(edit: GraphEdit, position?: { x: number; y: number }): LayoutChange {
   switch (edit.kind) {
@@ -351,8 +335,6 @@ export function layoutChange(edit: GraphEdit, position?: { x: number; y: number 
       };
     case "addTable":
       return position ? { place: { key: qualifiedName(edit.table), ...position } } : {};
-    case "dropTable":
-      return { remove: qualifiedName(edit.table) };
     default:
       return {};
   }

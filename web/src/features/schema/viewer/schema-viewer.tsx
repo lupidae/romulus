@@ -8,6 +8,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import type { SchemaDiffInput } from "../diff";
+import type { GraphEditor } from "../graph/editing/types";
 import { graphOf } from "../graph/graph-of";
 import { SchemaGraph } from "../graph/schema-graph";
 import type { Groups, Layout } from "../layout";
@@ -53,6 +54,8 @@ export interface SchemaViewerProps {
   /** Tables picked for an action on several: see `SchemaGraph`. */
   picked?: readonly string[];
   onPickedChange?: (keys: string[]) => void;
+  /** Schema editing from the graph (a draft's editors): see `SchemaGraph`. */
+  editor?: GraphEditor;
   className?: string;
 }
 
@@ -87,6 +90,7 @@ export function SchemaViewer({
   graphEmpty,
   picked,
   onPickedChange,
+  editor,
   className,
 }: SchemaViewerProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
@@ -170,6 +174,7 @@ export function SchemaViewer({
       onSelectedChange={select}
       picked={picked}
       onPickedChange={onPickedChange}
+      editor={editor}
       empty={graphEmpty}
       controls={
         <>

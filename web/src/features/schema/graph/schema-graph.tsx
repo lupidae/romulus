@@ -25,15 +25,29 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { TableIcon } from "@/components/icons";
+import { PlusIcon, TableIcon } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
+import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import type { ChangeStatus, SchemaDiffInput } from "../diff";
 import { type Groups, groupColor, type GroupColor, type Layout } from "../layout";
 import type { Schema } from "../model";
 import type { EdgeModel, GraphModel } from "./build";
+import type { GraphEdit } from "../edits/edits";
+import { ActionsMenu } from "./editing/actions-menu";
+import {
+  EditContext,
+  type EditContextValue,
+  editableKind,
+  type MenuTarget,
+} from "./editing/context";
+import { EditPopovers } from "./editing/edit-popovers";
+import { LinkDrag } from "./editing/link-drag";
+import { NewTable } from "./editing/new-table";
+import type { Editing, ElementMark, GraphEditor } from "./editing/types";
 import { DiffLegend, GraphKey, SearchButton, toolbarClass, ZoomControls } from "./graph-controls";
 import { graphOf } from "./graph-of";
 import { createGraphUiStore, GraphUiContext, type GraphUiStore, useGraphUi } from "./graph-ui";
@@ -98,6 +112,11 @@ export interface SchemaGraphProps {
   controls?: ReactNode;
   /** Rendered inside the flow, e.g. remote cursors in a `ViewportPortal`. */
   children?: ReactNode;
+  /**
+   * Schema editing (a draft's editors): actions on tables and columns (menu,
+   * double-click, keys, drawing foreign keys), handed out as edits.
+   */
+  editor?: GraphEditor;
   className?: string;
 }
 
@@ -169,6 +188,7 @@ function GraphCanvas({
   empty,
   controls,
   children,
+  editor,
   className,
 }: SchemaGraphProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
@@ -383,10 +403,11 @@ function GraphCanvas({
           schemaColor: schemaColors.get(table.schema),
           edges: byTable.get(table.key) ?? [],
           diffMode: diff !== undefined,
+          editable: !!editor && editableKind(table.entity),
         },
       ]),
     );
-  }, [graph, schemaColors, diff]);
+  }, [graph, schemaColors, diff, editor]);
 
   const nodes = useMemo(() => {
     const out: (TableFlowNode | GroupFlowNode | AreaLabelFlowNode)[] = [];
@@ -585,6 +606,157 @@ function GraphCanvas({
     [onLayoutChange, layout],
   );
 
+  // ---- Editing the schema ----------------------------------------------------
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const editorRef = useRef(editor);
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
+  const marks = editor?.marks ?? NO_MARKS;
+  useEffect(() => {
+    store.set({ marks });
+  }, [marks, store]);
+  // A failure shows its message once, where it happened.
+  const seenFailures = useRef(new Set<number>());
+  useEffect(() => {
+    for (const [key, mark] of marks) {
+      if (mark.status !== "failed" || seenFailures.current.has(mark.id)) continue;
+      seenFailures.current.add(mark.id);
+      if (store.get().editing) continue;
+      const [table, column] = key.split("\u0000") as [string, string | undefined];
+      store.set({ editing: { kind: "failure", table: table, column } });
+    }
+  }, [marks, store]);
+
+  const focusGraph = useCallback(() => {
+    requestAnimationFrame(() => wrapper.current?.focus({ preventScroll: true }));
+  }, []);
+  const center = useCallback(() => {
+    const el = wrapper.current;
+    const { x, y, zoom } = flow.getViewport();
+    if (!el) return { x: 0, y: 0 };
+    return {
+      x: (el.clientWidth / 2 - x) / zoom - NODE.minWidth / 2,
+      y: (el.clientHeight / 2 - y) / zoom - NODE.header,
+    };
+  }, [flow]);
+  const startEditing = useCallback(
+    (editing: Editing) => {
+      setMenu(null);
+      setPinned(null);
+      if ("table" in editing) {
+        if (store.get().selected !== editing.table) select(editing.table);
+        // Rows are drawn from a readable zoom only: get there first.
+        const box = boxOf(editing.table);
+        const { zoom } = flow.getViewport();
+        if (box && store.get().lod === "overview") {
+          autoFit.current = false;
+          void flow.setCenter(box.x + box.width / 2, box.y + Math.min(box.height, 320) / 2, {
+            zoom: Math.max(zoom, 0.75),
+            duration: 300,
+          });
+        } else if (box) reveal(editing.table);
+      }
+      store.set({ editing });
+    },
+    [store, select, boxOf, flow, reveal],
+  );
+  const stopEditing = useCallback(() => {
+    store.set({ editing: null });
+    focusGraph();
+  }, [store, focusGraph]);
+  const emit = useCallback(
+    (edit: GraphEdit, options?: { position?: { x: number; y: number } }) => {
+      editorRef.current?.onEdit(edit, options);
+      store.set({ editing: null });
+      if (edit.kind === "addTable") select(`${edit.table.schema}.${edit.table.name}`);
+      if (edit.kind === "renameTable") select(`${edit.table.schema}.${edit.to}`);
+      focusGraph();
+    },
+    [store, select, focusGraph],
+  );
+  const elementOf = useCallback((table: string, column?: string) => {
+    const node = wrapper.current?.querySelector(
+      `.react-flow__node[data-id="${CSS.escape(table)}"]`,
+    );
+    if (!node || column === undefined) return node ?? null;
+    return node.querySelector(`[data-column="${CSS.escape(column)}"]`) ?? node;
+  }, []);
+  const editContext = useMemo<EditContextValue | null>(
+    () =>
+      editor
+        ? {
+            schema,
+            graph,
+            editor,
+            start: startEditing,
+            stop: stopEditing,
+            emit,
+            element: elementOf,
+            openMenu: setMenu,
+            center,
+          }
+        : null,
+    [editor, schema, graph, startEditing, stopEditing, emit, elementOf, center],
+  );
+
+  /** Right click: the menu of what is under the pointer (a column, a table, the canvas). */
+  const onContextMenu = (event: React.MouseEvent) => {
+    if (!editContext) return;
+    const target = event.target as Element;
+    if (isEditableTarget(target) || target.closest("[role=dialog], [role=menu]")) return;
+    event.preventDefault();
+    const node = target.closest<HTMLElement>(".react-flow__node[data-id]");
+    const table = node?.dataset.id;
+    if (table && graph.byKey.has(table)) {
+      if (!editableKind(graph.byKey.get(table)!.entity)) return;
+      select(table);
+      const column = target.closest<HTMLElement>("[data-column]")?.dataset.column;
+      setMenu({ table, column, x: event.clientX, y: event.clientY });
+    } else if (target.closest(".react-flow__pane")) {
+      const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      setMenu({ at, x: event.clientX, y: event.clientY });
+    }
+  };
+
+  /** Keys for editing the selected table (none for a read-only graph). */
+  const onEditKey = (event: React.KeyboardEvent, current: string | null): boolean => {
+    if (!editContext) return false;
+    const table = current ? graph.byKey.get(current) : undefined;
+    const editable = table && editableKind(table.entity);
+    const key = event.key;
+    if ((key === "n" || key === "N") && !event.shiftKey) {
+      startEditing({ kind: "newTable", position: center() });
+    } else if (!editable || !table) {
+      return false;
+    } else if (key === "F2") {
+      startEditing({ kind: "renameTable", table: table.key });
+    } else if (
+      (key === "a" || key === "A") &&
+      table.kind !== "view" &&
+      table.kind !== "materialized"
+    ) {
+      startEditing({ kind: "addColumn", table: table.key });
+    } else if (key === "Delete" || key === "Backspace") {
+      startEditing({ kind: "drop", table: table.key });
+    } else if (
+      key === "m" ||
+      key === "M" ||
+      key === "ContextMenu" ||
+      (key === "F10" && event.shiftKey)
+    ) {
+      const header = wrapper.current?.querySelector(
+        `.react-flow__node[data-id="${CSS.escape(table.key)}"] [data-table-header]`,
+      );
+      const box = header?.getBoundingClientRect();
+      if (!box) return false;
+      setMenu({ table: table.key, x: box.left + 12, y: box.bottom });
+    } else {
+      return false;
+    }
+    return true;
+  };
+
   // ---- Keyboard -------------------------------------------------------------
   const boxes = useCallback(
     () => graph.tables.map((t) => boxOf(t.key)).filter((b): b is Box => b !== undefined),
@@ -597,6 +769,10 @@ function GraphCanvas({
     // Toolbar buttons keep their keys; a node's buttons never hold focus.
     if (isEditableTarget(target) || target.closest("button, a, [role=dialog]")) return;
     const current = store.get().selected;
+    if (onEditKey(event, current)) {
+      event.preventDefault();
+      return;
+    }
     const arrows: Record<string, Direction> = {
       ArrowLeft: "left",
       ArrowRight: "right",
@@ -728,154 +904,186 @@ function GraphCanvas({
 
   return (
     <GraphUiContext.Provider value={store}>
-      {/* A keyboard-driven canvas: one tab stop, arrow keys between tables.
+      <EditContext.Provider value={editContext}>
+        {/* A keyboard-driven canvas: one tab stop, arrow keys between tables.
           `application` makes screen readers pass those keys through; jsx-a11y
           does not count it as interactive. */}
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
-      <div
-        ref={wrapper}
-        role="application"
-        aria-roledescription="schema graph"
-        aria-label="Schema graph"
-        aria-describedby={hintId}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className={cn(
-          "schema-graph relative h-full min-h-0 w-full bg-background outline-none",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-          className,
-        )}
-      >
-        <p id={hintId} className="sr-only">
-          {graph.tables.length} tables. Arrow keys move between tables, Enter zooms to the selected
-          one, slash finds a table.{onPickedChange && " P picks the selected table for a group."}
-        </p>
-        <Announcer graph={graph} />
-        {arranging ? (
-          <div className="flex h-full items-center justify-center gap-2.5 text-base text-muted-foreground">
-            <Spinner label={`Arranging ${graph.tables.length} tables`} />
-            <span aria-hidden>
-              Arranging {graph.tables.length} {graph.tables.length === 1 ? "table" : "tables"}…
-            </span>
-          </div>
-        ) : (
-          <ReactFlow<TableFlowNode | GroupFlowNode | AreaLabelFlowNode, Edge>
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            edgeTypes={edgeTypes}
-            onNodesChange={editable ? onNodesChange : undefined}
-            onNodeDragStop={editable ? onNodeDragStop : undefined}
-            onNodeClick={(event, node) => {
-              if (node.type !== "table") return;
-              if (onPickedChange && (event.shiftKey || event.metaKey || event.ctrlKey)) {
-                const current = picked ?? [];
-                onPickedChange(
-                  current.includes(node.id)
-                    ? current.filter((key) => key !== node.id)
-                    : [...current, node.id],
-                );
-                return;
-              }
-              select(node.id);
-            }}
-            onNodeDoubleClick={(_, node) => {
-              if (node.type === "table") zoomToTable(node.id);
-            }}
-            onNodeMouseEnter={(_, node) => {
-              if (node.type === "table") store.set({ hovered: node.id });
-            }}
-            onNodeMouseLeave={() => store.set({ hovered: null })}
-            onPaneClick={() => select(null)}
-            onMoveStart={(event) => {
-              // A wheel, pinch or drag of the reader's: stop fitting for them.
-              if (event) autoFit.current = false;
-            }}
-            onInit={(instance) => {
-              // Mounted inside a hidden pane: fit for real once it has a size.
-              const el = wrapper.current;
-              if (el && el.clientWidth > 0) void instance.fitView({ ...FIT });
-              setInitialized(true);
-            }}
-            fitView
-            fitViewOptions={FIT}
-            minZoom={0.05}
-            maxZoom={2}
-            nodesDraggable={editable}
-            nodesConnectable={false}
-            nodesFocusable={false}
-            edgesFocusable={false}
-            elementsSelectable={false}
-            disableKeyboardA11y
-            deleteKeyCode={null}
-            selectionKeyCode={null}
-            multiSelectionKeyCode={null}
-            panOnScroll
-            zoomOnPinch
-            zoomActivationKeyCode={["Meta", "Control"]}
-            // Zoomed in, only the tables on screen are mounted; zoomed out,
-            // they are, but light (overview bodies, no shadows, no marks).
-            onlyRenderVisibleElements
-            attributionPosition="bottom-right"
-          >
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1.25} />
-            <ZoomLevel onZoom={applyZoom} />
-            {/* One bar across the top: search left, legend and controls right,
-                wrapping on a phone. The bar itself lets drags reach the pane. */}
-            <Panel
-              position="top-left"
-              className="pointer-events-none !inset-x-3 !top-3 !m-0 flex items-start justify-between gap-2 *:pointer-events-auto"
-            >
-              <SearchButton onClick={() => setSearchOpen(true)} />
-              <div className="pointer-events-none flex flex-wrap-reverse items-center justify-end gap-2 *:pointer-events-auto">
-                {legend && graph.counts && (
-                  <DiffLegend counts={graph.counts} onNext={nextWithStatus} />
-                )}
-                <div className={toolbarClass}>
-                  <GraphKey diff={graph.counts !== undefined} />
-                  {controls}
-                </div>
-              </div>
-            </Panel>
-            <Panel position="bottom-left" className="!m-3">
-              <ZoomControls />
-            </Panel>
-            <NavigatorMap
-              pannable
-              zoomable
-              ariaLabel="Overview of the graph"
-              // Above React Flow's attribution, which sits in the corner.
-              className="!mx-3 !mt-3 !mb-7 hidden md:block"
-              style={{ width: 176, height: 120 }}
-              nodeBorderRadius={6}
-              nodeClassName={(node) => {
-                if (node.type !== "table") return "fill-transparent";
-                const data = node.data as TableNodeData;
-                const key = data.table.status ?? data.schemaColor;
-                return key ? (MINIMAP_FILL[key] ?? "") : "";
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
+        <div
+          ref={wrapper}
+          role="application"
+          aria-roledescription="schema graph"
+          aria-label="Schema graph"
+          aria-describedby={hintId}
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+          tabIndex={0}
+          onKeyDown={onKeyDown}
+          onContextMenu={onContextMenu}
+          className={cn(
+            "schema-graph relative h-full min-h-0 w-full bg-background outline-none",
+            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            className,
+          )}
+        >
+          <p id={hintId} className="sr-only">
+            {graph.tables.length} tables. Arrow keys move between tables, Enter zooms to the
+            selected one, slash finds a table.
+            {onPickedChange && " P picks the selected table for a group."}
+            {editor &&
+              " F2 renames the selected table, A adds a column, Delete drops it, M opens its actions; N adds a table."}
+          </p>
+          <Announcer graph={graph} />
+          {arranging ? (
+            <div className="flex h-full items-center justify-center gap-2.5 text-base text-muted-foreground">
+              <Spinner label={`Arranging ${graph.tables.length} tables`} />
+              <span aria-hidden>
+                Arranging {graph.tables.length} {graph.tables.length === 1 ? "table" : "tables"}…
+              </span>
+            </div>
+          ) : (
+            <ReactFlow<TableFlowNode | GroupFlowNode | AreaLabelFlowNode, Edge>
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onNodesChange={editable ? onNodesChange : undefined}
+              onNodeDragStop={editable ? onNodeDragStop : undefined}
+              onNodeClick={(event, node) => {
+                if (node.type !== "table") return;
+                if (onPickedChange && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+                  const current = picked ?? [];
+                  onPickedChange(
+                    current.includes(node.id)
+                      ? current.filter((key) => key !== node.id)
+                      : [...current, node.id],
+                  );
+                  return;
+                }
+                select(node.id);
               }}
-            />
-            {children}
-          </ReactFlow>
-        )}
-        <HoverDetails container={wrapper} graph={graph} pinned={pinned} />
-        <TableSearch
-          open={searchOpen}
-          onOpenChange={setSearchOpen}
-          graph={graph}
-          onPick={(key) => {
-            select(key);
-            zoomToTable(key);
-          }}
-          // After a pick, keys go on to the graph (arrows, Enter, E), not
-          // back to the search button.
-          pickedFocus={wrapper}
-        />
-      </div>
+              onNodeDoubleClick={(_, node) => {
+                if (node.type === "table") zoomToTable(node.id);
+              }}
+              onNodeMouseEnter={(_, node) => {
+                if (node.type === "table") store.set({ hovered: node.id });
+              }}
+              onNodeMouseLeave={() => store.set({ hovered: null })}
+              onPaneClick={() => select(null)}
+              onMoveStart={(event) => {
+                // A wheel, pinch or drag of the reader's: stop fitting for them.
+                if (event) autoFit.current = false;
+              }}
+              onInit={(instance) => {
+                // Mounted inside a hidden pane: fit for real once it has a size.
+                const el = wrapper.current;
+                if (el && el.clientWidth > 0) void instance.fitView({ ...FIT });
+                setInitialized(true);
+              }}
+              fitView
+              fitViewOptions={FIT}
+              minZoom={0.05}
+              maxZoom={2}
+              nodesDraggable={editable}
+              nodesConnectable={false}
+              nodesFocusable={false}
+              edgesFocusable={false}
+              elementsSelectable={false}
+              disableKeyboardA11y
+              deleteKeyCode={null}
+              selectionKeyCode={null}
+              multiSelectionKeyCode={null}
+              panOnScroll
+              zoomOnPinch
+              zoomActivationKeyCode={["Meta", "Control"]}
+              // Zoomed in, only the tables on screen are mounted; zoomed out,
+              // they are, but light (overview bodies, no shadows, no marks).
+              onlyRenderVisibleElements
+              attributionPosition="bottom-right"
+            >
+              <Background variant={BackgroundVariant.Dots} gap={22} size={1.25} />
+              <ZoomLevel onZoom={applyZoom} />
+              {/* One bar across the top: search left, legend and controls right,
+                wrapping on a phone. The bar itself lets drags reach the pane. */}
+              <Panel
+                position="top-left"
+                className="pointer-events-none !inset-x-3 !top-3 !m-0 flex items-start justify-between gap-2 *:pointer-events-auto"
+              >
+                <SearchButton onClick={() => setSearchOpen(true)} />
+                <div className="pointer-events-none flex flex-wrap-reverse items-center justify-end gap-2 *:pointer-events-auto">
+                  {legend && graph.counts && (
+                    <DiffLegend counts={graph.counts} onNext={nextWithStatus} />
+                  )}
+                  <div className={toolbarClass}>
+                    {editor && (
+                      <Tooltip content="Add a table" shortcut={["N"]}>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Add a table"
+                          onClick={() => startEditing({ kind: "newTable", position: center() })}
+                        >
+                          <PlusIcon />
+                        </Button>
+                      </Tooltip>
+                    )}
+                    <GraphKey diff={graph.counts !== undefined} />
+                    {controls}
+                  </div>
+                </div>
+              </Panel>
+              <Panel position="bottom-left" className="!m-3">
+                <ZoomControls />
+              </Panel>
+              <NavigatorMap
+                pannable
+                zoomable
+                ariaLabel="Overview of the graph"
+                // Above React Flow's attribution, which sits in the corner.
+                className="!mx-3 !mt-3 !mb-7 hidden md:block"
+                style={{ width: 176, height: 120 }}
+                nodeBorderRadius={6}
+                nodeClassName={(node) => {
+                  if (node.type !== "table") return "fill-transparent";
+                  const data = node.data as TableNodeData;
+                  const key = data.table.status ?? data.schemaColor;
+                  return key ? (MINIMAP_FILL[key] ?? "") : "";
+                }}
+              />
+              {editor && (
+                <>
+                  <NewTable />
+                  <LinkDrag />
+                </>
+              )}
+              {children}
+            </ReactFlow>
+          )}
+          {editor && (
+            <>
+              <EditPopovers />
+              <ActionsMenu target={menu} onClose={() => setMenu(null)} />
+            </>
+          )}
+          <HoverDetails container={wrapper} graph={graph} pinned={pinned} />
+          <TableSearch
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            graph={graph}
+            onPick={(key) => {
+              select(key);
+              zoomToTable(key);
+            }}
+            // After a pick, keys go on to the graph (arrows, Enter, E), not
+            // back to the search button.
+            pickedFocus={wrapper}
+          />
+        </div>
+      </EditContext.Provider>
     </GraphUiContext.Provider>
   );
 }
+
+const NO_MARKS: ReadonlyMap<string, ElementMark> = new Map();
 
 interface Dropped {
   position: { x: number; y: number };

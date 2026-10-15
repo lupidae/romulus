@@ -4,6 +4,7 @@
 
 import { createContext, useContext, useSyncExternalStore } from "react";
 
+import type { Editing, ElementMark } from "./editing/types";
 import type { NodeState } from "./geometry";
 
 /** Level of detail: rows are drawn only when they can be read. */
@@ -17,6 +18,10 @@ export interface GraphUiState {
   /** Unfolded columns or partitions, by table key. */
   nodeState: Record<string, NodeState>;
   lod: Lod;
+  /** Editing the schema (a draft): what is being edited in place, if anything. */
+  editing: Editing | null;
+  /** Edits in flight or failed, by table key or `table\u0000column`. */
+  marks: ReadonlyMap<string, ElementMark>;
 }
 
 export interface GraphUiStore {
@@ -33,6 +38,8 @@ export function createGraphUiStore(initial: Partial<GraphUiState> = {}): GraphUi
     hovered: null,
     nodeState: {},
     lod: "overview",
+    editing: null,
+    marks: new Map(),
     ...initial,
   };
   const listeners = new Set<() => void>();
