@@ -7,6 +7,8 @@
 //   sql:    Y.Text                       canonical DDL
 //   layout: Y.Map<qualified name, {x, y}>
 //   groups: Y.Map<group id, {name, color, members}>
+//   meta:   Y.Map: `rewrite` = {count, reason}, bumped by the server in the
+//           same transaction as each rewrite of the SQL (Tidy, Update draft)
 // Awareness carries this client's `cursor` (y-codemirror), `pointer` (graph
 // coordinates) and `selection` (a table); the server stamps `user`.
 
@@ -87,6 +89,11 @@ export interface SessionState {
   unsynced: boolean;
   /** Schema edits made from the graph in this tab, oldest first (see graph-edits.ts). */
   edits: readonly EditEntry[];
+  /**
+   * The server rewrote the SQL (Tidy, Update draft) and this tab's undo
+   * history went with it; `mine` when this tab asked for the rewrite.
+   */
+  historyCleared: { reason: string; count: number; mine: boolean } | null;
 }
 
 /**
@@ -208,6 +215,8 @@ export class DraftSession {
   readonly sql: Y.Text;
   readonly layout: Y.Map<Position>;
   readonly groups: Y.Map<Group>;
+  /** Notes from the server about the doc (see `onMeta`). */
+  readonly meta: Y.Map<unknown>;
   /** Null for a local draft. */
   readonly provider: WebsocketProvider | null;
   readonly awareness: Awareness;
@@ -230,9 +239,12 @@ export class DraftSession {
     saveFailed: false,
     unsynced: false,
     edits: [],
+    historyCleared: null,
   };
   /** Each schema edit's entry in the undo history. */
   private undoItems = new Map<number, unknown>();
+  /** This tab asked for a rewrite (Tidy) that has not arrived yet. */
+  private rewriteExpected = false;
   private lastEdit = 0;
   private listeners = new Set<() => void>();
   private destroyed = false;
@@ -246,6 +258,8 @@ export class DraftSession {
     this.sql = this.doc.getText("sql");
     this.layout = this.doc.getMap("layout");
     this.groups = this.doc.getMap("groups");
+    this.meta = this.doc.getMap("meta");
+    this.meta.observe(this.onMeta);
     this.undo = new Y.UndoManager([this.sql, this.layout, this.groups], {
       trackedOrigins: new Set([LOCAL]),
     });
@@ -522,6 +536,43 @@ export class DraftSession {
   }
 
   /**
+   * This tab is asking the server to rewrite the SQL (Tidy): the next rewrite
+   * is its own. `false` when the request failed or changed nothing.
+   */
+  expectRewrite(expected = true) {
+    this.rewriteExpected = expected;
+  }
+
+  /**
+   * The server rewrote the SQL. The rewrite reuses characters this tab
+   * typed or a graph edit appended, in other places: undoing anything from
+   * before it would delete them wherever they are now (and move layout
+   * entries back under names the text no longer has). So the history goes,
+   * for everyone, with the edits judged on it (their statements are folded
+   * into the new text). Seen in the same transaction as the rewrite, also by
+   * a tab that syncs it later.
+   */
+  private onMeta = (event: Y.YMapEvent<unknown>) => {
+    if (event.transaction.local || !event.keysChanged.has("rewrite")) return;
+    const note = this.meta.get("rewrite") as { count?: unknown; reason?: unknown } | undefined;
+    const had = this.undo.undoStack.length + this.undo.redoStack.length > 0;
+    const mine = this.rewriteExpected;
+    this.rewriteExpected = false;
+    this.undo.clear();
+    this.undoItems.clear();
+    this.set({
+      edits: [],
+      historyCleared: had
+        ? {
+            reason: typeof note?.reason === "string" ? note.reason : "rewrite",
+            count: typeof note?.count === "number" ? note.count : 0,
+            mine,
+          }
+        : this.state.historyCleared,
+    });
+  };
+
+  /**
    * A schema edit from the graph (docs/MVP.md "Schema edits from the graph
    * append SQL"): its statements appended under the marker, and the layout
    * change that goes with it (a renamed table's entries move, a new table is
@@ -608,6 +659,7 @@ export class DraftSession {
     window.removeEventListener("online", this.onNetwork);
     window.removeEventListener("offline", this.onNetwork);
     this.sql.unobserve(this.onText);
+    this.meta.unobserve(this.onMeta);
     this.listeners.clear();
     this.undo.destroy();
     this.provider?.destroy();

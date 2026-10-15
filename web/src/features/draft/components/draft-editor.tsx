@@ -246,6 +246,21 @@ export function Workspace({
     return () => window.removeEventListener("keydown", onKey);
   }, [session, canEdit]);
 
+  // Someone rewrote the SQL (Tidy): this tab's undo history went with it.
+  // Whoever asked was told by Tidy itself.
+  const historyCleared = state?.historyCleared;
+  React.useEffect(() => {
+    if (!historyCleared || historyCleared.mine) return;
+    toast(
+      historyCleared.reason === "tidy"
+        ? "Undo history was cleared by Tidy"
+        : historyCleared.reason === "update"
+          ? "Undo history was cleared by Update draft"
+          : "Undo history was cleared",
+      { description: "The SQL was rewritten for everyone: earlier edits can no longer be undone." },
+    );
+  }, [historyCleared]);
+
   // Leaving with edits only this tab has would lose them.
   const unsynced = state?.unsynced ?? false;
   React.useEffect(() => {
@@ -290,6 +305,7 @@ export function Workspace({
         onUndo={() => session?.undo.undo()}
         onRedo={() => session?.undo.redo()}
         sql={sql}
+        onRewrite={(expected) => session?.expectRewrite(expected)}
         onJump={jump}
         onPublish={() => setPublishing(true)}
         onDeleted={onDeleted}

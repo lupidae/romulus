@@ -56,6 +56,8 @@ interface EditorBarProps {
   onRedo: () => void;
   /** The SQL now (Tidy says what it would lose). */
   sql: string;
+  /** Tidy is being asked for (true), or it failed or changed nothing (false). */
+  onRewrite?: (expected: boolean) => void;
   onJump: (diagnostic: Diagnostic) => void;
   onPublish: () => void;
   onDeleted: () => void;
@@ -177,13 +179,16 @@ export function EditorBar(props: EditorBarProps) {
         confirmLabel="Tidy SQL"
         onConfirm={async () => {
           try {
+            props.onRewrite?.(true);
             const result = await tidy.mutateAsync();
+            if (!result.changed) props.onRewrite?.(false);
             toast.success(result.changed ? "SQL tidied" : "Already tidy", {
               description: result.changed
-                ? "Everyone in the draft has the canonical SQL now. The schema is the same."
+                ? "Everyone has the canonical SQL, the schema the same. Earlier edits can no longer be undone."
                 : "The SQL is in canonical order already.",
             });
           } catch (error) {
+            props.onRewrite?.(false);
             toast.error(tidyFailure(error), {
               description: error instanceof ApiError ? error.message : "Check your connection.",
             });
@@ -219,8 +224,8 @@ function TidyDescription({ sql }: { sql: string }) {
   const comments = sql.split("\n").filter((line) => /^\s*--/.test(line)).length;
   return (
     <>
-      Rewrites the SQL in canonical order, for everyone here. The schema stays the same, table and
-      column comments included;{" "}
+      Rewrites the SQL in canonical order for everyone here; edits made before it can no longer be
+      undone. The schema stays the same, table and column comments included;{" "}
       {comments === 0
         ? "-- comments would be lost (there are none)."
         : `the ${comments} ${comments === 1 ? "line" : "lines"} of -- comments ${comments === 1 ? "is" : "are"} lost.`}

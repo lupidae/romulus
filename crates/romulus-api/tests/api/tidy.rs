@@ -2,18 +2,29 @@
 //! live, as a minimal edit; refused when the text does not compile or the
 //! rewrite would be another schema.
 
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
+
 use axum::http::StatusCode;
 use romulus_api::{
     AppState, Config,
     collab::{
         Hub,
         compile::{Compiled, SqlCompiler},
+        doc::{GRAPH_EDITS_MARKER, RewriteNote},
     },
     domain::Schema,
     drafts::tidy::canonical_sql,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use tokio::sync::mpsc as async_mpsc;
 use uuid::Uuid;
 use yrs::{Assoc, IndexedSequence, Text, Transact};
 
@@ -80,6 +91,15 @@ async fn tidy_rewrites_the_sql_canonically_for_everyone(db: PgPool) {
     assert_eq!(model_of(&expected), model_of(V1));
     bob.until(|c| c.sql() == expected).await;
     alice.until(|c| c.sql() == expected).await;
+    // Noted in the same update as the text: every client drops its undo
+    // history (a rewrite reuses characters they typed, elsewhere).
+    let note = Some(RewriteNote {
+        count: 1,
+        reason: "tidy".into(),
+    });
+    for c in [&alice, &bob] {
+        assert_eq!(c.roots.rewrites(&c.doc.transact()), note);
+    }
     // A compile of the tidy text follows.
     alice
         .until(|c| {
@@ -97,6 +117,7 @@ async fn tidy_rewrites_the_sql_canonically_for_everyone(db: PgPool) {
         .json();
     assert_eq!(again["changed"], false);
     assert_eq!(again["sha256"], body["sha256"]);
+    assert_eq!(alice.roots.rewrites(&alice.doc.transact()), note);
 
     d.app.state.collab.shutdown().await;
     assert_eq!(stored_sql(&db, d.id).await, expected);
@@ -262,4 +283,195 @@ async fn only_developers_and_admins_tidy_open_drafts(db: PgPool) {
     let response = as_(&d.team.developer).post_empty(&d.tidy).await;
     assert_eq!(response.status, StatusCode::CONFLICT);
     assert_eq!(response.code(), "draft_published");
+}
+
+/// Holds Tidy at its check compile (the only text with `CREATE TABLE
+/// public.`) while armed: the test hears it got there, acts, then lets it go.
+struct Gate {
+    armed: AtomicBool,
+    checks: AtomicUsize,
+    reached: async_mpsc::UnboundedSender<()>,
+    go: Mutex<mpsc::Receiver<()>>,
+}
+
+fn gated(gate: &Arc<Gate>) -> SqlCompiler {
+    let gate = Arc::clone(gate);
+    SqlCompiler::from_fn(move |sql| {
+        if sql.contains("CREATE TABLE public.") && gate.armed.load(Ordering::SeqCst) {
+            gate.checks.fetch_add(1, Ordering::SeqCst);
+            let _ = gate.reached.send(());
+            let _ = gate
+                .go
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(10));
+        }
+        Compiled {
+            model: Some(model_of(sql)),
+            diagnostics: Vec::new(),
+        }
+    })
+}
+
+/// A draft compiled by a [`gated`] compiler: the gate, its controls, the draft.
+async fn gated_draft(
+    db: &PgPool,
+) -> (
+    Arc<Gate>,
+    async_mpsc::UnboundedReceiver<()>,
+    mpsc::Sender<()>,
+    Draft,
+) {
+    let (reached, reached_rx) = async_mpsc::unbounded_channel();
+    let (go, go_rx) = mpsc::channel();
+    let gate = Arc::new(Gate {
+        armed: AtomicBool::new(true),
+        checks: AtomicUsize::new(0),
+        reached,
+        go: Mutex::new(go_rx),
+    });
+    let hub = Hub::with_settings(db.clone(), gated(&gate), quick());
+    let app = TestApp::with_state(AppState::new(db.clone(), Config::for_tests()).with_collab(hub));
+    let d = draft_in(db, app, "CREATE TABLE users (id bigint);\n").await;
+    (gate, reached_rx, go, d)
+}
+
+/// Waits until the room has `needle` in its text.
+async fn room_has(d: &Draft, needle: &str) {
+    for _ in 0..200 {
+        if d.app
+            .state
+            .collab
+            .content(d.id)
+            .await
+            .unwrap()
+            .sql
+            .contains(needle)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the room never got {needle:?}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn tidy_starts_over_when_someone_typed_meanwhile(db: PgPool) {
+    let (gate, mut reached, go, d) = gated_draft(&db).await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+
+    let developer = d.app.as_user(&d.team.developer);
+    let tidy = developer.post_empty(&d.tidy);
+    let typing = async {
+        // Alice types while Tidy checks its first rewrite: the room refuses
+        // it (computed against another text), Tidy reads the text again.
+        reached.recv().await.unwrap();
+        alice
+            .edit(|roots, txn| roots.sql.push(txn, "CREATE TABLE extra (id int);\n"))
+            .await;
+        room_has(&d, "extra").await;
+        go.send(()).unwrap();
+        reached.recv().await.unwrap();
+        gate.armed.store(false, Ordering::SeqCst);
+        go.send(()).unwrap();
+    };
+    let (response, ()) = tokio::join!(tidy, typing);
+    assert_eq!(response.status, StatusCode::OK, "{:?}", response.json());
+    assert_eq!(response.json()["changed"], true);
+    assert_eq!(gate.checks.load(Ordering::SeqCst), 2);
+    // The second attempt took Alice's table in.
+    let expected = canonical_sql(&model_of(
+        "CREATE TABLE users (id bigint);\nCREATE TABLE extra (id int);\n",
+    ));
+    alice.until(|c| c.sql() == expected).await;
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn tidy_gives_up_on_sql_that_keeps_changing(db: PgPool) {
+    let (gate, mut reached, go, d) = gated_draft(&db).await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+
+    let developer = d.app.as_user(&d.team.developer);
+    let tidy = developer.post_empty(&d.tidy);
+    let typing = async {
+        for n in 0..3 {
+            reached.recv().await.unwrap();
+            let table = format!("t{n}");
+            alice
+                .edit(|roots, txn| {
+                    roots
+                        .sql
+                        .push(txn, &format!("CREATE TABLE {table} (id int);\n"));
+                })
+                .await;
+            room_has(&d, &format!("CREATE TABLE t{n}")).await;
+            if n == 2 {
+                gate.armed.store(false, Ordering::SeqCst);
+            }
+            go.send(()).unwrap();
+        }
+    };
+    let (response, ()) = tokio::join!(tidy, typing);
+    assert_eq!(
+        response.status,
+        StatusCode::CONFLICT,
+        "{:?}",
+        response.json()
+    );
+    assert_eq!(response.code(), "draft_changed");
+    assert_eq!(gate.checks.load(Ordering::SeqCst), 3);
+    // Nothing rewritten: the text is what was typed.
+    let sql = d.app.state.collab.content(d.id).await.unwrap().sql;
+    assert!(
+        sql.starts_with("CREATE TABLE users (id bigint);\n"),
+        "{sql}"
+    );
+    assert!(sql.contains("CREATE TABLE t2 (id int);"), "{sql}");
+    assert_eq!(alice.roots.rewrites(&alice.doc.transact()), None);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_second_graph_edits_marker_is_removed_before_compiling(db: PgPool) {
+    let d = draft(&db).await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    let mut carol = Client::join(addr, &d.ws, &d.team.admin).await;
+    alice.until(compiled).await;
+    carol.until(|c| c.sql() == V1).await;
+    // Both append one before seeing the other's (V1 has one already: the
+    // draft started from text with a marker, as after a first graph edit
+    // made before the version was published).
+    let m = GRAPH_EDITS_MARKER;
+    let alice_edit = format!("\n{m}\nCREATE TABLE a (id int);\n");
+    let carol_edit = format!("\n{m}\nCREATE TABLE c (id int);\n");
+    tokio::join!(
+        alice.edit(|roots, txn| roots.sql.push(txn, &alice_edit)),
+        carol.edit(|roots, txn| roots.sql.push(txn, &carol_edit)),
+    );
+    alice
+        .until(|c| {
+            let sql = c.sql();
+            sql.contains("TABLE a") && sql.contains("TABLE c") && sql.matches(m).count() == 1
+        })
+        .await;
+    carol
+        .until(|c| c.sql().matches(m).count() == 1 && c.sql().contains("TABLE a"))
+        .await;
+    assert_eq!(alice.sql(), carol.sql());
+    // The statements stay, under the first marker; the compile is of that text.
+    let sql = alice.sql();
+    let first = sql.find(m).unwrap();
+    assert!(sql.find("TABLE a").unwrap() > first && sql.find("TABLE c").unwrap() > first);
+    alice
+        .until(|c| {
+            c.last_event("compile").is_some_and(|e| {
+                e["state"] == "ok"
+                    && e["model"]["entities"]
+                        .as_array()
+                        .is_some_and(|all| all.len() == 4)
+            })
+        })
+        .await;
 }

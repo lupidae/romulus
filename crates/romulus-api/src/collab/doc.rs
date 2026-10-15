@@ -6,6 +6,7 @@
 //! sql:     Y.Text                          canonical DDL
 //! layout:  Y.Map<qualified name, {x, y}>   positions, in graph coordinates
 //! groups:  Y.Map<group id, {name, color, members: qualified names[]}>
+//! meta:    Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`)
 //! ```
 //!
 //! Map values are plain JSON objects (Yjs `Any`), not nested Y.Maps: a move
@@ -29,6 +30,11 @@ use crate::versions::layout::{TableGroup, VersionLayout};
 pub const SQL: &str = "sql";
 pub const LAYOUT: &str = "layout";
 pub const GROUPS: &str = "groups";
+pub const META: &str = "meta";
+
+/// The line above the statements graph edits append (web/src/features/
+/// schema/edits/append.ts `MARKER`).
+pub const GRAPH_EDITS_MARKER: &str = "-- edits from the graph";
 
 /// A doc with the options every peer uses: text offsets in UTF-16 code units,
 /// like the browser's Yjs.
@@ -45,6 +51,7 @@ pub struct Roots {
     pub sql: TextRef,
     pub layout: MapRef,
     pub groups: MapRef,
+    pub meta: MapRef,
 }
 
 impl Roots {
@@ -53,7 +60,29 @@ impl Roots {
             sql: doc.get_or_insert_text(SQL),
             layout: doc.get_or_insert_map(LAYOUT),
             groups: doc.get_or_insert_map(GROUPS),
+            meta: doc.get_or_insert_map(META),
         }
+    }
+
+    /// Notes, in the transaction of a rewrite of the SQL by the server
+    /// (Tidy, Update draft's merge), that it happened: `meta.rewrite` =
+    /// `{count, reason}`. Every client clears its undo history when it sees
+    /// it change: a rewrite reuses characters clients typed, in other places,
+    /// and undoing an edit from before it would delete them wherever they
+    /// are now. In the doc rather than an event, so a client that syncs the
+    /// rewrite later (offline meanwhile) sees it too, in the same update.
+    pub fn note_rewrite(&self, txn: &mut TransactionMut, reason: &str) {
+        let count = self.rewrites(txn).map_or(0, |note| note.count);
+        let note = RewriteNote {
+            count: count + 1,
+            reason: reason.to_owned(),
+        };
+        self.meta.insert(txn, "rewrite", to_any(&note));
+    }
+
+    /// The last rewrite noted, if any.
+    pub fn rewrites<T: ReadTxn>(&self, txn: &T) -> Option<RewriteNote> {
+        from_any(&self.meta.get(txn, "rewrite")?.to_json(txn))
     }
 
     pub fn sql<T: ReadTxn>(&self, txn: &T) -> String {
@@ -101,6 +130,39 @@ impl Roots {
         }
         changed
     }
+}
+
+/// `meta.rewrite`: how many times the server rewrote the SQL, and why last.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct RewriteNote {
+    pub count: u64,
+    pub reason: String,
+}
+
+/// Byte ranges of every graph edits marker line but the first (with the
+/// blank line above it, when there is one). Two editors making their first
+/// graph edit before seeing each other's each append one; the room removes
+/// the extras before compiling.
+pub fn extra_markers(sql: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut seen = false;
+    let mut start = 0;
+    for line in sql.split_inclusive('\n') {
+        let end = start + line.len();
+        if line.trim_end_matches(['\n', '\r', ' ', '\t']) == GRAPH_EDITS_MARKER {
+            if seen {
+                let from = if sql[..start].ends_with("\n\n") {
+                    start - 1
+                } else {
+                    start
+                };
+                out.push(from..end);
+            }
+            seen = true;
+        }
+        start = end;
+    }
+    out
 }
 
 /// The values of a map that read as `T`; the others (a client writing
@@ -219,6 +281,37 @@ mod tests {
             after.groups["g1"].members,
             ["public.orders", "public.members"]
         );
+    }
+
+    #[test]
+    fn rewrites_are_counted_with_their_reason() {
+        let doc = new_doc();
+        let roots = Roots::of(&doc);
+        assert_eq!(roots.rewrites(&doc.transact()), None);
+        roots.note_rewrite(&mut doc.transact_mut(), "tidy");
+        roots.note_rewrite(&mut doc.transact_mut(), "update");
+        assert_eq!(
+            roots.rewrites(&doc.transact()),
+            Some(RewriteNote {
+                count: 2,
+                reason: "update".into()
+            })
+        );
+    }
+
+    #[test]
+    fn markers_after_the_first_are_extra_with_the_blank_line_above() {
+        let m = GRAPH_EDITS_MARKER;
+        let sql = format!("A;\n\n{m}\nX;\n\n{m}\nY;\n{m}\nZ;\n");
+        let extra = extra_markers(&sql);
+        let mut kept = sql.clone();
+        for range in extra.iter().rev() {
+            kept.replace_range(range.clone(), "");
+        }
+        assert_eq!(kept, format!("A;\n\n{m}\nX;\nY;\nZ;\n"));
+        assert_eq!(extra_markers(&format!("A;\n\n{m}\nX;\n")), []);
+        // Only whole lines count.
+        assert_eq!(extra_markers(&format!("{m}\n-- not {m}\n")), []);
     }
 
     #[test]

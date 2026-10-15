@@ -497,8 +497,16 @@ side (list with presence, one-click create, rename, soft delete, publish).
   new))`: the room applies the smallest edit (lines, then SQL tokens) in one
   transaction if the text is still that one (`RewriteError::Changed`
   otherwise: read again; the handler retries 3 times, then 409
-  `draft_changed`). Carets in untouched text survive. Any server rewrite of a
-  draft's SQL (Update draft's merge too) should go through `Hub::rewrite`.
+  `draft_changed`). Carets in untouched text survive. **Any server rewrite of a
+  draft's SQL** (Update draft's merge too) must call
+  `Roots::note_rewrite(txn, reason)` in its own transaction (`Hub::rewrite`
+  does): clients clear their undo history and graph edits when `meta.rewrite`
+  changes (a pre-rewrite undo would delete characters the rewrite reused),
+  and tell the person ("Undo history was cleared by Tidy"; `reason`
+  `update` has its own copy).
+- **Duplicate markers**: two editors making their first graph edit before
+  seeing each other's append two markers; the room removes all but the first
+  (`doc::extra_markers`, a server edit) before each compile of an open draft.
 - **Without the stack**: `/app/dev/editor` (`?role=reviewer`,
   `?fixture=empty|large`) runs the real editor on a `DraftSession` with
   `local` (no socket; its "compile" replays the graph edits found in the

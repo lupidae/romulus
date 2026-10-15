@@ -11,7 +11,8 @@
 //!
 //! The rewrite reaches the doc as the smallest edit ([`patch`]), in one
 //! transaction, so collaborators' carets and concurrent typing elsewhere
-//! survive it. Someone typing between reading the text and applying the
+//! survive it; the same transaction notes it (`Roots::note_rewrite`), and
+//! every client drops its undo history. Someone typing between reading the text and applying the
 //! edit makes the room refuse it; Tidy then starts over, a few times, before
 //! answering 409 `draft_changed`.
 
@@ -144,7 +145,7 @@ pub(super) async fn tidy(
             .map_err(ApiError::internal)?;
         match state
             .collab
-            .rewrite(id, sha256_hex(&content.sql), edits)
+            .rewrite(id, sha256_hex(&content.sql), edits, "tidy")
             .await
             .map_err(hub_error)?
         {

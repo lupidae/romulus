@@ -105,6 +105,7 @@ Y.Doc (one per draft)
 ├─ sql:     Y.Text                       canonical DDL, edited by both panes
 ├─ layout:  Y.Map<qualified name, {x, y}>
 ├─ groups:  Y.Map<group id, {name, color, members: qualified names[]}>
+├─ meta:    Y.Map: rewrite = {count, reason}, set by the server with each rewrite of `sql`
 └─ awareness (not persisted): user, color, text cursor, graph pointer, selection
 ```
 
@@ -207,7 +208,12 @@ keep in sync.
   clean file again. Chosen over in-place rewriting (2026-10-15).
 - **Undo**: one `Y.UndoManager` per client over `sql`, `layout` and `groups`,
   tracking local origins only, so a graph edit that touches text and layout
-  undoes as one step and nobody undoes someone else's typing.
+  undoes as one step and nobody undoes someone else's typing. A rewrite of
+  the SQL by the server (Tidy, Update draft) clears every client's undo
+  history: it reuses characters clients typed, elsewhere, and undoing an
+  edit from before it would delete them wherever they are now. The server
+  notes each rewrite in `meta`, in the rewrite's own transaction, so a
+  client that syncs it later clears its history too.
 - A version stores `source` (SQL) and `layout` (positions + groups) side by side.
   Export can embed the layout in the SQL as `-- @romulus` comments for people
   who want a single file in git; import reads it back. Not in the MVP.

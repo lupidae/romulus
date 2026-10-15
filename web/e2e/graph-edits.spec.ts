@@ -174,30 +174,37 @@ test("graph edits become SQL for everyone while others type, and undo whole", as
   await compiled(bob);
 });
 
-test("Tidy rewrites the SQL canonically, the schema identical", async ({ browser }) => {
+test("Tidy rewrites the SQL canonically, the schema identical, and resets undo", async ({
+  browser,
+}) => {
   test.slow();
-  const { slug, draftId, alice, bob } = await draft(browser);
+  const { slug, draftId, alice, carol, bob } = await draft(browser);
   const preview = `/api/orgs/${slug}/databases/shop/drafts/${draftId}/publish`;
 
+  // Graph edits by two editors, each on their own undo history.
   await row(alice, "users", "email").getByText("email", { exact: true }).dblclick();
   await alice.page.getByRole("textbox", { name: "Rename email" }).fill("mail");
   await alice.page.keyboard.press("Enter");
-  await node(alice, "orders").locator("[data-table-header]").click({ button: "right" });
-  await alice.page.getByRole("menuitem", { name: "Add comment" }).click();
-  await alice.page.getByRole("textbox", { name: "Comment" }).fill("One per checkout");
-  await alice.page.keyboard.press("ControlOrMeta+Enter");
+  await node(carol, "orders").locator("[data-table-header]").click({ button: "right" });
+  await carol.page.getByRole("menuitem", { name: "Add comment" }).click();
+  await carol.page.getByRole("textbox", { name: "Comment" }).fill("One per checkout");
+  await carol.page.keyboard.press("ControlOrMeta+Enter");
   await expect.poll(() => docText(bob)).toContain("COMMENT ON TABLE public.orders");
+  await expect.poll(() => docText(bob)).toContain("RENAME COLUMN email TO mail");
   await compiled(alice);
   const before = (await call(alice.page, "GET", preview))!.model;
 
   await alice.page.getByRole("button", { name: "More actions" }).click();
   await alice.page.getByRole("menuitem", { name: "Tidy SQL…" }).click();
   const confirm = alice.page.getByRole("alertdialog", { name: "Tidy the SQL?" });
+  await expect(confirm).toContainText("edits made before it can no longer be undone");
   await expect(confirm).toContainText("the 2 lines of -- comments are lost");
   await confirm.getByRole("button", { name: "Tidy SQL" }).click();
   await expect(alice.page.getByText("SQL tidied")).toBeVisible();
+  // Carol is told her undo history went with it.
+  await expect(carol.page.getByText("Undo history was cleared by Tidy")).toBeVisible();
 
-  for (const p of [alice, bob]) {
+  for (const p of [alice, carol, bob]) {
     await expect.poll(() => docText(p)).not.toContain("-- edits from the graph");
     await expect.poll(() => docText(p)).toContain("CREATE TABLE public.users");
     await expect
@@ -208,6 +215,18 @@ test("Tidy rewrites the SQL canonically, the schema identical", async ({ browser
   }
   const after = (await call(alice.page, "GET", preview))!.model;
   expect(after).toEqual(before);
+
+  // Undo after Tidy takes nothing back from before it: the text stays whole.
+  const tidy = await docText(bob);
+  for (const p of [alice, carol]) {
+    await graph(p).focus();
+    await p.page.keyboard.press("ControlOrMeta+z");
+    await p.page.keyboard.press("ControlOrMeta+z");
+  }
+  await bob.page.waitForTimeout(500);
+  expect(await docText(bob)).toBe(tidy);
+  await expect(row(bob, "users", "mail")).toBeVisible();
+  await compiled(bob);
 });
 
 test("a reviewer gets no way to edit the schema from the graph", async ({ browser }) => {

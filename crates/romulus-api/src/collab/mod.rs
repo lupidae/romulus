@@ -228,14 +228,17 @@ impl Hub {
     }
 
     /// Replaces the draft's SQL by `changes` ([`patch::changes`] from the
-    /// text whose SHA-256 is `from` to the new one), in one transaction, if
-    /// nobody edited it since; answers whether anything changed. On
-    /// [`RewriteError::Changed`], read the content again and recompute.
+    /// text whose SHA-256 is `from` to the new one), in one transaction that
+    /// also notes the rewrite for `reason` (`doc::Roots::note_rewrite`:
+    /// clients drop their undo history), if nobody edited it since; answers
+    /// whether anything changed. On [`RewriteError::Changed`], read the
+    /// content again and recompute.
     pub async fn rewrite(
         &self,
         draft: Uuid,
         from: String,
         changes: Vec<patch::Change>,
+        reason: &'static str,
     ) -> Result<Result<bool, RewriteError>, HubError> {
         let (reply, wait) = oneshot::channel();
         self.0.send(
@@ -243,6 +246,7 @@ impl Hub {
             Command::Rewrite {
                 from,
                 changes,
+                reason,
                 reply,
             },
         )?;

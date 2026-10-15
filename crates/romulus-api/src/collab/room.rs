@@ -18,7 +18,12 @@
 //! - **Rewrites**: the server replacing the SQL (Tidy) sends the changes
 //!   it computed against one text ([`super::patch`]); the room applies them
 //!   in one transaction if the text is still that one, and refuses
-//!   otherwise (the caller computes again).
+//!   otherwise (the caller computes again). The same transaction notes the
+//!   rewrite in `meta` (`Roots::note_rewrite`): every client drops its undo
+//!   history, which could otherwise delete characters the rewrite reused.
+//! - **Graph edits markers**: two editors making their first graph edit at
+//!   once each append `-- edits from the graph`; before compiling, the room
+//!   removes all but the first (a server edit).
 //! - **Publishing** freezes the room (every update dropped) until it is
 //!   published or the attempt fails; then every connection is asked to sync
 //!   again, which brings back what was dropped meanwhile. A frozen room
@@ -309,10 +314,11 @@ pub enum Command {
         number: i32,
     },
     /// Replace the SQL with `changes`, computed against the text whose
-    /// SHA-256 is `from`: whether anything changed.
+    /// SHA-256 is `from`, for `reason` (`tidy`…): whether anything changed.
     Rewrite {
         from: String,
         changes: Vec<patch::Change>,
+        reason: &'static str,
         reply: oneshot::Sender<Result<bool, RewriteError>>,
     },
     Shutdown,
@@ -685,9 +691,10 @@ impl Room {
             Command::Rewrite {
                 from,
                 changes,
+                reason,
                 reply,
             } => {
-                let _ = reply.send(self.rewrite(&from, &changes));
+                let _ = reply.send(self.rewrite(&from, &changes, reason));
             }
             // Handled by the loop.
             Command::Shutdown => {}
@@ -910,7 +917,12 @@ impl Room {
 
     /// Applies a rewrite of the SQL if the text is still the one it was
     /// computed against (see [`Command::Rewrite`]).
-    fn rewrite(&mut self, from: &str, changes: &[patch::Change]) -> Result<bool, RewriteError> {
+    fn rewrite(
+        &mut self,
+        from: &str,
+        changes: &[patch::Change],
+        reason: &str,
+    ) -> Result<bool, RewriteError> {
         if self.status != LiveStatus::Open {
             return Err(RewriteError::NotOpen(self.status));
         }
@@ -921,6 +933,9 @@ impl Room {
         let mut edited = false;
         self.server_edit(|roots, txn| {
             edited = patch::apply(&roots.sql, txn, &current, changes);
+            if edited {
+                roots.note_rewrite(txn, reason);
+            }
             edited
         });
         self.sql_may_have_changed();
@@ -1118,6 +1133,9 @@ impl Room {
         if self.status == LiveStatus::Published || self.status == LiveStatus::Deleted {
             return;
         }
+        if self.status == LiveStatus::Open {
+            self.collapse_markers();
+        }
         let (compiler, id, sql) = (self.compiler.clone(), self.id, self.sql.clone());
         let results = self.results.0.clone();
         tokio::spawn(async move {
@@ -1130,6 +1148,25 @@ impl Room {
                 result,
             });
         });
+    }
+
+    /// Removes the graph edits markers after the first (see the module
+    /// documentation). Not a rewrite: the characters removed are markers.
+    fn collapse_markers(&mut self) {
+        let extra = doc::extra_markers(&self.sql);
+        if extra.is_empty() {
+            return;
+        }
+        let changes: Vec<patch::Change> = extra
+            .into_iter()
+            .map(|delete| patch::Change {
+                delete,
+                insert: String::new(),
+            })
+            .collect();
+        let current = self.sql.clone();
+        self.server_edit(|roots, txn| patch::apply(&roots.sql, txn, &current, &changes));
+        self.sql = self.roots.sql(&self.doc.transact());
     }
 
     fn compiled(&mut self, done: CompileDone) {

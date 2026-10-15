@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
 
 import blogJson from "@/features/schema/fixtures/blog.json";
 import { MARKER } from "@/features/schema/edits/append";
@@ -22,6 +23,7 @@ const initial: SessionState = {
   saveFailed: false,
   unsynced: false,
   edits: [],
+  historyCleared: null,
 };
 
 const apply = (state: SessionState, ...events: Parameters<typeof eventPatch>[1][]) =>
@@ -126,6 +128,104 @@ describe("schema edits from the graph", () => {
     // As a step of its own: undo brings it back.
     session.undo.undo();
     expect(session.sql.toJSON()).toContain("RENAME TO members");
+    session.destroy();
+  });
+});
+
+describe("a rewrite by the server (Tidy, Update draft)", () => {
+  const blog = parseSchema(blogJson);
+  const users = { schema: "public", name: "users", kind: "r" as const };
+
+  /** A session and the server's copy of its doc, kept in sync by hand. */
+  function setup() {
+    const session = new DraftSession("acme", "draft", {
+      local: {
+        sql: "CREATE TABLE users (id bigint, x bigint);\n",
+        layout: { "public.users": { x: 10, y: 20 } },
+        role: "developer",
+        compile: () => ({ model: null, diagnostics: [] }),
+      },
+    });
+    const server = new Y.Doc();
+    const toServer = () => Y.applyUpdate(server, Y.encodeStateAsUpdate(session.doc));
+    const toClient = () =>
+      Y.applyUpdate(session.doc, Y.encodeStateAsUpdate(server, Y.encodeStateVector(session.doc)));
+    return { session, server, toServer, toClient };
+  }
+
+  /**
+   * What the room does (collab::room `rewrite`): edits the text keeping the
+   * characters it can (here: inserts into the client's own statement) and
+   * notes the rewrite in `meta`, in one transaction.
+   */
+  function rewrite(server: Y.Doc, edit: (text: Y.Text, sql: string) => void) {
+    const text = server.getText("sql");
+    const meta = server.getMap<{ count: number; reason: string }>("meta");
+    server.transact(() => {
+      edit(text, text.toJSON());
+      meta.set("rewrite", { count: (meta.get("rewrite")?.count ?? 0) + 1, reason: "tidy" });
+    });
+  }
+
+  it("leaves nothing to undo that predates it, so undo cannot corrupt the rewritten text", () => {
+    const { session, server, toServer, toClient } = setup();
+    session.editSchema(
+      {
+        kind: "addForeignKey",
+        table: users,
+        column: "x",
+        references: { schema: "public", name: "users" },
+        refColumn: "id",
+        name: "users_x_fkey",
+        onDelete: "a",
+      },
+      blog,
+    );
+    session.editSchema({ kind: "renameTable", table: users, to: "members" }, blog);
+    toServer();
+    // The rewrite keeps the client's characters, in another place and order.
+    rewrite(server, (text, sql) => {
+      const at = sql.indexOf("ALTER TABLE public.users ADD");
+      text.insert(at + "ALTER TABLE".length, " ONLY");
+      text.delete(0, sql.indexOf("\n") + 1);
+    });
+    toClient();
+    const rewritten = session.sql.toJSON();
+    const layout = session.layout.toJSON();
+
+    expect(session.undo.undoStack).toHaveLength(0);
+    expect(session.undo.redoStack).toHaveLength(0);
+    session.undo.undo();
+    session.undo.undo();
+    expect(session.sql.toJSON()).toBe(rewritten);
+    expect(session.layout.toJSON()).toEqual(layout);
+    expect(layout).toEqual({ "public.members": { x: 10, y: 20 } });
+    // Its edits are folded into the text: nothing left to judge.
+    expect(session.getState().edits).toEqual([]);
+    expect(session.getState().historyCleared).toMatchObject({ reason: "tidy", mine: false });
+    session.destroy();
+  });
+
+  it("says nothing when there was no history to clear, and new edits undo again", () => {
+    const { session, server, toServer, toClient } = setup();
+    toServer();
+    rewrite(server, (text) => text.insert(0, "-- tidy\n"));
+    toClient();
+    expect(session.getState().historyCleared).toBeNull();
+    session.editSchema({ kind: "setComment", table: users, comment: "People" }, blog);
+    session.undo.undo();
+    expect(session.sql.toJSON()).toBe("-- tidy\nCREATE TABLE users (id bigint, x bigint);\n");
+    session.destroy();
+  });
+
+  it("knows the rewrite it asked for", () => {
+    const { session, server, toServer, toClient } = setup();
+    session.editSchema({ kind: "setComment", table: users, comment: "People" }, blog);
+    toServer();
+    session.expectRewrite();
+    rewrite(server, (text) => text.insert(0, "-- tidy\n"));
+    toClient();
+    expect(session.getState().historyCleared).toMatchObject({ mine: true });
     session.destroy();
   });
 });
