@@ -676,7 +676,8 @@ async fn a_client_that_answers_no_pings_is_let_go(db: PgPool) {
     let d = draft_with(
         &db,
         Settings {
-            ping_every: Duration::from_millis(30),
+            // Silent for 250 ms: let go.
+            ping_every: Duration::from_millis(100),
             ..quick()
         },
     )
@@ -686,7 +687,7 @@ async fn a_client_that_answers_no_pings_is_let_go(db: PgPool) {
     let mut here = Client::join(addr, &d.ws, &d.team.admin).await;
 
     // `here` reads (and so answers pings); `gone` reads nothing meanwhile.
-    here.settle(Duration::from_millis(250)).await;
+    here.read_for(Duration::from_millis(800)).await;
     assert_eq!(here.closed, None);
     gone.until(|c| c.closed.is_some()).await;
     assert_eq!(gone.closed, Some(4002));

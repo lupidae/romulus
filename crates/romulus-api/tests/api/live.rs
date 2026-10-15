@@ -273,6 +273,16 @@ impl Client {
         }
     }
 
+    /// Handles whatever arrives for `period` (answering pings meanwhile).
+    pub async fn read_for(&mut self, period: Duration) {
+        let deadline = tokio::time::Instant::now() + period;
+        while let Ok(next) = tokio::time::timeout_at(deadline, self.socket.next()).await {
+            if !self.handle(next).await {
+                return;
+            }
+        }
+    }
+
     /// One frame; false once the socket is closed.
     async fn handle(
         &mut self,
