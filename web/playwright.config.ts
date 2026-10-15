@@ -7,15 +7,21 @@ import { defineConfig, devices } from "@playwright/test";
 const envFile = fileURLToPath(new URL("../.env", import.meta.url));
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
-const apiPort = process.env.ROMULUS_API_PORT ?? "41001";
 const previewPort = process.env.ROMULUS_PREVIEW_PORT ?? "41005";
-const baseURL = `http://localhost:${previewPort}/app/`;
+const e2eApiPort = process.env.ROMULUS_E2E_API_PORT ?? "41006";
+const origin = `http://localhost:${previewPort}`;
 
-/**
- * End-to-end tests run against a production build (vite preview, which
- * proxies /api like the dev server) and a real API on the stack's
- * databases: `just up` first. Servers already running are reused.
- */
+// The tests drive a production build (vite preview) on its own origin, served
+// by its own API whose public URL is that origin. The API's CSRF check (exact
+// Origin) and the OIDC redirect (registered by the Zitadel provisioner) then
+// agree with what the browser sends, and the dev server and dev API stay free.
+const env = (extra: Record<string, string>) => ({
+  ...Object.fromEntries(
+    Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
+  ),
+  ...extra,
+});
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -23,7 +29,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: {
-    baseURL,
+    baseURL: `${origin}/app/`,
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
@@ -31,14 +37,21 @@ export default defineConfig({
     {
       command: "cargo run -q -p romulus-api",
       cwd: "..",
-      url: `http://127.0.0.1:${apiPort}/api/health`,
+      env: env({
+        ROMULUS_API_ADDR: `127.0.0.1:${e2eApiPort}`,
+        ROMULUS_PUBLIC_URL: origin,
+        RUST_LOG: process.env.RUST_LOG ?? "romulus_api=warn,tower_http=warn",
+      }),
+      url: `http://127.0.0.1:${e2eApiPort}/api/health`,
       reuseExistingServer: true,
       timeout: 300_000,
       stdout: "ignore",
     },
     {
       command: "npm run build && npm run preview",
-      url: baseURL,
+      // The preview server proxies /api to this port (vite.config.ts).
+      env: env({ ROMULUS_API_PORT: e2eApiPort }),
+      url: `${origin}/app/`,
       reuseExistingServer: true,
       timeout: 180_000,
     },

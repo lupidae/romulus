@@ -1,12 +1,18 @@
 set dotenv-load := true
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# This worktree's compose project, derived from its path, never read from .env
+# (scripts/dev-env): a copied .env cannot aim `nuke` at another stack.
+compose := "docker compose -p " + `scripts/dev-env --project-name`
+# rustfmt.toml needs nightly rustfmt; pinned so formatting never drifts.
+nightly := "nightly-2026-10-14"
+
 default:
     @just --list
 
-# write .env (this worktree's ports and project name) unless it exists
+# write .env: this worktree's ports and project (idempotent, keeps the slot)
 env:
-    @[ -f .env ] || scripts/dev-env
+    @scripts/dev-env >/dev/null
 
 # start the stack (databases + Zitadel, provisioned) and wait until it is ready
 up: env
@@ -14,11 +20,11 @@ up: env
     set -euo pipefail
     # Created here so it belongs to you, not to the container (Linux bind mounts).
     mkdir -p .dev/zitadel
-    docker compose up -d --wait || { docker compose logs zitadel-provision; exit 1; }
+    {{compose}} up -d --wait || { {{compose}} logs zitadel-provision; exit 1; }
     # --wait returns once the one-shot provisioner is running, not once it is done.
-    status=$(docker wait "$(docker compose ps -aq zitadel-provision)")
+    status=$(docker wait "$({{compose}} ps -aq zitadel-provision)")
     if [ "$status" != 0 ]; then
-        docker compose logs zitadel-provision
+        {{compose}} logs zitadel-provision
         echo "up: zitadel-provision failed (exit $status)" >&2
         exit 1
     fi
@@ -28,11 +34,11 @@ up: env
 
 # stop the stack, keep its data
 down:
-    docker compose down --remove-orphans
+    {{compose}} down --remove-orphans
 
 # stop the stack and delete its data and the provisioned credentials
 nuke:
-    docker compose down -v --remove-orphans
+    {{compose}} down -v --remove-orphans
     rm -rf .dev
 
 # apply migrations to DATABASE_URL (the API also applies them on start)
@@ -70,7 +76,7 @@ gen-check:
 
 # the full gate, as CI runs it (needs DATABASE_URL on a migrated database)
 check:
-    cargo +nightly fmt --all --check
+    cargo +{{nightly}} fmt --all --check
     # --all-features: romulus-diff's `utoipa` feature (and its tests) included;
     # the feature-off build is linted too, since the API may not enable it.
     cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -86,7 +92,7 @@ check:
 
 # rustfmt needs nightly for imports_granularity / group_imports (rustfmt.toml)
 fmt:
-    cargo +nightly fmt --all
+    cargo +{{nightly}} fmt --all
     npm --prefix web run format
 
 # Playwright end-to-end tests against a running stack (`just up` first)

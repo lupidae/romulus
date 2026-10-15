@@ -15,16 +15,22 @@ set -euo pipefail
 : "${ZITADEL_HOST:?}"         # localhost:<port>: Zitadel picks the instance, and the issuer, from Host
 : "${ROMULUS_PUBLIC_URL:?}"   # the web origin; Vite proxies /api to the API
 : "${ROMULUS_API_PORT:?}"
+: "${ROMULUS_PREVIEW_PORT:?}" # the production build Playwright drives, with its own API
 OUT=${OUT:-/out}
 PAT_FILE=${PAT_FILE:-/bootstrap/admin.pat}
 OWNER=${OWNER:-}
 DEV_PASSWORD=${DEV_PASSWORD:-RomulusDev1!}
 
 issuer="http://$ZITADEL_HOST"
-redirect_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg api "http://localhost:$ROMULUS_API_PORT" \
-    '[$web + "/api/auth/callback", $api + "/api/auth/callback"]')
+# Two browser origins per stack: the dev server ($ROMULUS_PUBLIC_URL) and the
+# preview build end-to-end tests use; plus the API port, for direct testing.
+preview="http://localhost:$ROMULUS_PREVIEW_PORT"
+redirect_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg preview "$preview" \
+    --arg api "http://localhost:$ROMULUS_API_PORT" \
+    '[$web, $preview, $api] | map(. + "/api/auth/callback")')
 # The SPA lives under /app (the API serves the homepage at / in production).
-post_logout_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" '[$web + "/app/signin", $web + "/app/", $web + "/"]')
+post_logout_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg preview "$preview" \
+    '[$web, $preview] | map(. + "/app/signin", . + "/app/", . + "/")')
 
 log() { echo "zitadel-provision: $*" >&2; }
 

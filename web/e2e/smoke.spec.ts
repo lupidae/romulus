@@ -29,3 +29,19 @@ test("dev-only routes do not exist in a production build", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
 });
+
+test("the API accepts this origin's mutations (CSRF and Origin agree)", async ({ page }) => {
+  await page.goto("./signin");
+
+  // A same-origin mutation from the page, as the app's client sends it. No
+  // endpoint exists at this path, so passing the CSRF check means a JSON 404;
+  // an Origin the API does not expect would be a 403 "csrf".
+  const answer = await page.evaluate(async () => {
+    const response = await fetch("/api/e2e-origin-probe", {
+      method: "POST",
+      headers: { "X-Romulus-Csrf": "1" },
+    });
+    return { status: response.status, body: (await response.json()) as { code: string } };
+  });
+  expect(answer).toEqual({ status: 404, body: expect.objectContaining({ code: "not_found" }) });
+});

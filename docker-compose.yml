@@ -5,7 +5,7 @@
 services:
   # The application database (users, orgs, versions, drafts…).
   postgres:
-    image: postgres:18
+    image: postgres:18.6
     environment:
       POSTGRES_USER: romulus
       POSTGRES_PASSWORD: romulus
@@ -27,7 +27,7 @@ services:
   # so the server-side allowlist and the compile agree on the grammar. Bump
   # both together. Ephemeral by design: nothing in it outlives a compile.
   sandbox-postgres:
-    image: postgres:17
+    image: postgres:17.11
     environment:
       POSTGRES_USER: sandbox_admin
       POSTGRES_PASSWORD: sandbox_admin
@@ -90,7 +90,7 @@ services:
       start_period: 10s
 
   zitadel-db:
-    image: postgres:17
+    image: postgres:17.11
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -115,6 +115,7 @@ services:
       ZITADEL_HOST: localhost:${ROMULUS_ZITADEL_PORT}
       ROMULUS_PUBLIC_URL: ${ROMULUS_PUBLIC_URL:?run scripts/dev-env}
       ROMULUS_API_PORT: ${ROMULUS_API_PORT:?run scripts/dev-env}
+      ROMULUS_PREVIEW_PORT: ${ROMULUS_PREVIEW_PORT:?run scripts/dev-env}
       OWNER: ${ROMULUS_UID:-1000}:${ROMULUS_GID:-1000}
     volumes:
       - ./deploy/zitadel/provision.sh:/provision.sh:ro
