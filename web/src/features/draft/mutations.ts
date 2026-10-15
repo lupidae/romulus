@@ -74,7 +74,10 @@ export function usePublishDraft(org: string, db: string, id: string) {
         }),
       ),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["drafts", org, db] });
+      // Not the preview: the draft is published, there is nothing to preview.
+      queryClient.removeQueries({ queryKey: draftKeys.preview(org, db, id) });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
+      void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, id), exact: true });
       // The database page's versions (milestone 2's queries) are keyed by the database.
       void queryClient.invalidateQueries({ queryKey: ["databases", org] });
     },

@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { NetworkRightIcon, PageIcon } from "@/components/icons";
 import { type ChangeStatus, changeOf, parseStatusMap } from "@/features/schema/diff";
 import { SchemaGraph } from "@/features/schema/graph/schema-graph";
+import type { Groups, Layout } from "@/features/schema/layout";
 import { StatusBadge } from "@/features/schema/graph/status";
 import { parseSchema } from "@/features/schema/model";
 import { modKey } from "@/lib/platform";
@@ -32,6 +33,9 @@ interface PublishDialogProps {
   db: string;
   draftId: string;
   databaseName: string;
+  /** The draft's positions and groups: the diff is drawn where its tables are. */
+  layout: Layout;
+  groups: Groups;
   /** The version it would become, as the bar shows it. */
   next: number;
   open: boolean;
@@ -93,6 +97,8 @@ function PublishBody({
   db,
   draftId,
   databaseName,
+  layout,
+  groups,
   next,
   onOpenChange,
   onJump,
@@ -197,7 +203,7 @@ function PublishBody({
           </ul>
         </Alert>
       ) : (
-        <Changes preview={data!} changes={changes} />
+        <Changes preview={data!} changes={changes} layout={layout} groups={groups} />
       )}
 
       <form
@@ -237,7 +243,17 @@ function PublishBody({
   );
 }
 
-function Changes({ preview, changes }: { preview: PublishPreview; changes: Change[] }) {
+function Changes({
+  preview,
+  changes,
+  layout,
+  groups,
+}: {
+  preview: PublishPreview;
+  changes: Change[];
+  layout: Layout;
+  groups: Groups;
+}) {
   const { model: rawModel, base_model: rawBase, diff } = preview;
   const graph = React.useMemo(() => {
     try {
@@ -320,7 +336,15 @@ function Changes({ preview, changes }: { preview: PublishPreview; changes: Chang
         value="graph"
         className="mt-0 h-[50dvh] min-h-64 overflow-hidden rounded-lg border border-border"
       >
-        {graph && <SchemaGraph schema={graph.model} diff={graph.diff} shortcuts={false} />}
+        {graph && (
+          <SchemaGraph
+            schema={graph.model}
+            diff={graph.diff}
+            layout={layout}
+            groups={groups}
+            shortcuts={false}
+          />
+        )}
       </TabsContent>
     </Tabs>
   );

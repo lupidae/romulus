@@ -4,7 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
-import { CheckCircleIcon, GitBranchIcon, TrashIcon } from "@/components/icons";
+import { CheckCircleIcon, GitBranchIcon, TableIcon, TrashIcon } from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -244,7 +244,8 @@ function Workspace({
         canEdit={canEdit}
         isWriter={isWriter}
         compile={compile}
-        connection={state?.connection ?? "connecting"}
+        // A closed draft disconnects on purpose: nothing to report.
+        connection={status === "open" ? (state?.connection ?? "connecting") : "connected"}
         synced={state?.synced ?? false}
         peers={peers}
         meId={meId}
@@ -280,6 +281,17 @@ function Workspace({
             picked={canEdit ? picked : undefined}
             onPickedChange={canEdit ? setPicked : undefined}
             storageKey="romulus:draft-editor"
+            graphEmpty={
+              <EmptyState
+                icon={<TableIcon />}
+                title="No tables yet"
+                description={
+                  canEdit
+                    ? "Write CREATE TABLE in the SQL: tables appear here as you type."
+                    : "Tables appear here as soon as someone writes them in the SQL."
+                }
+              />
+            }
             graphControls={
               canEdit && (
                 <GroupsMenu
@@ -315,6 +327,8 @@ function Workspace({
           db={db}
           draftId={draft.id}
           databaseName={draft.database.name}
+          layout={layout}
+          groups={groups}
           next={(draft.latest_version ?? 0) + 1}
           open={publishing}
           onOpenChange={setPublishing}
@@ -361,17 +375,31 @@ function Notice({
       <Alert
         variant="info"
         className={strip}
-        title={`${state.statusBy ?? "Someone"} is publishing this draft`}
-      >
-        Edits are paused until it is done.
-      </Alert>
+        title={
+          <>
+            {state.statusBy ?? "Someone"} is publishing this draft.{" "}
+            <span className="font-normal text-muted-foreground">
+              Edits are paused until it is done.
+            </span>
+          </>
+        }
+      />
     );
   }
   if (!isWriter) {
     return (
-      <Alert variant="info" className={strip} title="You’re viewing as a reviewer">
-        Everyone sees your cursor. Only developers and admins can edit.
-      </Alert>
+      <Alert
+        variant="info"
+        className={strip}
+        title={
+          <>
+            You’re viewing as a reviewer.{" "}
+            <span className="font-normal text-muted-foreground">
+              Everyone sees your cursor; only developers and admins can edit.
+            </span>
+          </>
+        }
+      />
     );
   }
   if (draft.stale) {

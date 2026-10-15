@@ -15,7 +15,7 @@ import type { Awareness } from "y-protocols/awareness";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 
-import { type Group, GROUP_COLORS, type Layout, type Position } from "@/features/schema/layout";
+import { type Group, type GroupColor, type Layout, type Position } from "@/features/schema/layout";
 import { parseSchema, type Schema } from "@/features/schema/model";
 
 import type { CompileState, Diagnostic, LiveStatus, ServerEvent } from "./queries";
@@ -124,6 +124,18 @@ export interface DraftSessionOptions {
 
 let sessions = 0;
 
+/** New groups take the calm colors first (red reads as an error, stone as none). */
+const GROUP_ORDER: GroupColor[] = [
+  "blue",
+  "teal",
+  "violet",
+  "green",
+  "amber",
+  "pink",
+  "red",
+  "stone",
+];
+
 export class DraftSession {
   /** Tells sessions apart (a remount makes a new one): React keys. */
   readonly key = ++sessions;
@@ -154,6 +166,8 @@ export class DraftSession {
   private opened = false;
   /** Compile events are read in order: a slow hash never lets an older one win. */
   private compiles = 0;
+  private lastCompile: Extract<ServerEvent, { type: "compile" }> | null = null;
+  private recheck = 0;
 
   constructor(org: string, draftId: string, options: DraftSessionOptions = {}) {
     this.sql = this.doc.getText("sql");
@@ -173,6 +187,10 @@ export class DraftSession {
       { disableBc: true, maxBackoffTime: 5000 },
     );
     this.awareness = this.provider.awareness;
+    // Receivers ignore a first state at clock 0 from a client they do not
+    // know (y-protocols): set one field now, so this one starts at 1 and
+    // everyone sees who joined before they move.
+    this.awareness.setLocalStateField("selection", null);
 
     this.provider.messageHandlers[MESSAGE_EVENT] = (_encoder, decoder) => {
       const body = decoding.readVarUint8Array(decoder);
@@ -188,7 +206,10 @@ export class DraftSession {
     });
     this.provider.on("sync", (synced) => {
       // Our missing edits went with the answer to the server's step 1, before this.
-      if (synced) this.set({ synced: true, unsynced: false });
+      if (synced) {
+        this.set({ synced: true, unsynced: false });
+        void this.checkCompile();
+      }
     });
     this.doc.on("update", (_update: Uint8Array, origin: unknown) => {
       if (origin !== this.provider && !this.provider.wsconnected && !this.state.unsynced) {
@@ -265,13 +286,12 @@ export class DraftSession {
         this.set({ versionCreated: event.number });
         break;
       case "compile":
-        void this.onCompile(event);
+        this.onCompile(event);
         break;
     }
   }
 
-  private async onCompile(event: Extract<ServerEvent, { type: "compile" }>) {
-    const seq = ++this.compiles;
+  private onCompile(event: Extract<ServerEvent, { type: "compile" }>) {
     let model = this.state.compile.model;
     if (event.model) {
       try {
@@ -280,17 +300,32 @@ export class DraftSession {
         console.error("draft: the compiled model does not read", error);
       }
     }
+    this.lastCompile = event;
+    this.set({ compile: { ...this.state.compile, state: event.state, model } });
+    void this.checkCompile();
+  }
+
+  /**
+   * Whether the last result is about this client's text: then its
+   * diagnostics fit it and nothing is compiling. Checked on each result,
+   * once the doc arrived (a result can come first), and when typing pauses
+   * (an undo can bring the compiled text back).
+   */
+  private async checkCompile() {
+    const event = this.lastCompile;
+    if (!event) return;
+    const seq = ++this.compiles;
     const text = this.sql.toJSON();
     const matches = !!event.sha256 && event.sha256 === (await sha256(text));
-    if (this.destroyed || seq !== this.compiles) return;
+    if (this.destroyed || seq !== this.compiles || this.lastCompile !== event) return;
     const current = matches && this.sql.toJSON() === text;
     this.set({
       compile: {
+        ...this.state.compile,
         state: event.state,
         // A result for another text than this client's: one for this text follows.
         stale: event.state === "pending" || (event.state !== "unavailable" && !current),
         diagnostics: current ? event.diagnostics : this.state.compile.diagnostics,
-        model,
       },
     });
   }
@@ -299,6 +334,8 @@ export class DraftSession {
     if (!this.state.compile.stale && this.state.compile.state !== "unavailable") {
       this.set({ compile: { ...this.state.compile, stale: true } });
     }
+    window.clearTimeout(this.recheck);
+    this.recheck = window.setTimeout(() => void this.checkCompile(), 600);
   };
 
   // ---- Awareness -----------------------------------------------------------------
@@ -358,8 +395,7 @@ export class DraftSession {
   createGroup(members: string[]): string {
     const used = new Set([...this.groups.values()].map((g) => g.color));
     const color =
-      GROUP_COLORS.find((c) => c !== "stone" && !used.has(c)) ??
-      GROUP_COLORS[this.groups.size % GROUP_COLORS.length]!;
+      GROUP_ORDER.find((c) => !used.has(c)) ?? GROUP_ORDER[this.groups.size % GROUP_ORDER.length]!;
     const id = crypto.randomUUID().slice(0, 8);
     const name = `Group ${this.groups.size + 1}`;
     // A table belongs to one group: it leaves the others.
@@ -385,6 +421,7 @@ export class DraftSession {
 
   destroy() {
     this.destroyed = true;
+    window.clearTimeout(this.recheck);
     window.removeEventListener("online", this.onNetwork);
     window.removeEventListener("offline", this.onNetwork);
     this.sql.unobserve(this.onText);

@@ -5,7 +5,7 @@
 
 import { type Diagnostic as CmDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
 import { type Extension, Prec } from "@codemirror/state";
-import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
+import { EditorView, keymap, placeholder, ViewPlugin } from "@codemirror/view";
 import {
   yCollab,
   ySyncAnnotation,
@@ -20,6 +20,7 @@ import type { Diagnostic } from "./queries";
 import type { DraftSession } from "./session";
 
 const theme = EditorView.theme({
+  ".cm-placeholder": { color: "var(--color-faint-foreground)", fontStyle: "italic" },
   // Collaborators' carets: their presence color (the server stamps it as a
   // token), the name always shown, small, above the line.
   ".cm-ySelectionCaret": {
@@ -107,6 +108,9 @@ export function draftExtensions(
     seedGuard(session.sql),
     Prec.high(keymap.of(yUndoManagerKeymap)),
     lintGutter(),
+    // The SQL pane is narrow next to the graph: long lines wrap.
+    EditorView.lineWrapping,
+    placeholder("No SQL yet. CREATE TABLE statements written here become tables in the graph."),
     theme,
     ViewPlugin.define((view) => {
       onView(view);

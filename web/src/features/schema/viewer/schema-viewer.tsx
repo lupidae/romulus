@@ -48,6 +48,8 @@ export interface SchemaViewerProps {
   graphChildren?: ReactNode;
   /** More buttons in the graph's toolbar (a draft's groups). */
   graphControls?: ReactNode;
+  /** Shown instead of the graph when the schema has no tables. */
+  graphEmpty?: ReactNode;
   /** Tables picked for an action on several: see `SchemaGraph`. */
   picked?: readonly string[];
   onPickedChange?: (keys: string[]) => void;
@@ -82,6 +84,7 @@ export function SchemaViewer({
   storageKey = "romulus:schema-viewer",
   graphChildren,
   graphControls,
+  graphEmpty,
   picked,
   onPickedChange,
   className,
@@ -167,6 +170,7 @@ export function SchemaViewer({
       onSelectedChange={select}
       picked={picked}
       onPickedChange={onPickedChange}
+      empty={graphEmpty}
       controls={
         <>
           {graphControls}

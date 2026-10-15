@@ -140,7 +140,7 @@ function List({
           <Button
             variant="ghost"
             onClick={() => onJump(d)}
-            className="h-auto w-full items-start justify-start gap-2 px-1.5 py-1.5 text-left whitespace-normal"
+            className="h-auto w-full items-start justify-start gap-2 px-1.5 py-1.5 text-left whitespace-normal sm:h-auto"
           >
             {d.severity === "error" ? (
               <WarningTriangleIcon className="mt-0.5 text-destructive" />
