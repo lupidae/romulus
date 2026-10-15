@@ -22,17 +22,24 @@ services:
       timeout: 5s
       retries: 30
 
-  # Where draft SQL is compiled. Its major version is pinned to the one the
-  # `pg_query` crate's libpg_query parses (pg_query 6.2.1 → PostgreSQL 17.7),
-  # so the server-side allowlist and the compile agree on the grammar. Bump
-  # both together. Ephemeral by design: nothing in it outlives a compile.
+  # Where draft SQL is compiled (crates/romulus-sandbox). Its major version is
+  # pinned to the one the `pg_query` crate's libpg_query parses (pg_query 6.2.1
+  # → PostgreSQL 17.7), so the server-side allowlist and the compile agree on
+  # the grammar. Bump both together. The image adds the allowlisted extensions
+  # (PostGIS, pgvector) and marks them trusted (deploy/sandbox). Ephemeral by
+  # design: nothing in it outlives a compile. Sized small: compiles touch only
+  # empty tables, and the pool keeps one connection per sandbox database.
   sandbox-postgres:
-    image: postgres:17.11
+    build: deploy/sandbox
+    image: romulus-sandbox:17.11-postgis3.6.4-pgvector0.8.7
     environment:
       POSTGRES_USER: sandbox_admin
       POSTGRES_PASSWORD: sandbox_admin
       POSTGRES_DB: postgres
-    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off]
+    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off,
+              -c, shared_buffers=32MB, -c, work_mem=4MB, -c, maintenance_work_mem=32MB,
+              -c, max_connections=50]
+    mem_limit: 512m
     ports:
       - 127.0.0.1:${ROMULUS_SANDBOX_PORT:?run scripts/dev-env}:5432
     tmpfs:
