@@ -27,7 +27,7 @@ use std::{
 
 use axum::extract::State;
 use romulus_sandbox::{
-    merge::{Input, Merged, Unparsable, conflicts, merge},
+    merge::{Input, MergeError, Merged, conflicts, merge},
     render_sql,
 };
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ use crate::{
     collab::{
         compile::sha256_hex,
         patch,
-        room::{Content, FreezeError, FreezeFor, RewriteError},
+        room::{Content, FreezeError, RewriteError, UpdateTicket},
     },
     databases,
     domain::{DraftStatus, Schema},
@@ -89,34 +89,20 @@ pub(super) async fn update(
     State(state): State<AppState>,
 ) -> ApiResult<Json<UpdatedDraft>> {
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
-    let draft = sqlx::query!(
-        r#"SELECT status AS "status: DraftStatus", base_version_id, base_sql
-           FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'"#,
-        id,
-        database.id,
-    )
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(no_such_draft)?;
-    if draft.status != DraftStatus::Open {
-        return Err(not_open(draft.status));
-    }
+    // A first look: nothing newer, nothing to freeze for.
+    let draft = read(&state, database.id, id).await?;
     let latest = versions::latest(&state.db, database.id).await?;
-    let Some(latest) = latest.filter(|v| Some(v.id) != draft.base_version_id) else {
+    if latest.as_ref().map(|v| v.id) == draft.base_version_id {
         return up_to_date(&state, database.id, id, draft.base_version_id).await;
-    };
-    let base = match draft.base_version_id {
-        Some(base) => versions::by_id(&state.db, database.id, base).await?,
-        None => None,
-    };
+    }
 
-    let content = match state
+    let (content, ticket) = match state
         .collab
-        .freeze_for(id, &member.user.name, FreezeFor::Update)
+        .freeze_to_update(id, &member.user.name)
         .await
         .map_err(hub_error)?
     {
-        Ok(content) => content,
+        Ok(frozen) => frozen,
         Err(FreezeError::NotOpen(_)) => {
             return Err(ApiError::Conflict {
                 code: "draft_busy",
@@ -129,9 +115,24 @@ pub(super) async fn update(
         draft: id,
         done: false,
     };
+    // Frozen, read again: an update that finished meanwhile moved the base
+    // and left its text, and this one starts from both.
+    let draft = read(&state, database.id, id).await?;
+    let latest = versions::latest(&state.db, database.id).await?;
+    let Some(latest) = latest.filter(|v| Some(v.id) != draft.base_version_id) else {
+        drop(frozen);
+        return up_to_date(&state, database.id, id, draft.base_version_id).await;
+    };
+    let base = match draft.base_version_id {
+        Some(base) => versions::by_id(&state.db, database.id, base).await?,
+        None => None,
+    };
 
+    // From here, a failure leaves the draft with its merged text and its old
+    // base: updating again merges nothing twice (ours already has theirs'
+    // statements, `romulus_sandbox::merge`), and moves the base then.
     let (plan, rewritten, latest) =
-        rewrite(&state, id, base, latest, draft.base_sql, content).await?;
+        rewrite(&state, id, ticket, base, latest, draft.base_sql, content).await?;
     let changed = rewritten || !(plan.layout.is_empty() && plan.groups.is_empty());
     let (conflicts, ancestor) = (plan.conflicts, plan.merged.ancestor);
     // Then the layout, and everything is written before the base moves.
@@ -177,6 +178,7 @@ pub(super) async fn update(
 async fn rewrite(
     state: &AppState,
     id: Uuid,
+    ticket: UpdateTicket,
     base: Option<Version>,
     latest: Version,
     base_sql: Option<String>,
@@ -195,7 +197,7 @@ async fn rewrite(
         };
         match state
             .collab
-            .rewrite(id, sha256_hex(&plan.sql), plan.changes.clone())
+            .rewrite_update(id, ticket, sha256_hex(&plan.sql), plan.changes.clone())
             .await
             .map_err(hub_error)?
         {
@@ -210,6 +212,31 @@ async fn rewrite(
     Err(ApiError::Conflict {
         code: "draft_changed",
         message: "The SQL kept being rewritten while it was being updated. Try again.".into(),
+    })
+}
+
+struct Row {
+    base_version_id: Option<Uuid>,
+    base_sql: Option<String>,
+}
+
+/// The draft's base, if it is open (404 or 409 otherwise).
+async fn read(state: &AppState, database_id: Uuid, id: Uuid) -> ApiResult<Row> {
+    let draft = sqlx::query!(
+        r#"SELECT status AS "status: DraftStatus", base_version_id, base_sql
+           FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'"#,
+        id,
+        database_id,
+    )
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(no_such_draft)?;
+    if draft.status != DraftStatus::Open {
+        return Err(not_open(draft.status));
+    }
+    Ok(Row {
+        base_version_id: draft.base_version_id,
+        base_sql: draft.base_sql,
     })
 }
 
@@ -314,10 +341,14 @@ fn merge_sql(
         ours_model_sql: ours_model_sql.as_deref(),
         label,
     })
-    .map_err(|Unparsable(diagnostics)| ApiError::Unprocessable {
-        code: "draft_has_errors",
-        message: "The draft's SQL has syntax errors. Fix them, then update it.".into(),
-        details: Some(json!({ "diagnostics": diagnostics })),
+    .map_err(|err| match err {
+        MergeError::Unparsable(diagnostics) => ApiError::Unprocessable {
+            code: "draft_has_errors",
+            message: "The draft's SQL has syntax errors. Fix them, then update it.".into(),
+            details: Some(json!({ "diagnostics": diagnostics })),
+        },
+        // A bug of the merge's: logged, nothing applied.
+        MergeError::Overlap => ApiError::internal(err),
     })
 }
 
@@ -330,21 +361,44 @@ type GroupOps = Vec<(String, Option<TableGroup>)>;
 /// - **a position stays ours**: the people in the draft are arranging it
 ///   right now, and moving tables under them would undo their work for a
 ///   cosmetic difference; the version's arrangement is still in its history;
-/// - **a group takes theirs' name and color, and both sides' members**
-///   (a group one side deleted and the other changed stays, changed). A
-///   table never ends up in two groups: it stays where ours had it.
+/// - **a group merges field by field**: a name or color only one side
+///   changed comes from it (theirs wins when both did); a member either
+///   side removed stays removed, a member either side added comes in. A
+///   group one side deleted and the other changed stays, changed. A table
+///   never ends up in two groups: it stays where ours had it.
 fn merge_layout(
     base: &VersionLayout,
     theirs: &VersionLayout,
     ours: &VersionLayout,
 ) -> (LayoutOps, GroupOps) {
-    let positions = merge_maps(&base.layout, &theirs.layout, &ours.layout, |o, _| Some(*o));
-    let mut groups = merge_maps(&base.groups, &theirs.groups, &ours.groups, |o, t| {
-        let mut members = o.members.clone();
-        members.extend(t.members.iter().filter(|m| !o.members.contains(m)).cloned());
+    let positions = merge_maps(&base.layout, &theirs.layout, &ours.layout, |_, o, _| {
+        Some(*o)
+    });
+    let mut groups = merge_maps(&base.groups, &theirs.groups, &ours.groups, |b, o, t| {
+        let field = |get: fn(&TableGroup) -> &String| {
+            match b {
+                Some(b) if get(t) == get(b) => get(o),
+                _ => get(t),
+            }
+            .clone()
+        };
+        let before: &[String] = b.map_or(&[], |b| &b.members);
+        let removed_by_theirs = |m: &String| before.contains(m) && !t.members.contains(m);
+        let mut members: Vec<String> = o
+            .members
+            .iter()
+            .filter(|m| !removed_by_theirs(m))
+            .cloned()
+            .collect();
+        members.extend(
+            t.members
+                .iter()
+                .filter(|m| !o.members.contains(m) && !before.contains(m))
+                .cloned(),
+        );
         Some(TableGroup {
-            name: t.name.clone(),
-            color: t.color.clone(),
+            name: field(|g| &g.name),
+            color: field(|g| &g.color),
             members,
         })
     });
@@ -372,13 +426,13 @@ fn groups_has(groups: &BTreeMap<String, TableGroup>, id: &str, member: &String) 
     groups.get(id).is_some_and(|g| g.members.contains(member))
 }
 
-/// Three-way per key; `both` decides keys both sides changed (`None`:
-/// remove). A key one side removed and the other changed stays, changed.
+/// Three-way per key; `both` decides keys both sides changed (from base,
+/// ours, theirs; `None`: remove). A key one side removed and the other changed stays, changed.
 fn merge_maps<T: Clone + PartialEq>(
     base: &BTreeMap<String, T>,
     theirs: &BTreeMap<String, T>,
     ours: &BTreeMap<String, T>,
-    both: impl Fn(&T, &T) -> Option<T>,
+    both: impl Fn(Option<&T>, &T, &T) -> Option<T>,
 ) -> BTreeMap<String, T> {
     let keys: BTreeSet<&String> = base
         .keys()
@@ -394,7 +448,7 @@ fn merge_maps<T: Clone + PartialEq>(
             t.cloned()
         } else {
             match (o, t) {
-                (Some(o), Some(t)) => both(o, t),
+                (Some(o), Some(t)) => both(b, o, t),
                 (Some(kept), None) | (None, Some(kept)) => Some(kept.clone()),
                 (None, None) => None,
             }
@@ -469,6 +523,26 @@ mod tests {
             ]
         );
         assert_eq!(groups, []);
+    }
+
+    #[test]
+    fn group_members_either_side_removed_stay_removed() {
+        let base = layout(&[], &[("g", "Core", &["a", "b"])]);
+        // Theirs took b out; ours renamed the group and added c.
+        let theirs = layout(&[], &[("g", "Core", &["a"])]);
+        let ours = layout(&[], &[("g", "Billing", &["a", "b", "c"])]);
+        let (_, groups) = merge_layout(&base, &theirs, &ours);
+        assert_eq!(
+            groups,
+            [(
+                "g".to_owned(),
+                Some(TableGroup {
+                    name: "Billing".to_owned(),
+                    color: "blue".to_owned(),
+                    members: vec!["a".to_owned(), "c".to_owned()],
+                })
+            )]
+        );
     }
 
     #[test]

@@ -253,9 +253,10 @@ off that line. Branching should be invisible: nobody has to know the word.
   it. A table both sides moved keeps the draft's position: the people in the
   draft are arranging it now, a position is cosmetic, and moving tables
   under them would undo their work (v13's arrangement stays in its
-  version). A group both changed takes v13's name and color and both
-  sides' members; a table is never in two groups (it stays where the draft
-  had it).
+  version). A group both changed merges field by field: a name or color
+  only one side changed comes from it (v13 wins when both did); a member
+  either side removed stays removed, a member either side added comes in;
+  a table is never in two groups (it stays where the draft had it).
 - **Publishing** freezes the draft first (status change broadcast; the server
   drops further updates), then compiles and stores exactly that frozen state.
   Version numbers are assigned under a lock on the database row, with

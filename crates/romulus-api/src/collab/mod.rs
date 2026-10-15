@@ -56,7 +56,7 @@ use self::{
     compile::SqlCompiler,
     room::{
         Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, FreezeFor, Incoming, Outbox,
-        RewriteError, Settings, Shared,
+        RewriteError, Settings, Shared, UpdateTicket,
     },
 };
 use crate::AppState;
@@ -85,6 +85,7 @@ pub struct HubInner {
     rooms: Mutex<Rooms>,
     next_conn: AtomicU64,
     next_room: AtomicU64,
+    next_ticket: AtomicU64,
     closing: AtomicBool,
     /// Notified each time a room leaves.
     left: Notify,
@@ -169,6 +170,7 @@ impl Hub {
             rooms: Mutex::new(Rooms::default()),
             next_conn: AtomicU64::new(1),
             next_room: AtomicU64::new(1),
+            next_ticket: AtomicU64::new(1),
             closing: AtomicBool::new(false),
             left: Notify::new(),
         }))
@@ -219,11 +221,23 @@ impl Hub {
         self.freeze_for(draft, by, FreezeFor::Publish).await
     }
 
-    /// [`Hub::freeze`] for publishing or for "Update draft" (everyone sees
-    /// which). Follow an update with [`Hub::rewrite`] and
-    /// [`Hub::merge_layout`], then
-    /// [`Hub::unfreeze`].
-    pub async fn freeze_for(
+    /// [`Hub::freeze`] for "Update draft": everyone sees "updating". With the
+    /// content, the ticket that lets this update, and nothing else,
+    /// rewrite the SQL meanwhile ([`Hub::rewrite_update`]). Then
+    /// [`Hub::merge_layout`] and [`Hub::unfreeze`].
+    pub async fn freeze_to_update(
+        &self,
+        draft: Uuid,
+        by: &str,
+    ) -> Result<Result<(Content, UpdateTicket), FreezeError>, HubError> {
+        let ticket = UpdateTicket(self.0.next_ticket.fetch_add(1, Ordering::Relaxed));
+        Ok(self
+            .freeze_for(draft, by, FreezeFor::Update(ticket))
+            .await?
+            .map(|content| (content, ticket)))
+    }
+
+    async fn freeze_for(
         &self,
         draft: Uuid,
         by: &str,
@@ -261,6 +275,30 @@ impl Hub {
                 from,
                 changes,
                 reason,
+                ticket: None,
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
+    /// [`Hub::rewrite`] by the update holding `ticket`, while the draft is
+    /// frozen for it ([`Hub::freeze_to_update`]).
+    pub async fn rewrite_update(
+        &self,
+        draft: Uuid,
+        ticket: UpdateTicket,
+        from: String,
+        changes: Vec<patch::Change>,
+    ) -> Result<Result<bool, RewriteError>, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::Rewrite {
+                from,
+                changes,
+                reason: "update",
+                ticket: Some(ticket),
                 reply,
             },
         )?;

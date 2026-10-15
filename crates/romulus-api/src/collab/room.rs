@@ -282,8 +282,14 @@ pub enum RewriteError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreezeFor {
     Publish,
-    Update,
+    /// With the ticket the update's own rewrite shows ([`Command::Rewrite`]):
+    /// nobody else rewrites the SQL meanwhile.
+    Update(UpdateTicket),
 }
+
+/// What lets "Update draft" rewrite the SQL of the room it froze.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateTicket(pub(super) u64);
 
 pub enum Command {
     Join {
@@ -339,6 +345,9 @@ pub enum Command {
         from: String,
         changes: Vec<patch::Change>,
         reason: &'static str,
+        /// The update's ticket: while frozen for an update, only that
+        /// update rewrites the SQL (and only while it is).
+        ticket: Option<UpdateTicket>,
         reply: oneshot::Sender<Result<bool, RewriteError>>,
     },
     /// The draft was updated to a newer version (its base moved).
@@ -418,6 +427,8 @@ struct Room {
     /// Renames typed in the text that arrived while frozen: moved if
     /// publishing fails.
     deferred_renames: Vec<(String, String)>,
+    /// While frozen for an update: the ticket its rewrite shows.
+    update: Option<UpdateTicket>,
     /// Applied updates not written yet, and when they will be.
     pending: Vec<Bytes>,
     flush_at: Option<Instant>,
@@ -575,6 +586,7 @@ impl Room {
             save_failed: false,
             doc_bytes,
             deferred_renames: Vec::new(),
+            update: None,
             hub,
             shared,
             doc,
@@ -704,9 +716,10 @@ impl Room {
                 from,
                 changes,
                 reason,
+                ticket,
                 reply,
             } => {
-                let _ = reply.send(self.rewrite(&from, &changes, reason));
+                let _ = reply.send(self.rewrite(&from, &changes, reason, ticket));
             }
             // Handled by the loop.
             Command::Shutdown | Command::MergeLayout { .. } => {}
@@ -937,9 +950,9 @@ impl Room {
             let _ = reply.send(Err(FreezeError::NotOpen(self.status)));
             return;
         }
-        self.status = match purpose {
-            FreezeFor::Publish => LiveStatus::Publishing,
-            FreezeFor::Update => LiveStatus::Updating,
+        (self.status, self.update) = match purpose {
+            FreezeFor::Publish => (LiveStatus::Publishing, None),
+            FreezeFor::Update(ticket) => (LiveStatus::Updating, Some(ticket)),
         };
         self.flush_pending();
         self.broadcast_event(
@@ -958,6 +971,7 @@ impl Room {
             return;
         }
         self.status = LiveStatus::Open;
+        self.update = None;
         self.broadcast_event(
             &ServerEvent::Status {
                 status: self.status,
@@ -983,9 +997,15 @@ impl Room {
         from: &str,
         changes: &[patch::Change],
         reason: &str,
+        ticket: Option<UpdateTicket>,
     ) -> Result<bool, RewriteError> {
-        // Open, or frozen for an update (this rewrite is its merge).
-        if !matches!(self.status, LiveStatus::Open | LiveStatus::Updating) {
+        // Open (anyone), or frozen for the update that shows its ticket.
+        let allowed = match (self.status, ticket) {
+            (LiveStatus::Open, None) => true,
+            (LiveStatus::Updating, Some(ticket)) => self.update == Some(ticket),
+            _ => false,
+        };
+        if !allowed {
             return Err(RewriteError::NotOpen(self.status));
         }
         let current = self.roots.sql(&self.doc.transact());

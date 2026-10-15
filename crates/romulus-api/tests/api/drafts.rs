@@ -1029,3 +1029,107 @@ async fn who_may_update_and_when(db: PgPool) {
         .json();
     assert_eq!(still["base_version"], 1);
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn uploads_are_never_refused_for_what_looks_like_a_conflict(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    database(&db, team.org, "billing").await;
+    let app = TestApp::compiling(db);
+    // A banner, and a whole block's markers, in an uploaded file's comments.
+    let sql = "-- ==========================================\n-- Users\n\
+               -- ==========================================\n\
+               -- <<<<<<< yours\nCREATE TABLE users (id bigint);\n-- ======= v2\n-- >>>>>>> v2\n";
+    let response = app
+        .as_user(&team.developer)
+        .post(
+            &team.path("/databases/billing/versions"),
+            &json!({ "sql": sql }),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{}", response.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_update_that_stopped_after_its_rewrite_runs_again_cleanly(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    alice
+        .edit(insert_after("orders (id bigint", ", total numeric"))
+        .await;
+    room_sql_with(&app, id, "total").await;
+    let v2 = "CREATE TABLE users (id bigint, email text, plan text);\n\nCREATE TABLE orders (id bigint);\n";
+    version_of(
+        &db,
+        shop,
+        2,
+        v2,
+        &model_json(&[
+            (
+                "users",
+                &[("id", "bigint"), ("email", "text"), ("plan", "text")],
+            ),
+            ORDERS,
+        ]),
+        false,
+    )
+    .await;
+    let path = draft_path(&team, &draft, "/update");
+    assert_eq!(
+        app.as_user(&team.developer).post_empty(&path).await.json()["conflicts"],
+        0
+    );
+    let merged = room_sql_with(&app, id, "plan text").await;
+
+    // As if the base had not moved after the rewrite (the database failing).
+    sqlx::query!(
+        "UPDATE drafts SET base_version_id = (SELECT id FROM versions WHERE database_id = $2 AND number = 1),
+                           base_sql = NULL
+         WHERE id = $1",
+        id,
+        shop,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let again = app.as_user(&team.developer).post_empty(&path).await;
+    assert_eq!(
+        again.json(),
+        json!({"base_version": 2, "conflicts": 0, "changed": false}),
+        "nothing merged twice"
+    );
+    assert_eq!(app.state.collab.content(id).await.unwrap().sql, merged);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn only_the_update_rewrites_a_draft_it_froze(db: PgPool) {
+    use romulus_api::collab::{compile::sha256_hex, patch::changes, room::RewriteError};
+
+    let (app, _team, _shop, draft, _alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    let hub = &app.state.collab;
+    let (content, ticket) = hub.freeze_to_update(id, "Carol").await.unwrap().unwrap();
+    let sha = sha256_hex(&content.sql);
+    let edit = changes(&content.sql, &format!("{}-- tidied\n", content.sql));
+
+    // Anyone else (Tidy) is refused meanwhile.
+    let refused = hub.rewrite(id, sha.clone(), edit.clone()).await.unwrap();
+    assert!(
+        matches!(refused, Err(RewriteError::NotOpen(_))),
+        "{refused:?}"
+    );
+    // The update itself is not.
+    assert!(
+        hub.rewrite_update(id, ticket, sha.clone(), edit.clone())
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    // Once it is over, its ticket is worth nothing.
+    hub.unfreeze(id);
+    let text = hub.content(id).await.unwrap().sql;
+    let late = hub
+        .rewrite_update(id, ticket, sha256_hex(&text), changes(&text, ""))
+        .await
+        .unwrap();
+    assert!(matches!(late, Err(RewriteError::NotOpen(_))), "{late:?}");
+}
