@@ -11,7 +11,10 @@ interface InlineNameProps {
   validate: (name: string) => string | null;
   onCommit: (name: string) => void;
   onCancel: () => void;
-  /** Saving the initial name as it is counts (a new table's suggested name). */
+  /**
+   * Saving the initial name as it is counts (a new table's suggested name):
+   * Enter takes it; leaving the field takes only a name typed over it.
+   */
   acceptInitial?: boolean;
   "aria-label": string;
   className?: string;
@@ -84,7 +87,7 @@ export function InlineName({
             }
           }}
           // Leaving with a name that cannot be used keeps the old one.
-          onBlur={() => finish(!problem)}
+          onBlur={() => finish(!problem && !(acceptInitial && name === initial))}
           // Clicks inside stay with the field (no drag, no selection change).
           onMouseDown={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}

@@ -551,7 +551,12 @@ function MarkIcon({
 function HeaderTools({ edit, table }: { edit: EditContextValue; table: TableModel }) {
   const view = isViewTable(table);
   return (
-    <div className="nodrag absolute inset-y-0 right-0 flex items-center gap-0.5 bg-linear-to-l from-card from-70% pr-1.5 pl-6">
+    <div
+      className={cn(
+        "nodrag absolute inset-y-0 right-0 flex items-center gap-0.5 bg-linear-to-l from-70% pr-1.5 pl-6",
+        view ? "from-muted" : "from-card",
+      )}
+    >
       {!view && (
         <Button
           variant="ghost"
