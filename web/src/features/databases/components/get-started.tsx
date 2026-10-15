@@ -31,8 +31,8 @@ export function GetStarted({
         <h2 className="text-lg font-semibold text-foreground">No versions yet</h2>
         <p className="max-w-prose text-base text-muted-foreground">
           {writer
-            ? "Every version is a snapshot of the schema. Bring in the first one by uploading its SQL, or let CI push it from the live database."
-            : "Every version is a snapshot of the schema. The first one appears here once a developer uploads its SQL or CI pushes it."}
+            ? "Bring in the first one: upload the schema's SQL, or push it from CI."
+            : "The first one appears here once a developer uploads SQL or CI pushes it."}
         </p>
       </div>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -54,8 +54,8 @@ export function GetStarted({
         </Card>
         <Card className="flex min-w-0 flex-col gap-4 p-5">
           <Way icon={<CloudIcon />} title="Push from CI">
-            remus reads the live database and sends what it finds. An unchanged schema creates
-            nothing, so it is safe on every run.
+            remus sends the live database&apos;s schema. Unchanged schemas are skipped, so run it on
+            every build.
           </Way>
           <CodeBlock code={pushCommand(database.id)} label="Push command" />
           {writer && (

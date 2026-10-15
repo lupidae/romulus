@@ -43,6 +43,8 @@ export default defineConfig({
       env: env({
         ROMULUS_API_ADDR: `127.0.0.1:${e2eApiPort}`,
         ROMULUS_PUBLIC_URL: origin,
+        // One process per sandbox pool: the dev API may hold the default one.
+        ROMULUS_SANDBOX_PREFIX: "romulus_e2e",
         RUST_LOG: process.env.RUST_LOG ?? "romulus_api=warn,tower_http=warn",
       }),
       url: `http://127.0.0.1:${e2eApiPort}/api/health`,

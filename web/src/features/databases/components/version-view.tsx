@@ -185,14 +185,20 @@ function VersionStrip({
           Latest
         </Badge>
       ) : (
-        <Button variant="link" size="sm" asChild>
-          <Link to="/$org/$db" params={{ org, db }}>
-            Viewing an older version · go to v{latest}
-          </Link>
-        </Button>
+        <span className="flex items-center gap-2">
+          <Badge variant="warning">
+            <ClockIcon aria-hidden />
+            Older version
+          </Badge>
+          <Button variant="link" size="sm" asChild>
+            <Link to="/$org/$db" params={{ org, db }}>
+              Go to v{latest}
+            </Link>
+          </Button>
+        </span>
       )}
       {version ? (
-        <div className="flex min-w-0 flex-1 items-center gap-3 text-sm">
+        <div className="hidden min-w-0 flex-1 items-center gap-3 text-sm md:flex">
           <OriginBadge origin={version.origin} />
           <Byline author={version.author} at={version.created_at} />
           {version.message && (

@@ -15,9 +15,9 @@ interface CodeBlockProps {
 }
 
 /**
- * A few lines to paste somewhere else (a command, a CI step), with a Copy
- * button that confirms in place. Long lines scroll sideways rather than
- * wrap, so what is copied is what is seen.
+ * A few lines to paste somewhere else (a command, a CI step), under a bar
+ * naming them with a Copy button that confirms in place. Long lines scroll
+ * sideways rather than wrap, so what is copied is what is seen.
  */
 export function CodeBlock({ code, label, className }: CodeBlockProps) {
   const [copied, setCopied] = React.useState(false);
@@ -43,24 +43,27 @@ export function CodeBlock({ code, label, className }: CodeBlockProps) {
   return (
     <div
       data-slot="code-block"
-      className={cn("relative rounded-lg border border-border bg-muted", className)}
+      className={cn("overflow-hidden rounded-lg border border-border bg-muted", className)}
     >
+      <div className="flex h-9 items-center justify-between gap-2 border-b border-border pr-1.5 pl-3">
+        <span className="truncate text-xs font-medium text-muted-foreground">{label}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void copy()}
+          aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()}`}
+        >
+          {copied ? <CheckIcon className="text-success" /> : <CopyIcon />}
+          {copied ? "Copied" : "Copy"}
+        </Button>
+      </div>
       <pre
         ref={preRef}
         aria-label={label}
-        className="overflow-x-auto rounded-lg py-3 pr-24 pl-3 font-mono text-sm leading-5 text-foreground"
+        className="overflow-x-auto bg-card/60 px-3 py-3 font-mono text-sm leading-5 text-foreground"
       >
         <code>{code}</code>
       </pre>
-      <Button
-        size="sm"
-        onClick={() => void copy()}
-        className="absolute top-2 right-2"
-        aria-label={copied ? `${label} copied` : `Copy ${label.toLowerCase()}`}
-      >
-        {copied ? <CheckIcon className="text-success" /> : <CopyIcon />}
-        {copied ? "Copied" : "Copy"}
-      </Button>
       <span role="status" aria-live="polite" className="sr-only">
         {copied ? `${label} copied to the clipboard` : ""}
       </span>

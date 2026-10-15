@@ -51,7 +51,11 @@ export const Route = createFileRoute("/$org/$db")({
 function DatabaseLayout() {
   const { org, db } = Route.useParams();
   const { data: orgData } = useSuspenseQuery(orgQuery(org));
-  const { data: database } = useSuspenseQuery(databaseQuery(org, db));
+  // Polled: versions pushed by CI show up without a reload.
+  const { data: database } = useSuspenseQuery({
+    ...databaseQuery(org, db),
+    refetchInterval: 30_000,
+  });
   const navigate = useNavigate();
   const matchRoute = useMatchRoute();
   const writer = canWrite(orgData.role);
@@ -68,7 +72,7 @@ function DatabaseLayout() {
     <UploadContext.Provider value={writer ? openUpload : null}>
       <div className="flex h-full min-h-0 flex-col">
         <header className="shrink-0 border-b border-border px-4 pt-4 md:px-6 md:pt-5">
-          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <div className="flex items-start justify-between gap-x-6 gap-y-3">
             <div className="flex min-w-0 items-center gap-3">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-muted-foreground">
                 <DatabaseIcon className="size-4" />
@@ -90,9 +94,14 @@ function DatabaseLayout() {
             {writer && (
               <div className="flex shrink-0 items-center gap-2">
                 <Tooltip content="Upload SQL as a new version" shortcut={["U"]}>
-                  <Button variant="primary" onClick={openUpload}>
+                  <Button
+                    variant="primary"
+                    onClick={openUpload}
+                    aria-label="Upload SQL"
+                    className="max-sm:px-2.5"
+                  >
                     <UploadIcon />
-                    Upload SQL
+                    <span className="max-sm:hidden">Upload SQL</span>
                   </Button>
                 </Tooltip>
               </div>
