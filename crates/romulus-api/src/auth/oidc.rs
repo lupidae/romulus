@@ -17,8 +17,8 @@ use std::{
 use openidconnect::{
     AdditionalProviderMetadata, AuthenticationFlow, AuthorizationCode, ClaimsVerificationError,
     ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl,
-    Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, ProviderMetadata, RedirectUrl,
-    Scope, TokenResponse,
+    LoginHint, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, ProviderMetadata,
+    RedirectUrl, Scope, TokenResponse,
     core::{
         CoreAuthDisplay, CoreAuthPrompt, CoreClaimName, CoreClaimType, CoreClient,
         CoreClientAuthMethod, CoreGrantType, CoreIdTokenClaims, CoreJsonWebKey,
@@ -235,8 +235,14 @@ impl Oidc {
     }
 
     /// A new authorization request. `select_account` makes the IdP ask which
-    /// account to use even when one is signed in ("switch account").
-    pub async fn start(&self, select_account: bool) -> Result<Started, OidcError> {
+    /// account to use even when one is signed in ("switch account");
+    /// `login_hint` names the address to sign in with (Zitadel then skips to
+    /// its password, or offers to create the account).
+    pub async fn start(
+        &self,
+        select_account: bool,
+        login_hint: Option<&str>,
+    ) -> Result<Started, OidcError> {
         let provider = self.provider(false).await?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut request = provider
@@ -251,6 +257,9 @@ impl Oidc {
             .set_pkce_challenge(challenge);
         if select_account {
             request = request.add_prompt(CoreAuthPrompt::SelectAccount);
+        }
+        if let Some(hint) = login_hint {
+            request = request.set_login_hint(LoginHint::new(hint.to_owned()));
         }
         let (url, state, nonce) = request.url();
         Ok(Started {

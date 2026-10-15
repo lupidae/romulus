@@ -1,6 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-import { createOrg, devSignIn, inviteLink, ssoSignIn, unique, zitadelUsers } from "./helpers";
+import {
+  createOrg,
+  devSignIn,
+  emailedCode,
+  inviteLink,
+  ssoSignIn,
+  unique,
+  zitadelPort,
+  zitadelSignIn,
+  zitadelUsers,
+} from "./helpers";
 
 // Two people through the real identity provider: Zitadel's login, the OIDC
 // callback, sessions, then the invitation round trip and a role change.
@@ -24,8 +34,10 @@ test("an admin invites a developer, who joins, and is then made a reviewer", asy
   await invitee.goto(link);
   await expect(invitee.getByRole("heading", { name: `Join ${orgName} on romulus` })).toBeVisible();
   await expect(invitee.getByText(`invited ${bob.email} to join as a developer`)).toBeVisible();
+  // One click, straight into Zitadel, with Bob's address already given.
   await invitee.getByRole("link", { name: "Sign in to accept" }).click();
-  await ssoSignIn(invitee, bob);
+  await expect(invitee.getByRole("heading", { name: "Enter your password" })).toBeVisible();
+  await zitadelSignIn(invitee, bob);
   await expect(invitee).toHaveURL(/\/app\/invite\//);
   await invitee.getByRole("button", { name: `Join ${orgName}` }).click();
   await expect(invitee).toHaveURL(new RegExp(`/app/${slug}$`));
@@ -72,8 +84,9 @@ test("an invitation opened with another account offers to switch", async ({ brow
       .filter({ hasText: "This invitation is for invitee@romulus.test" }),
   ).toBeVisible();
   await someoneElse.getByRole("button", { name: "Switch account" }).click();
-  // Dev stacks offer the dev users; the invitation is where sign-in comes back to.
-  await expect(someoneElse).toHaveURL(/\/app\/signin\?next=%2Fapp%2Finvite%2F/);
+  // The real sign-in, dev stack or not; it comes back to the invitation.
+  await someoneElse.waitForURL((url) => url.port === zitadelPort());
+  await expect(someoneElse.getByRole("heading", { name: "Sign in to romulus" })).toBeVisible();
 });
 
 test("the last admin is told why they cannot leave or step down", async ({ page }) => {
@@ -123,4 +136,42 @@ test("a session ended elsewhere lands on sign-in, and stays there", async ({ pag
   // Not bounced back by a cached user.
   await page.waitForTimeout(1500);
   await expect(page).toHaveURL(signin);
+});
+
+test("someone without an account creates one from the invitation and joins", async ({
+  browser,
+}) => {
+  const admin = await (await browser.newContext()).newPage();
+  await devSignIn(admin, `host-${Date.now()}@romulus.test`, "/app/new");
+  const orgName = unique("Newcomers");
+  const slug = await createOrg(admin, orgName);
+  const email = `nora-${Date.now().toString(36)}@romulus.test`;
+  const link = await inviteLink(admin, email);
+
+  const nora = await (await browser.newContext()).newPage();
+  await nora.goto(link);
+  await nora.getByRole("link", { name: "Sign in to accept" }).click();
+  // No account for that address: Zitadel's (branded) login offers one.
+  await expect(nora.getByRole("heading", { name: "Sign in to romulus" })).toBeVisible();
+  await nora.getByRole("button", { name: "Create account" }).click();
+  await expect(nora.getByRole("heading", { name: "Create your romulus account" })).toBeVisible();
+  await nora.locator("#firstname").fill("Nora");
+  await nora.locator("#lastname").fill("Newcomer");
+  await nora.locator("#email").fill(email);
+  await nora.locator("#register-password").fill("RomulusDev1!");
+  await nora.locator("#register-password-confirmation").fill("RomulusDev1!");
+  await nora.getByRole("button", { name: "Create account" }).click();
+
+  // The address is verified with the code Zitadel emails (the mail catcher).
+  await expect(nora.getByRole("heading", { name: "Check your email" })).toBeVisible();
+  await nora.locator("#code").fill(await emailedCode(email));
+  await nora.getByRole("button", { name: "Verify" }).click();
+  await expect(nora.getByRole("heading", { name: "Your account is ready" })).toBeVisible();
+  await nora.getByRole("button", { name: "Continue to romulus" }).click();
+
+  // Back on the invitation, signed in as the invitee: one click to join.
+  await expect(nora).toHaveURL(/\/app\/invite\//);
+  await nora.getByRole("button", { name: `Join ${orgName}` }).click();
+  await expect(nora).toHaveURL(new RegExp(`/app/${slug}$`));
+  await expect(nora.getByText(`Welcome to ${orgName}`)).toBeVisible();
 });

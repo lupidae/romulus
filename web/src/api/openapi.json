@@ -76,6 +76,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "login_hint",
+            "in": "query",
+            "description": "The address to sign in with (an invitation's): the IdP pre-fills it,\nor offers to create the account. Anything not shaped like an email\nis ignored.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {

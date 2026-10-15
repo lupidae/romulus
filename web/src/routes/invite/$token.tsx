@@ -17,8 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
-import { authMethodsQuery, meQuery } from "@/features/auth/queries";
-import { appPath, switchAccount } from "@/features/auth/session";
+import { meQuery } from "@/features/auth/queries";
+import { appPath, loginUrl, switchAccount } from "@/features/auth/session";
 import { useAcceptInvitation } from "@/features/orgs/mutations";
 import { type InvitationPreview, invitationPreviewQuery } from "@/features/orgs/queries";
 import { roleAbilities, withArticle } from "@/features/orgs/roles";
@@ -222,14 +222,14 @@ function SignInToAccept({
 }) {
   return (
     <div className="grid gap-3">
+      {/* Straight into single sign-on (in dev too): one click, and the
+          invited address is pre-filled or offered for a new account. */}
       <Button variant="primary" size="lg" className="w-full" asChild>
-        <Link to="/signin" search={{ next: here }}>
-          Sign in to accept
-        </Link>
+        <a href={loginUrl(here, { loginHint: email })}>Sign in to accept</a>
       </Button>
       <p className="text-sm text-muted-foreground">
-        Sign in as {email}; you come straight back here. The invitation expires on{" "}
-        {formatDate(expiresAt)}.
+        Sign in, or create your account, with {email}; you come straight back here. The invitation
+        expires on {formatDate(expiresAt)}.
       </p>
     </div>
   );
@@ -280,7 +280,6 @@ function Accept({ token, invitation }: { token: string; invitation: InvitationPr
 
 function WrongAccount({ here, email }: { here: string; email: string }) {
   const me = useQuery(meQuery);
-  const methods = useQuery(authMethodsQuery);
   const [switching, setSwitching] = React.useState(false);
 
   return (
@@ -297,7 +296,7 @@ function WrongAccount({ here, email }: { here: string; email: string }) {
         loading={switching}
         onClick={() => {
           setSwitching(true);
-          switchAccount(here, methods.data?.dev_signin ?? false).catch(() => {
+          switchAccount(here, email).catch(() => {
             setSwitching(false);
             toast.error("Could not sign out. Try again.");
           });

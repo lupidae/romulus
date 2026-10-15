@@ -448,3 +448,26 @@ async fn an_address_from_the_idp_is_stored_composed(db: PgPool) {
         .json();
     assert_eq!(me["email"], "Élodie@romulus.test");
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_invitation_names_the_address_to_sign_in_with(db: PgPool) {
+    let idp = FakeIdp::start().await;
+    let app = TestApp::with_config(db, idp.config());
+    let hint = |authorize: &str| {
+        url::Url::parse(authorize)
+            .unwrap()
+            .query_pairs()
+            .find(|(key, _)| key == "login_hint")
+            .map(|(_, value)| value.into_owned())
+    };
+    let invited = login(&app, "?next=/app/invite/x&login_hint=bob%40romulus.test").await;
+    assert_eq!(
+        hint(&invited.authorize).as_deref(),
+        Some("bob@romulus.test")
+    );
+    // Anything that is not an address is not passed on.
+    for garbage in ["not-an-email", "a%20b%40c.d", "%40nope"] {
+        let other = login(&app, &format!("?login_hint={garbage}")).await;
+        assert_eq!(hint(&other.authorize), None, "{garbage}");
+    }
+}

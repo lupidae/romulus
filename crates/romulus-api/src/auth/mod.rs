@@ -150,6 +150,10 @@ pub struct LoginQuery {
     /// `select_account` asks the IdP which account to use even when one is
     /// already signed in there ("switch account").
     prompt: Option<String>,
+    /// The address to sign in with (an invitation's): the IdP pre-fills it,
+    /// or offers to create the account. Anything not shaped like an email
+    /// is ignored.
+    login_hint: Option<String>,
 }
 
 /// Starts signing in: redirects to the IdP's authorization endpoint (code
@@ -177,7 +181,16 @@ async fn login(
         return Ok(to_signin("too_many_sign_ins", &next).into_response());
     }
     let select_account = query.prompt.as_deref() == Some("select_account");
-    let started = match state.oidc.start(select_account).await {
+    let login_hint = query
+        .login_hint
+        .as_deref()
+        .map(crate::email::normalize)
+        .filter(|hint| is_plausible_email(hint));
+    let started = match state
+        .oidc
+        .start(select_account, login_hint.as_deref())
+        .await
+    {
         Ok(started) => started,
         Err(err) => {
             tracing::warn!(error = %Chain(&err), "sign-in: cannot start");
@@ -339,6 +352,16 @@ async fn start_session(
     }
     let token = session::create(&state.db, user_id).await?;
     Ok(jar.add(session::cookie(&state.config, token)))
+}
+
+/// Something@something, no spaces or controls, at most 254 bytes: enough to
+/// pass on as a hint, never trusted as an identity.
+fn is_plausible_email(value: &str) -> bool {
+    value.len() <= 254
+        && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+        && value.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+        })
 }
 
 /// "alice.martin@x" → "Alice Martin": a name for users the IdP gave none.

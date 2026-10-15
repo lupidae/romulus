@@ -27,10 +27,15 @@ export function afterSignIn(next: string | undefined): string {
 }
 
 /** The API route that starts SSO, coming back to `next`. */
-export function loginUrl(next?: string, options: { switchAccount?: boolean } = {}): string {
+export function loginUrl(
+  next?: string,
+  options: { switchAccount?: boolean; loginHint?: string } = {},
+): string {
   const params = new URLSearchParams();
   if (next) params.set("next", next);
   if (options.switchAccount) params.set("prompt", "select_account");
+  // The IdP pre-fills it, or offers to create that account.
+  if (options.loginHint) params.set("login_hint", options.loginHint);
   const query = params.toString();
   return `/api/auth/login${query ? `?${query}` : ""}`;
 }
@@ -49,17 +54,14 @@ export async function signOut(): Promise<void> {
 }
 
 /**
- * Ends the session and signs in again, choosing the account: for "this
- * invitation is for another address". `devSignin` sends people to the sign-in
- * page (which lists the dev users) instead of straight to SSO.
+ * Ends the session and signs in again through the IdP, choosing the account:
+ * for "this invitation is for another address". Always the real sign-in,
+ * dev stacks included: the dev shortcut is only ever an explicit choice on
+ * the sign-in page.
  */
-export async function switchAccount(next: string, devSignin: boolean): Promise<void> {
+export async function switchAccount(next: string, loginHint?: string): Promise<void> {
   await unwrap(api.POST("/api/auth/logout"));
-  window.location.assign(
-    devSignin
-      ? `${APP_BASE}/signin?${new URLSearchParams({ next }).toString()}`
-      : loginUrl(next, { switchAccount: true }),
-  );
+  window.location.assign(loginUrl(next, { switchAccount: true, loginHint }));
 }
 
 /**

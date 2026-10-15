@@ -478,6 +478,12 @@ export interface operations {
          *     already signed in there ("switch account").
          */
         prompt?: string;
+        /**
+         * @description The address to sign in with (an invitation's): the IdP pre-fills it,
+         *     or offers to create the account. Anything not shaped like an email
+         *     is ignored.
+         */
+        login_hint?: string;
       };
       header?: never;
       path?: never;

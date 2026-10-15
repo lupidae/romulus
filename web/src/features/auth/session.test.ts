@@ -28,6 +28,9 @@ describe("auth URLs", () => {
     expect(loginUrl("/app/invite/x", { switchAccount: true })).toBe(
       "/api/auth/login?next=%2Fapp%2Finvite%2Fx&prompt=select_account",
     );
+    expect(loginUrl("/app/invite/x", { loginHint: "bob@romulus.test" })).toBe(
+      "/api/auth/login?next=%2Fapp%2Finvite%2Fx&login_hint=bob%40romulus.test",
+    );
     expect(devSigninUrl("bob@romulus.test", "/app/")).toBe(
       "/api/auth/dev-signin?email=bob%40romulus.test&next=%2Fapp%2F",
     );

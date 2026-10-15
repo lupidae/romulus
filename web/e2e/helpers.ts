@@ -19,11 +19,52 @@ export function zitadelUsers(): [TestUser, TestUser] {
 /** From romulus's sign-in page, through Zitadel's login (v1), back to romulus. */
 export async function ssoSignIn(page: Page, user: TestUser) {
   await page.getByRole("link", { name: "Continue with SSO" }).click();
-  await page.locator("#loginName").fill(user.email);
-  await page.locator("#submit-button").click();
+  await zitadelSignIn(page, user);
+}
+
+/**
+ * On Zitadel's login: the address (unless a login hint already filled it and
+ * the page went on to the password), the password, back to romulus.
+ */
+export async function zitadelSignIn(page: Page, user: TestUser) {
+  await page.waitForURL((url) => url.pathname.startsWith("/ui/login/"));
+  if (await page.locator("#loginName").isVisible()) {
+    await page.locator("#loginName").fill(user.email);
+    await page.locator("#submit-button").click();
+  }
   await page.locator("#password").fill(user.password);
   await page.locator("#submit-button").click();
   await page.waitForURL((url) => url.pathname.startsWith("/app/"));
+}
+
+/** Zitadel's origin in this stack (the issuer). */
+export function zitadelPort() {
+  const port = process.env.ROMULUS_ZITADEL_PORT;
+  if (!port) throw new Error("ROMULUS_ZITADEL_PORT is not set: run scripts/dev-env");
+  return port;
+}
+
+/**
+ * The code Zitadel emailed to `email`, from the stack's mail catcher
+ * (ROMULUS_MAIL_PORT): sign-up verification, as a person would read it.
+ */
+export async function emailedCode(email: string): Promise<string> {
+  const port = process.env.ROMULUS_MAIL_PORT;
+  if (!port) throw new Error("ROMULUS_MAIL_PORT is not set: run scripts/dev-env");
+  const api = `http://localhost:${port}/api/v1`;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const search = (await (
+      await fetch(`${api}/search?query=${encodeURIComponent(`to:"${email}"`)}`)
+    ).json()) as { messages?: { ID: string }[] };
+    const id = search.messages?.[0]?.ID;
+    if (id) {
+      const message = (await (await fetch(`${api}/message/${id}`)).json()) as { Text: string };
+      const code = /Your code is (\w+)/.exec(message.Text)?.[1];
+      if (code) return code;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`no code emailed to ${email}`);
 }
 
 /**
