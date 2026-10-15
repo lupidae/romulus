@@ -40,6 +40,10 @@ pub struct Statement {
     /// object; for `DROP a, b`, each; for `CREATE SCHEMA s CREATE …`, the
     /// schema then each element.
     pub keys: Vec<Key>,
+    /// What it defines inline, named as Postgres names them: the
+    /// constraints and foreign keys of a `CREATE TABLE` or an `ADD COLUMN`,
+    /// the sequences of serial and identity columns. Never one of `keys`.
+    pub inline: Vec<Key>,
     /// How many earlier statements have the same `key`: `(key, occurrence)`
     /// identifies a statement within a text.
     pub occurrence: usize,
@@ -179,6 +183,8 @@ pub fn parse(sql: &str) -> ParsedSql {
             let span = tokens[first].start..tokens[last].end;
             let extent = extent(text, &tokens, first, last);
             let keys = keyer.keys(&node, &path);
+            let mut inline = keyer.take_inline();
+            inline.retain(|k| !keys.contains(k));
             let key = keys[0].clone();
             let occurrence = statements.iter().filter(|s| s.key == key).count();
             let search_path = path.clone();
@@ -189,6 +195,7 @@ pub fn parse(sql: &str) -> ParsedSql {
                 index: statements.len(),
                 key,
                 keys,
+                inline,
                 occurrence,
                 span: lines.span(sql, span),
                 extent: lines.span(sql, extent),

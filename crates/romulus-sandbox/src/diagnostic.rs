@@ -66,6 +66,9 @@ pub enum Code {
     /// Info: a statement was not run because an extension created earlier
     /// already provides that object (remus output for PostGIS databases).
     ProvidedByExtension,
+    /// The text still has a conflict block from "Update draft" (or a stray
+    /// marker line): nothing compiles until it is resolved.
+    Conflict,
 }
 
 impl Diagnostic {

@@ -61,7 +61,9 @@
 //!   migration) gets a different suffix there.
 //! - Objects defined inline in `CREATE TABLE` (its constraints, serial
 //!   sequences) belong to the table's key; they get names, for later
-//!   defaults, but no keys of their own.
+//!   defaults, but no keys of their own. [`crate::Statement::inline`] lists
+//!   them, named (the merge matches an inline foreign key with one added by
+//!   `ALTER TABLE` elsewhere).
 //! - `ALTER TABLE … DROP CONSTRAINT x` keys as `drop:constraint:…` whatever
 //!   kind `x` was (`fk:` or `constraint:` when created).
 
@@ -332,6 +334,9 @@ pub(crate) struct Keyer {
     namespaces: HashMap<String, Namespace>,
     /// Tables created so far, by schema and name.
     tables: HashMap<(String, String), Table>,
+    /// Objects the statement being keyed defines inline (see
+    /// [`Keyer::take_inline`]).
+    inline: Vec<Key>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -363,6 +368,12 @@ impl Keyer {
         self.tables
             .entry((schema.to_owned(), name.to_owned()))
             .or_default()
+    }
+
+    /// The constraints, foreign keys and sequences the last statement keyed
+    /// defined inline, named as Postgres names them.
+    pub(crate) fn take_inline(&mut self) -> Vec<Key> {
+        std::mem::take(&mut self.inline)
     }
 
     /// `ChooseRelationName`: `name1_name2_label`, then `label1`, `label2`…
@@ -736,6 +747,11 @@ impl Keyer {
         if serial || identity {
             let sequence =
                 self.choose_relation_name(schema, table, Some(&column.colname), "seq", false);
+            self.inline.push(Key::new(
+                Action::Create,
+                ObjectKind::Sequence,
+                [schema.to_owned(), sequence.clone()],
+            ));
             self.table(schema, table).relations.push(sequence);
         }
     }
@@ -844,7 +860,32 @@ impl Keyer {
                 names[i] = Some(name);
             }
         }
+        self.record_inline(schema, table, constraints, &names);
         names
+    }
+
+    /// Keys for the constraints just named, in [`Keyer::take_inline`].
+    fn record_inline(
+        &mut self,
+        schema: &str,
+        table: &str,
+        constraints: &[(Option<String>, &Constraint)],
+        names: &[Option<String>],
+    ) {
+        for ((_, c), name) in constraints.iter().zip(names) {
+            if let Some(name) = name {
+                let kind = if c.contype() == ConstrType::ConstrForeign {
+                    ObjectKind::ForeignKey
+                } else {
+                    ObjectKind::Constraint
+                };
+                self.inline.push(Key::new(
+                    Action::Create,
+                    kind,
+                    [schema.to_owned(), table.to_owned(), name.clone()],
+                ));
+            }
+        }
     }
 
     /// `CREATE DOMAIN d … CHECK …` names its checks `d_check`.
@@ -1493,6 +1534,40 @@ mod tests {
             .iter()
             .map(|s| s.key.to_string())
             .collect()
+    }
+
+    #[test]
+    fn inline_objects_are_listed_with_the_names_postgres_gives_them() {
+        let parsed = parse(
+            "CREATE TABLE users (id bigint PRIMARY KEY);
+             CREATE TABLE orders (
+                 id serial PRIMARY KEY,
+                 user_id bigint REFERENCES users,
+                 CHECK (id > 0)
+             );
+             ALTER TABLE orders ADD COLUMN code text UNIQUE;
+             ALTER TABLE orders ADD CONSTRAINT own FOREIGN KEY (id) REFERENCES users;",
+        );
+        let inline = |i: usize| -> Vec<String> {
+            parsed.statements[i]
+                .inline
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(inline(0), ["constraint:public.users.users_pkey"]);
+        assert_eq!(
+            inline(1),
+            [
+                "sequence:public.orders_id_seq",
+                "constraint:public.orders.orders_pkey",
+                "fk:public.orders.orders_user_id_fkey",
+                "constraint:public.orders.orders_id_check",
+            ]
+        );
+        assert_eq!(inline(2), ["constraint:public.orders.orders_code_key"]);
+        // Its own key, not an inline one.
+        assert_eq!(inline(3), Vec::<String>::new());
     }
 
     #[test]
