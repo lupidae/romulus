@@ -18,7 +18,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "public",
       "name": "users",
-      "qualified_name": "public.users",
       "kind": "table",
       "status": "changed",
       "changes": [],
@@ -60,17 +59,30 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
   "domains": [],
   "composites": [],
   "extensions": [],
-  "orphan_partitions": [],
+  "orphan_partitions": {
+    "partitions": [],
+    "lines": [],
+    "sql": {
+      "before": null,
+      "after": null
+    }
+  },
   "status": {
     "entities": {
-      "public.users": {
-        "status": "changed",
-        "columns": {
-          "email": "changed"
-        },
-        "constraints": {}
+      "public": {
+        "users": {
+          "status": "changed",
+          "columns": {
+            "email": "changed"
+          },
+          "constraints": {},
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        }
       }
     },
+    "orphan_partitions": {},
     "enums": {},
     "domains": {},
     "composites": {},

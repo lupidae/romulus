@@ -33,8 +33,8 @@ impl Status {
     }
 }
 
-/// Everything that differs between two schemas, matched by qualified name: a
-/// rename is a removal plus an addition.
+/// Everything that differs between two schemas, matched by schema and name:
+/// a rename is a removal plus an addition.
 ///
 /// Lists hold only what was added, removed or changed. [`SchemaDiff::status`]
 /// is the total view (every object of either side, unchanged ones included)
@@ -44,17 +44,39 @@ impl Status {
 pub struct SchemaDiff {
     pub summary: Summary,
     /// Tables, partitioned tables, views, materialized views and foreign
-    /// tables, by schema then name. Leaf partitions are listed under their
-    /// parent, not here.
+    /// tables, by schema then name. Partitions are listed under the entity
+    /// their chain of parents leads to, not here.
     pub entities: Vec<EntityDiff>,
     pub enums: Vec<EnumDiff>,
     pub domains: Vec<DomainDiff>,
     pub composites: Vec<CompositeDiff>,
     pub extensions: Vec<ExtensionDiff>,
-    /// Partitions whose parent is an entity in neither schema. A payload from
-    /// remus never has one; a hand-written model could.
-    pub orphan_partitions: Vec<PartitionDiff>,
+    pub orphan_partitions: OrphanPartitions,
     pub status: StatusMap,
+}
+
+/// A schema-qualified relation name, unquoted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct Relation {
+    pub schema: String,
+    pub name: String,
+}
+
+/// Partitions whose chain of parents reaches no entity in either schema: the
+/// root table was left out of the model (a schema filter that kept a
+/// sub-partition's schema but not its root's), or the model was written by
+/// hand. They are matched like any partition and described here instead of
+/// under an entity.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct OrphanPartitions {
+    /// By schema then name.
+    pub partitions: Vec<PartitionDiff>,
+    pub lines: Vec<String>,
+    /// Every orphan partition of each side as `remus-sql` renders it; `null`
+    /// on a side with none, and on both sides when nothing changed.
+    pub sql: Sides,
 }
 
 /// Counts per category, and the same as one sentence.
@@ -93,27 +115,44 @@ pub enum Category {
     Extension,
 }
 
-/// Status of every object on either side, keyed by qualified name
-/// (`schema.name`, unquoted, the same key layout and groups use). Extensions
-/// are keyed by bare name: they are database-wide.
+/// Status of every object on either side, unchanged ones included.
+///
+/// Schema-qualified objects are nested by schema, then name, both unquoted
+/// exactly as in the model: `status.entities["shop"]["orders"]`. Nesting keeps
+/// keys collision-free without making the web reproduce Postgres's quoting
+/// rules (a flat `schema.name` key cannot tell schema `a.b` + table `c` from
+/// schema `a` + table `b.c`). Extensions are database-wide, keyed by name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct StatusMap {
-    pub entities: BTreeMap<String, EntityStatus>,
-    pub enums: BTreeMap<String, Status>,
-    pub domains: BTreeMap<String, Status>,
-    pub composites: BTreeMap<String, Status>,
+    pub entities: BTreeMap<String, BTreeMap<String, EntityStatus>>,
+    /// See [`OrphanPartitions`].
+    pub orphan_partitions: BTreeMap<String, BTreeMap<String, Status>>,
+    pub enums: BTreeMap<String, BTreeMap<String, Status>>,
+    pub domains: BTreeMap<String, BTreeMap<String, Status>>,
+    pub composites: BTreeMap<String, BTreeMap<String, Status>>,
     pub extensions: BTreeMap<String, Status>,
 }
 
-/// One graph node: the entity's status and that of every column and
-/// constraint it has on either side. Foreign keys are the graph's edges.
+impl StatusMap {
+    pub fn entity(&self, schema: &str, name: &str) -> Option<&EntityStatus> {
+        self.entities.get(schema)?.get(name)
+    }
+}
+
+/// One graph node: the entity's status and that of every part it has on
+/// either side. Foreign keys are the graph's edges. Columns, constraints,
+/// indexes and policies are keyed by name; partitions (every level under this
+/// entity) by schema, then name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct EntityStatus {
     pub status: Status,
     pub columns: BTreeMap<String, Status>,
     pub constraints: BTreeMap<String, Status>,
+    pub indexes: BTreeMap<String, Status>,
+    pub policies: BTreeMap<String, Status>,
+    pub partitions: BTreeMap<String, BTreeMap<String, Status>>,
 }
 
 /// The same thing on both sides, `null` where it does not exist.
@@ -214,8 +253,6 @@ pub enum EntityKind {
 pub struct EntityDiff {
     pub schema: String,
     pub name: String,
-    /// `schema.name`, unquoted: the key in [`StatusMap::entities`].
-    pub qualified_name: String,
     /// The new kind, or the old one when the entity was removed.
     pub kind: EntityKind,
     pub status: Status,
@@ -228,7 +265,9 @@ pub struct EntityDiff {
     pub constraints: Vec<ConstraintDiff>,
     pub indexes: Vec<IndexDiff>,
     pub policies: Vec<PolicyDiff>,
-    /// Leaf partitions of a partitioned table, by child name.
+    /// Partitions of a partitioned table, at every level (a sub-partition is
+    /// not an entity, so its own partitions are listed here too), by schema
+    /// then name.
     pub partitions: Vec<PartitionDiff>,
     /// One human-readable line per change, ready for a change list.
     pub lines: Vec<String>,
@@ -249,10 +288,12 @@ changes! {
         Unlogged(bool),
         /// `PARTITION BY` clause, without the keywords.
         PartitionKey(Option<String>),
-        /// A view's `SELECT`, as `pg_get_viewdef` prints it.
+        /// A view's `SELECT`, as `pg_get_viewdef` prints it. Compared with
+        /// whitespace outside quotes ignored, since Postgres majors indent it
+        /// differently; reported raw.
         ViewDefinition(Option<String>),
-        /// Qualified names a view reads from, sorted.
-        DependsOn(Vec<String>),
+        /// Relations a view reads from, sorted.
+        DependsOn(Vec<Relation>),
     }
 }
 
@@ -307,9 +348,12 @@ pub enum Generated {
 changes! {
     /// A change to one column.
     ColumnChange {
-        /// As `format_type` prints it. Also reported when only the catalog
-        /// name or array-ness behind the same text changed.
+        /// As `format_type` prints it.
         Type(String),
+        /// `type_schema.type_name`, with `[]` for an array: reported instead
+        /// of [`ColumnChange::Type`] when the type prints the same but is
+        /// another type (`email` from another schema on the search path).
+        TypeName(String),
         /// Same type text, different kind of type (a domain replaced by an
         /// enum of the same name).
         TypeKind(TypeKind),
@@ -357,8 +401,10 @@ changes! {
     /// A change to one constraint.
     ConstraintChange {
         Kind(ConstraintKind),
-        /// `pg_get_constraintdef`. Also reported when only a structural field
-        /// behind the same text differs (columns, target, actions, deferrable).
+        /// `pg_get_constraintdef`, compared with whitespace outside quotes
+        /// ignored and reported raw. Also reported when only a structural
+        /// field behind the same text differs (columns, target, actions,
+        /// deferrable).
         Definition(String),
         Comment(Option<String>),
     }
@@ -418,15 +464,15 @@ changes! {
     }
 }
 
-/// A leaf partition, keyed by its own qualified name.
+/// A partition, matched by its own schema and name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct PartitionDiff {
     pub schema: String,
     pub name: String,
-    pub qualified_name: String,
-    /// Qualified name of the partitioned table.
-    pub parent: String,
+    /// The table it is a partition of (the entity, or a partition that is
+    /// itself partitioned): the new one, or the old one when removed.
+    pub parent: Relation,
     pub status: Status,
     pub changes: Vec<PartitionChange>,
     /// `FOR VALUES …` or `DEFAULT`.
@@ -436,8 +482,10 @@ pub struct PartitionDiff {
 changes! {
     /// A change to one partition.
     PartitionChange {
-        /// `null` and `DEFAULT` both mean the default partition, as in the
-        /// model.
+        /// Attached to another table of the same tree.
+        Parent(Relation),
+        /// `FOR VALUES …`, or `DEFAULT`. A `null` bound means `DEFAULT` too
+        /// and never differs from it.
         Bound(Option<String>),
     }
 }
@@ -447,7 +495,6 @@ changes! {
 pub struct EnumDiff {
     pub schema: String,
     pub name: String,
-    pub qualified_name: String,
     pub status: Status,
     pub changes: Vec<EnumChange>,
     /// Every label of an added or removed enum; the added, removed and moved
@@ -480,7 +527,6 @@ pub struct LabelDiff {
 pub struct DomainDiff {
     pub schema: String,
     pub name: String,
-    pub qualified_name: String,
     pub status: Status,
     pub changes: Vec<DomainChange>,
     pub lines: Vec<String>,
@@ -494,7 +540,8 @@ changes! {
         NotNull(bool),
         Default(Option<String>),
         /// `CHECK (…)` clauses, sorted. The catalog's constraint names are not
-        /// in the model, so checks compare by text.
+        /// in the model, so checks compare by text, whitespace outside quotes
+        /// ignored.
         Constraints(Vec<String>),
         Comment(Option<String>),
     }
@@ -505,7 +552,6 @@ changes! {
 pub struct CompositeDiff {
     pub schema: String,
     pub name: String,
-    pub qualified_name: String,
     pub status: Status,
     pub changes: Vec<CompositeChange>,
     /// Ordered like [`ColumnDiff`]s.

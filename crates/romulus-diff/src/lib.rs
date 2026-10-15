@@ -1,6 +1,6 @@
 //! Semantic diff between two remus schema models.
 //!
-//! [`diff`] compares two [`Schema`]s object by object, matched by qualified
+//! [`diff`] compares two [`Schema`]s object by object, matched by schema and
 //! name (a rename is a removal plus an addition), and returns a
 //! [`SchemaDiff`] that serves the three views of a version diff:
 //!
@@ -8,8 +8,9 @@
 //!   [`SchemaDiff::enums`], … each with structured changes and ready-made
 //!   `lines` of text;
 //! - **a highlighted graph**: [`SchemaDiff::status`], the status of every
-//!   object of either side and of every column and constraint of every
-//!   entity, keyed by qualified name;
+//!   object of either side and of every column, constraint, index, policy and
+//!   partition of every entity, nested by schema then name (see
+//!   [`StatusMap`]);
 //! - **a side-by-side SQL diff**: each changed object's `sql.before` /
 //!   `sql.after`, rendered by `remus-sql`, and [`render_sql`] for whole
 //!   schemas in a consistent order.
@@ -42,7 +43,7 @@
 //! let d = diff(&old, &new);
 //! assert_eq!(d.summary.text, "1 table changed");
 //! assert_eq!(d.entities[0].lines, ["`users.email`: type text → citext"]);
-//! assert_eq!(d.status.entities["public.users"].columns["email"], Status::Changed);
+//! assert_eq!(d.status.entities["public"]["users"].columns["email"], Status::Changed);
 //! assert!(diff(&old, &old).is_empty());
 //! assert_eq!(diff(&new, &old), d.reversed());
 //! # Ok::<(), remus_core::Error>(())
@@ -65,8 +66,7 @@
 //!     "text": "1 table changed"
 //!   },
 //!   "entities": [{
-//!     "schema": "public", "name": "users", "qualified_name": "public.users",
-//!     "kind": "table", "status": "changed",
+//!     "schema": "public", "name": "users", "kind": "table", "status": "changed",
 //!     "changes": [],
 //!     "columns": [{
 //!       "name": "email", "status": "changed",
@@ -82,19 +82,41 @@
 //!     }
 //!   }],
 //!   "enums": [], "domains": [], "composites": [], "extensions": [],
-//!   "orphan_partitions": [],
+//!   "orphan_partitions": { "partitions": [], "lines": [], "sql": { "before": null, "after": null } },
 //!   "status": {
 //!     "entities": {
-//!       "public.users": {
-//!         "status": "changed",
-//!         "columns": { "email": "changed" },
-//!         "constraints": {}
+//!       "public": {
+//!         "users": {
+//!           "status": "changed",
+//!           "columns": { "email": "changed" },
+//!           "constraints": {}, "indexes": {}, "policies": {}, "partitions": {}
+//!         }
 //!       }
 //!     },
-//!     "enums": {}, "domains": {}, "composites": {}, "extensions": {}
+//!     "orphan_partitions": {}, "enums": {}, "domains": {}, "composites": {},
+//!     "extensions": {}
 //!   }
 //! }
 //! ```
+//!
+//! # Keys
+//!
+//! Objects are identified by schema and name, unquoted, exactly as in the
+//! model. The status maps nest them, `status.entities[schema][name]`, rather
+//! than joining them into `schema.name`, which is ambiguous when a name holds
+//! a dot. Inside an entity, columns, constraints, indexes and policies are
+//! keyed by name and partitions by schema then name; extensions, which are
+//! database-wide, by name. Relations inside changes (a partition's parent, a
+//! view's dependencies) are `{"schema", "name"}` objects.
+//!
+//! # Partitions
+//!
+//! remus lists no partition among the entities, sub-partitioned ones
+//! included, so a partition of a partition names a parent that is not an
+//! entity. Each partition is listed under the entity at the top of its tree,
+//! found by following parents, with its own immediate `parent`; the entity
+//! counts as changed when any partition under it does. The rare partition
+//! whose parents lead to no entity is in [`SchemaDiff::orphan_partitions`].
 //!
 //! Lists are sorted by name (columns, enum labels and composite attributes in
 //! table order, see [`ColumnDiff`]) and the order does not depend on which
@@ -114,8 +136,8 @@ pub use model::{
     CompositeDiff, ConstraintChange, ConstraintDiff, ConstraintKind, Count, DomainChange,
     DomainDiff, EntityChange, EntityDiff, EntityKind, EntityStatus, EnumChange, EnumDiff,
     ExtensionChange, ExtensionDiff, Generated, Identity, IndexChange, IndexDiff, LabelDiff,
-    PartitionChange, PartitionDiff, PolicyChange, PolicyCommand, PolicyDiff, Positions, SchemaDiff,
-    Sides, Status, StatusMap, Summary, TypeKind,
+    OrphanPartitions, PartitionChange, PartitionDiff, PolicyChange, PolicyCommand, PolicyDiff,
+    Positions, Relation, SchemaDiff, Sides, Status, StatusMap, Summary, TypeKind,
 };
 use remus_core::Schema;
 pub use sql::{normalize, render_sql};
@@ -123,8 +145,11 @@ pub use sql::{normalize, render_sql};
 /// Everything that differs from `old` to `new`.
 ///
 /// Every field of the model is compared, so the diff is empty exactly when
-/// the two schemas are equal after [`normalize`], metadata aside (database
-/// name, server and remus versions, timestamp). That makes
+/// the two schemas are equal after [`normalize`], with three exceptions that
+/// differ between environments without the schema differing: metadata
+/// (database name, server and remus versions, timestamp), and whitespace
+/// outside quotes in view definitions, constraint definitions and domain
+/// checks, which Postgres majors deparse differently. That makes
 /// `diff(a, b).is_empty()` a sounder "unchanged" check than comparing
 /// [`Schema::canonical`] outputs, which also differ when the catalog merely
 /// returned a list in another order.
@@ -140,19 +165,21 @@ impl SchemaDiff {
             && self.domains.is_empty()
             && self.composites.is_empty()
             && self.extensions.is_empty()
-            && self.orphan_partitions.is_empty()
+            && self.orphan_partitions.partitions.is_empty()
     }
 
-    /// Every object's lines, entities first, then enums, domains, composite
-    /// types and extensions: the whole change list as plain text, for a
-    /// commit message or a CI log. Orphan partitions only reach the summary.
+    /// Every object's lines, entities first, then orphan partitions, enums,
+    /// domains, composite types and extensions: the whole change list as
+    /// plain text, for a commit message or a CI log.
     pub fn lines(&self) -> impl Iterator<Item = &str> {
         let entities = self.entities.iter().flat_map(|e| &e.lines);
+        let orphans = self.orphan_partitions.lines.iter();
         let enums = self.enums.iter().flat_map(|e| &e.lines);
         let domains = self.domains.iter().flat_map(|d| &d.lines);
         let composites = self.composites.iter().flat_map(|c| &c.lines);
         let extensions = self.extensions.iter().flat_map(|x| &x.lines);
         entities
+            .chain(orphans)
             .chain(enums)
             .chain(domains)
             .chain(composites)

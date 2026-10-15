@@ -6,12 +6,16 @@
 
 use std::fmt::Write;
 
-use crate::model::{
-    AttributeChange, AttributeDiff, Category, ColumnChange, ColumnDiff, CompositeChange,
-    CompositeDiff, ConstraintChange, ConstraintDiff, ConstraintKind, Count, DomainChange,
-    DomainDiff, EntityChange, EntityDiff, EntityKind, EnumChange, EnumDiff, ExtensionChange,
-    ExtensionDiff, Generated, Identity, IndexChange, IndexDiff, LabelDiff, PartitionChange,
-    PartitionDiff, PolicyChange, PolicyCommand, PolicyDiff, SchemaDiff, Status, Summary, TypeKind,
+use crate::{
+    model::{
+        AttributeChange, AttributeDiff, Category, ColumnChange, ColumnDiff, CompositeChange,
+        CompositeDiff, ConstraintChange, ConstraintDiff, ConstraintKind, Count, DomainChange,
+        DomainDiff, EntityChange, EntityDiff, EntityKind, EnumChange, EnumDiff, ExtensionChange,
+        ExtensionDiff, Generated, Identity, IndexChange, IndexDiff, LabelDiff, PartitionChange,
+        PartitionDiff, PolicyChange, PolicyCommand, PolicyDiff, Relation, SchemaDiff, Status,
+        Summary, TypeKind,
+    },
+    sql::squash,
 };
 
 /// Values longer than this are cut with an ellipsis in a line; the full text
@@ -40,6 +44,12 @@ impl SchemaDiff {
         for x in &mut self.extensions {
             x.lines = extension_lines(x);
         }
+        let orphans = &mut self.orphan_partitions;
+        orphans.lines = orphans
+            .partitions
+            .iter()
+            .flat_map(partition_lines)
+            .collect();
         self.summary = summary(self);
     }
 }
@@ -236,7 +246,7 @@ fn entity_lines(e: &EntityDiff) -> Vec<String> {
         out.extend(policy_lines(&me, p));
     }
     for p in &e.partitions {
-        out.extend(partition_lines(&me, p));
+        out.extend(partition_lines(p));
     }
     out
 }
@@ -266,15 +276,16 @@ fn entity_change(me: &str, change: &EntityChange) -> String {
             _ => format!("{me}: definition changed"),
         },
         EntityChange::DependsOn { before, after } => {
+            let name = |r: &Relation| code(&display(&r.schema, &r.name));
             let reads: Vec<String> = after
                 .iter()
-                .filter(|n| !before.contains(n))
-                .map(|n| code(n))
+                .filter(|r| !before.contains(r))
+                .map(name)
                 .collect();
             let unread: Vec<String> = before
                 .iter()
-                .filter(|n| !after.contains(n))
-                .map(|n| code(n))
+                .filter(|r| !after.contains(r))
+                .map(name)
                 .collect();
             let mut parts = Vec::new();
             if !reads.is_empty() {
@@ -302,15 +313,19 @@ fn column_lines(table: &str, c: &ColumnDiff) -> Vec<String> {
         Status::Changed | Status::Unchanged => {}
     }
     // A new type usually is a new kind of type too; one line says it.
-    let retyped = c
-        .changes
-        .iter()
-        .any(|change| matches!(change, ColumnChange::Type { .. }));
+    let retyped = c.changes.iter().any(|change| {
+        matches!(
+            change,
+            ColumnChange::Type { .. } | ColumnChange::TypeName { .. }
+        )
+    });
     c.changes
         .iter()
         .filter(|change| !(retyped && matches!(change, ColumnChange::TypeKind { .. })))
         .map(|change| match change {
-            ColumnChange::Type { before, after } => format!("{me}: type {}", arrow(before, after)),
+            ColumnChange::Type { before, after } | ColumnChange::TypeName { before, after } => {
+                format!("{me}: type {}", arrow(before, after))
+            }
             ColumnChange::TypeKind { before, after } => {
                 format!(
                     "{me}: type kind {} → {}",
@@ -422,10 +437,14 @@ fn policy_lines(table: &str, p: &PolicyDiff) -> Vec<String> {
         .collect()
 }
 
-fn partition_lines(table: &str, p: &PartitionDiff) -> Vec<String> {
+/// Partitions name their own parent, which under a sub-partitioned tree is not
+/// the entity they are listed under.
+fn partition_lines(p: &PartitionDiff) -> Vec<String> {
+    let parent = |r: &Relation| code(&display(&r.schema, &r.name));
     let me = format!(
-        "partition {} of {table}",
-        code(&display(&p.schema, &p.name))
+        "partition {} of {}",
+        code(&display(&p.schema, &p.name)),
+        parent(&p.parent)
     );
     match p.status {
         Status::Added => {
@@ -438,6 +457,9 @@ fn partition_lines(table: &str, p: &PartitionDiff) -> Vec<String> {
     p.changes
         .iter()
         .map(|change| match change {
+            PartitionChange::Parent { before, .. } => {
+                format!("{me}: moved from {}", parent(before))
+            }
             PartitionChange::Bound { before, after } => {
                 let bound = |b: &Option<String>| b.as_deref().unwrap_or("DEFAULT").to_owned();
                 format!("{me}: bound {}", arrow(&bound(before), &bound(after)))
@@ -497,10 +519,14 @@ fn domain_lines(d: &DomainDiff) -> Vec<String> {
             }
             DomainChange::Constraints { before, after } => {
                 let start = out.len();
-                for check in after.iter().filter(|c| !before.contains(c)) {
+                let squashed = |checks: &[String]| -> Vec<String> {
+                    checks.iter().map(|c| squash(c)).collect()
+                };
+                let (old, new) = (squashed(before), squashed(after));
+                for check in after.iter().filter(|c| !old.contains(&squash(c))) {
                     out.push(format!("{me}: check added: {}", short(check)));
                 }
-                for check in before.iter().filter(|c| !after.contains(c)) {
+                for check in before.iter().filter(|c| !new.contains(&squash(c))) {
                     out.push(format!("{me}: check removed: {}", short(check)));
                 }
                 if out.len() == start {
@@ -637,7 +663,7 @@ fn summary(diff: &SchemaDiff) -> Summary {
             tally(Category::Partition, p.status);
         }
     }
-    for p in &diff.orphan_partitions {
+    for p in &diff.orphan_partitions.partitions {
         tally(Category::Partition, p.status);
     }
     for e in &diff.enums {

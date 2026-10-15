@@ -5,7 +5,10 @@
 //! they export the version, after [`normalize`] has put both sides in the
 //! same order.
 
-use std::fmt::Write;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
 
 use remus_core::{
     Schema,
@@ -21,10 +24,13 @@ use remus_core::{
 ///
 /// Starts from [`Schema::canonical`], then sorts everything whose order the
 /// model does not define: objects by schema and name, constraints by kind and
-/// name (as `introspect.sql` does), indexes and policies by name, and the
-/// lists the catalog returns in OID or constraint-name order (policy roles,
-/// domain checks, view dependencies). Column, enum label and composite
-/// attribute order is meaningful and kept.
+/// name (as `introspect.sql` does), indexes and policies by name, partitions
+/// by their path from the top of their tree (so a sub-partitioned partition
+/// comes before its own partitions), and the lists the catalog returns in OID
+/// or constraint-name order (policy roles, domain checks, view dependencies).
+/// A partition without a bound gets `DEFAULT`, which is what `remus-sql`
+/// prints for it anyway. Column, enum label and composite attribute order is
+/// meaningful and kept.
 pub fn normalize(schema: &Schema) -> Schema {
     let mut schema = schema.clone().canonical();
     schema
@@ -45,9 +51,13 @@ pub fn normalize(schema: &Schema) -> Schema {
     schema
         .composites
         .sort_by(|a, b| (&a.schema, &a.name).cmp(&(&b.schema, &b.name)));
+    for partition in &mut schema.partitions {
+        partition.bound.get_or_insert_with(|| "DEFAULT".to_owned());
+    }
+    let paths = partition_paths(&schema.partitions);
     schema
         .partitions
-        .sort_by(|a, b| partition_order(a).cmp(&partition_order(b)));
+        .sort_by_cached_key(|p| paths.get(&child(p)).cloned().unwrap_or_default());
     schema.extensions.sort_by(|a, b| a.name.cmp(&b.name));
     schema
 }
@@ -82,8 +92,72 @@ fn kind_code(kind: &ConstraintKind) -> char {
     }
 }
 
-fn partition_order(p: &Partition) -> (&str, &str, &str, &str) {
-    (&p.parent_schema, &p.parent, &p.child, &p.child_schema)
+type Name = (String, String);
+
+fn child(p: &Partition) -> Name {
+    (p.child_schema.clone(), p.child.clone())
+}
+
+fn parent(p: &Partition) -> Name {
+    (p.parent_schema.clone(), p.parent.clone())
+}
+
+/// For each partition, the names from the top of its tree down to it. The
+/// walk stops at a name seen twice, so a hand-written cycle cannot hang it.
+fn partition_paths(partitions: &[Partition]) -> BTreeMap<Name, Vec<Name>> {
+    let mut parents: BTreeMap<Name, Name> = BTreeMap::new();
+    for p in partitions {
+        parents.entry(child(p)).or_insert_with(|| parent(p));
+    }
+    parents
+        .keys()
+        .map(|leaf| {
+            let mut path = vec![leaf.clone()];
+            let mut seen = BTreeSet::from([leaf]);
+            let mut at = leaf;
+            while let Some(up) = parents.get(at) {
+                if !seen.insert(up) {
+                    break;
+                }
+                path.push(up.clone());
+                at = up;
+            }
+            path.reverse();
+            (leaf.clone(), path)
+        })
+        .collect()
+}
+
+/// `sql` with every whitespace run outside quotes reduced to one space, and
+/// none at either end: what two Postgres majors agree on when they deparse
+/// the same view or check differently. Quoted literals and identifiers are
+/// kept byte for byte, since a space inside them is part of the value.
+pub(crate) fn squash(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut quote = None;
+    let mut space = false;
+    for c in sql.chars() {
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == q {
+                    quote = None;
+                }
+            }
+            None if c.is_whitespace() => space = true,
+            None => {
+                if space && !out.is_empty() {
+                    out.push(' ');
+                }
+                space = false;
+                if c == '\'' || c == '"' {
+                    quote = Some(c);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// A schema holding nothing, with the metadata of `like` (which only reaches
@@ -126,6 +200,13 @@ fn render_alone(schema: Schema) -> String {
 pub(crate) fn entity_sql(like: &Schema, entity: &Entity, partitions: &[&Partition]) -> String {
     let mut schema = empty_like(like);
     schema.entities.push(entity.clone());
+    schema.partitions = partitions.iter().map(|p| (*p).clone()).collect();
+    render_alone(schema)
+}
+
+/// Partitions alone, for the ones no entity owns.
+pub(crate) fn partitions_sql(like: &Schema, partitions: &[&Partition]) -> String {
+    let mut schema = empty_like(like);
     schema.partitions = partitions.iter().map(|p| (*p).clone()).collect();
     render_alone(schema)
 }

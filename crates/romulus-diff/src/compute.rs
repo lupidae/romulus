@@ -3,7 +3,9 @@
 //! Every field of the model is compared, so an empty diff means the schemas
 //! are the same up to [`crate::normalize`]. Lists whose order the catalog does
 //! not define (policy roles, domain checks, view dependencies) compare as
-//! sorted lists.
+//! sorted lists, and deparsed SQL that Postgres majors lay out differently
+//! (views, constraints, domain checks) with whitespace outside quotes
+//! ignored.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,7 +17,8 @@ use crate::{
         ConstraintChange, ConstraintDiff, ConstraintKind, DomainChange, DomainDiff, EntityChange,
         EntityDiff, EntityKind, EntityStatus, EnumChange, EnumDiff, ExtensionChange, ExtensionDiff,
         Generated, Identity, IndexChange, IndexDiff, LabelDiff, PartitionChange, PartitionDiff,
-        PolicyChange, PolicyCommand, PolicyDiff, Positions, SchemaDiff, Sides, Status, TypeKind,
+        PolicyChange, PolicyCommand, PolicyDiff, Positions, Relation, SchemaDiff, Sides, Status,
+        TypeKind,
     },
     order::{by_key, placed},
     sql,
@@ -40,56 +43,64 @@ macro_rules! field {
 pub(crate) fn schema_diff(old: &Schema, new: &Schema) -> SchemaDiff {
     let mut out = SchemaDiff::default();
 
-    let old_parts = by_parent(&old.partitions);
-    let new_parts = by_parent(&new.partitions);
-    let mut parents = BTreeSet::new();
-    for (_, before, after) in by_key(&old.entities, &new.entities, |e| (&e.schema, &e.name)) {
-        let Some(any) = after.or(before) else {
-            continue;
-        };
-        let key = any.qualified_name();
+    let entity_names: BTreeSet<Name> = old
+        .entities
+        .iter()
+        .chain(&new.entities)
+        .map(|e| (e.schema.clone(), e.name.clone()))
+        .collect();
+    let old_trees = by_root(old, &entity_names);
+    let new_trees = by_root(new, &entity_names);
+    for ((schema, name), before, after) in
+        by_key(&old.entities, &new.entities, |e| (&e.schema, &e.name))
+    {
+        let root = Some((schema.clone(), name.clone()));
         let (status, diff) = entity(
             old,
             new,
             before,
             after,
-            old_parts.get(&key).map_or(&[], Vec::as_slice),
-            new_parts.get(&key).map_or(&[], Vec::as_slice),
+            tree(&old_trees, &root),
+            tree(&new_trees, &root),
         );
-        out.status.entities.insert(key.clone(), status);
+        nest(&mut out.status.entities, schema, name, status);
         out.entities.extend(diff);
-        parents.insert(key);
     }
-    out.orphan_partitions = partitions(&orphans(old, &parents), &orphans(new, &parents));
-
-    for (_, before, after) in by_key(&old.enums, &new.enums, |e| (&e.schema, &e.name)) {
-        let Some(any) = after.or(before) else {
-            continue;
+    let (old_orphans, new_orphans) = (tree(&old_trees, &None), tree(&new_trees, &None));
+    let (orphans, orphan_status) = partitions(old_orphans, new_orphans);
+    out.status.orphan_partitions = orphan_status;
+    if !orphans.is_empty() {
+        let render = |schema, parts: &[&m::Partition]| {
+            (!parts.is_empty()).then(|| sql::partitions_sql(schema, parts))
         };
-        let key = qualified(&any.schema, &any.name);
+        out.orphan_partitions.sql = Sides {
+            before: render(old, old_orphans),
+            after: render(new, new_orphans),
+        };
+    }
+    out.orphan_partitions.partitions = orphans;
+
+    for ((schema, name), before, after) in by_key(&old.enums, &new.enums, |e| (&e.schema, &e.name))
+    {
         let diff = enum_type(old, new, before, after);
         let status = diff.as_ref().map_or(Status::Unchanged, |d| d.status);
-        out.status.enums.insert(key, status);
+        nest(&mut out.status.enums, schema, name, status);
         out.enums.extend(diff);
     }
-    for (_, before, after) in by_key(&old.domains, &new.domains, |d| (&d.schema, &d.name)) {
-        let Some(any) = after.or(before) else {
-            continue;
-        };
-        let key = qualified(&any.schema, &any.name);
+    for ((schema, name), before, after) in
+        by_key(&old.domains, &new.domains, |d| (&d.schema, &d.name))
+    {
         let diff = domain(old, new, before, after);
         let status = diff.as_ref().map_or(Status::Unchanged, |d| d.status);
-        out.status.domains.insert(key, status);
+        nest(&mut out.status.domains, schema, name, status);
         out.domains.extend(diff);
     }
-    for (_, before, after) in by_key(&old.composites, &new.composites, |c| (&c.schema, &c.name)) {
-        let Some(any) = after.or(before) else {
-            continue;
-        };
-        let key = qualified(&any.schema, &any.name);
+    for ((schema, name), before, after) in
+        by_key(&old.composites, &new.composites, |c| (&c.schema, &c.name))
+    {
         let diff = composite(old, new, before, after);
         let status = diff.as_ref().map_or(Status::Unchanged, |d| d.status);
-        out.status.composites.insert(key, status);
+        nest(&mut out.status.composites, schema, name, status);
         out.composites.extend(diff);
     }
     for (name, before, after) in by_key(&old.extensions, &new.extensions, |x| &x.name) {
@@ -113,28 +124,65 @@ fn presence<T>(before: Option<T>, after: Option<T>, changed: bool) -> Status {
     }
 }
 
-fn qualified(schema: &str, name: &str) -> String {
-    format!("{schema}.{name}")
+/// A schema and a name: the identity of every schema-qualified object.
+type Name = (String, String);
+
+fn nest<T>(map: &mut BTreeMap<String, BTreeMap<String, T>>, schema: &str, name: &str, value: T) {
+    map.entry(schema.to_owned())
+        .or_default()
+        .insert(name.to_owned(), value);
 }
 
-fn parent_name(p: &m::Partition) -> String {
-    qualified(&p.parent_schema, &p.parent)
+fn parent_of(p: &m::Partition) -> Name {
+    (p.parent_schema.clone(), p.parent.clone())
 }
 
-fn orphans<'a>(schema: &'a Schema, parents: &BTreeSet<String>) -> Vec<&'a m::Partition> {
-    schema
-        .partitions
-        .iter()
-        .filter(|p| !parents.contains(&parent_name(p)))
-        .collect()
-}
-
-fn by_parent(partitions: &[m::Partition]) -> BTreeMap<String, Vec<&m::Partition>> {
-    let mut map: BTreeMap<String, Vec<&m::Partition>> = BTreeMap::new();
-    for p in partitions {
-        map.entry(parent_name(p)).or_default().push(p);
+fn parent_relation(p: &m::Partition) -> Relation {
+    Relation {
+        schema: p.parent_schema.clone(),
+        name: p.parent.clone(),
     }
-    map
+}
+
+fn tree<'t, 'a>(
+    trees: &'t BTreeMap<Option<Name>, Vec<&'a m::Partition>>,
+    root: &Option<Name>,
+) -> &'t [&'a m::Partition] {
+    trees.get(root).map_or(&[], Vec::as_slice)
+}
+
+/// One side's partitions, grouped by the entity at the top of their tree.
+///
+/// `introspect.sql` leaves every partition out of `entities`, sub-partitioned
+/// ones included, so a partition of a partition names a parent that is not an
+/// entity: its parents are followed through this side's partitions until one
+/// is an entity of either side. `None` gathers the partitions whose chain
+/// ends elsewhere, or loops.
+fn by_root<'a>(
+    schema: &'a Schema,
+    entities: &BTreeSet<Name>,
+) -> BTreeMap<Option<Name>, Vec<&'a m::Partition>> {
+    let mut parents: BTreeMap<Name, Name> = BTreeMap::new();
+    for p in &schema.partitions {
+        parents
+            .entry((p.child_schema.clone(), p.child.clone()))
+            .or_insert_with(|| parent_of(p));
+    }
+    let root = |mut at: Name| {
+        let mut seen = BTreeSet::new();
+        while !entities.contains(&at) {
+            if !seen.insert(at.clone()) {
+                return None;
+            }
+            at = parents.get(&at)?.clone();
+        }
+        Some(at)
+    };
+    let mut trees: BTreeMap<Option<Name>, Vec<&m::Partition>> = BTreeMap::new();
+    for p in &schema.partitions {
+        trees.entry(root(parent_of(p))).or_default().push(p);
+    }
+    trees
 }
 
 fn sorted<T: Ord + Clone>(items: &[T]) -> Vec<T> {
@@ -159,15 +207,15 @@ fn entity(
         before.map_or(&[], |e| &e.constraints),
         after.map_or(&[], |e| &e.constraints),
     );
-    let indexes = indexes(
+    let (indexes, index_status) = indexes(
         before.map_or(&[], |e| &e.indexes),
         after.map_or(&[], |e| &e.indexes),
     );
-    let policies = policies(
+    let (policies, policy_status) = policies(
         before.map_or(&[], |e| &e.policies),
         after.map_or(&[], |e| &e.policies),
     );
-    let partitions = partitions(old_parts, new_parts);
+    let (partitions, partition_status) = partitions(old_parts, new_parts);
     let changes = match (before, after) {
         (Some(b), Some(a)) => entity_changes(b, a),
         _ => Vec::new(),
@@ -183,6 +231,9 @@ fn entity(
         status,
         columns: column_status,
         constraints: constraint_status,
+        indexes: index_status,
+        policies: policy_status,
+        partitions: partition_status,
     };
     let Some(any) = after.or(before).filter(|_| status != Status::Unchanged) else {
         return (summary, None);
@@ -190,7 +241,6 @@ fn entity(
     let diff = EntityDiff {
         schema: any.schema.clone(),
         name: any.name.clone(),
-        qualified_name: any.qualified_name(),
         kind: EntityKind::from(&any.kind),
         status,
         changes,
@@ -221,19 +271,24 @@ fn entity_changes(b: &m::Entity, a: &m::Entity) -> Vec<EntityChange> {
         b.partition_key,
         a.partition_key
     );
-    field!(
-        out,
-        EntityChange::ViewDefinition,
-        b.view_definition,
-        a.view_definition
-    );
-    let depends = |e: &m::Entity| -> Vec<String> {
-        sorted(
-            &e.depends_on
-                .iter()
-                .map(|r| qualified(&r.schema, &r.name))
-                .collect::<Vec<_>>(),
-        )
+    let view = |e: &m::Entity| e.view_definition.as_deref().map(sql::squash);
+    if view(b) != view(a) {
+        out.push(EntityChange::ViewDefinition {
+            before: b.view_definition.clone(),
+            after: a.view_definition.clone(),
+        });
+    }
+    let depends = |e: &m::Entity| -> Vec<Relation> {
+        let mut relations: Vec<Relation> = e
+            .depends_on
+            .iter()
+            .map(|r| Relation {
+                schema: r.schema.clone(),
+                name: r.name.clone(),
+            })
+            .collect();
+        relations.sort();
+        relations
     };
     field!(out, EntityChange::DependsOn, depends(b), depends(a));
     out
@@ -274,19 +329,22 @@ fn column_changes(
     moved: Option<(usize, usize)>,
 ) -> Vec<ColumnChange> {
     let mut out = Vec::new();
-    let type_of = |c: &m::Column| {
-        (
-            c.r#type.clone(),
-            c.type_schema.clone(),
-            c.type_name.clone(),
-            c.is_array,
-        )
+    let catalog_name = |c: &m::Column| {
+        let array = if c.is_array { "[]" } else { "" };
+        format!("{}.{}{array}", c.type_schema, c.type_name)
     };
-    if type_of(b) != type_of(a) {
+    if b.r#type != a.r#type {
         out.push(ColumnChange::Type {
             before: b.r#type.clone(),
             after: a.r#type.clone(),
         });
+    } else {
+        field!(
+            out,
+            ColumnChange::TypeName,
+            catalog_name(b),
+            catalog_name(a)
+        );
     }
     field!(
         out,
@@ -365,7 +423,7 @@ fn constraint_changes(b: &m::Constraint, a: &m::Constraint) -> Vec<ConstraintCha
     // definition; one line says it, but a difference in any of them counts.
     let shape = |c: &m::Constraint| {
         (
-            c.definition.clone(),
+            sql::squash(&c.definition),
             c.columns.clone(),
             c.ref_schema.clone(),
             c.ref_table.clone(),
@@ -385,8 +443,9 @@ fn constraint_changes(b: &m::Constraint, a: &m::Constraint) -> Vec<ConstraintCha
     out
 }
 
-fn indexes(old: &[m::Index], new: &[m::Index]) -> Vec<IndexDiff> {
+fn indexes(old: &[m::Index], new: &[m::Index]) -> (Vec<IndexDiff>, BTreeMap<String, Status>) {
     let mut diffs = Vec::new();
+    let mut statuses = BTreeMap::new();
     for (name, before, after) in by_key(old, new, |i| i.name.as_str()) {
         let mut changes = Vec::new();
         if let (Some(b), Some(a)) = (before, after)
@@ -398,6 +457,7 @@ fn indexes(old: &[m::Index], new: &[m::Index]) -> Vec<IndexDiff> {
             });
         }
         let status = presence(before, after, !changes.is_empty());
+        statuses.insert(name.to_owned(), status);
         if status != Status::Unchanged {
             diffs.push(IndexDiff {
                 name: name.to_owned(),
@@ -410,11 +470,12 @@ fn indexes(old: &[m::Index], new: &[m::Index]) -> Vec<IndexDiff> {
             });
         }
     }
-    diffs
+    (diffs, statuses)
 }
 
-fn policies(old: &[m::Policy], new: &[m::Policy]) -> Vec<PolicyDiff> {
+fn policies(old: &[m::Policy], new: &[m::Policy]) -> (Vec<PolicyDiff>, BTreeMap<String, Status>) {
     let mut diffs = Vec::new();
+    let mut statuses = BTreeMap::new();
     for (name, before, after) in by_key(old, new, |p| p.name.as_str()) {
         let mut changes = Vec::new();
         if let (Some(b), Some(a)) = (before, after) {
@@ -441,6 +502,7 @@ fn policies(old: &[m::Policy], new: &[m::Policy]) -> Vec<PolicyDiff> {
             field!(changes, PolicyChange::Check, b.check, a.check);
         }
         let status = presence(before, after, !changes.is_empty());
+        statuses.insert(name.to_owned(), status);
         if status != Status::Unchanged {
             diffs.push(PolicyDiff {
                 name: name.to_owned(),
@@ -453,36 +515,49 @@ fn policies(old: &[m::Policy], new: &[m::Policy]) -> Vec<PolicyDiff> {
             });
         }
     }
-    diffs
+    (diffs, statuses)
 }
 
-/// Keyed by parent and child, so a partition attached to another parent is a
-/// removal and an addition, like any rename.
-fn partitions(old: &[&m::Partition], new: &[&m::Partition]) -> Vec<PartitionDiff> {
-    let key = |p: &&m::Partition| {
-        (
-            p.parent_schema.clone(),
-            p.parent.clone(),
-            p.child_schema.clone(),
-            p.child.clone(),
-        )
-    };
+/// Matched by the partition's own name, like any relation: one attached to
+/// another table of the same tree changes its parent.
+fn partitions(
+    old: &[&m::Partition],
+    new: &[&m::Partition],
+) -> (
+    Vec<PartitionDiff>,
+    BTreeMap<String, BTreeMap<String, Status>>,
+) {
     let mut diffs = Vec::new();
-    for (_, before, after) in by_key(old, new, key) {
+    let mut statuses = BTreeMap::new();
+    let bound = |p: &m::Partition| p.bound.clone().unwrap_or_else(|| "DEFAULT".to_owned());
+    for ((schema, name), before, after) in
+        by_key(old, new, |p| (p.child_schema.as_str(), p.child.as_str()))
+    {
         let Some(any) = after.or(before) else {
             continue;
         };
         let mut changes = Vec::new();
         if let (Some(b), Some(a)) = (before, after) {
-            field!(changes, PartitionChange::Bound, b.bound, a.bound);
+            field!(
+                changes,
+                PartitionChange::Parent,
+                parent_relation(b),
+                parent_relation(a)
+            );
+            if bound(b) != bound(a) {
+                changes.push(PartitionChange::Bound {
+                    before: b.bound.clone(),
+                    after: a.bound.clone(),
+                });
+            }
         }
         let status = presence(before, after, !changes.is_empty());
+        nest(&mut statuses, schema, name, status);
         if status != Status::Unchanged {
             diffs.push(PartitionDiff {
-                schema: any.child_schema.clone(),
-                name: any.child.clone(),
-                qualified_name: qualified(&any.child_schema, &any.child),
-                parent: parent_name(any),
+                schema: schema.to_owned(),
+                name: name.to_owned(),
+                parent: parent_relation(any),
                 status,
                 changes,
                 definition: Sides {
@@ -492,7 +567,7 @@ fn partitions(old: &[&m::Partition], new: &[&m::Partition]) -> Vec<PartitionDiff
             });
         }
     }
-    diffs
+    (diffs, statuses)
 }
 
 fn enum_type(
@@ -526,7 +601,6 @@ fn enum_type(
     (status != Status::Unchanged).then(|| EnumDiff {
         schema: any.schema.clone(),
         name: any.name.clone(),
-        qualified_name: qualified(&any.schema, &any.name),
         status,
         changes,
         labels,
@@ -550,19 +624,23 @@ fn domain(
         field!(changes, DomainChange::BaseType, b.base_type, a.base_type);
         field!(changes, DomainChange::NotNull, b.not_null, a.not_null);
         field!(changes, DomainChange::Default, b.default, a.default);
-        field!(
-            changes,
-            DomainChange::Constraints,
-            sorted(&b.constraints),
-            sorted(&a.constraints)
-        );
+        let checks = |d: &m::DomainType| {
+            let mut checks: Vec<String> = d.constraints.iter().map(|c| sql::squash(c)).collect();
+            checks.sort();
+            checks
+        };
+        if checks(b) != checks(a) {
+            changes.push(DomainChange::Constraints {
+                before: sorted(&b.constraints),
+                after: sorted(&a.constraints),
+            });
+        }
         field!(changes, DomainChange::Comment, b.comment, a.comment);
     }
     let status = presence(before, after, !changes.is_empty());
     (status != Status::Unchanged).then(|| DomainDiff {
         schema: any.schema.clone(),
         name: any.name.clone(),
-        qualified_name: qualified(&any.schema, &any.name),
         status,
         changes,
         lines: Vec::new(),
@@ -619,7 +697,6 @@ fn composite(
     (status != Status::Unchanged).then(|| CompositeDiff {
         schema: any.schema.clone(),
         name: any.name.clone(),
-        qualified_name: qualified(&any.schema, &any.name),
         status,
         changes,
         attributes,

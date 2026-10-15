@@ -45,6 +45,9 @@ fn every_output_type_is_a_named_component() {
         "Sides",
         "Positions",
         "Status",
+        "Relation",
+        "OrphanPartitions",
+        "PartitionChange",
     ] {
         assert!(names.contains_key(name), "{name} missing");
     }
@@ -84,6 +87,7 @@ fn changes_are_unions_tagged_by_field() {
         fields,
         [
             "type",
+            "type_name",
             "type_kind",
             "not_null",
             "default",

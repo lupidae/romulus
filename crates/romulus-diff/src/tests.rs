@@ -2,6 +2,8 @@
 //! models. Each diff goes through [`check`], which also holds it to its
 //! mirror image.
 
+use std::collections::BTreeMap;
+
 use remus_core::{
     Schema,
     emit::ident::{qualified, quote_ident},
@@ -11,9 +13,16 @@ use remus_core::{
 
 use crate::{
     ColumnChange, ConstraintChange, ConstraintKind, DomainChange, EntityChange, EntityKind,
-    EnumDiff, Generated, Identity, IndexChange, PartitionChange, PolicyChange, PolicyCommand,
-    SchemaDiff, Status, diff, normalize, render_sql, sql,
+    EntityStatus, EnumDiff, Generated, Identity, IndexChange, PartitionChange, PolicyChange,
+    PolicyCommand, Relation, SchemaDiff, Status, diff, normalize, render_sql, sql,
 };
+
+fn rel(schema: &str, name: &str) -> Relation {
+    Relation {
+        schema: schema.into(),
+        name: name.into(),
+    }
+}
 
 fn showcase() -> Schema {
     Schema::from_json(SHOWCASE).unwrap()
@@ -79,16 +88,33 @@ fn a_schema_has_no_diff_with_itself() {
     assert!(d.summary.counts.is_empty());
     assert_eq!(d.lines().count(), 0);
     let statuses = &d.status;
-    assert_eq!(statuses.entities.len(), 13);
-    assert!(statuses.entities.values().all(|e| {
+    let entities: Vec<&EntityStatus> = statuses
+        .entities
+        .values()
+        .flat_map(|m| m.values())
+        .collect();
+    assert_eq!(entities.len(), 13);
+    let unchanged = |m: &BTreeMap<String, Status>| m.values().all(|s| *s == Status::Unchanged);
+    assert!(entities.iter().all(|e| {
         e.status == Status::Unchanged
-            && e.columns.values().all(|s| *s == Status::Unchanged)
-            && e.constraints.values().all(|s| *s == Status::Unchanged)
+            && unchanged(&e.columns)
+            && unchanged(&e.constraints)
+            && unchanged(&e.indexes)
+            && unchanged(&e.policies)
+            && e.partitions.values().all(unchanged)
     }));
-    assert_eq!(statuses.entities["shop.orders"].columns.len(), 8);
-    assert_eq!(statuses.enums["shop.order_status"], Status::Unchanged);
-    assert_eq!(statuses.domains.len(), 2);
-    assert_eq!(statuses.composites["shop.address"], Status::Unchanged);
+    let orders = statuses.entity("shop", "orders").unwrap();
+    assert_eq!(orders.columns.len(), 8);
+    assert_eq!(orders.indexes.len(), 3);
+    assert_eq!(orders.policies.len(), 2);
+    assert_eq!(
+        statuses.entity("audit", "events").unwrap().partitions["audit"].len(),
+        2
+    );
+    assert!(statuses.orphan_partitions.is_empty());
+    assert_eq!(statuses.enums["shop"]["order_status"], Status::Unchanged);
+    assert_eq!(statuses.domains["shop"].len(), 2);
+    assert_eq!(statuses.composites["shop"]["address"], Status::Unchanged);
     assert_eq!(statuses.extensions["pgcrypto"], Status::Unchanged);
 }
 
@@ -164,7 +190,7 @@ fn an_added_table_lists_everything_in_it_as_added() {
             .unwrap()
             .starts_with("CREATE TABLE shop.stock (")
     );
-    let status = &d.status.entities["shop.stock"];
+    let status = d.status.entity("shop", "stock").unwrap();
     assert_eq!(status.status, Status::Added);
     assert_eq!(status.columns["quantity"], Status::Added);
     assert_eq!(status.constraints["stock_warehouse_fkey"], Status::Added);
@@ -180,7 +206,10 @@ fn a_removed_view_is_one_line() {
     assert_eq!(lines(&d), ["view `shop.open_orders_by_customer` removed"]);
     assert_eq!(d.summary.text, "1 view removed");
     assert_eq!(
-        d.status.entities["shop.open_orders_by_customer"].columns["email"],
+        d.status
+            .entity("shop", "open_orders_by_customer")
+            .unwrap()
+            .columns["email"],
         Status::Removed
     );
 }
@@ -193,14 +222,11 @@ fn a_rename_is_a_removal_and_an_addition() {
     let statuses: Vec<(&str, Status)> = d
         .entities
         .iter()
-        .map(|e| (e.qualified_name.as_str(), e.status))
+        .map(|e| (e.name.as_str(), e.status))
         .collect();
     assert_eq!(
         statuses,
-        [
-            ("shop.depots", Status::Added),
-            ("shop.warehouses", Status::Removed)
-        ]
+        [("depots", Status::Added), ("warehouses", Status::Removed)]
     );
     assert_eq!(d.summary.text, "1 table added, 1 removed");
 }
@@ -268,8 +294,8 @@ fn partition_keys_view_definitions_and_dependencies() {
     assert_eq!(
         view.changes[1],
         EntityChange::DependsOn {
-            before: vec!["shop.customers".into(), "shop.open_orders".into()],
-            after: vec!["shop.customers".into(), "shop.orders".into()],
+            before: vec![rel("shop", "customers"), rel("shop", "open_orders")],
+            after: vec![rel("shop", "customers"), rel("shop", "orders")],
         }
     );
 }
@@ -300,7 +326,7 @@ fn column_type_change_is_one_line() {
         ["`shop.orders.note`: type text → character varying(200)"]
     );
     assert_eq!(d.summary.text, "1 table changed");
-    let status = &d.status.entities["shop.orders"];
+    let status = d.status.entity("shop", "orders").unwrap();
     assert_eq!(status.status, Status::Changed);
     assert_eq!(status.columns["note"], Status::Changed);
     assert_eq!(status.columns["id"], Status::Unchanged);
@@ -484,7 +510,7 @@ fn constraints_added_removed_and_redefined() {
         ]
     );
     assert_eq!(
-        d.status.entities["shop.orders"].constraints["orders_placed_when_not_draft"],
+        d.status.entity("shop", "orders").unwrap().constraints["orders_placed_when_not_draft"],
         Status::Removed
     );
 }
@@ -665,7 +691,7 @@ fn enum_labels_added_removed_and_reordered() {
             "`shop.order_status`: label 'refunded' added",
         ]
     );
-    assert_eq!(d.status.enums["shop.order_status"], Status::Changed);
+    assert_eq!(d.status.enums["shop"]["order_status"], Status::Changed);
     assert_eq!(d.summary.text, "1 enum changed");
     // The table using the enum is untouched: its model did not change.
     assert!(d.entities.is_empty());
@@ -762,7 +788,10 @@ fn partitions_live_under_their_parent() {
         Some("FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2026-07-01 00:00:00+00')".into());
     let d = check(&showcase(), &new);
     let events = only_entity(&d);
-    assert_eq!(events.qualified_name, "audit.events");
+    assert_eq!(
+        (events.schema.as_str(), events.name.as_str()),
+        ("audit", "events")
+    );
     assert_eq!(events.status, Status::Changed);
     assert!(events.columns.is_empty());
     let parts: Vec<(&str, Status)> = events
@@ -802,7 +831,13 @@ fn partitions_live_under_their_parent() {
         d.summary.text,
         "1 table changed; 1 partition added, 1 changed, 1 removed"
     );
-    assert_eq!(d.status.entities["audit.events"].status, Status::Changed);
+    let status = d.status.entity("audit", "events").unwrap();
+    assert_eq!(status.status, Status::Changed);
+    assert_eq!(status.partitions["audit"]["events_2027"], Status::Added);
+    assert_eq!(
+        status.partitions["audit"]["events_default"],
+        Status::Removed
+    );
 }
 
 #[test]
@@ -826,9 +861,30 @@ fn partitions_of_no_entity_are_orphans() {
     new.partitions.pop();
     let d = check(&old, &new);
     assert!(d.entities.is_empty());
-    assert_eq!(d.orphan_partitions.len(), 1);
-    assert_eq!(d.orphan_partitions[0].parent, "audit.events");
+    let orphans = &d.orphan_partitions;
+    assert_eq!(orphans.partitions.len(), 1);
+    assert_eq!(orphans.partitions[0].parent, rel("audit", "events"));
+    assert_eq!(
+        orphans.lines,
+        ["partition `audit.events_default` of `audit.events` removed"]
+    );
+    assert_eq!(
+        orphans.sql.before.as_deref(),
+        Some(
+            "CREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\n\
+             CREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n"
+        )
+    );
+    assert_eq!(
+        d.status.orphan_partitions["audit"]["events_default"],
+        Status::Removed
+    );
+    assert_eq!(
+        d.status.orphan_partitions["audit"]["events_2026"],
+        Status::Unchanged
+    );
     assert_eq!(d.summary.text, "1 partition removed");
+    assert_eq!(lines(&d), orphans.lines);
     assert!(!d.is_empty());
 }
 
@@ -950,7 +1006,8 @@ fn part_definitions_match_what_remus_sql_renders() {
         }
         for p in &e.partitions {
             let line = format!(
-                "PARTITION OF {table} {};",
+                "PARTITION OF {} {};",
+                qualified(&p.parent.schema, &p.parent.name),
                 p.definition.after.as_deref().unwrap()
             );
             assert!(sql.contains(&line), "{line:?} not in\n{sql}");
@@ -992,7 +1049,7 @@ fn every_status_map_entry_matches_the_lists() {
     new.entities.retain(|e| e.name != "scratch");
     let d = check(&showcase(), &new);
     for e in &d.entities {
-        let status = &d.status.entities[&e.qualified_name];
+        let status = d.status.entity(&e.schema, &e.name).unwrap();
         assert_eq!(status.status, e.status);
         for c in &e.columns {
             assert_eq!(status.columns[&c.name], c.status);
@@ -1002,6 +1059,7 @@ fn every_status_map_entry_matches_the_lists() {
         .status
         .entities
         .values()
+        .flat_map(|m| m.values())
         .filter(|e| e.status != Status::Unchanged)
         .count();
     assert_eq!(changed, d.entities.len());
@@ -1052,4 +1110,277 @@ fn the_object_sql_helpers_cut_only_the_header() {
         sql::extension_sql(&schema, x),
         "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA ai;\n"
     );
+}
+
+fn partition(parent: (&str, &str), child: (&str, &str), bound: Option<&str>) -> m::Partition {
+    m::Partition {
+        parent_schema: parent.0.into(),
+        parent: parent.1.into(),
+        child_schema: child.0.into(),
+        child: child.1.into(),
+        bound: bound.map(Into::into),
+    }
+}
+
+/// `audit.events_2026` partitioned by month. remus lists it, and its months,
+/// under `partitions` only: a sub-partitioned partition is not an entity.
+fn sub_partitioned() -> Schema {
+    let mut schema = showcase();
+    schema.partitions.push(partition(
+        ("audit", "events_2026"),
+        ("audit", "events_2026_01"),
+        Some("FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2026-02-01 00:00:00+00')"),
+    ));
+    schema
+}
+
+#[test]
+fn sub_partitions_are_listed_under_the_root_entity() {
+    let old = sub_partitioned();
+    let mut new = sub_partitioned();
+    new.partitions.push(partition(
+        ("audit", "events_2026"),
+        ("audit", "events_2026_02"),
+        Some("FOR VALUES FROM ('2026-02-01 00:00:00+00') TO ('2026-03-01 00:00:00+00')"),
+    ));
+    let d = check(&old, &new);
+    assert!(d.orphan_partitions.partitions.is_empty());
+    let events = only_entity(&d);
+    assert_eq!(
+        (events.name.as_str(), events.status),
+        ("events", Status::Changed)
+    );
+    assert_eq!(events.partitions[0].parent, rel("audit", "events_2026"));
+    assert_eq!(
+        events.lines,
+        [
+            "partition `audit.events_2026_02` of `audit.events_2026` added: FOR VALUES FROM ('2026-02-01 00:00:00+00') TO ('2026-03-01 00:00:00+00')"
+        ]
+    );
+    let sql = events.sql.after.as_deref().unwrap();
+    let parent = sql
+        .find("CREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES")
+        .unwrap();
+    let child = sql
+        .find("CREATE TABLE audit.events_2026_02 PARTITION OF audit.events_2026 FOR VALUES")
+        .unwrap();
+    assert!(parent < child);
+    let status = d.status.entity("audit", "events").unwrap();
+    assert_eq!(status.partitions["audit"]["events_2026_02"], Status::Added);
+    assert_eq!(
+        status.partitions["audit"]["events_2026_01"],
+        Status::Unchanged
+    );
+    assert!(d.status.orphan_partitions.is_empty());
+    assert_eq!(d.summary.text, "1 table changed; 1 partition added");
+}
+
+#[test]
+fn a_partition_comes_after_its_parent_whatever_their_names() {
+    let mut schema = showcase();
+    schema.partitions = vec![
+        partition(("audit", "zz_mid"), ("audit", "aa_leaf"), Some("DEFAULT")),
+        partition(("audit", "events"), ("audit", "zz_mid"), Some("DEFAULT")),
+    ];
+    let sql = render_sql(&schema);
+    let mid = sql.find("CREATE TABLE audit.zz_mid PARTITION OF").unwrap();
+    let leaf = sql.find("CREATE TABLE audit.aa_leaf PARTITION OF").unwrap();
+    assert!(mid < leaf, "{sql}");
+    let d = check(&empty(), &schema);
+    let events = d.entities.iter().find(|e| e.name == "events").unwrap();
+    assert_eq!(events.partitions.len(), 2);
+}
+
+#[test]
+fn a_partition_moved_within_its_tree_changes_parent() {
+    let mut old = sub_partitioned();
+    old.partitions.push(partition(
+        ("audit", "events"),
+        ("audit", "events_2027"),
+        Some("FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')"),
+    ));
+    let mut new = old.clone();
+    new.partitions.last_mut().unwrap().parent = "events_2026".into();
+    let d = check(&old, &new);
+    let moved = &only_entity(&d).partitions[0];
+    assert_eq!(
+        moved.changes,
+        [PartitionChange::Parent {
+            before: rel("audit", "events"),
+            after: rel("audit", "events_2026"),
+        }]
+    );
+    assert_eq!(moved.parent, rel("audit", "events_2026"));
+    assert_eq!(
+        d.clone().reversed().entities[0].partitions[0].parent,
+        rel("audit", "events")
+    );
+    assert_eq!(
+        only_entity(&d).lines,
+        ["partition `audit.events_2027` of `audit.events_2026`: moved from `audit.events`"]
+    );
+}
+
+#[test]
+fn removing_a_root_removes_its_whole_tree() {
+    let old = sub_partitioned();
+    let mut new = sub_partitioned();
+    new.entities.retain(|e| e.name != "events");
+    new.partitions.clear();
+    let d = check(&old, &new);
+    assert_eq!(only_entity(&d).partitions.len(), 3);
+    assert!(d.orphan_partitions.partitions.is_empty());
+    assert_eq!(d.summary.text, "1 table removed; 3 partitions removed");
+}
+
+#[test]
+fn a_cycle_of_parents_ends_as_orphans() {
+    let mut old = empty();
+    old.partitions = vec![
+        partition(("app", "p2"), ("app", "p1"), None),
+        partition(("app", "p1"), ("app", "p2"), None),
+    ];
+    let mut new = old.clone();
+    new.partitions[0].bound = Some("FOR VALUES IN (1)".into());
+    let d = check(&old, &new);
+    assert_eq!(d.orphan_partitions.partitions.len(), 1);
+    assert_eq!(
+        d.orphan_partitions.lines,
+        ["partition `app.p1` of `app.p2`: bound DEFAULT → FOR VALUES IN (1)"]
+    );
+}
+
+#[test]
+fn status_keys_cannot_collide() {
+    let mut old = empty();
+    let mut dotted_schema = showcase().entities[1].clone();
+    dotted_schema.schema = "a.b".into();
+    dotted_schema.name = "c".into();
+    let mut dotted_name = dotted_schema.clone();
+    dotted_name.schema = "a".into();
+    dotted_name.name = "b.c".into();
+    old.entities = vec![dotted_schema, dotted_name];
+    let mut new = old.clone();
+    new.entities[1].comment = Some("the other one".into());
+    let d = check(&old, &new);
+    assert_eq!(
+        d.status.entity("a.b", "c").unwrap().status,
+        Status::Unchanged
+    );
+    assert_eq!(d.status.entity("a", "b.c").unwrap().status, Status::Changed);
+}
+
+#[test]
+fn index_and_policy_statuses_cover_every_one() {
+    let mut new = showcase();
+    let orders = entity(&mut new, "shop.orders");
+    orders.indexes.retain(|i| i.name != "orders_open_idx");
+    orders.policies[0].permissive = true;
+    let d = check(&showcase(), &new);
+    let orders = d.status.entity("shop", "orders").unwrap();
+    assert_eq!(orders.indexes["orders_open_idx"], Status::Removed);
+    assert_eq!(orders.indexes["orders_customer_idx"], Status::Unchanged);
+    assert_eq!(orders.policies["orders_no_cancelled"], Status::Changed);
+    assert_eq!(orders.policies["orders_owner"], Status::Unchanged);
+}
+
+#[test]
+fn a_missing_bound_is_the_default_partition() {
+    let mut new = showcase();
+    let default = new
+        .partitions
+        .iter_mut()
+        .find(|p| p.child == "events_default")
+        .unwrap();
+    assert_eq!(default.bound.as_deref(), Some("DEFAULT"));
+    default.bound = None;
+    assert!(check(&showcase(), &new).is_empty());
+    assert_eq!(render_sql(&new), render_sql(&showcase()));
+}
+
+#[test]
+fn same_type_text_from_another_schema_names_the_schema() {
+    let mut old = showcase();
+    let mut new = showcase();
+    for (schema, side) in [("app", &mut old), ("public", &mut new)] {
+        let c = column(side, "shop.customers", "email");
+        c.r#type = "email".into();
+        c.type_schema = schema.into();
+    }
+    let d = check(&old, &new);
+    assert_eq!(
+        only_entity(&d).columns[0].changes,
+        [ColumnChange::TypeName {
+            before: "app.email".into(),
+            after: "public.email".into()
+        }]
+    );
+    assert_eq!(
+        only_entity(&d).lines,
+        ["`shop.customers.email`: type app.email → public.email"]
+    );
+    let mut array = showcase();
+    column(&mut array, "shop.customers", "email").is_array = true;
+    let d = check(&showcase(), &array);
+    assert_eq!(
+        only_entity(&d).lines,
+        ["`shop.customers.email`: type shop.email → shop.email[]"]
+    );
+}
+
+#[test]
+fn deparse_whitespace_is_not_a_change() {
+    let mut new = showcase();
+    let view = entity(&mut new, "shop.open_orders");
+    let reindented = view
+        .view_definition
+        .as_deref()
+        .unwrap()
+        .replace("\n   ", "\n\t")
+        .replace(", ", ",\n        ");
+    view.view_definition = Some(format!("\n{reindented}  "));
+    let check_constraint = entity(&mut new, "shop.orders")
+        .constraints
+        .iter_mut()
+        .find(|c| c.kind == m::ConstraintKind::Check)
+        .unwrap();
+    check_constraint.definition = check_constraint.definition.replace(" OR ", "\n    OR ");
+    for d in &mut new.domains {
+        d.constraints = d.constraints.iter().map(|c| format!("  {c}\n")).collect();
+    }
+    assert!(check(&showcase(), &new).is_empty());
+}
+
+#[test]
+fn whitespace_inside_quotes_still_counts() {
+    let mut new = showcase();
+    let view = entity(&mut new, "shop.open_orders");
+    let definition = view.view_definition.clone().unwrap();
+    assert!(definition.contains("'placed'"));
+    let spaced = definition.replace("'placed'", "'placed '");
+    view.view_definition = Some(spaced.clone());
+    let d = check(&showcase(), &new);
+    assert_eq!(
+        only_entity(&d).changes,
+        [EntityChange::ViewDefinition {
+            before: Some(definition),
+            after: Some(spaced),
+        }],
+        "reported raw, not squashed"
+    );
+    let mut quoted_name = showcase();
+    let check_constraint = entity(&mut quoted_name, "shop.orders")
+        .constraints
+        .iter_mut()
+        .find(|c| c.kind == m::ConstraintKind::Check)
+        .unwrap();
+    check_constraint.definition = check_constraint.definition.replace("'draft'", "'draft  '");
+    assert!(!check(&showcase(), &quoted_name).is_empty());
+}
+
+#[test]
+fn squash_keeps_quoted_text() {
+    assert_eq!(sql::squash("  SELECT  a,\n\tb  "), "SELECT a, b");
+    assert_eq!(sql::squash("'a  b'  ||  \"x  y\""), "'a  b' || \"x  y\"");
+    assert_eq!(sql::squash("'it''s  here'  x"), "'it''s  here' x");
 }

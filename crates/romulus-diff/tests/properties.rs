@@ -115,7 +115,14 @@ fn constraint(name: String) -> impl Strategy<Value = Constraint> {
             subsequence(vec!["id"], 0..=1),
         ),
         (action(), action(), any::<bool>()),
-        one(&["PRIMARY KEY (id)", "CHECK ((a > 0))"]),
+        // The last two differ from the second only in whitespace, outside and
+        // inside quotes.
+        one(&[
+            "PRIMARY KEY (id)",
+            "CHECK ((a > 0))",
+            "CHECK ((a >\n  0))",
+            "CHECK ((a > ' 0'))",
+        ]),
         maybe(&["why"]),
     )
         .prop_map(
@@ -206,7 +213,12 @@ fn entity((schema, name): (String, String)) -> impl Strategy<Value = Entity> {
         (any::<bool>(), any::<bool>(), any::<bool>()),
         (
             maybe(&["RANGE (a)", "LIST (b)"]),
-            maybe(&[" SELECT 1;", " SELECT 2;"]),
+            maybe(&[
+                " SELECT 1;",
+                "\n SELECT  1;\n",
+                " SELECT 'a b';",
+                " SELECT 'a  b';",
+            ]),
         ),
         prop::collection::btree_set(relation(), 0..3),
         (columns, constraints, indexes, policies),
@@ -265,7 +277,14 @@ fn schema() -> impl Strategy<Value = Schema> {
             one(&["text", "bigint"]),
             any::<bool>(),
             maybe(&["0"]),
-            prop::collection::vec(one(&["CHECK ((VALUE > 0))", "CHECK ((VALUE < 9))"]), 0..3),
+            prop::collection::vec(
+                one(&[
+                    "CHECK ((VALUE > 0))",
+                    "CHECK ((VALUE < 9))",
+                    "CHECK  ((VALUE >\t0))",
+                ]),
+                0..3,
+            ),
             maybe(&["x"]),
         ),
         0..3,
@@ -311,14 +330,26 @@ fn schema() -> impl Strategy<Value = Schema> {
             })
             .collect::<Vec<_>>()
     });
+    // Keyed by child, as in a database: a table has one parent. Parents
+    // include the partitions themselves, so trees go several levels deep,
+    // and sometimes loop or lead nowhere.
     let partitions = btree_map(
-        (relation(), one(&["p1", "p2"])),
-        maybe(&["DEFAULT", "FOR VALUES IN (1)"]),
+        one(&["p1", "p2", "p3"]),
+        (
+            prop_oneof![
+                relation(),
+                one(&["p1", "p2", "p3"]).prop_map(|name| RelationRef {
+                    schema: "app".into(),
+                    name,
+                }),
+            ],
+            maybe(&["DEFAULT", "FOR VALUES IN (1)"]),
+        ),
         0..4,
     )
     .prop_map(|m| {
         m.into_iter()
-            .map(|((parent, child), bound)| Partition {
+            .map(|(child, (parent, bound))| Partition {
                 parent_schema: parent.schema,
                 parent: parent.name,
                 child_schema: "app".into(),
@@ -385,12 +416,14 @@ fn pointers(value: &Value, at: &str, out: &mut Vec<String>) {
 /// can still produce a valid model.
 const CODES: [&str; 12] = ["r", "p", "v", "m", "f", "u", "c", "x", "a", "d", "s", "*"];
 
-/// `schema` with one value edited through its JSON: a flag flipped, a text
-/// changed, a null filled, a list item removed or two neighbours swapped.
-/// Being generic over the JSON, it reaches every field of the model, including
-/// any a future remus adds, which is the point: a field `diff` forgets to
-/// compare makes the edit invisible.
-fn mutate(schema: &Schema, pick: Pick, item: Pick, swap: bool) -> Option<Schema> {
+/// `schema` with one value edited through its JSON: a flag flipped; a text
+/// extended, re-spaced, replaced by a catalog letter or nulled; a null
+/// filled; a list item removed or two neighbours swapped. Being generic over
+/// the JSON, it reaches every field of the model, including any a future
+/// remus adds, which is the point: a field `diff` forgets to compare makes
+/// the edit invisible. Re-spacing and `DEFAULT`/null edits are the ones `diff`
+/// must ignore in views, checks and partition bounds.
+fn mutate(schema: &Schema, pick: Pick, item: Pick, how: Pick) -> Option<Schema> {
     let json = serde_json::to_value(schema).ok()?;
     let mut all = Vec::new();
     pointers(&json, "", &mut all);
@@ -398,17 +431,26 @@ fn mutate(schema: &Schema, pick: Pick, item: Pick, swap: bool) -> Option<Schema>
         return None;
     }
     let at = pick.get(&all);
-    let candidates: Vec<Value> = match json.pointer(at)? {
+    let mut candidates: Vec<Value> = match json.pointer(at)? {
         Value::Bool(b) => vec![Value::Bool(!b)],
-        Value::String(s) => std::iter::once(format!("{s}x"))
-            .chain(CODES.map(str::to_owned))
-            .filter(|c| c != s)
-            .map(Value::String)
-            .collect(),
-        Value::Null => ["x", "a", "s"].map(|c| Value::String(c.into())).to_vec(),
+        Value::String(s) => [
+            format!("{s}x"),
+            format!("\n {s}  "),
+            s.replacen(' ', "\n    ", 1),
+            "DEFAULT".to_owned(),
+        ]
+        .into_iter()
+        .chain(CODES.map(str::to_owned))
+        .filter(|c| c != s)
+        .map(Value::String)
+        .chain([Value::Null])
+        .collect(),
+        Value::Null => ["x", "a", "s", "DEFAULT"]
+            .map(|c| Value::String(c.into()))
+            .to_vec(),
         Value::Array(items) => {
             let mut items = items.clone();
-            if swap && items.len() >= 2 {
+            if how.index(2) == 0 && items.len() >= 2 {
                 let i = item.index(items.len() - 1);
                 items.swap(i, i + 1);
             } else {
@@ -418,6 +460,11 @@ fn mutate(schema: &Schema, pick: Pick, item: Pick, swap: bool) -> Option<Schema>
         }
         Value::Object(_) | Value::Number(_) => Vec::new(),
     };
+    // Start from a random candidate; the first that parses wins.
+    if !candidates.is_empty() {
+        let start = how.index(candidates.len());
+        candidates.rotate_left(start);
+    }
     candidates.into_iter().find_map(|candidate| {
         let mut edited = json.clone();
         *edited.pointer_mut(at)? = candidate;
@@ -426,19 +473,83 @@ fn mutate(schema: &Schema, pick: Pick, item: Pick, swap: bool) -> Option<Schema>
 }
 
 fn mutated() -> impl Strategy<Value = (Schema, Schema)> {
-    (schema(), any::<Pick>(), any::<Pick>(), any::<bool>())
-        .prop_filter_map("the edit yields a valid model", |(a, pick, item, swap)| {
-            mutate(&a, pick, item, swap).map(|b| (a, b))
+    (schema(), any::<Pick>(), any::<Pick>(), any::<Pick>())
+        .prop_filter_map("the edit yields a valid model", |(a, pick, item, how)| {
+            mutate(&a, pick, item, how).map(|b| (a, b))
         })
 }
 
-/// What `diff` promises to see: the normalised schema without its metadata.
+/// Whitespace runs outside quotes as one space, none at the ends. Written
+/// apart from the crate's own version (by splitting on quotes rather than
+/// scanning), so the two check each other.
+fn squash(sql: &str) -> String {
+    let mut out = String::new();
+    let mut rest = sql;
+    while !rest.is_empty() {
+        let open = rest.find(['\'', '"']).unwrap_or(rest.len());
+        let mut space = false;
+        for c in rest[..open].chars() {
+            if c.is_whitespace() {
+                space = true;
+            } else {
+                if space {
+                    out.push(' ');
+                }
+                space = false;
+                out.push(c);
+            }
+        }
+        if space {
+            out.push(' ');
+        }
+        rest = &rest[open..];
+        if let Some(quote) = rest.chars().next() {
+            let close = rest[1..].find(quote).map_or(rest.len(), |i| i + 2);
+            out.push_str(&rest[..close]);
+            rest = &rest[close..];
+        }
+    }
+    out.trim_matches(' ').to_owned()
+}
+
+/// What `diff` promises to see: the normalised schema without its metadata,
+/// and without deparse whitespace in views and checks.
 fn comparable(schema: &Schema) -> Schema {
     let mut schema = normalize(schema);
     schema.remus_version.clear();
     schema.database.clear();
     schema.server_version.clear();
+    for e in &mut schema.entities {
+        e.view_definition = e.view_definition.as_deref().map(squash);
+        for c in &mut e.constraints {
+            c.definition = squash(&c.definition);
+        }
+    }
+    for d in &mut schema.domains {
+        d.constraints = d.constraints.iter().map(|c| squash(c)).collect();
+        d.constraints.sort();
+    }
     schema
+}
+
+/// The entity at the top of `partition`'s tree on `side`, if its parents
+/// lead to one of `entities` without looping.
+fn root(
+    side: &Schema,
+    entities: &BTreeSet<(String, String)>,
+    partition: &Partition,
+) -> Option<(String, String)> {
+    let mut at = (partition.parent_schema.clone(), partition.parent.clone());
+    for _ in 0..=side.partitions.len() {
+        if entities.contains(&at) {
+            return Some(at);
+        }
+        let up = side.partitions.iter().find(|p| {
+            (p.child_schema.as_str(), p.child.as_str()) == (at.0.as_str(), at.1.as_str())
+        })?;
+        at = (up.parent_schema.clone(), up.parent.clone());
+    }
+    None
 }
 
 proptest! {
@@ -460,7 +571,7 @@ proptest! {
         let d = diff(&a, &a);
         prop_assert!(d.is_empty());
         prop_assert_eq!(d.summary.text.as_str(), "no changes");
-        prop_assert!(d.status.entities.values().all(|e| e.status == Status::Unchanged));
+        prop_assert!(d.status.entities.values().flat_map(|m| m.values()).all(|e| e.status == Status::Unchanged));
     }
 
     #[test]
@@ -490,18 +601,57 @@ proptest! {
     #[test]
     fn the_status_map_covers_both_sides(a in schema(), b in schema()) {
         let d = diff(&a, &b);
-        let names: BTreeSet<String> = a.entities.iter().chain(&b.entities).map(Entity::qualified_name).collect();
-        prop_assert_eq!(d.status.entities.keys().cloned().collect::<BTreeSet<_>>(), names);
-        for (name, status) in &d.status.entities {
+        let names: BTreeSet<(String, String)> = a
+            .entities
+            .iter()
+            .chain(&b.entities)
+            .map(|e| (e.schema.clone(), e.name.clone()))
+            .collect();
+        let keys: BTreeSet<(String, String)> = d
+            .status
+            .entities
+            .iter()
+            .flat_map(|(schema, m)| m.keys().map(|name| (schema.clone(), name.clone())))
+            .collect();
+        prop_assert_eq!(&keys, &names);
+        for (schema, name) in &names {
+            let status = d.status.entity(schema, name).unwrap();
             let columns: BTreeSet<&str> = a.entities.iter().chain(&b.entities)
-                .filter(|e| &e.qualified_name() == name)
+                .filter(|e| (&e.schema, &e.name) == (schema, name))
                 .flat_map(|e| e.columns.iter().map(|c| c.name.as_str()))
                 .collect();
             prop_assert_eq!(status.columns.keys().map(String::as_str).collect::<BTreeSet<_>>(), columns);
         }
-        let listed = d.entities.iter().map(|e| (e.qualified_name.clone(), e.status));
-        for (name, status) in listed {
-            prop_assert_eq!(d.status.entities[&name].status, status);
+        for e in &d.entities {
+            prop_assert_eq!(d.status.entity(&e.schema, &e.name).unwrap().status, e.status);
+        }
+        // Every partition of either side has a status, under the entity at the
+        // top of its tree or among the orphans, and nothing else does.
+        let children: BTreeSet<(String, String)> = a
+            .partitions
+            .iter()
+            .chain(&b.partitions)
+            .map(|p| (p.child_schema.clone(), p.child.clone()))
+            .collect();
+        let mut listed = BTreeSet::new();
+        let trees = d.status.entities.values().flat_map(|m| m.values()).map(|e| &e.partitions);
+        for tree in trees.chain([&d.status.orphan_partitions]) {
+            for (schema, names) in tree {
+                listed.extend(names.keys().map(|name| (schema.clone(), name.clone())));
+            }
+        }
+        prop_assert_eq!(listed, children);
+        // Each side's partitions sit under the entity their own parents lead
+        // to, walked here independently of the crate.
+        for side in [&a, &b] {
+            for p in &side.partitions {
+                let child = (p.child_schema.clone(), p.child.clone());
+                let tree = match root(side, &names, p) {
+                    Some((schema, name)) => &d.status.entity(&schema, &name).unwrap().partitions,
+                    None => &d.status.orphan_partitions,
+                };
+                prop_assert!(tree.get(&child.0).is_some_and(|m| m.contains_key(&child.1)));
+            }
         }
     }
 
@@ -513,6 +663,10 @@ proptest! {
         prop_assert!(d.domains.iter().all(|x| !x.lines.is_empty()));
         prop_assert!(d.composites.iter().all(|c| !c.lines.is_empty()));
         prop_assert!(d.extensions.iter().all(|x| !x.lines.is_empty()));
+        let orphans = &d.orphan_partitions;
+        prop_assert_eq!(orphans.lines.is_empty(), orphans.partitions.is_empty());
+        let rendered = orphans.sql.before.is_some() || orphans.sql.after.is_some();
+        prop_assert_eq!(rendered, !orphans.partitions.is_empty());
         prop_assert_eq!(d.summary.text == "no changes", d.is_empty());
     }
 }

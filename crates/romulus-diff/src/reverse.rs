@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use crate::model::{
     AttributeDiff, ColumnDiff, CompositeDiff, ConstraintChange, ConstraintDiff, DomainDiff,
     EntityChange, EntityDiff, EntityStatus, EnumDiff, ExtensionDiff, IndexDiff, LabelDiff,
-    PartitionDiff, PolicyDiff, SchemaDiff, Status, StatusMap, Summary,
+    OrphanPartitions, PartitionChange, PartitionDiff, PolicyDiff, SchemaDiff, Status, StatusMap,
+    Summary,
 };
 
 impl SchemaDiff {
@@ -33,11 +34,11 @@ impl SchemaDiff {
                 .into_iter()
                 .map(ExtensionDiff::reversed)
                 .collect(),
-            orphan_partitions: self
-                .orphan_partitions
-                .into_iter()
-                .map(PartitionDiff::reversed)
-                .collect(),
+            orphan_partitions: OrphanPartitions {
+                partitions: each(self.orphan_partitions.partitions, PartitionDiff::reversed),
+                lines: Vec::new(),
+                sql: self.orphan_partitions.sql.reversed(),
+            },
             status: self.status.reversed(),
         };
         out.finish();
@@ -132,9 +133,18 @@ impl PolicyDiff {
 
 impl PartitionDiff {
     fn reversed(self) -> Self {
+        let changes = each(self.changes, PartitionChange::reversed);
+        let parent = changes
+            .iter()
+            .find_map(|c| match c {
+                PartitionChange::Parent { after, .. } => Some(after.clone()),
+                PartitionChange::Bound { .. } => None,
+            })
+            .unwrap_or(self.parent);
         Self {
+            parent,
             status: self.status.reversed(),
-            changes: each(self.changes, |c| c.reversed()),
+            changes,
             definition: self.definition.reversed(),
             ..self
         }
@@ -217,17 +227,28 @@ fn flip(map: BTreeMap<String, Status>) -> BTreeMap<String, Status> {
     map.into_iter().map(|(k, s)| (k, s.reversed())).collect()
 }
 
+/// [`flip`] for maps nested by schema.
+fn flip_nested(
+    map: BTreeMap<String, BTreeMap<String, Status>>,
+) -> BTreeMap<String, BTreeMap<String, Status>> {
+    map.into_iter().map(|(k, m)| (k, flip(m))).collect()
+}
+
 impl StatusMap {
     fn reversed(self) -> Self {
         Self {
             entities: self
                 .entities
                 .into_iter()
-                .map(|(k, e)| (k, e.reversed()))
+                .map(|(schema, names)| {
+                    let names = names.into_iter().map(|(k, e)| (k, e.reversed()));
+                    (schema, names.collect())
+                })
                 .collect(),
-            enums: flip(self.enums),
-            domains: flip(self.domains),
-            composites: flip(self.composites),
+            orphan_partitions: flip_nested(self.orphan_partitions),
+            enums: flip_nested(self.enums),
+            domains: flip_nested(self.domains),
+            composites: flip_nested(self.composites),
             extensions: flip(self.extensions),
         }
     }
@@ -239,6 +260,9 @@ impl EntityStatus {
             status: self.status.reversed(),
             columns: flip(self.columns),
             constraints: flip(self.constraints),
+            indexes: flip(self.indexes),
+            policies: flip(self.policies),
+            partitions: flip_nested(self.partitions),
         }
     }
 }

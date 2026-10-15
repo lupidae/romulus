@@ -42,7 +42,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "audit",
       "name": "events",
-      "qualified_name": "audit.events",
       "kind": "partitioned_table",
       "status": "changed",
       "changes": [],
@@ -54,8 +53,10 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
         {
           "schema": "audit",
           "name": "events_2027",
-          "qualified_name": "audit.events_2027",
-          "parent": "audit.events",
+          "parent": {
+            "schema": "audit",
+            "name": "events"
+          },
           "status": "added",
           "changes": [],
           "definition": {
@@ -75,7 +76,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "audit",
       "name": "scratch",
-      "qualified_name": "audit.scratch",
       "kind": "table",
       "status": "removed",
       "changes": [],
@@ -120,7 +120,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "shop",
       "name": "coupons",
-      "qualified_name": "shop.coupons",
       "kind": "table",
       "status": "added",
       "changes": [],
@@ -178,7 +177,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "shop",
       "name": "customers",
-      "qualified_name": "shop.customers",
       "kind": "table",
       "status": "changed",
       "changes": [],
@@ -223,7 +221,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "shop",
       "name": "orders",
-      "qualified_name": "shop.orders",
       "kind": "table",
       "status": "changed",
       "changes": [],
@@ -308,7 +305,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "shop",
       "name": "order_status",
-      "qualified_name": "shop.order_status",
       "status": "changed",
       "changes": [],
       "labels": [
@@ -334,7 +330,6 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
     {
       "schema": "shop",
       "name": "money_cents",
-      "qualified_name": "shop.money_cents",
       "status": "changed",
       "changes": [
         {
@@ -390,189 +385,263 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
       }
     }
   ],
-  "orphan_partitions": [],
+  "orphan_partitions": {
+    "partitions": [],
+    "lines": [],
+    "sql": {
+      "before": null,
+      "after": null
+    }
+  },
   "status": {
     "entities": {
-      "audit.events": {
-        "status": "changed",
-        "columns": {
-          "customer_id": "unchanged",
-          "id": "unchanged",
-          "occurred_at": "unchanged",
-          "payload": "unchanged"
+      "audit": {
+        "events": {
+          "status": "changed",
+          "columns": {
+            "customer_id": "unchanged",
+            "id": "unchanged",
+            "occurred_at": "unchanged",
+            "payload": "unchanged"
+          },
+          "constraints": {
+            "events_customer_id_fkey": "unchanged",
+            "events_pkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {
+            "audit": {
+              "events_2026": "unchanged",
+              "events_2027": "added",
+              "events_default": "unchanged"
+            }
+          }
         },
-        "constraints": {
-          "events_customer_id_fkey": "unchanged",
-          "events_pkey": "unchanged"
+        "scratch": {
+          "status": "removed",
+          "columns": {
+            "id": "removed"
+          },
+          "constraints": {
+            "scratch_pkey": "removed"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         }
       },
-      "audit.scratch": {
-        "status": "removed",
-        "columns": {
-          "id": "removed"
+      "shop": {
+        "coupons": {
+          "status": "added",
+          "columns": {
+            "code": "added",
+            "region": "added"
+          },
+          "constraints": {
+            "coupons_pkey": "added"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         },
-        "constraints": {
-          "scratch_pkey": "removed"
-        }
-      },
-      "shop.coupons": {
-        "status": "added",
-        "columns": {
-          "code": "added",
-          "region": "added"
-        },
-        "constraints": {
-          "coupons_pkey": "added"
-        }
-      },
-      "shop.customer_profiles": {
-        "status": "unchanged",
-        "columns": {
-          "bio": "unchanged",
-          "customer_id": "unchanged"
-        },
-        "constraints": {
-          "customer_profiles_customer_id_fkey": "unchanged",
-          "customer_profiles_pkey": "unchanged"
-        }
-      },
-      "shop.customers": {
-        "status": "changed",
-        "columns": {
-          "address": "unchanged",
-          "created_at": "unchanged",
-          "email": "changed",
-          "full_name": "unchanged",
-          "id": "unchanged",
-          "referrer_id": "unchanged",
-          "select": "unchanged",
-          "tags": "unchanged"
-        },
-        "constraints": {
-          "customers_email_key": "unchanged",
-          "customers_pkey": "unchanged",
-          "customers_referrer_id_fkey": "unchanged"
-        }
-      },
-      "shop.daily_totals": {
-        "status": "unchanged",
-        "columns": {
-          "day": "unchanged",
-          "total": "unchanged"
-        },
-        "constraints": {}
-      },
-      "shop.open_orders": {
-        "status": "unchanged",
-        "columns": {
-          "customer_id": "unchanged",
-          "id": "unchanged",
-          "total": "unchanged"
-        },
-        "constraints": {}
-      },
-      "shop.open_orders_by_customer": {
-        "status": "unchanged",
-        "columns": {
-          "email": "unchanged",
-          "open_orders": "unchanged"
-        },
-        "constraints": {}
-      },
-      "shop.order_products": {
-        "status": "unchanged",
-        "columns": {
-          "created_at": "unchanged",
-          "order_id": "unchanged",
-          "product_id": "unchanged"
-        },
-        "constraints": {
-          "order_products_order_id_fkey": "unchanged",
-          "order_products_pkey": "unchanged",
-          "order_products_product_id_fkey": "unchanged"
-        }
-      },
-      "shop.orders": {
-        "status": "changed",
-        "columns": {
-          "coupon_code": "added",
-          "customer_id": "unchanged",
-          "id": "unchanged",
-          "note": "changed",
-          "placed_at": "unchanged",
+        "customer_profiles": {
           "status": "unchanged",
-          "subtotal": "unchanged",
-          "tax": "unchanged",
-          "total": "unchanged"
+          "columns": {
+            "bio": "unchanged",
+            "customer_id": "unchanged"
+          },
+          "constraints": {
+            "customer_profiles_customer_id_fkey": "unchanged",
+            "customer_profiles_pkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         },
-        "constraints": {
-          "orders_customer_id_fkey": "changed",
-          "orders_pkey": "unchanged",
-          "orders_placed_when_not_draft": "unchanged"
-        }
-      },
-      "shop.products": {
-        "status": "unchanged",
-        "columns": {
-          "id": "unchanged",
-          "price": "unchanged",
-          "sku": "unchanged",
-          "statuses": "unchanged",
-          "weight_g": "unchanged"
+        "customers": {
+          "status": "changed",
+          "columns": {
+            "address": "unchanged",
+            "created_at": "unchanged",
+            "email": "changed",
+            "full_name": "unchanged",
+            "id": "unchanged",
+            "referrer_id": "unchanged",
+            "select": "unchanged",
+            "tags": "unchanged"
+          },
+          "constraints": {
+            "customers_email_key": "unchanged",
+            "customers_pkey": "unchanged",
+            "customers_referrer_id_fkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         },
-        "constraints": {
-          "products_pkey": "unchanged",
-          "products_sku_key": "unchanged",
-          "products_weight_g_check": "unchanged"
-        }
-      },
-      "shop.promotions": {
-        "status": "unchanged",
-        "columns": {
-          "during": "unchanged",
-          "id": "unchanged",
-          "product_id": "unchanged"
+        "daily_totals": {
+          "status": "unchanged",
+          "columns": {
+            "day": "unchanged",
+            "total": "unchanged"
+          },
+          "constraints": {},
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         },
-        "constraints": {
-          "promotions_pkey": "unchanged",
-          "promotions_product_id_during_excl": "unchanged",
-          "promotions_product_id_fkey": "unchanged"
-        }
-      },
-      "shop.stock": {
-        "status": "unchanged",
-        "columns": {
-          "product_id": "unchanged",
-          "quantity": "unchanged",
-          "region": "unchanged",
-          "warehouse_code": "unchanged"
+        "open_orders": {
+          "status": "unchanged",
+          "columns": {
+            "customer_id": "unchanged",
+            "id": "unchanged",
+            "total": "unchanged"
+          },
+          "constraints": {},
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         },
-        "constraints": {
-          "stock_pkey": "unchanged",
-          "stock_product_id_fkey": "unchanged",
-          "stock_warehouse_fkey": "unchanged"
-        }
-      },
-      "shop.warehouses": {
-        "status": "unchanged",
-        "columns": {
-          "code": "unchanged",
-          "region": "unchanged"
+        "open_orders_by_customer": {
+          "status": "unchanged",
+          "columns": {
+            "email": "unchanged",
+            "open_orders": "unchanged"
+          },
+          "constraints": {},
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         },
-        "constraints": {
-          "warehouses_pkey": "unchanged"
+        "order_products": {
+          "status": "unchanged",
+          "columns": {
+            "created_at": "unchanged",
+            "order_id": "unchanged",
+            "product_id": "unchanged"
+          },
+          "constraints": {
+            "order_products_order_id_fkey": "unchanged",
+            "order_products_pkey": "unchanged",
+            "order_products_product_id_fkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "orders": {
+          "status": "changed",
+          "columns": {
+            "coupon_code": "added",
+            "customer_id": "unchanged",
+            "id": "unchanged",
+            "note": "changed",
+            "placed_at": "unchanged",
+            "status": "unchanged",
+            "subtotal": "unchanged",
+            "tax": "unchanged",
+            "total": "unchanged"
+          },
+          "constraints": {
+            "orders_customer_id_fkey": "changed",
+            "orders_pkey": "unchanged",
+            "orders_placed_when_not_draft": "unchanged"
+          },
+          "indexes": {
+            "orders_coupon_idx": "added",
+            "orders_customer_idx": "unchanged",
+            "orders_note_lower_idx": "unchanged",
+            "orders_open_idx": "unchanged"
+          },
+          "policies": {
+            "orders_no_cancelled": "unchanged",
+            "orders_owner": "unchanged"
+          },
+          "partitions": {}
+        },
+        "products": {
+          "status": "unchanged",
+          "columns": {
+            "id": "unchanged",
+            "price": "unchanged",
+            "sku": "unchanged",
+            "statuses": "unchanged",
+            "weight_g": "unchanged"
+          },
+          "constraints": {
+            "products_pkey": "unchanged",
+            "products_sku_key": "unchanged",
+            "products_weight_g_check": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "promotions": {
+          "status": "unchanged",
+          "columns": {
+            "during": "unchanged",
+            "id": "unchanged",
+            "product_id": "unchanged"
+          },
+          "constraints": {
+            "promotions_pkey": "unchanged",
+            "promotions_product_id_during_excl": "unchanged",
+            "promotions_product_id_fkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "stock": {
+          "status": "unchanged",
+          "columns": {
+            "product_id": "unchanged",
+            "quantity": "unchanged",
+            "region": "unchanged",
+            "warehouse_code": "unchanged"
+          },
+          "constraints": {
+            "stock_pkey": "unchanged",
+            "stock_product_id_fkey": "unchanged",
+            "stock_warehouse_fkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "warehouses": {
+          "status": "unchanged",
+          "columns": {
+            "code": "unchanged",
+            "region": "unchanged"
+          },
+          "constraints": {
+            "warehouses_pkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
         }
       }
     },
+    "orphan_partitions": {},
     "enums": {
-      "shop.order_status": "changed"
+      "shop": {
+        "order_status": "changed"
+      }
     },
     "domains": {
-      "shop.email": "unchanged",
-      "shop.money_cents": "changed"
+      "shop": {
+        "email": "unchanged",
+        "money_cents": "changed"
+      }
     },
     "composites": {
-      "shop.address": "unchanged"
+      "shop": {
+        "address": "unchanged"
+      }
     },
     "extensions": {
       "btree_gist": "unchanged",
