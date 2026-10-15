@@ -66,7 +66,7 @@ export function Avatar({ name, id, src, size = "md", className }: AvatarProps) {
     >
       {src && <AvatarPrimitive.Image src={src} alt={name} className="size-full object-cover" />}
       <AvatarPrimitive.Fallback
-        delayMs={src ? 400 : 0}
+        delayMs={src ? 400 : undefined}
         className={cn(
           "flex size-full items-center justify-center font-semibold text-presence-foreground",
           presence[presenceIndex(id ?? name) - 1],

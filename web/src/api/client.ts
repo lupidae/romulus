@@ -38,6 +38,8 @@ const csrf: Middleware = {
 export const api = createClient<paths>({
   baseUrl: typeof window === "undefined" ? "http://localhost" : window.location.origin,
   credentials: "same-origin",
+  // Looked up per call, not captured at import, so tests and mocks can stub it.
+  fetch: (request) => globalThis.fetch(request),
 });
 api.use(csrf);
 
