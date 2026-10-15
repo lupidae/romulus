@@ -181,7 +181,7 @@ Made in the skeleton (S0):
   Anything else that errors outside a handler (a 405, the 30 s timeout's 503
   `timeout`, another extractor) is rewritten to the same format by
   `layers::errors_as_json`, but prefer a precise code from your handler.
-- **State**: `AppState { db, config, oidc, membership }` derives `FromRef`:
+- **State**: `AppState { db, config, oidc, membership, collab }` derives `FromRef`:
   take `State<PgPool>` or `State<Arc<Config>>` directly.
 - **Who is calling** (`auth`): take `CurrentUser` for anything a signed-in
   person does, and `Member<min::Reviewer | min::Developer | min::Admin>` for
@@ -396,6 +396,62 @@ from `Compiler::check_admin`. Tests use `SqlCompiler::from_fn`.
 - Known remus gaps (documented on `render_sql`): `NOT VALID` CHECKs come back
   validated, stand-alone range types are not modelled; its other workarounds
   go away with the remus release fixing remus#16.
+
+## Drafts and the collab server (`drafts`, `collab`)
+
+A draft's content is a Y.Doc (`sql` Y.Text, `layout` and `groups` Y.Maps of
+plain JSON values, docs/MVP.md) served live by `collab`; `drafts` is its REST
+side (list with presence, one-click create, rename, soft delete, publish).
+
+- **Hub and rooms**: `state.collab` (`collab::Hub`) holds one room per loaded
+  draft (`collab::room`): an actor task owning the doc, the connections, the
+  awareness states and a single writer task per draft (batched appends to
+  `draft_updates`, compaction into `draft_snapshots`, the compile cache in
+  `draft_compiles`). Rooms load on the first join or REST call, unload
+  `Settings::idle_unload` after the last connection, and are written and
+  closed (1012) by `Hub::shutdown` on graceful shutdown. One API instance.
+- **Websocket** `GET /api/orgs/{org}/drafts/{id}/ws`: `csrf::SameOrigin` +
+  `Member`. y-sync as y-websocket speaks it, plus **tag 100**:
+  `collab::protocol::ServerEvent` JSON (welcome, compile, status, renamed,
+  version_created), a message only the server sends (results never live in
+  the doc: clients could forge them). Decoding runs in the socket task behind
+  `catch_unwind` (yrs debug-asserts on client ids past 2^53). Close codes:
+  1012 restart, 4000 too slow, 4001 membership changed (reconnect), 4404
+  deleted (final: y-websocket treats 4400–4499 as such).
+- **Rights**: reviewers' (and everyone's, unless the draft is open) document
+  updates are dropped; awareness passes, sanitized (`collab::awareness`):
+  `user` = the server's stamp `{id, name, role, presence, color, colorLight}`
+  (presence tokens), other fields limited to `cursor`, `pointer`,
+  `selection`; a connection only speaks for the Yjs client ids it announced
+  first. Freezing (publish) drops edits, then `SyncStep1` to everyone on
+  unfreeze brings them back.
+- **Compile on type**: `collab::compile::DraftCompiler` (sandbox, or a
+  function in tests); debounced 300 ms (at most 1 s), coalesced per draft.
+  A rename typed in the text (same `CREATE` statement index, the last
+  compile that succeeded vs this one) moves the layout and group entries,
+  written by the server. `draft_compiles.good_model` is the graph while the
+  text has errors.
+- **Versions from drafts** store `{layout, groups}` pruned to the model;
+  base moved → 409 `stale_base` (milestone 6 brings "Update draft").
+- **Tests** (`tests/api/live.rs`): `live_app(db, quick())` (fake compiler:
+  a table per `CREATE TABLE`, an error at `ERROR`), `serve(&app)` for a real
+  socket, `Client::join(addr, path, &session)` (a y-websocket client made of
+  yrs: `edit`, `announce`, `until`, `settle`, `events`, `awareness`),
+  `version(db, database, n, sql, layout)`, `stored_sql(db, draft)`;
+  `app.state.collab.shutdown()` writes everything before asserting on rows.
+- **Web** (`features/draft`): `DraftSession` (doc, y-websocket provider,
+  server events, compile state, one `Y.UndoManager` over sql+layout+groups
+  tracking `LOCAL` and y-codemirror's origin; `PLACED` writes, the graph
+  placing tables, are never undone), React hooks in `use-session.ts`
+  (`useSyncExternalStore` over Yjs), CodeMirror extensions in `collab.ts`
+  (yCollab, diagnostics, remote carets in tokens). The editor is the
+  full-screen route `routes/$org_.$db.drafts.$draft.tsx`; the database page
+  shows `<DraftsSection>`. `SchemaViewer` takes `picked`/`onPickedChange`
+  (shift- or ⌘-click), `graphControls`, `graphEmpty`.
+- Pitfalls: y-protocols ignores a stranger's first awareness state at clock
+  0 (the session sets a field before connecting); a compile event can arrive
+  before the doc (the session checks it again on sync); compare editor text
+  with `textContent` in Playwright (`toHaveText` ignores line breaks).
 
 ## Testing
 
