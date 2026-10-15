@@ -1,0 +1,728 @@
+{
+  "summary": {
+    "counts": [
+      {
+        "category": "table",
+        "added": 2,
+        "removed": 1,
+        "changed": 3
+      },
+      {
+        "category": "enum",
+        "added": 1,
+        "removed": 0,
+        "changed": 0
+      }
+    ],
+    "text": "2 tables added, 3 changed, 1 removed; 1 enum added"
+  },
+  "entities": [
+    {
+      "schema": "public",
+      "name": "comments",
+      "kind": "table",
+      "status": "changed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "author_id",
+          "status": "changed",
+          "position": {
+            "before": 2,
+            "after": 2
+          },
+          "changes": [
+            {
+              "field": "not_null",
+              "before": false,
+              "after": true
+            }
+          ],
+          "definition": {
+            "before": "bigint",
+            "after": "bigint NOT NULL"
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "comments_author_id_fkey",
+          "kind": "foreign_key",
+          "status": "changed",
+          "changes": [
+            {
+              "field": "definition",
+              "before": "FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE SET NULL",
+              "after": "FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE CASCADE"
+            }
+          ],
+          "definition": {
+            "before": "FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE SET NULL",
+            "after": "FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE CASCADE"
+          }
+        }
+      ],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "`comments.author_id`: now NOT NULL",
+        "foreign key `comments_author_id_fkey` on `comments`: FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE SET NULL → FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE CASCADE"
+      ],
+      "sql": {
+        "before": "CREATE TABLE public.comments (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    post_id bigint NOT NULL,\n    author_id bigint,\n    parent_id bigint,\n    body text NOT NULL,\n    posted_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT comments_pkey PRIMARY KEY (id)\n);\n\nALTER TABLE public.comments ADD CONSTRAINT comments_author_id_fkey FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE SET NULL;\nALTER TABLE public.comments ADD CONSTRAINT comments_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.comments(id) ON DELETE CASCADE;\nALTER TABLE public.comments ADD CONSTRAINT comments_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE;\n",
+        "after": "CREATE TABLE public.comments (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    post_id bigint NOT NULL,\n    author_id bigint NOT NULL,\n    parent_id bigint,\n    body text NOT NULL,\n    posted_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT comments_pkey PRIMARY KEY (id)\n);\n\nALTER TABLE public.comments ADD CONSTRAINT comments_author_id_fkey FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE CASCADE;\nALTER TABLE public.comments ADD CONSTRAINT comments_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.comments(id) ON DELETE CASCADE;\nALTER TABLE public.comments ADD CONSTRAINT comments_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE;\n"
+      }
+    },
+    {
+      "schema": "public",
+      "name": "post_reactions",
+      "kind": "table",
+      "status": "added",
+      "changes": [],
+      "columns": [
+        {
+          "name": "post_id",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 0
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "bigint NOT NULL"
+          }
+        },
+        {
+          "name": "user_id",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 1
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "bigint NOT NULL"
+          }
+        },
+        {
+          "name": "kind",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 2
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "reaction_kind NOT NULL"
+          }
+        },
+        {
+          "name": "reacted_at",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 3
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "timestamp with time zone DEFAULT now() NOT NULL"
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "post_reactions_pkey",
+          "kind": "primary_key",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "PRIMARY KEY (post_id, user_id, kind)"
+          }
+        },
+        {
+          "name": "post_reactions_post_id_fkey",
+          "kind": "foreign_key",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE"
+          }
+        },
+        {
+          "name": "post_reactions_user_id_fkey",
+          "kind": "foreign_key",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE"
+          }
+        }
+      ],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": ["table `post_reactions` added"],
+      "sql": {
+        "before": null,
+        "after": "CREATE TABLE public.post_reactions (\n    post_id bigint NOT NULL,\n    user_id bigint NOT NULL,\n    kind reaction_kind NOT NULL,\n    reacted_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT post_reactions_pkey PRIMARY KEY (post_id, user_id, kind)\n);\n\nALTER TABLE public.post_reactions ADD CONSTRAINT post_reactions_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE;\nALTER TABLE public.post_reactions ADD CONSTRAINT post_reactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;\n\nCOMMENT ON TABLE public.post_reactions IS 'One reaction of each kind per reader and post';\n"
+      }
+    },
+    {
+      "schema": "public",
+      "name": "posts",
+      "kind": "table",
+      "status": "changed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "body",
+          "status": "removed",
+          "position": {
+            "before": 4,
+            "after": null
+          },
+          "changes": [],
+          "definition": {
+            "before": "text NOT NULL",
+            "after": null
+          }
+        },
+        {
+          "name": "body_md",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 4
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "text NOT NULL"
+          }
+        },
+        {
+          "name": "reading_minutes",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 5
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "integer GENERATED ALWAYS AS (((length(body_md) / 1200) + 1)) STORED"
+          }
+        },
+        {
+          "name": "updated_at",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 8
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "timestamp with time zone DEFAULT now() NOT NULL"
+          }
+        }
+      ],
+      "constraints": [],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "column `posts.body` removed",
+        "column `posts.body_md` added: text NOT NULL",
+        "column `posts.reading_minutes` added: integer GENERATED ALWAYS AS (((length(body_md) / 1200) + 1)) STORED",
+        "column `posts.updated_at` added: timestamp with time zone DEFAULT now() NOT NULL"
+      ],
+      "sql": {
+        "before": "CREATE TABLE public.posts (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    author_id bigint NOT NULL,\n    title text NOT NULL,\n    slug text NOT NULL,\n    body text NOT NULL,\n    status public.post_status DEFAULT 'draft'::public.post_status NOT NULL,\n    published_at timestamp with time zone,\n    CONSTRAINT posts_published_have_a_date CHECK (((status <> 'published'::public.post_status) OR (published_at IS NOT NULL))),\n    CONSTRAINT posts_pkey PRIMARY KEY (id),\n    CONSTRAINT posts_slug_key UNIQUE (slug)\n);\n\nALTER TABLE public.posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES public.users(id);\n\nCREATE INDEX posts_author_idx ON public.posts USING btree (author_id);\nCREATE INDEX posts_published_idx ON public.posts USING btree (published_at DESC) WHERE (status = 'published'::public.post_status);\n\nCOMMENT ON COLUMN public.posts.slug IS 'URL fragment, unique per site';\n",
+        "after": "CREATE TABLE public.posts (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    author_id bigint NOT NULL,\n    title text NOT NULL,\n    slug text NOT NULL,\n    body_md text NOT NULL,\n    reading_minutes integer GENERATED ALWAYS AS (((length(body_md) / 1200) + 1)) STORED,\n    status public.post_status DEFAULT 'draft'::public.post_status NOT NULL,\n    published_at timestamp with time zone,\n    updated_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT posts_published_have_a_date CHECK (((status <> 'published'::public.post_status) OR (published_at IS NOT NULL))),\n    CONSTRAINT posts_pkey PRIMARY KEY (id),\n    CONSTRAINT posts_slug_key UNIQUE (slug)\n);\n\nALTER TABLE public.posts ADD CONSTRAINT posts_author_id_fkey FOREIGN KEY (author_id) REFERENCES public.users(id);\n\nCREATE INDEX posts_author_idx ON public.posts USING btree (author_id);\nCREATE INDEX posts_published_idx ON public.posts USING btree (published_at DESC) WHERE (status = 'published'::public.post_status);\n\nCOMMENT ON COLUMN public.posts.slug IS 'URL fragment, unique per site';\nCOMMENT ON COLUMN public.posts.body_md IS 'Markdown source; HTML is rendered at read time';\n"
+      }
+    },
+    {
+      "schema": "public",
+      "name": "profiles",
+      "kind": "table",
+      "status": "removed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "user_id",
+          "status": "removed",
+          "position": {
+            "before": 0,
+            "after": null
+          },
+          "changes": [],
+          "definition": {
+            "before": "bigint NOT NULL",
+            "after": null
+          }
+        },
+        {
+          "name": "bio",
+          "status": "removed",
+          "position": {
+            "before": 1,
+            "after": null
+          },
+          "changes": [],
+          "definition": {
+            "before": "text",
+            "after": null
+          }
+        },
+        {
+          "name": "website",
+          "status": "removed",
+          "position": {
+            "before": 2,
+            "after": null
+          },
+          "changes": [],
+          "definition": {
+            "before": "text",
+            "after": null
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "profiles_pkey",
+          "kind": "primary_key",
+          "status": "removed",
+          "changes": [],
+          "definition": {
+            "before": "PRIMARY KEY (user_id)",
+            "after": null
+          }
+        },
+        {
+          "name": "profiles_user_id_fkey",
+          "kind": "foreign_key",
+          "status": "removed",
+          "changes": [],
+          "definition": {
+            "before": "FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE",
+            "after": null
+          }
+        }
+      ],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": ["table `profiles` removed"],
+      "sql": {
+        "before": "CREATE TABLE public.profiles (\n    user_id bigint NOT NULL,\n    bio text,\n    website text,\n    CONSTRAINT profiles_pkey PRIMARY KEY (user_id)\n);\n\nALTER TABLE public.profiles ADD CONSTRAINT profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;\n",
+        "after": null
+      }
+    },
+    {
+      "schema": "public",
+      "name": "subscriptions",
+      "kind": "table",
+      "status": "added",
+      "changes": [],
+      "columns": [
+        {
+          "name": "id",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 0
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "bigint GENERATED ALWAYS AS IDENTITY NOT NULL"
+          }
+        },
+        {
+          "name": "user_id",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 1
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "bigint NOT NULL"
+          }
+        },
+        {
+          "name": "plan",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 2
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "text DEFAULT 'free'::text NOT NULL"
+          }
+        },
+        {
+          "name": "renews_at",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 3
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "timestamp with time zone"
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "subscriptions_pkey",
+          "kind": "primary_key",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "PRIMARY KEY (id)"
+          }
+        },
+        {
+          "name": "subscriptions_user_id_fkey",
+          "kind": "foreign_key",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE"
+          }
+        },
+        {
+          "name": "subscriptions_user_id_key",
+          "kind": "unique",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "UNIQUE (user_id)"
+          }
+        }
+      ],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": ["table `subscriptions` added"],
+      "sql": {
+        "before": null,
+        "after": "CREATE TABLE public.subscriptions (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    user_id bigint NOT NULL,\n    plan text DEFAULT 'free'::text NOT NULL,\n    renews_at timestamp with time zone,\n    CONSTRAINT subscriptions_pkey PRIMARY KEY (id),\n    CONSTRAINT subscriptions_user_id_key UNIQUE (user_id)\n);\n\nALTER TABLE public.subscriptions ADD CONSTRAINT subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;\n"
+      }
+    },
+    {
+      "schema": "public",
+      "name": "users",
+      "kind": "table",
+      "status": "changed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "email",
+          "status": "changed",
+          "position": {
+            "before": 1,
+            "after": 1
+          },
+          "changes": [
+            {
+              "field": "comment",
+              "before": null,
+              "after": "Lowercased on write"
+            }
+          ],
+          "definition": {
+            "before": "text NOT NULL",
+            "after": "text NOT NULL"
+          }
+        },
+        {
+          "name": "avatar_url",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 2
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "text"
+          }
+        },
+        {
+          "name": "name",
+          "status": "changed",
+          "position": {
+            "before": 2,
+            "after": 3
+          },
+          "changes": [
+            {
+              "field": "type",
+              "before": "text",
+              "after": "character varying(120)"
+            }
+          ],
+          "definition": {
+            "before": "text NOT NULL",
+            "after": "character varying(120) NOT NULL"
+          }
+        }
+      ],
+      "constraints": [],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "`users.email`: comment 'Lowercased on write' added",
+        "column `users.avatar_url` added: text",
+        "`users.name`: type text → character varying(120)"
+      ],
+      "sql": {
+        "before": "CREATE TABLE public.users (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    email text NOT NULL,\n    name text NOT NULL,\n    created_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id),\n    CONSTRAINT users_email_key UNIQUE (email)\n);\n\nCOMMENT ON TABLE public.users IS 'Anyone who can log in';\n",
+        "after": "CREATE TABLE public.users (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    email text NOT NULL,\n    avatar_url text,\n    name character varying(120) NOT NULL,\n    created_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id),\n    CONSTRAINT users_email_key UNIQUE (email)\n);\n\nCOMMENT ON TABLE public.users IS 'Anyone who can log in';\nCOMMENT ON COLUMN public.users.email IS 'Lowercased on write';\nCOMMENT ON COLUMN public.users.avatar_url IS 'Absolute URL, served through the image proxy';\n"
+      }
+    }
+  ],
+  "enums": [
+    {
+      "schema": "public",
+      "name": "reaction_kind",
+      "status": "added",
+      "changes": [],
+      "labels": [
+        {
+          "label": "like",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 0
+          }
+        },
+        {
+          "label": "insightful",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 1
+          }
+        },
+        {
+          "label": "funny",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 2
+          }
+        }
+      ],
+      "lines": ["enum `reaction_kind` added"],
+      "sql": {
+        "before": null,
+        "after": "CREATE TYPE public.reaction_kind AS ENUM ('like', 'insightful', 'funny');\n\nCOMMENT ON TYPE public.reaction_kind IS 'What a reader felt';\n"
+      }
+    }
+  ],
+  "domains": [],
+  "composites": [],
+  "extensions": [],
+  "orphan_partitions": {
+    "partitions": [],
+    "lines": [],
+    "sql": {
+      "before": null,
+      "after": null
+    }
+  },
+  "status": {
+    "entities": {
+      "public": {
+        "comments": {
+          "status": "changed",
+          "columns": {
+            "author_id": "changed",
+            "body": "unchanged",
+            "id": "unchanged",
+            "parent_id": "unchanged",
+            "post_id": "unchanged",
+            "posted_at": "unchanged"
+          },
+          "constraints": {
+            "comments_author_id_fkey": "changed",
+            "comments_parent_id_fkey": "unchanged",
+            "comments_pkey": "unchanged",
+            "comments_post_id_fkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "post_reactions": {
+          "status": "added",
+          "columns": {
+            "kind": "added",
+            "post_id": "added",
+            "reacted_at": "added",
+            "user_id": "added"
+          },
+          "constraints": {
+            "post_reactions_pkey": "added",
+            "post_reactions_post_id_fkey": "added",
+            "post_reactions_user_id_fkey": "added"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "post_tags": {
+          "status": "unchanged",
+          "columns": {
+            "post_id": "unchanged",
+            "tag_id": "unchanged"
+          },
+          "constraints": {
+            "post_tags_pkey": "unchanged",
+            "post_tags_post_id_fkey": "unchanged",
+            "post_tags_tag_id_fkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "posts": {
+          "status": "changed",
+          "columns": {
+            "author_id": "unchanged",
+            "body": "removed",
+            "body_md": "added",
+            "id": "unchanged",
+            "published_at": "unchanged",
+            "reading_minutes": "added",
+            "slug": "unchanged",
+            "status": "unchanged",
+            "title": "unchanged",
+            "updated_at": "added"
+          },
+          "constraints": {
+            "posts_author_id_fkey": "unchanged",
+            "posts_pkey": "unchanged",
+            "posts_published_have_a_date": "unchanged",
+            "posts_slug_key": "unchanged"
+          },
+          "indexes": {
+            "posts_author_idx": "unchanged",
+            "posts_published_idx": "unchanged"
+          },
+          "policies": {},
+          "partitions": {}
+        },
+        "profiles": {
+          "status": "removed",
+          "columns": {
+            "bio": "removed",
+            "user_id": "removed",
+            "website": "removed"
+          },
+          "constraints": {
+            "profiles_pkey": "removed",
+            "profiles_user_id_fkey": "removed"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "published_posts": {
+          "status": "unchanged",
+          "columns": {
+            "author": "unchanged",
+            "id": "unchanged",
+            "published_at": "unchanged",
+            "slug": "unchanged",
+            "title": "unchanged"
+          },
+          "constraints": {},
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "subscriptions": {
+          "status": "added",
+          "columns": {
+            "id": "added",
+            "plan": "added",
+            "renews_at": "added",
+            "user_id": "added"
+          },
+          "constraints": {
+            "subscriptions_pkey": "added",
+            "subscriptions_user_id_fkey": "added",
+            "subscriptions_user_id_key": "added"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "tags": {
+          "status": "unchanged",
+          "columns": {
+            "id": "unchanged",
+            "name": "unchanged"
+          },
+          "constraints": {
+            "tags_name_key": "unchanged",
+            "tags_pkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        },
+        "users": {
+          "status": "changed",
+          "columns": {
+            "avatar_url": "added",
+            "created_at": "unchanged",
+            "email": "changed",
+            "id": "unchanged",
+            "name": "changed"
+          },
+          "constraints": {
+            "users_email_key": "unchanged",
+            "users_pkey": "unchanged"
+          },
+          "indexes": {},
+          "policies": {},
+          "partitions": {}
+        }
+      }
+    },
+    "orphan_partitions": {},
+    "enums": {
+      "public": {
+        "post_status": "unchanged",
+        "reaction_kind": "added"
+      }
+    },
+    "domains": {},
+    "composites": {},
+    "extensions": {}
+  }
+}
