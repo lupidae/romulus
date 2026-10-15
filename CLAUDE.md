@@ -227,6 +227,12 @@ Made in the skeleton (S0):
   the model's tables, never null (empty is `{"layout": {}, "groups": {}}`;
   `{}` reads as empty). The viewer gets `layout.layout` and `layout.groups`
   as `<SchemaViewer layout groups>`.
+- **Diffs** (`versions::diff`, `GET …/diff?from=&to=`): romulus-diff's
+  `SchemaDiff`, both models, both as SQL (`romulus_diff::normalize` then
+  `compile::render_sql`, the newer version's header on both, so an upload
+  and a push of one schema read the same) and the union's layout (the newer
+  version's, the older one's positions for tables only it has). The
+  serialised response is cached in `AppState::diffs` by the two version ids.
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
   compiles), 429 `rate_limited` with `Retry-After`. Handlers that must decide
@@ -285,6 +291,9 @@ src/features/schema/     SchemaViewer / SchemaGraph / SchemaText (graph + SQL pa
 src/features/databases/  databases, versions, API tokens: queries, mutations, the upload dialog
                          (useOpenUpload), VersionView, DraftsSlot (where drafts list, above the
                          history)
+src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; no router, no
+                         queries: reuse it wherever two models are compared), CompareBar,
+                         diffQuery; /app/<org>/<db>/diff/<from>...<to>, /app/dev/diff shows it
 src/api/                 client.ts (typed openapi-fetch + CSRF header), generated types
 src/styles/globals.css   every token; the only file with raw colors
 ```
