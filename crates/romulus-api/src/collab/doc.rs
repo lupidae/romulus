@@ -11,9 +11,10 @@
 //! Map values are plain JSON objects (Yjs `Any`), not nested Y.Maps: a move
 //! or a group edit replaces the whole value, last writer wins per key.
 //!
-//! The server writes to a doc in two places only: the initial content of a
-//! new draft, and moving a table's layout and group entries when a rename is
-//! typed in the text (see `room`). Everything else comes from clients.
+//! The server writes to a doc in three places only: the initial content of a
+//! new draft, moving a table's layout and group entries when a rename is
+//! typed in the text (see `room`), and rewriting the SQL as a minimal edit
+//! (Tidy, see `patch`). Everything else comes from clients.
 
 use std::collections::BTreeMap;
 

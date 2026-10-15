@@ -283,13 +283,19 @@ src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field
                          Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
                          EmptyState, Skeleton, Tooltip, Kbd, Alert, Card, Separator, Spinner,
                          Sidebar*, TabNav (link tabs, one URL each), CodeBlock (copyable
-                         lines), FileButton (opens the file picker)
+                         lines), FileButton (opens the file picker), Checkbox, Combobox
+                         (a field with suggestions: ARIA combobox, the field keeps focus)
 src/components/shell/    AppShell (top bar, org switcher, user menu, nav, panel), PageHeader,
                          PageBody, status pages (404/500), the sign-in preview
 src/components/icons/    Iconoir only, generated: `npm --prefix web run icons:add -- <name>`
 src/features/<module>/   per-feature code: queries (queryOptions), mutations, components
 src/features/schema/     SchemaViewer / SchemaGraph / SchemaText (graph + SQL panes), remus model
                          types (parseSchema), fixtures; /app/dev/viewer shows them
+src/features/schema/edits/  graph edits as data (GraphEdit) and their SQL (sqlFor, quoteIdent
+                         with PG 17's keywords), what depends on what, foreign key checks and
+                         names, the optimistic model (applyEdit/reflects), appendTo (the marker)
+src/features/schema/graph/editing/  the graph's editing UI (menus, inline names, popovers,
+                         foreign key drag, new table); on when SchemaGraph gets `editor`
 src/features/databases/  databases, versions, API tokens: queries, mutations, the upload dialog
                          (useOpenUpload), VersionView, DraftsSlot (where drafts list, above the
                          history)
@@ -464,10 +470,50 @@ side (list with presence, one-click create, rename, soft delete, publish).
   has `NewDraftButton` and `OpenDrafts` in its header and `<DraftsSection>`
   in `DraftsSlot` (History tab). `SchemaViewer` takes `picked`/`onPickedChange`
   (shift- or ⌘-click), `graphControls`, `graphEmpty`.
+- **Schema edits from the graph** (milestone 5, docs/MVP.md "Schema edits
+  from the graph append SQL"): the graph only emits `GraphEdit`s (data,
+  decisions included: CASCADE, USING, the FK's name, all planned from the
+  model in `edits/plan.ts`); `DraftSession.editSchema(edit, shownModel,
+  position?)` appends `sqlFor(edit)` under `-- edits from the graph` (written
+  once, at the end) and moves the layout/groups (renames, new tables) in ONE
+  `LOCAL` transaction between `undo.stopCapturing()` calls: one ⌘Z each. A
+  dropped table keeps its layout entry (pruned at publish). Nothing about an
+  edit is stored as truth: `graph-edits.ts` `judge`s every edit of the tab
+  again from the text (its statements still there?) and the compile (shows
+  it? an error inside its statements?): pending (applied to the model shown,
+  marked), failed (still shown, but drops; the compile's message and "Undo
+  it" on the element), reverting (undone, the model not caught up yet: its
+  entities put back from the snapshot taken when it was made), idle.
+  `useGraphEdits` gives the viewer the model to show and the `editor`.
+  Reviewers get no `editor`: no affordance at all. The SQL pane lights what an
+  edit wrote (`showGraphEdit`). Every statement kind is snapshot-tested, and
+  `romulus-sandbox/tests/graph_edits.rs` checks the snapshots parse and pass
+  the allowlist: change a statement, run vitest with `-u`, both follow.
+- **Tidy**: `POST …/drafts/{id}/tidy` [developer] renders the compiled model
+  (`drafts::tidy::canonical_sql`: `render_sql` without remus's header),
+  refuses text with errors (422 `compile_failed`) and a rewrite that compiles
+  to another model (422 `tidy_unsafe`: foreign tables…), then
+  `Hub::rewrite(draft, sha256_of_the_text_it_read, collab::patch::changes(old,
+  new))`: the room applies the smallest edit (lines, then SQL tokens) in one
+  transaction if the text is still that one (`RewriteError::Changed`
+  otherwise: read again; the handler retries 3 times, then 409
+  `draft_changed`). Carets in untouched text survive. Any server rewrite of a
+  draft's SQL (Update draft's merge too) should go through `Hub::rewrite`.
+- **Without the stack**: `/app/dev/editor` (`?role=reviewer`,
+  `?fixture=empty|large`) runs the real editor on a `DraftSession` with
+  `local` (no socket; its "compile" replays the graph edits found in the
+  text onto the blog fixture; "Fail the next edit", "Someone types");
+  `e2e/dev/graph-edits.spec.ts` drives it. The two-person flows with the
+  sandbox are `e2e/graph-edits.spec.ts`.
 - Pitfalls: y-protocols ignores a stranger's first awareness state at clock
   0 (the session sets a field before connecting); a compile event can arrive
   before the doc (the session checks it again on sync); compare editor text
-  with `textContent` in Playwright (`toHaveText` ignores line breaks).
+  with `textContent` in Playwright (`toHaveText` ignores line breaks). The
+  graph's editing context must stay stable across drags (its actions read
+  the latest state through a ref): a value changing per frame redraws every
+  node. Drafts are seeded with their version's model as the first compile:
+  a test whose fake compiler disagrees with the version's model sees that
+  model until the text changes.
 
 ## Testing
 
