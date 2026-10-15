@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# Makes the dev Zitadel instance usable by romulus, with no clicking:
-#   project "romulus" → OIDC web app "romulus-web" → test users alice and bob,
-#   the hosted login branded as romulus (logo, colors, font, texts), and its
-#   emails (sign-up codes) sent to the stack's mail catcher.
+# Makes a Zitadel instance usable by romulus, with no clicking:
+#   project "romulus" → OIDC web app "romulus-web" → users, the hosted login
+#   branded as romulus (logo, colors, font, texts), and its emails (sign-up
+#   codes) sent to an SMTP server when there is one.
 # Then writes the contract other tools read:
-#   $OUT/oidc.env    ROMULUS_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET
-#   $OUT/users.json  [{email, password, name}]
+#   $OUT/oidc.env      ROMULUS_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET
+#   $OUT/users.json    [{email, password, name}]: the test users (dev)
+#   $OUT/accounts.txt  "email password" of each account it created from
+#                      $ACCOUNTS (deployments), mode 600
 #
-# It runs on every `compose up`, so every step finds what exists before
+# The dev stack (docker-compose.yml) runs it on every `up`; the preview
+# (deploy/preview) on every deploy. Every step finds what exists before
 # creating anything. Zitadel never shows a client secret twice: when the app
 # exists but oidc.env is gone (or names another client), the secret is
 # regenerated rather than guessed.
+#
+#   provision.sh                       provision (the default)
+#   provision.sh verify-email ADDRESS  mark that user's email verified (no SMTP: README)
 set -euo pipefail
 
 : "${ZITADEL_URL:?}"          # http://zitadel:8080, inside the compose network
-: "${ZITADEL_HOST:?}"         # localhost:<port>: Zitadel picks the instance, and the issuer, from Host
-: "${ROMULUS_PUBLIC_URL:?}"   # the web origin; Vite proxies /api to the API
-: "${ROMULUS_API_PORT:?}"
-: "${ROMULUS_PREVIEW_PORT:?}" # the production build Playwright drives, with its own API
+: "${ZITADEL_HOST:?}"         # Zitadel picks the instance from Host: localhost:<port>, or its external domain
+: "${ROMULUS_PUBLIC_URL:?}"   # the browser origin of the app (/app) and the API (/api)
+ROMULUS_API_PORT=${ROMULUS_API_PORT:-}         # dev: the API's own port, for direct testing
+ROMULUS_PREVIEW_PORT=${ROMULUS_PREVIEW_PORT:-} # dev: the production build Playwright drives, with its own API
+ISSUER=${ZITADEL_ISSUER:-http://$ZITADEL_HOST} # https://<external domain> behind TLS
+OIDC_DEV_MODE=${OIDC_DEV_MODE:-true}           # Zitadel's dev mode allows http redirect URIs
+TEST_USERS=${TEST_USERS:-true}                 # alice and bob, password $DEV_PASSWORD
+ACCOUNTS=${ACCOUNTS:-}                         # "email|Given|Family …": created once, verified, random password
 OUT=${OUT:-/out}
 PAT_FILE=${PAT_FILE:-/bootstrap/admin.pat}
 OWNER=${OWNER:-}
@@ -25,16 +35,15 @@ DEV_PASSWORD=${DEV_PASSWORD:-RomulusDev1!}
 ASSETS=${ASSETS:-/assets}       # deploy/zitadel/assets: logos, font, brand.json
 MAIL_HOST=${MAIL_HOST:-}        # host:port of an SMTP server without auth; empty: no email
 
-issuer="http://$ZITADEL_HOST"
-# Two browser origins per stack: the dev server ($ROMULUS_PUBLIC_URL) and the
-# preview build end-to-end tests use; plus the API port, for direct testing.
-preview="http://localhost:$ROMULUS_PREVIEW_PORT"
-redirect_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg preview "$preview" \
-    --arg api "http://localhost:$ROMULUS_API_PORT" \
-    '[$web, $preview, $api] | map(. + "/api/auth/callback")')
+issuer=$ISSUER
+# Every browser origin of the stack: dev has two (the dev server and the
+# preview build end-to-end tests use) and the API port; a deployment one.
+origins=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg preview "$ROMULUS_PREVIEW_PORT" \
+    '[$web] + (if $preview == "" then [] else ["http://localhost:" + $preview] end)')
+redirect_uris=$(jq -c --arg api "$ROMULUS_API_PORT" \
+    '. + (if $api == "" then [] else ["http://localhost:" + $api] end) | map(. + "/api/auth/callback")' <<<"$origins")
 # The SPA lives under /app (the API serves the homepage at / in production).
-post_logout_uris=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg preview "$preview" \
-    '[$web, $preview] | map(. + "/app/signin", . + "/app/", . + "/")')
+post_logout_uris=$(jq -c 'map(. + "/app/signin", . + "/app/", . + "/")' <<<"$origins")
 
 log() { echo "zitadel-provision: $*" >&2; }
 
@@ -63,6 +72,31 @@ api() {
     printf '%s' "$response"
 }
 
+# users_with_email ADDRESS → ListUsers' result: whoever has that address,
+# whatever their username (self-registration may pick another).
+users_with_email() {
+    api POST /v2/users "$(jq -cn --arg e "$1" \
+        '{queries: [{emailQuery: {emailAddress: $e, method: "TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE"}}]}')" \
+        | jq -c '.result // []'
+}
+
+# Without SMTP an account cannot verify its address by itself: an operator
+# who knows the person vouches for it (deploy/preview/README.md).
+if [ "${1:-}" = verify-email ]; then
+    address=${2:?usage: provision.sh verify-email ADDRESS}
+    found=$(users_with_email "$address")
+    if [ "$(jq length <<<"$found")" != 1 ]; then
+        log "verify-email: expected one user with the email $address, found $(jq length <<<"$found")"
+        exit 1
+    fi
+    user_id=$(jq -r '.[0].userId' <<<"$found")
+    email=$(jq -r '.[0].human.email.email' <<<"$found")
+    api POST "/v2/users/$user_id/email" "$(jq -cn --arg e "$email" '{email: $e, isVerified: true}')" >/dev/null
+    log "verified $email ($user_id, $(jq -r '.[0].preferredLoginName' <<<"$found"))"
+    exit 0
+fi
+mkdir -p "$OUT"
+
 # Project
 project_id=$(api POST /management/v1/projects/_search \
     '{"queries":[{"nameQuery":{"name":"romulus","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' \
@@ -74,7 +108,8 @@ fi
 
 # OIDC app. The config is reapplied on every run, so a changed slot (ports)
 # only needs another `up`.
-oidc_config=$(jq -cn --argjson redirects "$redirect_uris" --argjson logouts "$post_logout_uris" '{
+oidc_config=$(jq -cn --argjson redirects "$redirect_uris" --argjson logouts "$post_logout_uris" \
+    --argjson dev "$OIDC_DEV_MODE" '{
     redirectUris: $redirects,
     postLogoutRedirectUris: $logouts,
     responseTypes: ["OIDC_RESPONSE_TYPE_CODE"],
@@ -83,7 +118,7 @@ oidc_config=$(jq -cn --argjson redirects "$redirect_uris" --argjson logouts "$po
     authMethodType: "OIDC_AUTH_METHOD_TYPE_BASIC",
     accessTokenType: "OIDC_TOKEN_TYPE_BEARER",
     idTokenUserinfoAssertion: true,
-    devMode: true,
+    devMode: $dev,
     loginVersion: {loginV1: {}}
 }')
 app=$(api POST "/management/v1/projects/$project_id/apps/_search" \
@@ -136,8 +171,34 @@ ensure_user() {
     users=$(jq -c --arg e "$email" --arg p "$DEV_PASSWORD" --arg n "$given $family" \
         '. + [{email: $e, password: $p, name: $n}]' <<<"$users")
 }
-ensure_user alice@romulus.test Alice Martin
-ensure_user bob@romulus.test Bob Durand
+if [ "$TEST_USERS" = true ]; then
+    ensure_user alice@romulus.test Alice Martin
+    ensure_user bob@romulus.test Bob Durand
+fi
+
+# A deployment's first accounts: created once, email verified (there may be
+# no SMTP to verify it), with a random password the person must change at
+# first sign-in. It is only ever written to $OUT/accounts.txt (mode 600);
+# an address that already has an account is left alone.
+for account in $ACCOUNTS; do
+    IFS='|' read -r email given family <<<"$account"
+    if [ -z "$email" ] || [ -z "$given" ] || [ -z "$family" ]; then
+        log "ACCOUNTS: expected email|Given|Family, got \"$account\""
+        exit 1
+    fi
+    [ "$(users_with_email "$email" | jq length)" = 0 ] || continue
+    password="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')Aa1!" # every character class the policy asks for
+    body=$(jq -cn --arg u "$email" --arg g "$given" --arg f "$family" --arg p "$password" '{
+        username: $u,
+        profile: {givenName: $g, familyName: $f, displayName: ($g + " " + $f)},
+        email: {email: $u, isVerified: true},
+        password: {password: $p, changeRequired: true}
+    }')
+    user_id=$(api POST /v2/users/human "$body" | jq -r .userId)
+    (umask 077; printf '%s %s\n' "$email" "$password" >> "$OUT/accounts.txt")
+    if [ -n "$OWNER" ]; then chown "$OWNER" "$OUT/accounts.txt"; fi
+    log "created account $email ($user_id); its initial password is in accounts.txt"
+done
 
 # The hosted login looks like romulus: Zitadel's label policy (colors from the
 # app's tokens via brand.json, the logo per theme, Inter, no watermark) on the
@@ -260,7 +321,6 @@ if [ -n "$MAIL_HOST" ]; then
 fi
 
 # Readers must never see half a file: write beside, then rename.
-mkdir -p "$OUT"
 printf 'ROMULUS_OIDC_ISSUER=%s\nROMULUS_OIDC_CLIENT_ID=%s\nROMULUS_OIDC_CLIENT_SECRET=%s\n' \
     "$issuer" "$client_id" "$client_secret" > "$OUT/.oidc.env.tmp"
 jq . <<<"$users" > "$OUT/.users.json.tmp"
@@ -271,4 +331,6 @@ chmod 600 "$OUT/.oidc.env.tmp"
 mv "$OUT/.oidc.env.tmp" "$OUT/oidc.env"
 mv "$OUT/.users.json.tmp" "$OUT/users.json"
 
-log "ready: issuer $issuer, client $client_id, users $(jq -r 'map(.email) | join(", ")' <<<"$users")"
+admin=$(api POST /v2/users '{"queries":[{"userNameQuery":{"userName":"admin","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' \
+    | jq -r '.result[0].preferredLoginName // "?"')
+log "ready: issuer $issuer, client $client_id, console admin $admin, test users $(jq -r 'map(.email) | join(", ") | if . == "" then "none" else . end' <<<"$users")"
