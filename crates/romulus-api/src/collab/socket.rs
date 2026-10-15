@@ -36,7 +36,7 @@ const PING_EVERY: Duration = Duration::from_secs(25);
 /// Members only (reviewers watch: their document updates are dropped).
 /// Messages: y-sync (sync, awareness) plus server events (tag 100, see the
 /// `ServerEvent` schema). Close codes: 1012 server restarting, 4000 too
-/// slow, 4001 membership changed (reconnect), 4004 draft deleted (do not).
+/// slow, 4001 membership changed (reconnect), 4404 draft deleted (do not).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/drafts/{id}/ws",

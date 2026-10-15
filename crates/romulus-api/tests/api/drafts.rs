@@ -186,7 +186,7 @@ async fn deleting_hides_the_draft_and_lets_its_editors_go(db: PgPool) {
     assert_eq!(deleted.status, StatusCode::NO_CONTENT);
 
     editor.until(|c| c.closed.is_some()).await;
-    assert_eq!(editor.closed, Some(4004));
+    assert_eq!(editor.closed, Some(4404));
     assert_eq!(editor.last_event("status").unwrap()["status"], "deleted");
     assert_eq!(
         app.as_user(&team.admin).get(&path).await.status,

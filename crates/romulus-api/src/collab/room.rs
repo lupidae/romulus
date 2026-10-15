@@ -139,8 +139,8 @@ pub mod close {
     /// The member's role changed or they were removed: reconnect, to get
     /// the rights they have now (or be refused).
     pub const MEMBERSHIP: u16 = 4001;
-    /// The draft was deleted: do not reconnect.
-    pub const DELETED: u16 = 4004;
+    /// The draft was deleted: do not reconnect (4400–4499: final, as y-websocket reads them).
+    pub const DELETED: u16 = 4404;
     /// The draft could not be loaded.
     pub const UNAVAILABLE: u16 = 1011;
 }
