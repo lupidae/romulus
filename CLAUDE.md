@@ -300,8 +300,18 @@ stable `code` and a `Span` in bytes, UTF-16 (CodeMirror/Yjs) and line/column.
 
 - **Pure tooling**: `parse(sql)` → statements with spans and `Key`s
   (`table:public.users`, `fk:public.orders.x_fkey`, `comment:column:…`;
-  `Key` round-trips through its string form). The statement-level merge and
-  graph edits build on it. `allowlist::check` is the server-side DDL gate.
+  `Key` round-trips through its string form). Unnamed objects are keyed by
+  the exact name Postgres gives them (suffixes included), and
+  `Statement::keys` lists every object a statement touches: the
+  statement-level merge and graph edits build on that (identity rules and
+  limits in `key.rs`). `parse` never fails: each broken statement is a
+  located error, the rest are still returned. `allowlist::check` is the
+  server-side DDL gate.
+- **Calling it from handlers**: `compile` is cancel-safe (a dropped request
+  never leaves a sandbox database dirty) and limited to
+  `upload_concurrency` of the pool so uploads cannot starve drafts;
+  per-user/org rate limits on uploads are the API's to add. Only results
+  the text alone determines are cached.
 - **What the compile adds, never in the model**: stubs for functions the SQL
   calls but does not define (created where Postgres would look; expressions
   print as on the real database), policy roles rewritten to PUBLIC and
