@@ -237,29 +237,34 @@ export function createSqlDiff(parent: HTMLElement, options: SqlDiffOptions): Sql
       return { dom, from: line.from, to: line.to };
     });
   };
+  // Lines painted last time: what to clear when the selection leaves.
+  let painted: HTMLElement[] = [];
   const paintOld = (view: EditorView) => {
+    for (const dom of painted) dom.classList.remove("cm-statement", "cm-statement-related");
+    painted = [];
     const ranges = [
       ...(oldHighlights.primary ? [{ ...oldHighlights.primary, cls: "cm-statement" }] : []),
       ...oldHighlights.related.map((r) => ({ ...r, cls: "cm-statement-related" })),
     ];
+    if (!ranges.length) return;
     for (const chunkDom of view.contentDOM.querySelectorAll(".cm-deletedChunk")) {
       for (const line of deletedLines(view, chunkDom)) {
         const hit = ranges.find((r) => line.from < r.to && line.to >= r.from);
-        line.dom.classList.toggle("cm-statement", hit?.cls === "cm-statement");
-        line.dom.classList.toggle("cm-statement-related", hit?.cls === "cm-statement-related");
+        if (!hit) continue;
+        line.dom.classList.add(hit.cls);
+        painted.push(line.dom);
       }
     }
   };
-  const oldSide = [
-    ViewPlugin.define((view) => {
-      view.requestMeasure({ read: () => null, write: () => paintOld(view) });
-      return {
-        // Chunks are drawn during the update: paint after it.
-        update: (update) =>
-          update.view.requestMeasure({ read: () => null, write: () => paintOld(update.view) }),
-      };
-    }),
-  ];
+  // Deleted chunks are drawn as they scroll into view: paint them then (and
+  // only when something is selected on the old side), after the update.
+  const oldSide = ViewPlugin.define(() => ({
+    update: (update) => {
+      if (!update.viewportChanged && !update.docChanged) return;
+      if (!painted.length && !oldHighlights.primary && !oldHighlights.related.length) return;
+      update.view.requestMeasure({ read: () => null, write: () => paintOld(update.view) });
+    },
+  }));
 
   const view = new EditorView({
     parent,

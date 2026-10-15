@@ -103,6 +103,7 @@ export function SqlDiff({
     let cancelled = false;
     void import("../sql-diff/merge").then(({ createSqlDiff }) => {
       if (cancelled || !host.current) return;
+      const started = performance.now();
       created = createSqlDiff(host.current, {
         before,
         after,
@@ -114,6 +115,8 @@ export function SqlDiff({
           if (statement) latest.current.onCursor?.(statement, side);
         },
       });
+      // Read by the perf spec, like the graph's marks.
+      performance.measure(`sql diff: ${layout} view built`, { start: started });
       setEditor(created);
     });
     return () => {

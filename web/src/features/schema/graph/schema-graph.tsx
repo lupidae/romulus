@@ -273,13 +273,32 @@ function GraphCanvas({
     return () => observer.disconnect();
   }, [ready, flow]);
 
+  /**
+   * How long a move to (cx, cy) at `zoom` animates: a short glide to what is
+   * near, a jump to what is far. Flying across a few hundred tables draws
+   * them all on the way (and zooms out mid-flight), frames of 100 ms and more.
+   */
+  const travel = useCallback(
+    (cx: number, cy: number, zoom: number, ms = 300) => {
+      const { width, height, transform } = flowStore.getState();
+      const [x, y, k] = transform;
+      const here = { x: (width / 2 - x) / k, y: (height / 2 - y) / k };
+      const far =
+        Math.hypot(cx - here.x, cy - here.y) > Math.max(width, height) / Math.min(k, zoom);
+      return far || Math.max(k, zoom) / Math.min(k, zoom) > 2.5 ? 0 : ms;
+    },
+    [flowStore],
+  );
+
   /** Pans (never zooms) just enough to bring a table into view. */
   const reveal = useCallback(
     (key: string) => {
       const box = boxOf(key);
-      const el = wrapper.current;
-      // A hidden graph has no size to center in (React Flow would go NaN).
-      if (!box || !el || el.clientWidth === 0) return;
+      // The pane's size as React Flow measured it: reading the element's
+      // would force a layout of the whole page on every pick. A hidden graph
+      // has none to center in (React Flow would go NaN).
+      const { width, height } = flowStore.getState();
+      if (!box || !width || !height) return;
       autoFit.current = false;
       const { x, y, zoom } = flow.getViewport();
       const left = box.x * zoom + x;
@@ -288,33 +307,31 @@ function GraphCanvas({
       const inside =
         left >= margin &&
         top >= margin &&
-        left + box.width * zoom <= el.clientWidth - margin &&
-        top + Math.min(box.height, 320) * zoom <= el.clientHeight - margin;
+        left + box.width * zoom <= width - margin &&
+        top + Math.min(box.height, 320) * zoom <= height - margin;
       if (!inside) {
-        void flow.setCenter(box.x + box.width / 2, box.y + Math.min(box.height, 320) / 2, {
-          zoom,
-          duration: 300,
-        });
+        const cx = box.x + box.width / 2;
+        const cy = box.y + Math.min(box.height, 320) / 2;
+        void flow.setCenter(cx, cy, { zoom, duration: travel(cx, cy, zoom) });
       }
     },
-    [boxOf, flow],
+    [boxOf, flow, flowStore, travel],
   );
 
   /** Centers a table at a zoom that shows it whole, never past 100%. */
   const zoomToTable = useCallback(
     (key: string) => {
       const box = boxOf(key);
-      const el = wrapper.current;
-      if (!box || !el || el.clientWidth === 0) return;
+      const { width, height } = flowStore.getState();
+      if (!box || !width || !height) return;
       autoFit.current = false;
-      const fit = Math.min(
-        el.clientWidth / (box.width + 320),
-        el.clientHeight / (box.height + 200),
-      );
+      const fit = Math.min(width / (box.width + 320), height / (box.height + 200));
       const zoom = Math.max(0.45, Math.min(1, fit));
-      void flow.setCenter(box.x + box.width / 2, box.y + box.height / 2, { zoom, duration: 400 });
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      void flow.setCenter(cx, cy, { zoom, duration: travel(cx, cy, zoom, 400) });
     },
-    [boxOf, flow],
+    [boxOf, flow, flowStore, travel],
   );
 
   // Once the flow has fitted its first view, so that fit does not undo it.
@@ -323,9 +340,15 @@ function GraphCanvas({
   useEffect(() => {
     zoomTo.current = zoomToTable;
   });
+  // The table a zoom is on its way to: no pan to it first.
+  const zooming = useRef<string | null>(null);
   useEffect(() => {
     if (!focus || !initialized) return;
-    const frame = requestAnimationFrame(() => zoomTo.current(focus.key));
+    zooming.current = focus.key;
+    const frame = requestAnimationFrame(() => {
+      zooming.current = null;
+      zoomTo.current(focus.key);
+    });
     return () => cancelAnimationFrame(frame);
   }, [focus, initialized]);
 
@@ -333,7 +356,8 @@ function GraphCanvas({
     if (selected === undefined) return;
     store.set({ selected });
     // A selection made elsewhere (the text pane) brings the table into view.
-    if (selected && localPick.current !== selected) reveal(selected);
+    if (selected && localPick.current !== selected && zooming.current !== selected)
+      reveal(selected);
     localPick.current = undefined;
   }, [selected, store, reveal]);
 

@@ -15,16 +15,20 @@ import { SchemaDiffView } from "@/features/diff/components/schema-diff-view";
 import type { Layout } from "@/features/schema/layout";
 import { parseSchema } from "@/features/schema/model";
 import { devRoutes } from "@/lib/dev-routes";
+import { useDebounced } from "@/lib/use-debounced";
 
 import { orgs, user } from "./-fixtures";
 
 // The diff view on the blog fixture (v1 → v2), inside the app shell, for
 // building and reviewing it without a stack. Dev builds only.
+//   ?fixture=large                300 tables, a tenth of them changed (the perf spec's)
+//   ?fixture=large-all            300 tables, every one changed
 //   ?state=loading|identical      the other states
 //   ?change=table:public.posts    the selected change
 //   ?show=added|removed|changed   the filter
 
 interface Search {
+  fixture?: "large" | "large-all";
   state?: "loading" | "identical";
   change?: string;
   show?: ChangeFilter;
@@ -64,6 +68,8 @@ const VERSIONS: VersionSummary[] = [
 
 export const Route = createFileRoute("/dev/diff")({
   validateSearch: (search: Record<string, unknown>): Search => ({
+    fixture:
+      search.fixture === "large" || search.fixture === "large-all" ? search.fixture : undefined,
     state: search.state === "loading" || search.state === "identical" ? search.state : undefined,
     change: typeof search.change === "string" ? search.change : undefined,
     show:
@@ -71,10 +77,16 @@ export const Route = createFileRoute("/dev/diff")({
         ? search.show
         : undefined,
   }),
+  loaderDeps: ({ search }) => ({ fixture: search.fixture }),
   beforeLoad: () => {
     if (!devRoutes) throw notFound();
   },
-  loader: async () => {
+  loader: async ({ deps }) => {
+    if (deps.fixture) {
+      const { largeDiffFixture } = await import("@/features/schema/fixtures/synthetic-diff");
+      const every = deps.fixture === "large-all";
+      return { ...largeDiffFixture(300, { every }), layout: undefined, large: true };
+    }
     const [before, after, diff, sqlBefore, sqlAfter] = await Promise.all([
       import("@/features/schema/fixtures/blog.json"),
       import("@/features/schema/fixtures/blog-v2.json"),
@@ -87,6 +99,8 @@ export const Route = createFileRoute("/dev/diff")({
       after: parseSchema(after.default),
       diff: diff.default as unknown as SchemaDiff,
       sql: { before: sqlBefore.default, after: sqlAfter.default },
+      layout: LAYOUT,
+      large: false,
     };
   },
   pendingMs: 0,
@@ -98,6 +112,12 @@ function DiffPreview() {
   const data = Route.useLoaderData();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  // As on the real page: the address follows once the reader pauses.
+  const selectInUrl = useDebounced(
+    (change: string | null) =>
+      void navigate({ search: (s) => ({ ...s, change: change ?? undefined }), replace: true }),
+    250,
+  );
   const nav = (
     <SidebarNav aria-label="Organization">
       <SidebarSection>
@@ -129,7 +149,9 @@ function DiffPreview() {
     >
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex min-h-14 shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
-          <h1 className="text-lg font-semibold text-foreground">Blog</h1>
+          <h1 className="text-lg font-semibold text-foreground">
+            {data.large ? "Warehouse" : "Blog"}
+          </h1>
           <Badge variant="outline">Dev fixture</Badge>
         </div>
         <CompareBar
@@ -157,15 +179,11 @@ function DiffPreview() {
               after={data.after}
               diff={data.diff}
               sql={data.sql}
-              layout={LAYOUT}
+              key={search.fixture ?? "blog"}
+              layout={data.layout}
               labels={{ before: "v1", after: "v2" }}
               defaultSelected={search.change}
-              onSelectedChange={(change) =>
-                void navigate({
-                  search: (s) => ({ ...s, change: change ?? undefined }),
-                  replace: true,
-                })
-              }
+              onSelectedChange={selectInUrl}
               filter={search.show ?? "all"}
               onFilterChange={(show) =>
                 void navigate({

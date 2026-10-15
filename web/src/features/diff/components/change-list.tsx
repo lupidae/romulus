@@ -104,6 +104,12 @@ export function ChangeList({
   const shown = filterSections(sections, filter);
   const list = React.useRef<HTMLDivElement>(null);
   const headingId = React.useId();
+  // One function for every row, whatever the parent passes: rows stay memoized.
+  const latest = React.useRef(onSelect);
+  React.useEffect(() => {
+    latest.current = onSelect;
+  });
+  const select = React.useCallback((item: ChangeItem) => latest.current(item), []);
 
   // The selection, wherever it came from (the graph, j/k), stays in sight;
   // and focus with it, when focus was in the list.
@@ -205,7 +211,7 @@ export function ChangeList({
                       item={item}
                       selected={item.id === selected}
                       multiSchema={multiSchema}
-                      onSelect={() => onSelect(item)}
+                      onSelect={select}
                     />
                   </li>
                 ))}
@@ -232,7 +238,8 @@ export function ChangeList({
   );
 }
 
-function ChangeRow({
+/** One object; memoized: a pick re-renders the two rows it concerns, not hundreds. */
+const ChangeRow = React.memo(function ChangeRow({
   item,
   selected,
   multiSchema,
@@ -241,7 +248,7 @@ function ChangeRow({
   item: ChangeItem;
   selected: boolean;
   multiSchema: boolean;
-  onSelect: () => void;
+  onSelect: (item: ChangeItem) => void;
 }) {
   const lines = detailLines(item);
   const visible = selected ? lines : lines.slice(0, PREVIEW_LINES);
@@ -258,7 +265,7 @@ function ChangeRow({
       // Named by the object and its status; its lines describe it.
       aria-label={`${name}, ${STATUS_LABEL[item.status].toLowerCase()}${kind ? `, ${kind}` : ""}`}
       aria-describedby={lines.length ? linesId : undefined}
-      onClick={onSelect}
+      onClick={() => onSelect(item)}
       className={cn(
         "grid h-auto w-full grid-cols-[1rem_minmax(0,1fr)] items-start justify-stretch gap-x-2 gap-y-0.5 px-1.5 py-1.5 text-left font-normal whitespace-normal sm:h-auto",
         // A finger needs 44px: rows grow on touch screens.
@@ -293,4 +300,4 @@ function ChangeRow({
       )}
     </Button>
   );
-}
+});

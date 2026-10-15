@@ -15,6 +15,7 @@ import { Identical } from "@/features/diff/components/identical";
 import { SchemaDiffView } from "@/features/diff/components/schema-diff-view";
 import { diffQuery, parseRange, rangeParam } from "@/features/diff/queries";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
+import { useDebounced } from "@/lib/use-debounced";
 
 // Two versions compared, at /app/<org>/<db>/diff/<from>...<to>, shareable
 // with what is selected (?change=) and the filter (?show=).
@@ -70,6 +71,18 @@ function Compare() {
   const versions = useInfiniteQuery({ ...versionsQuery(org, db), enabled: pickerOpened });
   const missing = Math.max(from, to) > latest;
   const diff = useQuery({ ...diffQuery(org, db, database.id, from, to), enabled: !missing });
+
+  // The address follows the selection, once the reader pauses: j held down
+  // would otherwise match the routes again on every step.
+  const selectInUrl = useDebounced(
+    (change: string | null) =>
+      void navigate({
+        search: (s) => ({ ...s, change: change ?? undefined }),
+        replace: true,
+        resetScroll: false,
+      }),
+    250,
+  );
 
   const compare = (f: number, t: number) =>
     void navigate({
@@ -166,13 +179,7 @@ function Compare() {
         groups={diff.data.layout.groups}
         labels={{ before: `v${from}`, after: `v${to}` }}
         defaultSelected={search.change}
-        onSelectedChange={(change) =>
-          void navigate({
-            search: (s) => ({ ...s, change: change ?? undefined }),
-            replace: true,
-            resetScroll: false,
-          })
-        }
+        onSelectedChange={selectInUrl}
         filter={search.show ?? "all"}
         onFilterChange={(show) =>
           void navigate({
