@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use romulus_api::{ApiError, db, domain::Role};
-use sqlx::{PgExecutor, PgPool};
+use sqlx::{PgExecutor, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::harness::{database, member, org, user};
@@ -118,6 +118,89 @@ async fn concurrent_demotions_cannot_strand_an_organization(db: PgPool) {
     assert_eq!(db::constraint(&err), Some(db::ORGANIZATION_NEEDS_AN_ADMIN));
 }
 
+/// A transaction at `isolation` (a `SET TRANSACTION …` statement) whose
+/// snapshot is already taken, as an application transaction would have after
+/// its first read.
+async fn begin_at(db: &PgPool, isolation: &'static str) -> Transaction<'static, Postgres> {
+    let mut tx = db.begin().await.unwrap();
+    sqlx::query(isolation).execute(&mut *tx).await.unwrap();
+    sqlx::query("SELECT count(*) FROM memberships")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx
+}
+
+async fn admins(db: &PgPool, org: Uuid) -> i64 {
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM memberships WHERE org_id = $1 AND role = 'admin'"#,
+        org
+    )
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+/// With a fixed snapshot, the second demotion would still count the admin the
+/// first one demoted. The trigger writes the organization row, so Postgres
+/// aborts the second transaction instead of letting it strand the org.
+async fn stale_snapshot_demotion_is_aborted(db: PgPool, isolation: &'static str) {
+    let (acme, alice, bob) = (
+        org(&db, "acme").await,
+        user(&db, "Alice").await,
+        user(&db, "Bob").await,
+    );
+    member(&db, acme, alice, Role::Admin).await;
+    member(&db, acme, bob, Role::Admin).await;
+
+    let mut first = begin_at(&db, isolation).await;
+    let mut second = begin_at(&db, isolation).await;
+    set_role(&mut *first, acme, alice, Role::Developer)
+        .await
+        .unwrap();
+    first.commit().await.unwrap();
+
+    let err = set_role(&mut *second, acme, bob, Role::Developer)
+        .await
+        .unwrap_err();
+    assert!(db::is_serialization_failure(&err), "{err}");
+    assert_eq!(ApiError::from(err).code(), "concurrent_change");
+    second.rollback().await.unwrap();
+    assert_eq!(admins(&db, acme).await, 1);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn repeatable_read_demotions_cannot_strand_an_organization(db: PgPool) {
+    stale_snapshot_demotion_is_aborted(db, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ").await;
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn serializable_demotions_cannot_strand_an_organization(db: PgPool) {
+    stale_snapshot_demotion_is_aborted(db, "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn membership_changes_do_not_touch_the_organization_timestamp(db: PgPool) {
+    let (acme, alice, bob) = (
+        org(&db, "acme").await,
+        user(&db, "Alice").await,
+        user(&db, "Bob").await,
+    );
+    member(&db, acme, alice, Role::Admin).await;
+    member(&db, acme, bob, Role::Admin).await;
+    let before = sqlx::query_scalar!("SELECT updated_at FROM organizations WHERE id = $1", acme)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+
+    set_role(&db, acme, bob, Role::Developer).await.unwrap();
+    let after = sqlx::query_scalar!("SELECT updated_at FROM organizations WHERE id = $1", acme)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+}
+
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn deleting_an_organization_takes_its_last_admin_along(db: PgPool) {
     let (acme, alice) = (org(&db, "acme").await, user(&db, "Alice").await);
@@ -159,6 +242,44 @@ async fn versions_are_immutable(db: PgPool) {
     .await
     .unwrap_err();
     assert_eq!(db::constraint(&err), Some("versions_are_immutable"));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn versions_go_only_with_their_database(db: PgPool) {
+    let acme = org(&db, "acme").await;
+    let shop = database(&db, acme, "shop").await;
+    let v1 = version(&db, shop, 1).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO drafts (database_id, name, base_version_id) VALUES ($1, 'Draft from v1', $2)",
+        shop,
+        v1
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let err = sqlx::query!("DELETE FROM versions WHERE id = $1", v1)
+        .execute(&db)
+        .await
+        .unwrap_err();
+    assert_eq!(db::constraint(&err), Some(db::VERSIONS_ARE_PERMANENT));
+    assert_eq!(ApiError::from(err).code(), "version_immutable");
+
+    sqlx::query!("DELETE FROM databases WHERE id = $1", shop)
+        .execute(&db)
+        .await
+        .unwrap();
+    let blog = database(&db, acme, "blog").await;
+    version(&db, blog, 1).await.unwrap();
+    sqlx::query!("DELETE FROM organizations WHERE id = $1", acme)
+        .execute(&db)
+        .await
+        .unwrap();
+    let left = sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM versions"#)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

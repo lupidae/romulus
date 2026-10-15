@@ -24,6 +24,7 @@ COMMENT ON COLUMN drafts.base_version_id IS
 
 -- The database page lists open drafts.
 CREATE INDEX drafts_open_database_id_idx ON drafts (database_id) WHERE status = 'open';
+CREATE INDEX drafts_created_by_idx ON drafts (created_by) WHERE created_by IS NOT NULL;
 
 CREATE TRIGGER drafts_set_updated_at BEFORE UPDATE ON drafts
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();

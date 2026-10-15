@@ -20,6 +20,8 @@ COMMENT ON TABLE databases IS 'A schema kept in romulus. Soft-deleted: deleted_a
 -- database frees its slug, so "prod" can be created again after deleting it.
 CREATE UNIQUE INDEX databases_org_id_slug_key ON databases (org_id, slug) WHERE deleted_at IS NULL;
 
+CREATE INDEX databases_created_by_idx ON databases (created_by) WHERE created_by IS NOT NULL;
+
 CREATE TRIGGER databases_set_updated_at BEFORE UPDATE ON databases
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -39,6 +41,7 @@ COMMENT ON TABLE api_tokens IS 'Per-database bearer tokens for remus and CI. Rev
 COMMENT ON COLUMN api_tokens.token_hash IS 'sha256 of the token; the token itself is shown once.';
 
 CREATE INDEX api_tokens_database_id_idx ON api_tokens (database_id);
+CREATE INDEX api_tokens_created_by_idx ON api_tokens (created_by) WHERE created_by IS NOT NULL;
 
 CREATE TABLE versions (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -85,3 +88,23 @@ $$;
 
 CREATE TRIGGER versions_are_immutable BEFORE UPDATE ON versions
     FOR EACH ROW EXECUTE FUNCTION versions_are_immutable();
+
+CREATE FUNCTION versions_are_permanent() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    -- History only goes with its database (ON DELETE CASCADE, by then the
+    -- databases row is gone). Databases are soft-deleted in the product.
+    IF EXISTS (SELECT 1 FROM databases WHERE id = OLD.database_id) THEN
+        RAISE EXCEPTION 'version % cannot be deleted', OLD.id
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'versions_are_permanent';
+    END IF;
+    RETURN OLD;
+END
+$$;
+
+CREATE TRIGGER versions_are_permanent BEFORE DELETE ON versions
+    FOR EACH ROW EXECUTE FUNCTION versions_are_permanent();
+
+CREATE INDEX versions_created_by_idx ON versions (created_by) WHERE created_by IS NOT NULL;
+CREATE INDEX versions_created_by_token_idx ON versions (created_by_token)
+    WHERE created_by_token IS NOT NULL;

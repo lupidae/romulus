@@ -15,8 +15,9 @@ CREATE TABLE organizations (
 COMMENT ON TABLE organizations IS
     'romulus owns organizations, memberships and roles; Zitadel is identity only.';
 
+-- Only real changes: memberships_keep_an_admin rewrites the row unchanged.
 CREATE TRIGGER organizations_set_updated_at BEFORE UPDATE ON organizations
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    FOR EACH ROW WHEN (OLD.* IS DISTINCT FROM NEW.*) EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE memberships (
     org_id uuid NOT NULL REFERENCES organizations ON DELETE CASCADE,
@@ -37,10 +38,15 @@ BEGIN
     IF OLD.role <> 'admin' OR (TG_OP = 'UPDATE' AND NEW.role = 'admin' AND NEW.org_id = OLD.org_id) THEN
         RETURN NULL;
     END IF;
-    -- Serialises membership changes per organization: without the lock, two
-    -- admins demoting each other concurrently would each still see the other.
-    -- NO KEY UPDATE does not block inserts that reference the organization.
-    PERFORM 1 FROM organizations WHERE id = OLD.org_id FOR NO KEY UPDATE;
+    -- Serialises membership changes per organization by writing (unchanged)
+    -- the organization row; a row lock alone is not enough. Under READ
+    -- COMMITTED a concurrent change waits here, then counts admins with a
+    -- fresh snapshot. Under REPEATABLE READ or SERIALIZABLE its snapshot is
+    -- fixed and would still see the admin the other transaction demoted; the
+    -- write makes Postgres abort it instead (40001 serialization_failure, which
+    -- the caller retries). Not a key column, so inserts referencing the
+    -- organization are not blocked.
+    UPDATE organizations SET name = name WHERE id = OLD.org_id;
     IF NOT FOUND THEN
         -- The organization itself is being deleted (ON DELETE CASCADE).
         RETURN NULL;
@@ -73,6 +79,9 @@ CREATE TABLE invitations (
     created_by uuid REFERENCES users ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Deleting a user sets its authorship to NULL: without these, a scan per table.
+CREATE INDEX invitations_created_by_idx ON invitations (created_by) WHERE created_by IS NOT NULL;
 
 COMMENT ON TABLE invitations IS
     'Copy-link invitations (no email provider in the MVP). Accepting requires a signed-in user whose verified email equals email.';
