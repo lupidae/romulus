@@ -25,3 +25,8 @@ node_modules/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# The preview's host-only files (deploy/preview/deploy.sh writes them there)
+/deploy/preview/.env
+/deploy/preview/.host
+/deploy/preview/state/

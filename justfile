@@ -120,9 +120,10 @@ site: env
     port=$(sed -n 's/^ROMULUS_SITE_PORT=//p' .env)
     node site/serve.mjs "$port"
 
-# the homepage's checks: tokens and fonts in sync with web/, then Playwright and axe
+# the homepage's checks: tokens and fonts in sync with web/, the edge proxy's tests, then Playwright and axe
 site-check: env
     node site/tools/sync.mjs --check
+    npm --prefix site run test:edge
     npm --prefix site run e2e
 
 # re-copy tokens and fonts from web/, re-render the social image and the icons
@@ -151,6 +152,7 @@ site-lighthouse: env
             "$PWD/site/lighthouse/$preset.report.json" "$preset"
     done
 
-# publish the homepage to Cloudflare Pages (site/wrangler.toml; `npx wrangler login` once)
+# publish the homepage and its Function (/app, /api → the preview's API) to Cloudflare Pages
+# (site/wrangler.toml; `npx wrangler login` once, or CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID)
 site-deploy:
-    cd site && npx --yes wrangler@4.151.0 pages deploy
+    cd site && npx --yes wrangler@4.151.0 pages deploy --branch main

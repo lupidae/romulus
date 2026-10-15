@@ -1,10 +1,20 @@
 # Cloudflare Pages project for the homepage. Nothing to build: public/ is the
-# site as served (_headers for response headers, 404.html for unknown paths).
+# site as served (_headers for response headers, 404.html for unknown paths),
+# and functions/ the Function that proxies /app and /api to the API
+# (edge/proxy.js; public/_routes.json keeps it off every other path).
 #
 #   just site-deploy     (npx wrangler login once; CI never deploys)
 #
 # The custom domain (romulus.lupidae.com) is attached once in the Pages
 # dashboard: Pages has no wrangler.toml setting for it. See site/README.md.
+# The Function's secret, ROMULUS_EDGE_KEY, is set with
+# deploy/preview/cloudflare.sh edge-key (deploy/preview/README.md).
 name = "romulus-site"
 pages_build_output_dir = "./public"
 compatibility_date = "2026-10-01"
+
+[vars]
+# The one public origin: other hostnames (pages.dev, previews) redirect to it.
+ROMULUS_PUBLIC_HOST = "romulus.lupidae.com"
+# The tunnel hostname of the API (deploy/preview/cloudflare.sh).
+ROMULUS_ORIGIN = "https://romulus-origin.lupidae.com"

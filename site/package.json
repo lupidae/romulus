@@ -12,7 +12,8 @@
     "sync": "node tools/sync.mjs",
     "sync:check": "node tools/sync.mjs --check",
     "assets": "node tools/assets.mjs",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "test:edge": "node --test \"edge/*.test.mjs\""
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",

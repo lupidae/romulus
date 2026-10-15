@@ -35,10 +35,11 @@ The CSP allows one inline script by hash: if you edit the theme script in
 
 ## Deploy (Cloudflare Pages)
 
-Not deployed by CI. With `npx wrangler login` done once:
+Not deployed by CI. With `npx wrangler login` done once (or
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the environment):
 
 ```bash
-just site-deploy              # wrangler@4.151.0 pages deploy, project "romulus-site"
+just site-deploy              # wrangler@4.151.0 pages deploy --branch main: production, Function included
 ```
 
 Or connect the repository in the Pages dashboard with these settings:
@@ -54,19 +55,14 @@ Then attach the custom domain `romulus.lupidae.com` in the project's Custom
 domains tab (Pages has no wrangler.toml setting for it).
 
 **Links into the app** are root-relative (`/app/signin`, and `/app/…`,
-`/api/…` wherever they appear). The homepage is hosted on Pages and the app's
-host is not decided yet, so until then those links 404 on Pages. When it is,
-add one of these to `public/_redirects`:
-
-```
-# the app on its own host: send visitors there
-/app/*  https://<app host>/app/:splat  302
-```
-
-or keep one origin by proxying `/app/*` and `/api/*` to the API (a Pages
-Function or a Worker route in front of Pages), which is the MVP's shape: the
-API serves the SPA at `/app` and itself at `/api`. If the API ever serves this
-directory at `/` instead, it must send the `_headers` equivalents itself.
+`/api/…` wherever they appear): one origin. The Pages Function
+(`functions/_middleware.js`, logic and tests in `edge/`) proxies `/app` and
+`/api` to the API, websockets included, and `public/_routes.json` keeps it off
+every other path, so the homepage stays static. The API's origin, its edge
+key and the rest of the preview are in `deploy/preview/README.md`. `_headers`
+applies to static files only (Pages never applies it to a Function's
+responses): the homepage's CSP does not reach the app, whose headers come
+from the API.
 
 ## Decisions
 

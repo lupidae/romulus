@@ -14,8 +14,11 @@ crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, a
 deploy/sandbox/       the sandbox image: Postgres 17 + PostGIS + pgvector, allowlisted extensions trusted
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
-site/                 the static homepage (tokens copied from web/; see site/README.md)
-deploy/zitadel/       the provisioner that sets Zitadel up on `just up`, and the login's brand assets
+site/                 the static homepage (tokens copied from web/; see site/README.md); its Pages
+                      Function (functions/, edge/proxy.js) proxies /app and /api to the API
+deploy/zitadel/       the provisioner that sets Zitadel up on `just up` (and on deploys), and the login's brand assets
+deploy/preview/       the preview at romulus.lupidae.com: compose, deploy.sh, cloudflare.sh; README = runbook
+Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
 docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner, mail (Mailpit)
 .superset/            workspace setup/teardown (Superset worktrees boot configured)
@@ -85,10 +88,14 @@ copy-link invitations…). Change one with a reason, in MVP.md first.
 
 Made in the skeleton (S0):
 
-- **One origin.** Production: the API serves the homepage at `/`, the SPA at
-  `/app`, itself at `/api`. Dev mirrors it: Vite serves `/app` (base and router
-  `basepath`) and proxies `/api` (REST and websockets) without rewriting `Host`,
-  so cookies are first-party and the API sees the real `Origin`.
+- **One origin.** Production: the homepage at `/`, the SPA at `/app`, the API
+  at `/api`. The preview (deploy/preview) serves `/` from Cloudflare Pages and
+  proxies `/app` and `/api` with a Pages Function to the API, which serves the
+  SPA build itself (`ROMULUS_WEB_DIR`, the `web` module) and refuses requests
+  without the Function's edge key (`ROMULUS_EDGE_KEY`, the `edge` module).
+  Dev mirrors it: Vite serves `/app` (base and router `basepath`) and proxies
+  `/api` (REST and websockets) without rewriting `Host`, so cookies are
+  first-party and the API sees the real `Origin`.
 - **Sandbox Postgres is 17**, because `pg_query` 6.2.1 bundles libpg_query
   built from PostgreSQL 17.7. Bump both together (and the PostGIS/pgvector
   versions in `deploy/sandbox/Dockerfile`); `Compiler::start` refuses a

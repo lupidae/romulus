@@ -445,3 +445,7 @@ Two features, built in this order:
 - Invitations are copy-link; no email provider in the MVP.
 - Zitadel is identity only; romulus owns organizations and roles.
 - One API instance in the MVP (Yjs docs in memory).
+- Preview hosting (deploy/preview): the homepage on Cloudflare Pages; `/app`
+  and `/api` proxied to the API by a Pages Function, keeping one origin; the
+  API, Zitadel and the databases in containers, behind a Cloudflare
+  Tunnel. No Cloudflare Access: romulus's own sign-in protects it.

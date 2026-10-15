@@ -91,7 +91,14 @@ if [ "${1:-}" = verify-email ]; then
     fi
     user_id=$(jq -r '.[0].userId' <<<"$found")
     email=$(jq -r '.[0].human.email.email' <<<"$found")
-    api POST "/v2/users/$user_id/email" "$(jq -cn --arg e "$email" '{email: $e, isVerified: true}')" >/dev/null
+    if [ "$(jq -r '.[0].human.email.isVerified // false' <<<"$found")" = true ]; then
+        log "$email is already verified"
+        exit 0
+    fi
+    # A fresh code, handed to us instead of mailed, then used: Zitadel
+    # refuses to "change" an address to itself with isVerified.
+    code=$(api POST "/v2/users/$user_id/email/resend" '{"returnCode": {}}' | jq -r .verificationCode)
+    api POST "/v2/users/$user_id/email/verify" "$(jq -cn --arg c "$code" '{verificationCode: $c}')" >/dev/null
     log "verified $email ($user_id, $(jq -r '.[0].preferredLoginName' <<<"$found"))"
     exit 0
 fi
@@ -331,6 +338,7 @@ chmod 600 "$OUT/.oidc.env.tmp"
 mv "$OUT/.oidc.env.tmp" "$OUT/oidc.env"
 mv "$OUT/.users.json.tmp" "$OUT/users.json"
 
-admin=$(api POST /v2/users '{"queries":[{"userNameQuery":{"userName":"admin","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' \
+# Zitadel suffixes the first admin's username with the organization's domain.
+admin=$(api POST /v2/users '{"queries":[{"userNameQuery":{"userName":"admin@","method":"TEXT_QUERY_METHOD_STARTS_WITH"}}]}' \
     | jq -r '.result[0].preferredLoginName // "?"')
 log "ready: issuer $issuer, client $client_id, console admin $admin, test users $(jq -r 'map(.email) | join(", ") | if . == "" then "none" else . end' <<<"$users")"
