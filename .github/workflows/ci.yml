@@ -40,6 +40,9 @@ jobs:
       # The query macros check against this database, and #[sqlx::test]
       # creates its throwaway databases on the same server.
       DATABASE_URL: postgres://romulus:romulus@localhost:5432/romulus
+      # romulus-sandbox's integration tests compile against it (started below:
+      # a service cannot build an image).
+      ROMULUS_SANDBOX_URL: postgres://sandbox_admin:sandbox_admin@localhost:5433/postgres
     steps:
       - uses: actions/checkout@v5
 
@@ -62,6 +65,15 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --prefix web
+
+      - name: Start the sandbox Postgres
+        run: |
+          docker build -t romulus-sandbox deploy/sandbox
+          docker run -d --name sandbox -p 5433:5432 \
+            -e POSTGRES_USER=sandbox_admin -e POSTGRES_PASSWORD=sandbox_admin -e POSTGRES_DB=postgres \
+            romulus-sandbox postgres -c fsync=off -c wal_level=minimal -c max_wal_senders=0
+          for _ in $(seq 60); do docker exec sandbox pg_isready -U sandbox_admin -d postgres && exit 0; sleep 1; done
+          docker logs sandbox; exit 1
 
       - run: cargo sqlx migrate run --source migrations
       - run: just check

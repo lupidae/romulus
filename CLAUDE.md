@@ -10,6 +10,8 @@ remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
+crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, allowlist, stubs, compile pool
+deploy/sandbox/       the sandbox image: Postgres 17 + PostGIS + pgvector, allowlisted extensions trusted
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
 site/                 the static homepage (tokens copied from web/; see site/README.md)
@@ -85,8 +87,9 @@ Made in the skeleton (S0):
   `basepath`) and proxies `/api` (REST and websockets) without rewriting `Host`,
   so cookies are first-party and the API sees the real `Origin`.
 - **Sandbox Postgres is 17**, because `pg_query` 6.2.1 bundles libpg_query
-  built from PostgreSQL 17.7. Bump both together. The app database is 18
-  (`uuidv7()` ids).
+  built from PostgreSQL 17.7. Bump both together (and the PostGIS/pgvector
+  versions in `deploy/sandbox/Dockerfile`); `Compiler::start` refuses a
+  mismatch. The app database is 18 (`uuidv7()` ids).
 - **Zitadel v4.19.4 with its built-in login (v1)**, one container, no proxy.
   Login v1 disappears in v5: upgrading means adding the `zitadel-login`
   container and a path-routing proxy. The OIDC callback is
@@ -283,6 +286,40 @@ src/styles/globals.css   every token; the only file with raw colors
     it done.
 - **Collaborator colors**: `presenceIndex(userId)` (FNV-1a, 1–8) picks the
   `presence-N` token for avatars and cursors; the server can compute the same.
+
+## Sandbox compiler (`crates/romulus-sandbox`)
+
+The API will hold one `Compiler` (`Compiler::start(SandboxConfig::new(
+config.sandbox_url))` at startup, privileged: it creates the pool's roles and
+databases). `compile(sql)` for uploads, `compile_for(draft_id, sql)` for
+drafts (coalesced per draft: a superseded caller gets `Rejected::Superseded`
+and should drop it). Both return a `Compilation`: `model` (canonical,
+`database` = `"sandbox"`: set the real name) or `diagnostics`, each with a
+stable `code` and a `Span` in bytes, UTF-16 (CodeMirror/Yjs) and line/column.
+`SandboxError` means the sandbox itself failed: answer 503, don't store it.
+
+- **Pure tooling**: `parse(sql)` → statements with spans and `Key`s
+  (`table:public.users`, `fk:public.orders.x_fkey`, `comment:column:…`;
+  `Key` round-trips through its string form). The statement-level merge and
+  graph edits build on it. `allowlist::check` is the server-side DDL gate.
+- **What the compile adds, never in the model**: stubs for functions the SQL
+  calls but does not define (created where Postgres would look; expressions
+  print as on the real database), policy roles rewritten to PUBLIC and
+  restored, missing schemas, materialized views `WITH NO DATA`, statements
+  recreating extension objects (PostGIS's `spatial_ref_sys`…) skipped with
+  an info diagnostic. `crates/romulus-sandbox/src/prepare.rs` documents it.
+- **`render_sql(&Schema)`** is the SQL for a draft started from a JSON
+  version: remus-sql plus fixes (policy parentheses, index order), tested to
+  compile back to the same model. Use it, not `remus_sql::render`.
+- **One process per pool prefix** (`SandboxConfig::prefix`, an advisory
+  lock enforces it): the API uses `romulus_sandbox`, the crate's tests
+  `romulus_test*`. Queries to the sandbox are runtime `sqlx::query`/`raw_sql`
+  (not the macros: it is not the app database).
+- **Tests**: `just sandbox` starts only the sandbox (no Zitadel); the
+  integration tests read `ROMULUS_SANDBOX_URL` from `.env` and are skipped,
+  loudly, without it. CI starts the image itself.
+- Known remus gaps (documented on `render_sql`): `NOT VALID` CHECKs come back
+  validated, stand-alone range types are not modelled.
 
 ## Testing
 

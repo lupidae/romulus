@@ -32,6 +32,10 @@ up: env
     port=$(sed -n 's/^ROMULUS_ZITADEL_PORT=//p' .env)
     echo "up: ready. Zitadel http://localhost:$port, client in .dev/zitadel/oidc.env, users in .dev/zitadel/users.json"
 
+# only the sandbox Postgres (romulus-sandbox's tests need it; no Zitadel)
+sandbox: env
+    {{compose}} up -d --build --wait sandbox-postgres
+
 # stop the stack, keep its data
 down:
     {{compose}} down --remove-orphans
@@ -77,10 +81,10 @@ gen-check:
 # the full gate, as CI runs it (needs DATABASE_URL on a migrated database)
 check:
     cargo +{{nightly}} fmt --all --check
-    # --all-features: romulus-diff's `utoipa` feature (and its tests) included;
-    # the feature-off build is linted too, since the API may not enable it.
+    # --all-features: the `utoipa` features of romulus-diff and romulus-sandbox
+    # (and their tests) included; the feature-off builds are linted too.
     cargo clippy --workspace --all-targets --all-features -- -D warnings
-    cargo clippy -p romulus-diff --all-targets -- -D warnings
+    cargo clippy -p romulus-diff -p romulus-sandbox --all-targets -- -D warnings
     cargo test --workspace --all-features
     cargo sqlx prepare --workspace --check -- --all-targets
     just gen-check
