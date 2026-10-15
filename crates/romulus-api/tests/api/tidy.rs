@@ -178,11 +178,34 @@ fn foreign_compiler() -> SqlCompiler {
 async fn tidy_never_changes_the_schema(db: PgPool) {
     let hub = Hub::with_settings(db.clone(), foreign_compiler(), quick());
     let app = TestApp::with_state(AppState::new(db.clone(), Config::for_tests()).with_collab(hub));
-    let sql = "CREATE TABLE users (id bigint);\nCREATE FOREIGN TABLE remote (id int) SERVER s;\n";
-    let d = draft_in(&db, app, sql).await;
+    let d = draft_in(&db, app, "CREATE TABLE users (id bigint);\n").await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    alice
+        .edit(|roots, txn| {
+            roots
+                .sql
+                .push(txn, "CREATE FOREIGN TABLE remote (id int) SERVER s;\n")
+        })
+        .await;
+    alice
+        .until(|c| {
+            c.last_event("compile").is_some_and(|e| {
+                e["model"]["entities"]
+                    .as_array()
+                    .is_some_and(|all| all.iter().any(|t| t["kind"] == "f"))
+            })
+        })
+        .await;
+    let sql = alice.sql();
 
     let response = d.app.as_user(&d.team.developer).post_empty(&d.tidy).await;
-    assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        response.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{:?}",
+        response.json()
+    );
     assert_eq!(response.code(), "tidy_unsafe");
     assert_eq!(d.app.state.collab.content(d.id).await.unwrap().sql, sql);
 }
