@@ -1,5 +1,5 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import type * as React from "react";
+import * as React from "react";
 
 import { LogoMark, Wordmark } from "@/components/brand/logo";
 import {
@@ -20,6 +20,8 @@ import { Avatar, AvatarStack } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CopyField } from "@/components/ui/copy-field";
 import {
   Dialog,
   DialogClose,
@@ -52,6 +54,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toaster";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -83,6 +93,7 @@ const sections = [
   ["overlays", "Menu, Popover, Dialog, Toast"],
   ["feedback", "Alert, Spinner, Skeleton"],
   ["empty", "Empty state"],
+  ["table", "Table, CopyField, ConfirmDialog"],
   ["shell", "App shell"],
 ] as const;
 
@@ -148,6 +159,7 @@ function Kit() {
           <Overlays />
           <Feedback />
           <Empty />
+          <TableAndFriends />
           <ShellLinks />
         </main>
       </div>
@@ -393,12 +405,21 @@ function Forms() {
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="admin">Admin</SelectItem>
-              <SelectItem value="developer">Developer</SelectItem>
-              <SelectItem value="reviewer">Reviewer</SelectItem>
+            <SelectContent className="w-72">
+              <SelectItem value="admin" description="Everything, plus members and settings">
+                Admin
+              </SelectItem>
+              <SelectItem value="developer" description="Edits drafts, creates versions">
+                Developer
+              </SelectItem>
+              <SelectItem value="reviewer" description="Reads everything, edits nothing">
+                Reviewer
+              </SelectItem>
             </SelectContent>
           </Select>
+        </Field>
+        <Field label="URL" description="A prefix is part of the control, not the value.">
+          <Input prefix="romulus.app/app/" defaultValue="acme" className="font-mono" />
         </Field>
         <Field label="Disabled">
           <Input disabled defaultValue="read-only value" />
@@ -674,6 +695,74 @@ function Empty() {
             </Button>
           }
         />
+      </Card>
+    </Section>
+  );
+}
+
+function TableAndFriends() {
+  const [confirming, setConfirming] = React.useState(false);
+  const people = [
+    { id: "u-alice", name: "Alice Martin", email: "alice@acme.dev", role: "Admin" },
+    { id: "u-bob", name: "Bob Durand", email: "bob@acme.dev", role: "Developer" },
+  ];
+  return (
+    <Section id="table" title="Table, CopyField, ConfirmDialog">
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Member</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead className="hidden sm:table-cell">Joined</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {people.map((p) => (
+              <TableRow key={p.id}>
+                <TableCell className="w-full max-w-0">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Avatar id={p.id} name={p.name} size="lg" />
+                    <div className="grid min-w-0">
+                      <span className="truncate font-medium text-foreground">{p.name}</span>
+                      <span className="truncate text-muted-foreground">{p.email}</span>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge>{p.role}</Badge>
+                </TableCell>
+                <TableCell className="hidden text-muted-foreground tabular sm:table-cell">
+                  Oct 15
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </Card>
+      <Card className="grid gap-6 p-4">
+        <Specimen label="CopyField">
+          <CopyField
+            value="https://romulus.app/app/invite/0rW9xY3QmZ"
+            label="Invitation link"
+            className="w-full max-w-md"
+          />
+        </Specimen>
+        <Specimen label="ConfirmDialog">
+          <Button onClick={() => setConfirming(true)}>
+            <TrashIcon />
+            Remove member…
+          </Button>
+          <ConfirmDialog
+            open={confirming}
+            onOpenChange={setConfirming}
+            title="Remove Bob Durand from Acme?"
+            description="They lose access to its databases right away. You can invite them again later."
+            confirmLabel="Remove member"
+            destructive
+            onConfirm={() => new Promise((resolve) => setTimeout(resolve, 600))}
+          />
+        </Specimen>
       </Card>
     </Section>
   );

@@ -14,7 +14,38 @@ export const controlClasses = cn(
   "disabled:cursor-not-allowed disabled:bg-muted disabled:text-faint-foreground",
 );
 
-export function Input({ className, type = "text", ...props }: React.ComponentProps<"input">) {
+interface InputProps extends Omit<React.ComponentProps<"input">, "prefix"> {
+  /**
+   * Fixed text before the value, inside the control: `romulus.app/app/` before
+   * a slug. Not part of the value; id and aria-* still go to the input.
+   */
+  prefix?: React.ReactNode;
+}
+
+export function Input({ className, type = "text", prefix, ...props }: InputProps) {
+  if (prefix !== undefined) {
+    return (
+      <div
+        data-slot="input-group"
+        className={cn(
+          controlClasses,
+          "flex h-9 items-center overflow-hidden sm:h-8",
+          "has-[input:focus-visible]:border-ring has-[input:focus-visible]:ring-3 has-[input:focus-visible]:ring-ring/20",
+          "has-[input[aria-invalid=true]]:border-destructive has-[input[aria-invalid=true]:focus-visible]:ring-destructive/20",
+          "has-[input:disabled]:cursor-not-allowed has-[input:disabled]:bg-muted",
+          className,
+        )}
+      >
+        <span className="shrink-0 truncate pl-2.5 text-muted-foreground select-none">{prefix}</span>
+        <input
+          data-slot="input"
+          type={type}
+          className="h-full min-w-0 flex-1 bg-transparent pr-2.5 text-foreground outline-none placeholder:text-faint-foreground disabled:cursor-not-allowed disabled:text-faint-foreground"
+          {...props}
+        />
+      </div>
+    );
+  }
   return (
     <input
       data-slot="input"

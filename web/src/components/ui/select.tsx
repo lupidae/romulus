@@ -74,16 +74,22 @@ export function SelectLabel({
   );
 }
 
+/**
+ * An option. `description` adds a muted line under the label in the list
+ * (what a role allows, say); the trigger shows the label only.
+ */
 export function SelectItem({
   className,
   children,
+  description,
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Item>) {
+}: React.ComponentProps<typeof SelectPrimitive.Item> & { description?: React.ReactNode }) {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex h-8 cursor-pointer items-center rounded-md pr-8 pl-2 text-sm outline-none select-none",
+        "relative flex cursor-pointer rounded-md pr-8 pl-2 text-sm outline-none select-none",
+        description ? "flex-col items-start gap-0.5 py-1.5" : "h-8 items-center",
         "data-highlighted:bg-highlight data-highlighted:text-accent-foreground",
         // Keyboard focus also gets a ring: a fill alone is too faint to track.
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
@@ -93,7 +99,8 @@ export function SelectItem({
       {...props}
     >
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
-      <SelectPrimitive.ItemIndicator className="absolute right-2 flex items-center">
+      {description && <span className="text-xs text-muted-foreground">{description}</span>}
+      <SelectPrimitive.ItemIndicator className="absolute top-2 right-2 flex items-center">
         <CheckIcon className="size-4 text-primary" />
       </SelectPrimitive.ItemIndicator>
     </SelectPrimitive.Item>
