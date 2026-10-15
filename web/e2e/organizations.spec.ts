@@ -102,3 +102,25 @@ test("signing out ends the session", async ({ page }) => {
   await page.goto("./new");
   await expect(page).toHaveURL(/\/app\/signin\?next=%2Fapp%2Fnew$/);
 });
+
+test("a session ended elsewhere lands on sign-in, and stays there", async ({ page }) => {
+  await devSignIn(page, `ended-${Date.now()}@romulus.test`, "/app/new");
+  const slug = await createOrg(page, unique("Ended"));
+  await page.goto(`./${slug}/settings/members`);
+  await expect(page.getByRole("heading", { name: "Members" })).toBeVisible();
+
+  // Signed out in another tab: this one still believes it is signed in.
+  await page.evaluate(() =>
+    fetch("/api/auth/logout", { method: "POST", headers: { "X-Romulus-Csrf": "1" } }),
+  );
+  await page.getByRole("button", { name: "Invite" }).click();
+  await page.getByLabel("Email").fill("someone@romulus.test");
+  await page.getByRole("button", { name: "Create invite link" }).click();
+
+  const signin = new RegExp(`/app/signin\\?next=%2Fapp%2F${slug}%2Fsettings%2Fmembers`);
+  await expect(page).toHaveURL(signin);
+  await expect(page.getByRole("heading", { name: "Sign in to romulus" })).toBeVisible();
+  // Not bounced back by a cached user.
+  await page.waitForTimeout(1500);
+  await expect(page).toHaveURL(signin);
+});

@@ -83,7 +83,10 @@ function AcceptInvitation() {
 }
 
 function Invitation({ token, invitation }: { token: string; invitation: InvitationPreview }) {
-  const { org, email, role, invited_by: invitedBy, status } = invitation;
+  const { org, role, invited_by: invitedBy, status } = invitation;
+  // Present while the link can be used, which every state below the early
+  // returns is.
+  const email = invitation.email ?? "the invited address";
   const here = appPath(`/invite/${token}`);
   const askFor = invitedBy ?? `an admin of ${org.name}`;
 

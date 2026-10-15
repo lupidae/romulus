@@ -363,8 +363,11 @@ export interface components {
     };
     /** @description What an invitation link invites to, for its landing page. */
     InvitationPreview: {
-      /** @description The invited address: who has to be signed in to accept. */
-      email: string;
+      /**
+       * @description The invited address: who has to be signed in to accept. Only while
+       *     the link can still be used; a used or expired link no longer says.
+       */
+      email?: string | null;
       /** Format: date-time */
       expires_at: string;
       invited_by?: string | null;

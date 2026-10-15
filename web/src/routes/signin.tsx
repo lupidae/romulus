@@ -73,7 +73,11 @@ export const Route = createFileRoute("/signin")({
   }),
   // Already signed in: straight on to where the link was going.
   beforeLoad: async ({ context, search }) => {
-    const me = await context.queryClient.ensureQueryData(meQuery).catch(() => undefined);
+    // Asked again, never from the cache: the page also receives people whose
+    // session just ended.
+    const me = await context.queryClient
+      .fetchQuery({ ...meQuery, staleTime: 0 })
+      .catch(() => undefined);
     if (me) {
       const next = search.next?.startsWith("/app/") ? search.next.slice(4) : "/";
       throw redirect({ href: next, replace: true });

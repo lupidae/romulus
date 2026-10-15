@@ -6,6 +6,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ApiError } from "./api/client";
+import { meQuery } from "./features/auth/queries";
 import { orgKeys } from "./features/orgs/queries";
 import { routeTree } from "./routeTree.gen";
 
@@ -20,6 +21,9 @@ function onApiError(error: unknown, queryKey?: readonly unknown[]) {
   if (error.status === 401 && queryKey?.[0] !== "me") {
     const { pathname, search, hash } = window.location;
     if (pathname.startsWith("/app/signin")) return;
+    // The cached user is no longer signed in: without this, sign-in would
+    // find it and send them straight back here, and round it goes.
+    queryClient.removeQueries({ queryKey: meQuery.queryKey });
     void router.navigate({
       to: "/signin",
       search: {

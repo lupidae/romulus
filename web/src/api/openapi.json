@@ -1058,15 +1058,17 @@
         "description": "What an invitation link invites to, for its landing page.",
         "required": [
           "org",
-          "email",
           "role",
           "expires_at",
           "status"
         ],
         "properties": {
           "email": {
-            "type": "string",
-            "description": "The invited address: who has to be signed in to accept."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The invited address: who has to be signed in to accept. Only while\nthe link can still be used; a used or expired link no longer says."
           },
           "expires_at": {
             "type": "string",
