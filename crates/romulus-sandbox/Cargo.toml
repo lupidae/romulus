@@ -1,0 +1,37 @@
+[package]
+name = "romulus-sandbox"
+description = "Compiles draft SQL into a remus schema model on a sandbox Postgres: statement splitting and keys, the DDL allowlist, auto-stubs and the compile pool."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# `utoipa::ToSchema` on the diagnostic and statement types, so the API can put
+# compile results in its OpenAPI document.
+utoipa = ["dep:utoipa"]
+
+[dependencies]
+remus-core.workspace = true
+remus-sql.workspace = true
+
+# Pinned with the sandbox image: pg_query 6.2.1 bundles libpg_query built from
+# PostgreSQL 17.7, and deploy/sandbox runs PostgreSQL 17. Bump both together.
+pg_query = "=6.2.1"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+sqlx.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+dotenvy.workspace = true
+remus-core = { workspace = true, features = ["fixtures"] }
+
+[lints]
+workspace = true

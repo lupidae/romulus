@@ -26,9 +26,11 @@ services:
   # pinned to the one the `pg_query` crate's libpg_query parses (pg_query 6.2.1
   # → PostgreSQL 17.7), so the server-side allowlist and the compile agree on
   # the grammar. Bump both together. The image adds the allowlisted extensions
-  # (PostGIS, pgvector) and marks them trusted (deploy/sandbox). Ephemeral by
-  # design: nothing in it outlives a compile. Sized small: compiles touch only
-  # empty tables, and the pool keeps one connection per sandbox database.
+  # (PostGIS, pgvector) and marks them trusted (deploy/sandbox). Nothing is
+  # ever committed in it but the empty pool databases. Sized small: compiles
+  # touch only empty tables. Its data is on a volume, not tmpfs: every compile
+  # writes WAL (a PostGIS install is megabytes of catalog rows), which on tmpfs
+  # counts as memory; WAL is kept small and never archived instead.
   sandbox-postgres:
     build: deploy/sandbox
     image: romulus-sandbox:17.11-postgis3.6.4-pgvector0.8.7
@@ -37,13 +39,15 @@ services:
       POSTGRES_PASSWORD: sandbox_admin
       POSTGRES_DB: postgres
     command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off,
+              -c, wal_level=minimal, -c, max_wal_senders=0, -c, max_wal_size=128MB,
+              -c, min_wal_size=32MB, -c, checkpoint_timeout=60s,
               -c, shared_buffers=32MB, -c, work_mem=4MB, -c, maintenance_work_mem=32MB,
-              -c, max_connections=50]
-    mem_limit: 512m
+              -c, max_connections=60]
+    mem_limit: 768m
     ports:
       - 127.0.0.1:${ROMULUS_SANDBOX_PORT:?run scripts/dev-env}:5432
-    tmpfs:
-      - /var/lib/postgresql/data
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
     healthcheck:
       test: [CMD-SHELL, pg_isready -U sandbox_admin -d postgres]
       interval: 2s
@@ -134,5 +138,6 @@ services:
 
 volumes:
   postgres-data:
+  sandbox-data:
   zitadel-db-data:
   zitadel-bootstrap:

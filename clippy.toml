@@ -1,5 +1,5 @@
 # Proper nouns doc_markdown should not ask to wrap in backticks. ".." keeps the defaults.
-doc-valid-idents = ["..", "OpenAPI", "IdP", "OIDC", "PKCE", "CSRF", "Yjs", "Zitadel"]
+doc-valid-idents = ["..", "OpenAPI", "IdP", "OIDC", "PKCE", "CSRF", "Yjs", "Zitadel", "PostGIS", "CodeMirror"]
 
 # Handlers use crate::extract's wrappers, which answer rejections in the API's
 # JSON error format (see CLAUDE.md, "Errors").
