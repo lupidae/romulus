@@ -2099,7 +2099,7 @@
           "drafts"
         ],
         "summary": "Opens a draft live: the y-sync protocol over a websocket.",
-        "description": "Members only (reviewers watch: their document updates are dropped).\nMessages: y-sync (sync, awareness) plus server events (tag 100, see the\n`ServerEvent` schema). Close codes: 1012 server restarting, 4000 too\nslow, 4001 membership changed (reconnect), 4404 draft deleted (do not).",
+        "description": "Members only (reviewers watch: their document updates are dropped).\nMessages: y-sync (sync, awareness) plus server events (tag 100, see the\n`ServerEvent` schema). Close codes: 1012 server restarting, 4000 too\nslow, 4001 membership changed, 4002 no answer to pings (reconnect);\n4401 session ended, 4404 draft deleted, 4413 draft too large (do not).",
         "operationId": "draft_socket",
         "parameters": [
           {
@@ -5538,6 +5538,21 @@
                 "type": "string",
                 "enum": [
                   "version_created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The server could not store some edits (its database failing): they\nlive in the open tabs only.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "save_failed"
                 ]
               }
             }

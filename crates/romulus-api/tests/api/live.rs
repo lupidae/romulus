@@ -44,6 +44,7 @@ pub fn quick() -> Settings {
         compact_after: 200,
         idle_unload: Duration::from_millis(50),
         retry_unavailable: Duration::from_millis(200),
+        ..Settings::default()
     }
 }
 

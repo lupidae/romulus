@@ -36,6 +36,10 @@ pub struct NewVersion {
     /// otherwise [`StoreError::StaleBase`]. A draft publishes this way, so
     /// it never silently overwrites a version published meanwhile.
     pub expected_base: Option<Option<Uuid>>,
+    /// The draft this version publishes: marked `published` in the same
+    /// transaction, and nothing is stored unless it is still open
+    /// ([`StoreError::DraftNotOpen`]).
+    pub publishes_draft: Option<Uuid>,
 }
 
 /// Why [`store`] stored nothing.
@@ -47,6 +51,9 @@ pub enum StoreError {
         /// The latest version now.
         latest: Option<VersionSummary>,
     },
+    /// The draft being published was deleted or published meanwhile.
+    #[error("the draft is no longer open")]
+    DraftNotOpen,
     #[error(transparent)]
     Api(#[from] ApiError),
 }
@@ -62,6 +69,10 @@ impl From<StoreError> for ApiError {
     fn from(err: StoreError) -> Self {
         match err {
             StoreError::Api(err) => err,
+            StoreError::DraftNotOpen => ApiError::Conflict {
+                code: "draft_not_open",
+                message: "This draft was deleted or published meanwhile.".into(),
+            },
             StoreError::StaleBase { latest } => ApiError::Conflict {
                 code: STALE_BASE,
                 message: match &latest {
@@ -171,6 +182,21 @@ pub async fn store(
     )
     .fetch_one(&mut *tx)
     .await?;
+    if let Some(draft) = new.publishes_draft {
+        let marked = sqlx::query!(
+            "UPDATE drafts SET status = 'published', published_version_id = $2
+             WHERE id = $1 AND database_id = $3 AND status = 'open'",
+            draft,
+            id,
+            database_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+        if marked.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Err(StoreError::DraftNotOpen);
+        }
+    }
     tx.commit().await?;
     tracing::info!(database = %database_id, number, origin = ?new.origin, "version created");
     Ok(Stored::Created(summary(db, id).await?))

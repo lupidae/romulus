@@ -129,6 +129,9 @@ pub enum ServerEvent {
     /// The database has a new version (another draft was published): if
     /// it is not this draft's base, publishing now needs "Update draft".
     VersionCreated { number: i32 },
+    /// The server could not store some edits (its database failing): they
+    /// live in the open tabs only.
+    SaveFailed,
 }
 
 #[cfg(test)]

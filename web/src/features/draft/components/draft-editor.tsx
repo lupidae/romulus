@@ -18,7 +18,7 @@ import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
 
 import { draftExtensions, jumpTo, showDiagnostics } from "../collab";
 import { type Diagnostic, type Draft, draftKeys, draftQuery } from "../queries";
-import type { DraftSession, SessionState } from "../session";
+import { type DraftSession, mayEdit, type SessionState } from "../session";
 import {
   useDraftSession,
   usePeers,
@@ -81,13 +81,25 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
     if (versionCreated)
       void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
   }, [versionCreated, queryClient, org, db, draftId]);
-  // The server treats this connection as read-only though this page thought
-  // otherwise: a role changed. Catch up.
-  const readOnly = state?.readOnly;
+  // The server sees another role than this page thought: a role changed.
+  // Catch up.
+  const serverRole = state?.role ?? null;
   const isWriter = canWrite(orgData.role);
   React.useEffect(() => {
-    if (readOnly && isWriter) void queryClient.invalidateQueries({ queryKey: orgKeys.all });
-  }, [readOnly, isWriter, queryClient]);
+    if (serverRole && canWrite(serverRole) !== isWriter)
+      void queryClient.invalidateQueries({ queryKey: orgKeys.all });
+  }, [serverRole, isWriter, queryClient]);
+  // The session ended (signed out elsewhere, expired): sign in and come back.
+  const signedOut = state?.signedOut ?? false;
+  React.useEffect(() => {
+    if (!signedOut) return;
+    const { pathname, search } = window.location;
+    queryClient.removeQueries({ queryKey: meQuery.queryKey });
+    void navigate({
+      to: "/signin",
+      search: { next: `${pathname}${search}`, error: "session_expired" },
+    });
+  }, [signedOut, queryClient, navigate]);
 
   if (gone || state?.deleted) {
     return (
@@ -179,7 +191,11 @@ function Workspace({
 
   const status = state?.status ?? "open";
   const canEdit =
-    isWriter && draft.status === "open" && status === "open" && state?.readOnly !== true;
+    isWriter &&
+    draft.status === "open" &&
+    !(state?.tooLarge ?? false) &&
+    (state ? state.role === null || mayEdit(state) : true) &&
+    status === "open";
   const compile = state?.compile ?? { state: "waiting", stale: true, diagnostics: [], model: null };
   const schema = compile.model ?? emptySchema(db);
 
@@ -359,6 +375,31 @@ function Notice({
   isWriter: boolean;
 }) {
   const strip = "rounded-none border-x-0 border-t-0 px-4 py-2 md:px-5";
+  if (state?.tooLarge) {
+    return (
+      <Alert
+        variant="destructive"
+        className={strip}
+        title="This draft reached its size limit"
+        action={
+          <Button size="sm" onClick={() => window.location.reload()}>
+            Reload
+          </Button>
+        }
+      >
+        Your last change was too large to keep and was not saved. Reload to continue from what
+        everyone has.
+      </Alert>
+    );
+  }
+  if (state?.saveFailed) {
+    return (
+      <Alert variant="destructive" className={strip} title="Some edits could not be saved">
+        They are only in the tabs that have this draft open. Copy your SQL somewhere safe before you
+        reload.
+      </Alert>
+    );
+  }
   if (state?.status === "published") {
     return (
       <Alert

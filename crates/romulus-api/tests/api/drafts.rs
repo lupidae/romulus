@@ -1,13 +1,17 @@
 //! Drafts over REST: one-click creation, list, rename, delete, publish.
 
 use axum::http::StatusCode;
+use romulus_api::{
+    domain::{DraftStatus, SourceKind, VersionOrigin},
+    versions::store::{NewVersion, StoreError, store},
+};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
     harness::{Team, TestApp, database},
-    live::{Client, live_app, quick, serve, stored_sql, version},
+    live::{Client, live_app, model_of, quick, serve, stored_sql, version},
 };
 
 const V1: &str = "CREATE TABLE users (id bigint PRIMARY KEY);\nCREATE TABLE orders (id bigint);\n";
@@ -451,4 +455,138 @@ async fn publishing_sql_with_errors_is_refused(db: PgPool) {
         .await;
     assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(refused.json()["details"]["diagnostics"][0]["code"], "sql");
+}
+
+fn draft_id(draft: &Value) -> Uuid {
+    draft["id"].as_str().expect("id").parse().expect("uuid")
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_version_is_stored_only_if_its_draft_is_still_open(db: PgPool) {
+    let (app, team, shop) = shop(&db).await;
+    let draft = new_draft(&app, &team).await;
+    // Deleted between the freeze and the store.
+    sqlx::query!(
+        "UPDATE drafts SET status = 'deleted' WHERE id = $1",
+        draft_id(&draft)
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let refused = store(
+        &db,
+        NewVersion {
+            database_id: shop,
+            model: model_of("CREATE TABLE invoices (id bigint);"),
+            source: "CREATE TABLE invoices (id bigint);".into(),
+            source_kind: SourceKind::Sql,
+            origin: VersionOrigin::Draft,
+            message: None,
+            created_by: Some(team.developer.user),
+            created_by_token: None,
+            layout: None,
+            expected_base: None,
+            publishes_draft: Some(draft_id(&draft)),
+        },
+        false,
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(StoreError::DraftNotOpen)),
+        "{refused:?}"
+    );
+    let versions = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM versions WHERE database_id = $1"#,
+        shop
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(versions, 1, "nothing stored");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_being_published_cannot_be_deleted(db: PgPool) {
+    let (app, team, _) = shop(&db).await;
+    let draft = new_draft(&app, &team).await;
+    let path = draft_path(&team, &draft, "");
+    app.state
+        .collab
+        .freeze(draft_id(&draft), "Carol")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let busy = app.as_user(&team.admin).delete(&path).await;
+    assert_eq!(
+        (busy.status, busy.code().as_str()),
+        (StatusCode::CONFLICT, "draft_busy")
+    );
+    assert_eq!(
+        app.as_user(&team.admin).get(&path).await.status,
+        StatusCode::OK
+    );
+    // Publishing failed: now it can go.
+    app.state.collab.unfreeze(draft_id(&draft));
+    assert_eq!(
+        app.as_user(&team.admin).delete(&path).await.status,
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn deleting_a_database_deletes_its_open_drafts(db: PgPool) {
+    let (app, team, _) = shop(&db).await;
+    let draft = new_draft(&app, &team).await;
+    let deleted = app
+        .as_user(&team.admin)
+        .delete(&team.path("/databases/shop"))
+        .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+    let status = sqlx::query_scalar!(
+        r#"SELECT status AS "status: DraftStatus" FROM drafts WHERE id = $1"#,
+        draft_id(&draft)
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(status, DraftStatus::Deleted);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_from_a_pushed_model_compiles_its_own_sql(db: PgPool) {
+    let app = live_app(db.clone(), quick());
+    let team = Team::new(&db, "acme").await;
+    let shop = database(&db, team.org, "shop").await;
+    let model = serde_json::to_value(model_of(V1)).unwrap();
+    sqlx::query!(
+        "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout)
+         VALUES ($1, 1, $2, $3, 'remus_json', 'push', '{}')",
+        shop,
+        model,
+        model.to_string(),
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let draft = new_draft(&app, &team).await;
+    // The pushed model is not what the rendered SQL compiles to, byte for
+    // byte: nothing is cached, the draft compiles on opening.
+    let cached = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM draft_compiles WHERE draft_id = $1"#,
+        draft_id(&draft)
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(cached, 0);
+    let addr = serve(&app).await;
+    let ws = format!("/api/orgs/acme/drafts/{}/ws", draft_id(&draft));
+    let mut alice = Client::join(addr, &ws, &team.developer).await;
+    assert!(alice.sql().contains("CREATE TABLE"), "{}", alice.sql());
+    alice
+        .until(|c| c.last_event("compile").is_some_and(|e| e["state"] == "ok"))
+        .await;
 }

@@ -40,6 +40,8 @@ pub async fn latest(db: &PgPool, database_id: Uuid) -> ApiResult<Option<Version>
 /// A version a draft becomes.
 pub struct DraftVersion {
     pub database_id: Uuid,
+    /// Marked published in the same transaction as the version is stored.
+    pub draft: Uuid,
     /// The version the draft is based on: creating fails unless it is
     /// still the latest (`None`: the database has none).
     pub expected_base: Option<Uuid>,
@@ -56,8 +58,10 @@ pub struct Created {
     pub number: i32,
 }
 
-/// Stores the next version of the database, unless someone published since
-/// the draft started: 409 `stale_base`.
+/// Stores the next version of the database and marks the draft published,
+/// in one transaction: unless someone published since the draft started
+/// (409 `stale_base`), or the draft was deleted meanwhile (409
+/// `draft_not_open`).
 pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created> {
     let stored = store(
         db,
@@ -72,6 +76,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             created_by_token: None,
             layout: Some(new.layout),
             expected_base: Some(new.expected_base),
+            publishes_draft: Some(new.draft),
         },
         false,
     )
@@ -82,7 +87,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             number: version.number,
         }),
         Err(StoreError::StaleBase { latest }) => Err(stale_base(latest.map(|v| v.number))),
-        Err(StoreError::Api(err)) => Err(err),
+        Err(err @ (StoreError::DraftNotOpen | StoreError::Api(_))) => Err(err.into()),
     }
 }
 

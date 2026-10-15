@@ -17,13 +17,23 @@
 //!   layout and group entries (docs/MVP.md "Renames").
 //! - **Publishing** freezes the room (every update dropped) until it is
 //!   published or the attempt fails; then every connection is asked to sync
-//!   again, which brings back what was dropped meanwhile.
+//!   again, which brings back what was dropped meanwhile. A frozen room
+//!   never unloads.
 //! - **Unloading**: [`Settings::idle_unload`] after the last connection
 //!   leaves, the room writes everything and leaves the hub.
+//! - **Bounds**: each socket's queue is bounded in bytes
+//!   ([`Settings::max_queued_bytes`]: a socket that falls behind is let go
+//!   and syncs again), document updates reach the room through a bounded
+//!   channel (a socket flooding it waits, and stops reading), and the doc
+//!   has a size cap ([`Settings::max_doc_bytes`]: an update past it closes
+//!   its socket with 4413).
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -69,6 +79,15 @@ pub struct Settings {
     pub idle_unload: Duration,
     /// When the compiler is unavailable, try again after this long.
     pub retry_unavailable: Duration,
+    /// A doc grows no larger (its encoded state, roughly).
+    pub max_doc_bytes: usize,
+    /// Frames queued for one socket, in bytes, before it counts as too slow.
+    pub max_queued_bytes: usize,
+    /// Sockets are pinged this often; one that answers nothing for two and a
+    /// half pings is closed (4002: the client reconnects if it is there).
+    pub ping_every: Duration,
+    /// Sockets check their session this often (sign-outs are immediate).
+    pub session_check: Duration,
 }
 
 impl Default for Settings {
@@ -80,9 +99,17 @@ impl Default for Settings {
             compact_after: 200,
             idle_unload: Duration::from_secs(10),
             retry_unavailable: Duration::from_secs(10),
+            max_doc_bytes: 16 * 1024 * 1024,
+            max_queued_bytes: 16 * 1024 * 1024,
+            ping_every: Duration::from_secs(25),
+            session_check: Duration::from_secs(60),
         }
     }
 }
+
+/// Document updates queued for one room, from all its sockets: past this,
+/// sockets wait (and stop reading theirs).
+pub const DATA_QUEUE: usize = 256;
 
 /// A connection's number within the hub.
 pub type ConnId = u64;
@@ -128,6 +155,63 @@ pub enum Outgoing {
     Close(u16, &'static str),
 }
 
+/// The room's end of a socket's queue: bounded by the bytes waiting in it.
+#[derive(Clone)]
+pub struct Outbox {
+    tx: mpsc::UnboundedSender<Outgoing>,
+    queued: Arc<AtomicUsize>,
+    limit: usize,
+}
+
+/// The socket task's end.
+pub struct Inbox {
+    rx: mpsc::UnboundedReceiver<Outgoing>,
+    queued: Arc<AtomicUsize>,
+}
+
+/// A socket's queue, holding at most `limit` bytes of frames (one larger
+/// frame always fits in an empty queue: a big doc's first sync).
+pub fn queue(limit: usize) -> (Outbox, Inbox) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let queued = Arc::new(AtomicUsize::new(0));
+    (
+        Outbox {
+            tx,
+            queued: Arc::clone(&queued),
+            limit,
+        },
+        Inbox { rx, queued },
+    )
+}
+
+impl Outbox {
+    /// Queues a frame; false when the socket is too far behind, or gone.
+    pub fn frame(&self, frame: Bytes) -> bool {
+        let len = frame.len();
+        let before = self.queued.fetch_add(len, Ordering::SeqCst);
+        if before > 0 && before + len > self.limit {
+            self.queued.fetch_sub(len, Ordering::SeqCst);
+            return false;
+        }
+        self.tx.send(Outgoing::Frame(frame)).is_ok()
+    }
+
+    /// Asks the socket to close (whatever is queued goes first).
+    pub fn close(&self, code: u16, reason: &'static str) {
+        let _ = self.tx.send(Outgoing::Close(code, reason));
+    }
+}
+
+impl Inbox {
+    pub async fn recv(&mut self) -> Option<Outgoing> {
+        let out = self.rx.recv().await?;
+        if let Outgoing::Frame(frame) = &out {
+            self.queued.fetch_sub(frame.len(), Ordering::SeqCst);
+        }
+        Some(out)
+    }
+}
+
 /// Websocket close codes the web app understands.
 pub mod close {
     /// The server is restarting: reconnect.
@@ -139,8 +223,16 @@ pub mod close {
     /// The member's role changed or they were removed: reconnect, to get
     /// the rights they have now (or be refused).
     pub const MEMBERSHIP: u16 = 4001;
-    /// The draft was deleted: do not reconnect (4400–4499: final, as y-websocket reads them).
+    /// The client answered no ping for a while: reconnect if still there.
+    pub const SILENT: u16 = 4002;
+    /// The session ended (signed out or expired): sign in again. Final
+    /// (4400–4499: y-websocket does not reconnect).
+    pub const SESSION: u16 = 4401;
+    /// The draft was deleted: do not reconnect.
     pub const DELETED: u16 = 4404;
+    /// An update would make the draft larger than it may be: the update was
+    /// not applied; reload.
+    pub const TOO_LARGE: u16 = 4413;
     /// The draft could not be loaded.
     pub const UNAVAILABLE: u16 = 1011;
 }
@@ -165,12 +257,8 @@ pub enum Command {
     Join {
         conn: ConnId,
         peer: Peer,
-        out: mpsc::Sender<Outgoing>,
+        out: Outbox,
         joined: oneshot::Sender<()>,
-    },
-    Incoming {
-        conn: ConnId,
-        messages: Vec<Incoming>,
     },
     /// The connection sent something malformed.
     Malformed {
@@ -197,10 +285,21 @@ pub enum Command {
     Deleted {
         by: String,
     },
+    /// About to be deleted: refused while publishing, otherwise as `Deleted`.
+    Delete {
+        by: String,
+        reply: oneshot::Sender<Result<(), super::Publishing>>,
+    },
     VersionCreated {
         number: i32,
     },
     Shutdown,
+}
+
+/// Messages from one socket, already decoded: the data channel's items.
+pub struct Data {
+    pub conn: ConnId,
+    pub messages: Vec<Incoming>,
 }
 
 /// What the hub knows of a room without asking it.
@@ -213,7 +312,7 @@ pub struct Shared {
 struct Conn {
     peer: Peer,
     stamp: Value,
-    out: mpsc::Sender<Outgoing>,
+    out: Outbox,
     /// Yjs client ids this connection speaks for.
     clients: HashSet<u64>,
 }
@@ -255,6 +354,16 @@ struct Room {
     clients: HashMap<u64, ClientState>,
 
     writer: Writer,
+    /// Writes that failed for good, reported by the writer.
+    failures: mpsc::UnboundedReceiver<()>,
+    /// Told to everyone who joins once a write failed.
+    save_failed: bool,
+    /// The doc's size, roughly: its state at load or compaction, plus the
+    /// updates applied since.
+    doc_bytes: usize,
+    /// Renames typed in the text that arrived while frozen: moved if
+    /// publishing fails.
+    deferred_renames: Vec<(String, String)>,
     /// Applied updates not written yet, and when they will be.
     pending: Vec<Bytes>,
     flush_at: Option<Instant>,
@@ -284,6 +393,7 @@ pub async fn run(
     generation: u64,
     shared: Arc<Shared>,
     mut commands: mpsc::UnboundedReceiver<Command>,
+    mut data: mpsc::Receiver<Data>,
 ) {
     let loaded = match store::load(&hub.db, id).await {
         Ok(Some(loaded)) => loaded,
@@ -311,8 +421,11 @@ pub async fn run(
     loop {
         let flush_at = room.flush_at;
         let compile_at = room.compile_due();
+        // A frozen room stays: an unloaded one would come back open and take
+        // edits the publish then silently drops.
         let idle_at = room
             .idle_since
+            .filter(|_| room.status != LiveStatus::Publishing)
             .map(|since| since + room.settings.idle_unload);
         tokio::select! {
             biased;
@@ -325,6 +438,12 @@ pub async fn run(
                 }
                 Some(command) => room.handle(command),
             },
+            Some(Data { conn, messages }) = data.recv() => {
+                for message in messages {
+                    room.incoming(conn, message);
+                }
+            }
+            Some(()) = room.failures.recv() => room.save_failed(),
             Some(done) = room.results.1.recv() => room.compiled(done),
             () = at(compile_at) => room.start_compile(),
             () = at(flush_at) => room.flush_pending(),
@@ -372,19 +491,27 @@ impl Room {
             }
         }
         let sql = roots.sql(&doc.transact());
-        let _ = shared.database_id.set(loaded.database_id);
+        // A database deleted while this loaded: its drafts are deleted too.
+        let database_deleted = hub.attach(loaded.database_id, &shared);
         let status = match loaded.status {
+            _ if database_deleted || loaded.database_deleted => LiveStatus::Deleted,
             DraftStatus::Open => LiveStatus::Open,
             DraftStatus::Published => LiveStatus::Published,
             DraftStatus::Deleted => LiveStatus::Deleted,
         };
+        let doc_bytes = loaded.updates.iter().map(Vec::len).sum();
+        let (failed, failures) = mpsc::unbounded_channel();
 
         let sha256 = sha256_hex(&sql);
         let mut room = Self {
             id,
             settings: hub.settings.clone(),
             compiler: hub.compiler.clone(),
-            writer: Writer::spawn(hub.db.clone(), id, loaded.last_update_id),
+            writer: Writer::spawn(hub.db.clone(), id, loaded.last_update_id, failed),
+            failures,
+            save_failed: false,
+            doc_bytes,
+            deferred_renames: Vec::new(),
             hub,
             shared,
             doc,
@@ -443,16 +570,9 @@ impl Room {
                 self.join(conn, peer, out);
                 let _ = joined.send(());
             }
-            Command::Incoming { conn, messages } => {
-                for message in messages {
-                    self.incoming(conn, message);
-                }
-            }
             Command::Malformed { conn } => {
                 if let Some(c) = self.conns.get(&conn) {
-                    let _ = c
-                        .out
-                        .try_send(Outgoing::Close(close::PROTOCOL, "malformed message"));
+                    c.out.close(close::PROTOCOL, "malformed message");
                 }
                 self.leave(conn);
             }
@@ -493,11 +613,16 @@ impl Room {
                     // for what they have that the doc lacks.
                     let step1 = protocol::sync_step1(&self.doc.transact().state_vector());
                     self.broadcast(&step1, None);
+                    let renames = std::mem::take(&mut self.deferred_renames);
+                    if !renames.is_empty() {
+                        self.server_edit(|roots, txn| roots.rename(txn, &renames));
+                    }
                 }
             }
             Command::Published { version, by } => {
                 self.status = LiveStatus::Published;
                 self.dirty = None;
+                self.deferred_renames.clear();
                 self.broadcast_event(
                     &ServerEvent::Status {
                         status: self.status,
@@ -509,6 +634,14 @@ impl Room {
             }
             Command::Renamed { name } => {
                 self.broadcast_event(&ServerEvent::Renamed { name }, None);
+            }
+            Command::Delete { by, reply } => {
+                if self.status == LiveStatus::Publishing {
+                    let _ = reply.send(Err(super::Publishing));
+                    return;
+                }
+                let _ = reply.send(Ok(()));
+                self.handle(Command::Deleted { by });
             }
             Command::Deleted { by } => {
                 self.status = LiveStatus::Deleted;
@@ -533,13 +666,20 @@ impl Room {
 
     // ---- Connections ------------------------------------------------------
 
-    fn join(&mut self, conn: ConnId, peer: Peer, out: mpsc::Sender<Outgoing>) {
+    fn join(&mut self, conn: ConnId, peer: Peer, out: Outbox) {
         let read_only = !peer.can_edit() || self.status != LiveStatus::Open;
-        let mut first = vec![protocol::event(&ServerEvent::Welcome {
+        let welcome = protocol::event(&ServerEvent::Welcome {
             role: peer.role,
             read_only,
             status: self.status,
-        })];
+        });
+        if self.status == LiveStatus::Deleted {
+            // Joined as it was being deleted: let go at once.
+            out.frame(welcome);
+            out.close(close::DELETED, "the draft was deleted");
+            return;
+        }
+        let mut first = vec![welcome];
         // The client answers with what it has that the doc lacks (edits
         // made offline); its own step 1 gets the doc's content back.
         first.push(protocol::sync_step1(&self.doc.transact().state_vector()));
@@ -549,8 +689,11 @@ impl Room {
         if let Some(compile) = self.compile_for_joiner() {
             first.push(compile);
         }
+        if self.save_failed {
+            first.push(protocol::event(&ServerEvent::SaveFailed));
+        }
         for frame in first {
-            if out.try_send(Outgoing::Frame(frame)).is_err() {
+            if !out.frame(frame) {
                 return;
             }
         }
@@ -598,7 +741,7 @@ impl Room {
 
     fn close_all(&mut self, code: u16, reason: &'static str) {
         for conn in self.conns.values() {
-            let _ = conn.out.try_send(Outgoing::Close(code, reason));
+            conn.out.close(code, reason);
         }
     }
 
@@ -623,10 +766,7 @@ impl Room {
     }
 
     fn send(&mut self, conn: ConnId, frame: Bytes) {
-        let lagging = self
-            .conns
-            .get(&conn)
-            .is_some_and(|c| c.out.try_send(Outgoing::Frame(frame)).is_err());
+        let lagging = self.conns.get(&conn).is_some_and(|c| !c.out.frame(frame));
         if lagging {
             self.drop_lagging(conn);
         }
@@ -637,7 +777,7 @@ impl Room {
             .conns
             .iter()
             .filter(|(id, _)| Some(**id) != except)
-            .filter(|(_, c)| c.out.try_send(Outgoing::Frame(frame.clone())).is_err())
+            .filter(|(_, c)| !c.out.frame(frame.clone()))
             .map(|(id, _)| *id)
             .collect();
         for conn in lagging {
@@ -649,12 +789,12 @@ impl Room {
         self.broadcast(&protocol::event(event), except);
     }
 
-    /// A connection whose queue is full is let go: dropping its sender
-    /// closes the socket, and the client reconnects and syncs again.
+    /// A connection whose queue is full is let go: it closes (4000), and the
+    /// client reconnects and syncs again.
     fn drop_lagging(&mut self, conn: ConnId) {
         tracing::info!(draft = %self.id, conn, "collab: dropping a connection that cannot keep up");
         if let Some(c) = self.conns.get(&conn) {
-            let _ = c.out.try_send(Outgoing::Close(close::LAGGING, "too slow"));
+            c.out.close(close::LAGGING, "too slow");
         }
         self.leave(conn);
     }
@@ -695,6 +835,19 @@ impl Room {
         if update.is_empty() {
             return;
         }
+        if self.doc_bytes + bytes.len() > self.settings.max_doc_bytes {
+            // Deleted content may have made room: measure before refusing.
+            self.doc_bytes = self.state().len();
+            if self.doc_bytes + bytes.len() > self.settings.max_doc_bytes {
+                tracing::warn!(draft = %self.id, size = self.doc_bytes, "collab: refused an update past the size cap");
+                if let Some(c) = self.conns.get(&conn) {
+                    c.out
+                        .close(close::TOO_LARGE, "the draft would be too large");
+                }
+                self.leave(conn);
+                return;
+            }
+        }
         {
             let mut txn = self.doc.transact_mut();
             if let Err(err) = txn.apply_update(update) {
@@ -702,6 +855,7 @@ impl Room {
                 return;
             }
         }
+        self.doc_bytes += bytes.len();
         self.broadcast(&protocol::update(bytes.to_vec()), Some(conn));
         self.queue_write(bytes);
         self.sql_may_have_changed();
@@ -854,13 +1008,27 @@ impl Room {
         }
     }
 
-    fn compact(&mut self) {
-        let state = self
-            .doc
+    /// The doc's whole state, encoded.
+    fn state(&self) -> Vec<u8> {
+        self.doc
             .transact()
-            .encode_state_as_update_v1(&StateVector::default());
+            .encode_state_as_update_v1(&StateVector::default())
+    }
+
+    fn compact(&mut self) {
+        let state = self.state();
+        self.doc_bytes = state.len();
         self.writer.send(Job::Compact(state));
         self.rows_since_snapshot = 0;
+    }
+
+    /// A write failed for good: everyone hears it (their edits are in their
+    /// tabs, not on the server).
+    fn save_failed(&mut self) {
+        if !self.save_failed {
+            self.save_failed = true;
+            self.broadcast_event(&ServerEvent::SaveFailed, None);
+        }
     }
 
     /// Everything written: what unloading and shutting down wait for.
@@ -947,9 +1115,15 @@ impl Room {
         let source_hash = unhex(&sha256);
         if let Some(model) = compiled.model {
             let renames = compile::renames(&self.good_tables, &tables);
-            if !renames.is_empty() && self.status == LiveStatus::Open {
-                tracing::debug!(draft = %self.id, ?renames, "collab: carrying layout over renames");
-                self.server_edit(|roots, txn| roots.rename(txn, &renames));
+            match self.status {
+                _ if renames.is_empty() => {}
+                LiveStatus::Open => {
+                    tracing::debug!(draft = %self.id, ?renames, "collab: carrying layout over renames");
+                    self.server_edit(|roots, txn| roots.rename(txn, &renames));
+                }
+                // Moved if publishing fails (and moot if it succeeds).
+                LiveStatus::Publishing => self.deferred_renames.extend(renames),
+                LiveStatus::Published | LiveStatus::Deleted => {}
             }
             let model = Arc::new(serde_json::to_value(&model).unwrap_or_default());
             self.good_model = Some(Arc::clone(&model));
@@ -1036,4 +1210,22 @@ fn unhex(hex: &str) -> Vec<u8> {
         .step_by(2)
         .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_socket_queue_holds_so_many_bytes() {
+        let (out, mut inbox) = queue(10);
+        assert!(out.frame(Bytes::from_static(b"123456")));
+        assert!(!out.frame(Bytes::from_static(b"123456")), "past the limit");
+        assert!(out.frame(Bytes::from_static(b"1234")));
+        inbox.recv().await.unwrap();
+        inbox.recv().await.unwrap();
+        // Empty again: one frame larger than the limit fits (a first sync).
+        assert!(out.frame(Bytes::from(vec![0; 64])));
+        assert!(!out.frame(Bytes::from_static(b"1")));
+    }
 }

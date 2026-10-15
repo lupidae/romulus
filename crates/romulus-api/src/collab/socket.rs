@@ -4,44 +4,77 @@ use std::{panic::AssertUnwindSafe, time::Duration};
 
 use axum::{
     extract::{
-        State,
+        FromRequestParts, State,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
+    http::request::Parts,
     response::Response,
 };
+use axum_extra::extract::cookie::CookieJar;
 use futures_util::{
     SinkExt, StreamExt,
     stream::{SplitSink, SplitStream},
 };
-use tokio::sync::{broadcast::error::RecvError, mpsc};
+use sqlx::PgPool;
+use tokio::{
+    sync::broadcast::{self, error::RecvError},
+    time::Instant,
+};
 use uuid::Uuid;
 
 use super::{
     Hub,
     awareness::Peer,
     protocol::{self, ServerEvent},
-    room::{Command, Incoming, Outgoing, close},
+    room::{Incoming, Outgoing, close, queue},
 };
 use crate::{
-    ApiError, ApiResult, AppState, auth::Member, csrf::SameOrigin, domain::DraftStatus,
-    error::ErrorBody, extract::Path, orgs::events::MembershipEvents,
+    ApiError, ApiResult, AppState,
+    auth::{Member, session},
+    csrf::SameOrigin,
+    domain::DraftStatus,
+    error::ErrorBody,
+    extract::Path,
+    orgs::events::MembershipChange,
+    token,
 };
 
 /// Largest frame accepted: a whole draft's text pasted at once, with room.
 const MAX_FRAME: usize = 8 * 1024 * 1024;
-/// Frames queued for a socket before it counts as too slow.
-const QUEUE: usize = 1024;
-/// Keeps proxies from closing a quiet socket.
-const PING_EVERY: Duration = Duration::from_secs(25);
 /// How long a closing socket waits for the client's close frame.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
+
+/// What a socket must hear about from the moment its request arrives:
+/// membership changes and sign-outs. Taken as the handler's first extractor,
+/// before [`Member`] reads the membership, so a change committed after that
+/// read is delivered here, and one committed before it is what it reads:
+/// none slips between the two.
+pub(super) struct Watch {
+    membership: broadcast::Receiver<MembershipChange>,
+    sessions: broadcast::Receiver<Vec<u8>>,
+}
+
+impl FromRequestParts<AppState> for Watch {
+    type Rejection = ApiError;
+
+    fn from_request_parts(
+        _: &mut Parts,
+        state: &AppState,
+    ) -> impl Future<Output = Result<Self, ApiError>> + Send {
+        std::future::ready(Ok(Self {
+            membership: state.membership.subscribe(),
+            sessions: state.sessions.subscribe(),
+        }))
+    }
+}
 
 /// Opens a draft live: the y-sync protocol over a websocket.
 ///
 /// Members only (reviewers watch: their document updates are dropped).
 /// Messages: y-sync (sync, awareness) plus server events (tag 100, see the
 /// `ServerEvent` schema). Close codes: 1012 server restarting, 4000 too
-/// slow, 4001 membership changed (reconnect), 4404 draft deleted (do not).
+/// slow, 4001 membership changed, 4002 no answer to pings (reconnect);
+/// 4401 session ended, 4404 draft deleted, 4413 draft too large (do not).
 #[utoipa::path(
     get,
     path = "/orgs/{org}/drafts/{id}/ws",
@@ -59,8 +92,10 @@ const CLOSE_GRACE: Duration = Duration::from_secs(2);
     )
 )]
 pub(super) async fn connect(
+    watch: Watch,
     _: SameOrigin,
     member: Member,
+    jar: CookieJar,
     Path((_, id)): Path<(String, Uuid)>,
     State(state): State<AppState>,
     upgrade: WebSocketUpgrade,
@@ -85,85 +120,132 @@ pub(super) async fn connect(
             });
         }
     }
+    // `Member` found the session through this cookie.
+    let session = jar
+        .get(&state.config.session_cookie)
+        .map(|cookie| token::hash(cookie.value()))
+        .ok_or(ApiError::Unauthorized)?;
     let peer = Peer {
         user_id: member.user.id,
         name: member.user.name,
         role: member.role,
         org_id: member.org.id,
     };
-    let (hub, membership) = (state.collab.clone(), state.membership.clone());
+    let socket = Socket {
+        hub: state.collab.clone(),
+        db: state.db.clone(),
+        watch,
+        session,
+        draft: id,
+    };
     Ok(upgrade
         .max_message_size(MAX_FRAME)
         .max_frame_size(MAX_FRAME)
-        .on_upgrade(move |socket| run(hub, membership, id, peer, socket)))
+        .on_upgrade(move |ws| socket.run(peer, ws)))
 }
 
-async fn run(hub: Hub, membership: MembershipEvents, draft: Uuid, peer: Peer, socket: WebSocket) {
-    let (mut sink, mut stream) = socket.split();
-    let (out, mut queue) = mpsc::channel(QUEUE);
-    // Subscribed before joining: a change committed meanwhile is not missed.
-    let mut changes = membership.subscribe();
-    let (org_id, user_id) = (peer.org_id, peer.user_id);
-    let connection = match hub.join(draft, peer, out).await {
-        Ok(connection) => connection,
-        Err(err) => {
-            tracing::warn!(%draft, error = %err, "collab: cannot join");
-            let code = if matches!(err, super::HubError::Closing) {
-                close::RESTART
-            } else {
-                close::UNAVAILABLE
-            };
-            shut(sink, stream, code, "the draft is unavailable").await;
-            return;
-        }
-    };
-    let mut ping = tokio::time::interval(PING_EVERY);
-    ping.reset();
+struct Socket {
+    hub: Hub,
+    db: PgPool,
+    watch: Watch,
+    /// The `id_hash` of the session that opened it.
+    session: Vec<u8>,
+    draft: Uuid,
+}
 
-    let closing = loop {
-        tokio::select! {
-            frame = stream.next() => match frame {
-                Some(Ok(Message::Binary(data))) => match decode(&data) {
-                    Some(messages) => connection.send(Command::Incoming {
-                        conn: connection.id,
-                        messages,
-                    }),
-                    None => {
-                        connection.send(Command::Malformed { conn: connection.id });
+impl Socket {
+    async fn run(mut self, peer: Peer, ws: WebSocket) {
+        let (sink, mut stream) = ws.split();
+        let settings = self.hub.settings().clone();
+        let (out, mut inbox) = queue(settings.max_queued_bytes);
+        let (org_id, user_id) = (peer.org_id, peer.user_id);
+        let connection = match self.hub.join(self.draft, peer, out).await {
+            Ok(connection) => connection,
+            Err(err) => {
+                tracing::warn!(draft = %self.draft, error = %err, "collab: cannot join");
+                let code = if matches!(err, super::HubError::Closing) {
+                    close::RESTART
+                } else {
+                    close::UNAVAILABLE
+                };
+                shut(sink, stream, code, "the draft is unavailable").await;
+                return;
+            }
+        };
+        let mut sink = sink;
+        let mut ping = tokio::time::interval(settings.ping_every);
+        ping.reset();
+        let mut check = tokio::time::interval(settings.session_check);
+        check.reset();
+        let mut heard = Instant::now();
+
+        let closing = loop {
+            tokio::select! {
+                frame = stream.next() => {
+                    heard = Instant::now();
+                    match frame {
+                        Some(Ok(Message::Binary(data))) => match decode(&data) {
+                            // Waits while the room is busy: this socket then
+                            // reads no more (backpressure on the client). A
+                            // room that is gone left its last word (a close)
+                            // in the inbox, or closed it.
+                            Some(messages) => {
+                                let _ = connection.incoming(messages).await;
+                            }
+                            None => connection.malformed(),
+                        },
+                        Some(Ok(Message::Text(_))) => {
+                            break Some((close::PROTOCOL, "binary y-sync only"));
+                        }
+                        Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                        Some(Ok(Message::Close(_)) | Err(_)) | None => break None,
+                    }
+                }
+                out = inbox.recv() => match out {
+                    Some(Outgoing::Frame(frame)) => {
+                        if sink.send(Message::Binary(frame)).await.is_err() {
+                            break None;
+                        }
+                    }
+                    Some(Outgoing::Close(code, reason)) => break Some((code, reason)),
+                    // The room let this connection go (unloaded).
+                    None => break Some((close::LAGGING, "reconnect")),
+                },
+                change = self.watch.membership.recv() => match change {
+                    Ok(change) if !change.concerns(org_id, user_id) => {}
+                    // Missed messages may have named this socket: close to be safe.
+                    Ok(_) | Err(RecvError::Lagged(_) | RecvError::Closed) => {
+                        break Some((close::MEMBERSHIP, "your access to this organization changed"));
                     }
                 },
-                Some(Ok(Message::Text(_))) => break Some((close::PROTOCOL, "binary y-sync only")),
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Close(_)) | Err(_)) | None => break None,
-            },
-            out = queue.recv() => match out {
-                Some(Outgoing::Frame(frame)) => {
-                    if sink.send(Message::Binary(frame)).await.is_err() {
+                ended = self.watch.sessions.recv() => match ended {
+                    Ok(hash) if hash != self.session => {}
+                    Ok(_) => break Some((close::SESSION, "signed out")),
+                    // Missed some: ask the database instead.
+                    Err(RecvError::Lagged(_)) => check.reset_immediately(),
+                    Err(RecvError::Closed) => break Some((close::RESTART, "the server is restarting")),
+                },
+                _ = check.tick() => {
+                    if matches!(session::is_live(&self.db, &self.session).await, Ok(false)) {
+                        break Some((close::SESSION, "the session expired"));
+                    }
+                }
+                _ = ping.tick() => {
+                    if heard.elapsed() > settings.ping_every * 5 / 2 {
+                        break Some((close::SILENT, "no answer"));
+                    }
+                    if sink.send(Message::Ping(axum::body::Bytes::new())).await.is_err() {
                         break None;
                     }
                 }
-                Some(Outgoing::Close(code, reason)) => break Some((code, reason)),
-                // The room let this connection go (too slow, or unloaded).
-                None => break Some((close::LAGGING, "reconnect")),
-            },
-            change = changes.recv() => match change {
-                Ok(change) if !change.concerns(org_id, user_id) => {}
-                // Missed messages may have named this socket: close to be safe.
-                Ok(_) | Err(RecvError::Lagged(_) | RecvError::Closed) => {
-                    break Some((close::MEMBERSHIP, "your access to this organization changed"));
-                }
-            },
-            _ = ping.tick() => {
-                if sink.send(Message::Ping(axum::body::Bytes::new())).await.is_err() {
-                    break None;
-                }
             }
+        };
+        // Dropping the connection tells the room it left.
+        drop(connection);
+        if let Some((code, reason)) = closing {
+            shut(sink, stream, code, reason).await;
         }
-    };
-    // Dropping the connection tells the room it left.
-    drop(connection);
-    if let Some((code, reason)) = closing {
-        shut(sink, stream, code, reason).await;
+        drop(inbox);
     }
 }
 

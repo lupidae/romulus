@@ -22,6 +22,8 @@ use crate::domain::DraftStatus;
 pub struct Loaded {
     pub database_id: Uuid,
     pub status: DraftStatus,
+    /// Its database is deleted (its drafts are then deleted too).
+    pub database_deleted: bool,
     /// The snapshot, then every update after it, in order.
     pub updates: Vec<Vec<u8>>,
     /// The id of the last update loaded (or that the snapshot covers).
@@ -41,11 +43,17 @@ pub struct SavedCompile {
     pub good_tables: Option<Value>,
 }
 
-/// `None` when the draft does not exist.
+/// `None` when the draft does not exist. One snapshot of the database
+/// (REPEATABLE READ): the snapshot row and the updates after it agree.
 pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::Error> {
-    let mut tx = db.begin().await?;
+    let mut tx = db
+        .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .await?;
     let Some(draft) = sqlx::query!(
-        r#"SELECT database_id, status AS "status: DraftStatus" FROM drafts WHERE id = $1"#,
+        r#"SELECT d.database_id, d.status AS "status: DraftStatus",
+                  b.deleted_at IS NOT NULL AS "database_deleted!"
+           FROM drafts d JOIN databases b ON b.id = d.database_id
+           WHERE d.id = $1"#,
         draft_id,
     )
     .fetch_optional(&mut *tx)
@@ -88,6 +96,7 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     Ok(Some(Loaded {
         database_id: draft.database_id,
         status: draft.status,
+        database_deleted: draft.database_deleted,
         updates,
         last_update_id,
         rows_since_snapshot,
@@ -116,7 +125,8 @@ pub async fn append(db: &PgPool, draft_id: Uuid, update: &[u8]) -> Result<i64, s
 }
 
 /// Replaces the snapshot with `state`, which covers every update up to
-/// `upto`, and deletes those.
+/// `upto`, and deletes those. Never with an older snapshot than the stored
+/// one (a stray writer of a previous room, say).
 pub async fn compact(
     db: &PgPool,
     draft_id: Uuid,
@@ -127,7 +137,8 @@ pub async fn compact(
     sqlx::query!(
         "INSERT INTO draft_snapshots (draft_id, state, upto_update_id) VALUES ($1, $2, $3)
          ON CONFLICT (draft_id) DO UPDATE
-         SET state = EXCLUDED.state, upto_update_id = EXCLUDED.upto_update_id, created_at = now()",
+         SET state = EXCLUDED.state, upto_update_id = EXCLUDED.upto_update_id, created_at = now()
+         WHERE draft_snapshots.upto_update_id <= EXCLUDED.upto_update_id",
         draft_id,
         state,
         upto,
@@ -195,9 +206,15 @@ pub enum Job {
 pub struct Writer(mpsc::UnboundedSender<Job>);
 
 impl Writer {
-    pub fn spawn(db: PgPool, draft_id: Uuid, last_update_id: i64) -> Self {
+    /// `failed` hears of every append or compaction that failed for good.
+    pub fn spawn(
+        db: PgPool,
+        draft_id: Uuid,
+        last_update_id: i64,
+        failed: mpsc::UnboundedSender<()>,
+    ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run(db, draft_id, last_update_id, rx));
+        tokio::spawn(run(db, draft_id, last_update_id, rx, failed));
         Self(tx)
     }
 
@@ -216,23 +233,36 @@ impl Writer {
 
 const ATTEMPTS: u32 = 5;
 
-async fn run(db: PgPool, draft_id: Uuid, mut last_id: i64, mut jobs: mpsc::UnboundedReceiver<Job>) {
+async fn run(
+    db: PgPool,
+    draft_id: Uuid,
+    mut last_id: i64,
+    mut jobs: mpsc::UnboundedReceiver<Job>,
+    failed: mpsc::UnboundedSender<()>,
+) {
     while let Some(job) = jobs.recv().await {
         match job {
             Job::Append(update) => {
-                if let Some(id) = retry("append an update", draft_id, || {
+                match retry("append an update", draft_id, || {
                     append(&db, draft_id, &update)
                 })
                 .await
                 {
-                    last_id = id;
+                    Some(id) => last_id = id,
+                    None => {
+                        let _ = failed.send(());
+                    }
                 }
             }
             Job::Compact(state) => {
-                retry("compact", draft_id, || {
+                if retry("compact", draft_id, || {
                     compact(&db, draft_id, &state, last_id)
                 })
-                .await;
+                .await
+                .is_none()
+                {
+                    let _ = failed.send(());
+                }
             }
             Job::Compile(row) => {
                 retry("save a compile", draft_id, || {

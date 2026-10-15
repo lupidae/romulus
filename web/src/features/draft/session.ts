@@ -18,13 +18,19 @@ import * as Y from "yjs";
 import { type Group, type GroupColor, type Layout, type Position } from "@/features/schema/layout";
 import { parseSchema, type Schema } from "@/features/schema/model";
 
+import type { Role } from "@/features/orgs/queries";
+
 import type { CompileState, Diagnostic, LiveStatus, ServerEvent } from "./queries";
 
 /** The server's own messages on the socket (crates/romulus-api/src/collab/protocol.rs). */
 export const MESSAGE_EVENT = 100;
 
-/** Close codes (collab::room::close): the draft is gone for good. */
+/** Final close codes (collab::room::close): the session ended… */
+export const CLOSE_SESSION = 4401;
+/** …the draft is gone… */
 export const CLOSE_DELETED = 4404;
+/** …an update made it larger than a draft may be (it was not applied). */
+export const CLOSE_TOO_LARGE = 4413;
 
 /**
  * Transaction origins. Graph edits made here are `LOCAL`: the undo manager
@@ -53,8 +59,8 @@ export interface SessionState {
   connection: Connection;
   /** The doc arrived (once: later reconnects keep showing what is here). */
   synced: boolean;
-  /** What the server said about this connection. */
-  readOnly: boolean | null;
+  /** This connection's role, as the server sees it (null until it says). */
+  role: Role | null;
   status: LiveStatus;
   /** Who published, is publishing, or deleted it. */
   statusBy: string | null;
@@ -66,8 +72,48 @@ export interface SessionState {
   versionCreated: number | null;
   /** The server closed the socket for good. */
   deleted: boolean;
+  /** The session ended (signed out elsewhere, expired): sign in again. */
+  signedOut: boolean;
+  /** The last update would have made the draft too large: it was refused. */
+  tooLarge: boolean;
+  /** The server could not store some edits. */
+  saveFailed: boolean;
   /** Edits made here while disconnected, not on the server yet. */
   unsynced: boolean;
+}
+
+/**
+ * Whether this person may edit the draft now: their role as the server
+ * sees it, and the draft's live status (not a snapshot taken on joining:
+ * someone who joined while it was being published edits again once that
+ * failed).
+ */
+export function mayEdit(state: Pick<SessionState, "role" | "status">): boolean {
+  return state.role !== null && state.role !== "reviewer" && state.status === "open";
+}
+
+/** What a server event (other than a compile) changes in the state. */
+export function eventPatch(
+  state: SessionState,
+  event: Exclude<ServerEvent, { type: "compile" }>,
+): Partial<SessionState> {
+  switch (event.type) {
+    case "welcome":
+      return { role: event.role, status: event.status };
+    case "status":
+      return {
+        status: event.status,
+        statusBy: event.by ?? null,
+        publishedVersion: event.version ?? state.publishedVersion,
+        deleted: event.status === "deleted",
+      };
+    case "renamed":
+      return { name: event.name };
+    case "version_created":
+      return { versionCreated: event.number };
+    case "save_failed":
+      return { saveFailed: true };
+  }
 }
 
 /** A collaborator as the server stamped them (collab::awareness::Peer::stamp). */
@@ -151,7 +197,7 @@ export class DraftSession {
   private state: SessionState = {
     connection: "connecting",
     synced: false,
-    readOnly: null,
+    role: null,
     status: "open",
     statusBy: null,
     publishedVersion: null,
@@ -159,6 +205,9 @@ export class DraftSession {
     compile: { state: "waiting", stale: true, diagnostics: [], model: null },
     versionCreated: null,
     deleted: false,
+    signedOut: false,
+    tooLarge: false,
+    saveFailed: false,
     unsynced: false,
   };
   private listeners = new Set<() => void>();
@@ -222,6 +271,8 @@ export class DraftSession {
     });
     this.provider.on("closed", ({ code }) => {
       if (code === CLOSE_DELETED) this.set({ deleted: true, status: "deleted" });
+      else if (code === CLOSE_SESSION) this.set({ signedOut: true });
+      else if (code === CLOSE_TOO_LARGE) this.set({ tooLarge: true });
     });
     window.addEventListener("online", this.onNetwork);
     window.addEventListener("offline", this.onNetwork);
@@ -263,31 +314,14 @@ export class DraftSession {
   // ---- Server events -----------------------------------------------------------
 
   private onEvent(event: ServerEvent) {
-    switch (event.type) {
-      case "welcome":
-        this.set({ readOnly: event.read_only, status: event.status });
-        break;
-      case "status":
-        this.set({
-          status: event.status,
-          statusBy: event.by ?? null,
-          publishedVersion: event.version ?? this.state.publishedVersion,
-          deleted: event.status === "deleted",
-        });
-        if (event.status === "published" || event.status === "deleted") {
-          // Nothing will change it any more: stop reconnecting.
-          this.provider.disconnect();
-        }
-        break;
-      case "renamed":
-        this.set({ name: event.name });
-        break;
-      case "version_created":
-        this.set({ versionCreated: event.number });
-        break;
-      case "compile":
-        this.onCompile(event);
-        break;
+    if (event.type === "compile") {
+      this.onCompile(event);
+      return;
+    }
+    this.set(eventPatch(this.state, event));
+    if (event.type === "status" && (event.status === "published" || event.status === "deleted")) {
+      // Nothing will change it any more: stop reconnecting.
+      this.provider.disconnect();
     }
   }
 

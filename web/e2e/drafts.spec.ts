@@ -244,3 +244,14 @@ test("publishing a draft creates the next version and closes it for everyone", a
   )) as unknown as unknown[];
   expect(drafts).toEqual([]);
 });
+
+test("signing out in another tab sends an open draft to sign-in", async ({ browser }) => {
+  test.slow();
+  const { slug, alice } = await team(browser);
+  await openDraft(slug, alice);
+
+  // Same browser, same session: the server closes the draft's socket for good.
+  await call(alice.page, "POST", "/api/auth/logout");
+  await expect(alice.page).toHaveURL(/\/app\/signin/);
+  await expect(alice.page.getByText("Your session expired")).toBeVisible();
+});

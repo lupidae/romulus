@@ -25,6 +25,7 @@
 //! Zitadel, for QA and the Playwright suite. Otherwise it answers 404 like any
 //! unknown path, and it is not in the OpenAPI document.
 
+pub mod events;
 pub mod limit;
 pub mod member;
 pub mod next;
@@ -416,6 +417,8 @@ async fn logout(
         .filter(|_| !crate::csrf::has_bearer(&headers))
     {
         session::delete(&state.db, cookie.value()).await?;
+        // Its open sockets (drafts) close too.
+        state.sessions.ended(token::hash(cookie.value()));
     }
     let redirect_url = match state.oidc.logout_url().await {
         Some(url) => url.into(),

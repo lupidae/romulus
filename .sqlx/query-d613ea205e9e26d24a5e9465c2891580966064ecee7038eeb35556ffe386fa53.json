@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET status = 'published', published_version_id = $2\n             WHERE id = $1 AND database_id = $3 AND status = 'open'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d613ea205e9e26d24a5e9465c2891580966064ecee7038eeb35556ffe386fa53"
+}

@@ -155,6 +155,17 @@ pub async fn create(db: &PgPool, user_id: Uuid) -> Result<String, sqlx::Error> {
     Ok(token)
 }
 
+/// Whether the session with this `id_hash` (`token::hash`) is still live:
+/// for connections that outlive the request that opened them.
+pub async fn is_live(db: &PgPool, id_hash: &[u8]) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM sessions WHERE id_hash = $1 AND expires_at > now()) AS "live!""#,
+        id_hash,
+    )
+    .fetch_one(db)
+    .await
+}
+
 /// Ends the session `token` names, if it exists.
 pub async fn delete(db: impl PgExecutor<'_>, token: &str) -> Result<(), sqlx::Error> {
     sqlx::query!(

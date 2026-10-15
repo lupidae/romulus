@@ -232,7 +232,7 @@ pub(super) async fn publish(
         }
     };
     database.slug.clone_into(&mut model.database);
-    let created = store(
+    let created = match store(
         &state,
         &database,
         id,
@@ -242,7 +242,15 @@ pub(super) async fn publish(
         message,
         member.user.id,
     )
-    .await?;
+    .await
+    {
+        Ok(created) => created,
+        Err(err) if err.code() == "draft_not_open" => {
+            frozen.deleted(&member.user.name);
+            return Err(err);
+        }
+        Err(err) => return Err(err),
+    };
     frozen.published(created.number, &member.user.name);
     state.collab.version_created(database.id, created.number);
     tracing::info!(draft = %id, number = created.number, "draft published");
@@ -255,9 +263,10 @@ pub(super) async fn publish(
     ))
 }
 
-/// Stores the frozen content as the next version, then marks the draft
-/// published. Two steps: if the second fails, the version exists and the
-/// draft, still open, is now stale (it cannot be published twice).
+/// Stores the frozen content as the next version and marks the draft
+/// published, in one transaction. If an error comes back although that
+/// transaction committed (reading the new version back failed), the draft is
+/// published all the same: what the database says wins.
 #[expect(
     clippy::too_many_arguments,
     reason = "one call site, all of it the version"
@@ -272,10 +281,11 @@ async fn store(
     message: Option<&str>,
     by: Uuid,
 ) -> ApiResult<versions::Created> {
-    let created = versions::create_version(
+    let stored = versions::create_version(
         &state.db,
         versions::DraftVersion {
             database_id: database.id,
+            draft,
             expected_base: base,
             layout: content.layout.clone(),
             model,
@@ -284,19 +294,29 @@ async fn store(
             created_by: by,
         },
     )
-    .await?;
-    let marked = sqlx::query!(
-        "UPDATE drafts SET status = 'published', published_version_id = $2
-         WHERE id = $1 AND status = 'open'",
-        draft,
-        created.id,
-    )
-    .execute(&state.db)
-    .await?;
-    if marked.rows_affected() != 1 {
-        tracing::warn!(%draft, number = created.number, "publish: the draft was deleted meanwhile");
+    .await;
+    match stored {
+        Ok(created) => Ok(created),
+        Err(err) => match published_as(&state.db, draft).await {
+            Ok(Some(created)) => {
+                tracing::warn!(%draft, error = %err, "publish: committed, then failed; published anyway");
+                Ok(created)
+            }
+            _ => Err(err),
+        },
     }
-    Ok(created)
+}
+
+/// The version a draft became, once it is published.
+async fn published_as(db: &sqlx::PgPool, draft: Uuid) -> ApiResult<Option<versions::Created>> {
+    Ok(sqlx::query_as!(
+        versions::Created,
+        r#"SELECT v.id, v.number FROM drafts d JOIN versions v ON v.id = d.published_version_id
+           WHERE d.id = $1 AND d.status = 'published'"#,
+        draft,
+    )
+    .fetch_optional(db)
+    .await?)
 }
 
 /// The model of the content's SQL (the last compile's when it was of that
@@ -321,6 +341,13 @@ impl Frozen<'_> {
     fn published(mut self, number: i32, by: &str) {
         self.done = true;
         self.hub.published(self.draft, number, by);
+    }
+
+    /// Deleted meanwhile (its room was not loaded when the deletion asked):
+    /// the room closes rather than open again.
+    fn deleted(mut self, by: &str) {
+        self.done = true;
+        self.hub.deleted(self.draft, by);
     }
 }
 

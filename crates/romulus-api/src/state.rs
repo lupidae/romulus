@@ -4,7 +4,11 @@ use axum::extract::FromRef;
 use sqlx::PgPool;
 
 use crate::{
-    Config, auth::oidc::Oidc, collab::Hub, compile::SqlCompiler, orgs::events::MembershipEvents,
+    Config,
+    auth::{events::SessionEvents, oidc::Oidc},
+    collab::Hub,
+    compile::SqlCompiler,
+    orgs::events::MembershipEvents,
     rate::Limits,
 };
 
@@ -20,6 +24,8 @@ pub struct AppState {
     pub oidc: Arc<Oidc>,
     /// Role changes and removals, for the collab server to close sockets.
     pub membership: MembershipEvents,
+    /// Sign-outs, for the collab server to close the sockets of the session.
+    pub sessions: SessionEvents,
     /// SQL → model, for uploads, SQL pushes and drafts.
     pub compiler: SqlCompiler,
     /// Per-token and per-person rate limits.
@@ -37,6 +43,7 @@ impl AppState {
             oidc: Arc::new(Oidc::new(&config)),
             config: Arc::new(config),
             membership: MembershipEvents::new(),
+            sessions: SessionEvents::new(),
             compiler: SqlCompiler::unavailable(),
             limits: Arc::new(Limits::default()),
         }

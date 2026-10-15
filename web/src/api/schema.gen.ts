@@ -453,7 +453,8 @@ export interface paths {
      * @description Members only (reviewers watch: their document updates are dropped).
      *     Messages: y-sync (sync, awareness) plus server events (tag 100, see the
      *     `ServerEvent` schema). Close codes: 1012 server restarting, 4000 too
-     *     slow, 4001 membership changed (reconnect), 4404 draft deleted (do not).
+     *     slow, 4001 membership changed, 4002 no answer to pings (reconnect);
+     *     4401 session ended, 4404 draft deleted, 4413 draft too large (do not).
      */
     get: operations["draft_socket"];
     put?: never;
@@ -1611,6 +1612,10 @@ export interface components {
           number: number;
           /** @enum {string} */
           type: "version_created";
+        }
+      | {
+          /** @enum {string} */
+          type: "save_failed";
         };
     /** @enum {string} */
     Severity: "error" | "info";

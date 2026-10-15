@@ -417,6 +417,14 @@ async fn delete(
     )
     .execute(&mut *tx)
     .await?;
+    // Its open drafts go with it, in the same transaction: a draft loading
+    // meanwhile reads them deleted.
+    sqlx::query!(
+        "UPDATE drafts SET status = 'deleted' WHERE database_id = $1 AND status = 'open'",
+        id,
+    )
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     // Its drafts go with it: whoever has one open is told and let go.
     collab.database_deleted(id, &member.user.name);

@@ -35,7 +35,7 @@ mod socket;
 pub mod store;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -53,7 +53,9 @@ use uuid::Uuid;
 use self::{
     awareness::Peer,
     compile::SqlCompiler,
-    room::{Command, ConnId, Content, FreezeError, Outgoing, Settings, Shared},
+    room::{
+        Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, Incoming, Outbox, Settings, Shared,
+    },
 };
 use crate::AppState;
 
@@ -78,7 +80,7 @@ pub struct HubInner {
     db: PgPool,
     compiler: SqlCompiler,
     settings: Settings,
-    rooms: Mutex<HashMap<Uuid, Entry>>,
+    rooms: Mutex<Rooms>,
     next_conn: AtomicU64,
     next_room: AtomicU64,
     closing: AtomicBool,
@@ -86,9 +88,22 @@ pub struct HubInner {
     left: Notify,
 }
 
+#[derive(Default)]
+struct Rooms {
+    entries: HashMap<Uuid, Entry>,
+    /// Databases deleted while this process ran: a room of theirs still
+    /// loading when the deletion was announced learns it when it attaches
+    /// ([`HubInner::attach`]), under the same lock.
+    deleted_databases: HashSet<Uuid>,
+}
+
 struct Entry {
     generation: u64,
+    /// Everything but document updates: never bounded, so a socket leaving
+    /// is never lost.
     commands: mpsc::UnboundedSender<Command>,
+    /// Document updates and awareness from sockets: bounded (backpressure).
+    data: mpsc::Sender<Data>,
     shared: Arc<Shared>,
 }
 
@@ -102,21 +117,40 @@ pub enum HubError {
     Closing,
 }
 
+/// Why a draft cannot be deleted now.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("the draft is being published")]
+pub struct Publishing;
+
 /// A socket's place in a room.
 pub struct Connection {
     pub id: ConnId,
     commands: mpsc::UnboundedSender<Command>,
+    data: mpsc::Sender<Data>,
 }
 
 impl Connection {
-    fn send(&self, command: Command) {
-        let _ = self.commands.send(command);
+    /// Hands decoded messages to the room, waiting while it is busy (the
+    /// socket then stops reading: backpressure). False once the room is gone.
+    pub async fn incoming(&self, messages: Vec<Incoming>) -> bool {
+        self.data
+            .send(Data {
+                conn: self.id,
+                messages,
+            })
+            .await
+            .is_ok()
+    }
+
+    /// The socket sent something that is not y-sync.
+    pub fn malformed(&self) {
+        let _ = self.commands.send(Command::Malformed { conn: self.id });
     }
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        self.send(Command::Leave { conn: self.id });
+        let _ = self.commands.send(Command::Leave { conn: self.id });
     }
 }
 
@@ -130,7 +164,7 @@ impl Hub {
             db,
             compiler,
             settings,
-            rooms: Mutex::new(HashMap::new()),
+            rooms: Mutex::new(Rooms::default()),
             next_conn: AtomicU64::new(1),
             next_room: AtomicU64::new(1),
             closing: AtomicBool::new(false),
@@ -142,18 +176,17 @@ impl Hub {
         &self.0.compiler
     }
 
+    pub fn settings(&self) -> &Settings {
+        &self.0.settings
+    }
+
     /// Joins a socket to its draft's room (loading it if needed). The room
     /// sends the first frames (welcome, sync step 1, awareness, the last
     /// compile) to `out` before this returns.
-    pub async fn join(
-        &self,
-        draft: Uuid,
-        peer: Peer,
-        out: mpsc::Sender<Outgoing>,
-    ) -> Result<Connection, HubError> {
+    pub async fn join(&self, draft: Uuid, peer: Peer, out: Outbox) -> Result<Connection, HubError> {
         let id = self.0.next_conn.fetch_add(1, Ordering::Relaxed);
         let (joined, wait) = oneshot::channel();
-        let commands = self.0.send(
+        let (commands, data) = self.0.send(
             draft,
             Command::Join {
                 conn: id,
@@ -163,7 +196,7 @@ impl Hub {
             },
         )?;
         wait.await.map_err(|_| HubError::Unavailable)?;
-        Ok(Connection { id, commands })
+        Ok(Connection { id, commands, data })
     }
 
     /// The draft's content now (loading it if needed).
@@ -220,20 +253,41 @@ impl Hub {
         self.0.tell(draft, Command::Deleted { by: by.to_owned() });
     }
 
+    /// About to delete the draft: refused while it is being published;
+    /// otherwise its room (if loaded) stops taking edits and lets everyone
+    /// go. The database row is the caller's to update.
+    pub async fn delete(&self, draft: Uuid, by: &str) -> Result<(), Publishing> {
+        let (reply, wait) = oneshot::channel();
+        let sent = self.0.tell(
+            draft,
+            Command::Delete {
+                by: by.to_owned(),
+                reply,
+            },
+        );
+        if !sent {
+            return Ok(());
+        }
+        // A room that went away meanwhile is nothing to wait for.
+        wait.await.unwrap_or(Ok(()))
+    }
+
     /// A version was created: the drafts of that database open now hear it.
     pub fn version_created(&self, database_id: Uuid, number: i32) {
         let rooms = self.0.rooms();
-        for entry in rooms.values() {
+        for entry in rooms.entries.values() {
             if entry.shared.database_id.get() == Some(&database_id) {
                 let _ = entry.commands.send(Command::VersionCreated { number });
             }
         }
     }
 
-    /// The database was deleted: its drafts' rooms close as deleted drafts do.
+    /// The database was deleted: its drafts' rooms close as deleted drafts
+    /// do, those loading now included.
     pub fn database_deleted(&self, database_id: Uuid, by: &str) {
-        let rooms = self.0.rooms();
-        for entry in rooms.values() {
+        let mut rooms = self.0.rooms();
+        rooms.deleted_databases.insert(database_id);
+        for entry in rooms.entries.values() {
             if entry.shared.database_id.get() == Some(&database_id) {
                 let _ = entry.commands.send(Command::Deleted { by: by.to_owned() });
             }
@@ -246,7 +300,7 @@ impl Hub {
         drafts
             .iter()
             .filter_map(|id| {
-                let entry = rooms.get(id)?;
+                let entry = rooms.entries.get(id)?;
                 let present = entry
                     .shared
                     .present
@@ -265,10 +319,10 @@ impl Hub {
             let left = self.0.left.notified();
             {
                 let rooms = self.0.rooms();
-                if rooms.is_empty() {
+                if rooms.entries.is_empty() {
                     return;
                 }
-                for entry in rooms.values() {
+                for entry in rooms.entries.values() {
                     let _ = entry.commands.send(Command::Shutdown);
                 }
             }
@@ -284,7 +338,7 @@ impl Hub {
 }
 
 impl HubInner {
-    fn rooms(&self) -> MutexGuard<'_, HashMap<Uuid, Entry>> {
+    fn rooms(&self) -> MutexGuard<'_, Rooms> {
         // Plain data, no await under the lock: poisoning cannot leave it torn.
         self.rooms.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -296,14 +350,15 @@ impl HubInner {
         self: &Arc<Self>,
         draft: Uuid,
         command: Command,
-    ) -> Result<mpsc::UnboundedSender<Command>, HubError> {
+    ) -> Result<(mpsc::UnboundedSender<Command>, mpsc::Sender<Data>), HubError> {
         if self.closing.load(Ordering::SeqCst) {
             return Err(HubError::Closing);
         }
         let mut rooms = self.rooms();
-        let entry = rooms.entry(draft).or_insert_with(|| {
+        let entry = rooms.entries.entry(draft).or_insert_with(|| {
             let generation = self.next_room.fetch_add(1, Ordering::Relaxed);
             let (commands, receiver) = mpsc::unbounded_channel();
+            let (data, data_receiver) = mpsc::channel(DATA_QUEUE);
             let shared = Arc::new(Shared::default());
             tokio::spawn(room::run(
                 Arc::clone(self),
@@ -311,10 +366,12 @@ impl HubInner {
                 generation,
                 Arc::clone(&shared),
                 receiver,
+                data_receiver,
             ));
             Entry {
                 generation,
                 commands,
+                data,
                 shared,
             }
         });
@@ -322,15 +379,24 @@ impl HubInner {
             .commands
             .send(command)
             .map_err(|_| HubError::Unavailable)?;
-        Ok(entry.commands.clone())
+        Ok((entry.commands.clone(), entry.data.clone()))
     }
 
     /// Sends a command to the draft's room if it is loaded (a draft nobody
-    /// has open needs no news).
-    fn tell(&self, draft: Uuid, command: Command) {
-        if let Some(entry) = self.rooms().get(&draft) {
-            let _ = entry.commands.send(command);
-        }
+    /// has open needs no news). Whether it was.
+    fn tell(&self, draft: Uuid, command: Command) -> bool {
+        self.rooms()
+            .entries
+            .get(&draft)
+            .is_some_and(|entry| entry.commands.send(command).is_ok())
+    }
+
+    /// A room that loaded tells which database it belongs to; whether that
+    /// database was deleted meanwhile (see [`Rooms::deleted_databases`]).
+    pub(crate) fn attach(&self, database_id: Uuid, shared: &Shared) -> bool {
+        let rooms = self.rooms();
+        let _ = shared.database_id.set(database_id);
+        rooms.deleted_databases.contains(&database_id)
     }
 
     /// Called by a room that has written everything and has nobody in it:
@@ -348,10 +414,11 @@ impl HubInner {
             return Some(command);
         }
         if rooms
+            .entries
             .get(&draft)
             .is_some_and(|e| e.generation == generation)
         {
-            rooms.remove(&draft);
+            rooms.entries.remove(&draft);
         }
         drop(rooms);
         self.left.notify_waiters();
@@ -362,10 +429,11 @@ impl HubInner {
     fn remove(&self, draft: Uuid, generation: u64) {
         let mut rooms = self.rooms();
         if rooms
+            .entries
             .get(&draft)
             .is_some_and(|e| e.generation == generation)
         {
-            rooms.remove(&draft);
+            rooms.entries.remove(&draft);
         }
         drop(rooms);
         self.left.notify_waiters();

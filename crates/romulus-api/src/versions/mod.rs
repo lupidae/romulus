@@ -398,6 +398,7 @@ async fn upload(
         created_by_token: None,
         layout: None,
         expected_base: None,
+        publishes_draft: None,
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.

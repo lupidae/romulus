@@ -244,18 +244,21 @@ async fn create(
 
     let (name, sql, layout, model) = match &base {
         Some(version) => {
-            let sql = match version.source_kind {
-                SourceKind::Sql => version.source.clone(),
+            // The version's model is what its SQL compiles to only when the
+            // SQL is the source; SQL rendered from a pushed model is compiled
+            // like any other text (the SQL is what counts).
+            let (sql, model) = match version.source_kind {
+                SourceKind::Sql => (version.source.clone(), Some(&version.model)),
                 SourceKind::RemusJson => {
                     let schema = Schema::deserialize(&version.model).map_err(ApiError::internal)?;
-                    romulus_sandbox::render_sql(&schema)
+                    (romulus_sandbox::render_sql(&schema), None)
                 }
             };
             (
                 format!("Draft from v{}", version.number),
                 sql,
                 VersionLayout::from_value(&version.layout),
-                Some(&version.model),
+                model,
             )
         }
         None => (
@@ -401,13 +404,24 @@ async fn delete(
     if row.status != DraftStatus::Open {
         return Err(not_open(row.status));
     }
-    sqlx::query!(
+    // The room first: it refuses while the draft is being published, and
+    // takes no edit once it agreed.
+    if state.collab.delete(id, &member.user.name).await.is_err() {
+        return Err(ApiError::Conflict {
+            code: "draft_busy",
+            message: "This draft is being published. Try again in a moment.".into(),
+        });
+    }
+    let deleted = sqlx::query!(
         "UPDATE drafts SET status = 'deleted' WHERE id = $1 AND status = 'open'",
         id
     )
     .execute(&state.db)
     .await?;
-    state.collab.deleted(id, &member.user.name);
+    if deleted.rows_affected() != 1 {
+        // Published just before (its room was not loaded when asked).
+        return Err(not_open(DraftStatus::Published));
+    }
     tracing::info!(draft = %id, "draft deleted");
     Ok(StatusCode::NO_CONTENT)
 }

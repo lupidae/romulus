@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT database_id, status AS \"status: DraftStatus\" FROM drafts WHERE id = $1",
+  "query": "SELECT d.database_id, d.status AS \"status: DraftStatus\",\n                  b.deleted_at IS NOT NULL AS \"database_deleted!\"\n           FROM drafts d JOIN databases b ON b.id = d.database_id\n           WHERE d.id = $1",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,12 @@
             "name": "status"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "database_deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -44,8 +50,9 @@
     },
     "nullable": [
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "a0511fddaab6e057d41623c928de45c14c1f72a198a9081d39b8811d4c48641a"
+  "hash": "16d9311afc8981c0a5027a80f9380ec3b9e4e160f50ba6ebc5c80eb63cf5bb42"
 }

@@ -195,6 +195,7 @@ async fn push(
         created_by_token: Some(token.token_id),
         layout: None,
         expected_base: None,
+        publishes_draft: None,
     };
     let database_id = new.database_id;
     Ok(match store(&state.db, new, true).await? {

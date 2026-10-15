@@ -1,10 +1,19 @@
 //! The collab server over a real websocket: who may connect, sync and
 //! persistence, read-only reviewers, stamped awareness, compaction, compile
-//! on type, renames typed in the text, freezing.
+//! on type, renames typed in the text, freezing, and what closes a socket
+//! (membership, sign-out, silence, size, deletion).
 
 use std::time::Duration;
 
-use romulus_api::{domain::Role, orgs::events::MembershipChange};
+use axum::http::StatusCode;
+use romulus_api::{
+    collab::{
+        protocol::LiveStatus,
+        room::{FreezeError, Settings},
+    },
+    domain::Role,
+    orgs::events::MembershipChange,
+};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -14,7 +23,7 @@ use yrs::{
 };
 
 use super::{
-    harness::{ORIGIN, Team, TestApp, database, signed_in},
+    harness::{ORIGIN, Team, TestApp, database, session, signed_in},
     live::{Client, live_app, quick, serve, stored_sql, version},
 };
 
@@ -28,7 +37,7 @@ struct Draft {
     ws: String,
 }
 
-async fn draft_with(db: &PgPool, settings: romulus_api::collab::room::Settings) -> Draft {
+async fn draft_with(db: &PgPool, settings: Settings) -> Draft {
     let app = live_app(db.clone(), settings);
     let team = Team::new(db, "acme").await;
     let shop = database(db, team.org, "shop").await;
@@ -254,7 +263,7 @@ async fn awareness_carries_the_server_s_identity(db: PgPool) {
 async fn updates_are_compacted_into_a_snapshot(db: PgPool) {
     let d = draft_with(
         &db,
-        romulus_api::collab::room::Settings {
+        Settings {
             compact_after: 3,
             ..quick()
         },
@@ -548,4 +557,324 @@ async fn deleting_the_database_lets_its_drafts_go(db: PgPool) {
     alice.until(|c| c.closed.is_some()).await;
     assert_eq!(alice.closed, Some(4404));
     assert_eq!(alice.last_event("status").unwrap()["status"], "deleted");
+}
+
+/// Waits until some query of this test's database waits on a lock.
+async fn blocked_on_a_lock(db: &PgPool) {
+    for _ in 0..250 {
+        let waiting = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM pg_stat_activity
+               WHERE datname = current_database() AND wait_event_type = 'Lock'"#
+        )
+        .fetch_one(db)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("nothing waited on the lock");
+}
+
+/// The room's text once it holds `needle` (updates and commands travel on
+/// separate channels).
+async fn server_sql_with(d: &Draft, needle: &str) -> String {
+    for _ in 0..100 {
+        let sql = d.app.state.collab.content(d.id).await.unwrap().sql;
+        if sql.contains(needle) {
+            return sql;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the room never got {needle:?}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_role_change_during_the_upgrade_still_closes_the_socket(db: PgPool) {
+    let d = draft(&db).await;
+    let addr = serve(&d.app).await;
+    // Hold the upgrade after it read the membership (as a developer), at
+    // its next query: the draft's row.
+    let mut lock = db.begin().await.unwrap();
+    sqlx::query("LOCK TABLE drafts IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let (ws, developer) = (d.ws.clone(), d.team.developer.clone());
+    let connecting =
+        tokio::spawn(async move { Client::connect(addr, &ws, Some(&developer), ORIGIN).await });
+    blocked_on_a_lock(&db).await;
+    let changed = d
+        .app
+        .as_user(&d.team.admin)
+        .patch(
+            &d.team.path(&format!("/members/{}", d.team.developer.user)),
+            &json!({"role": "reviewer"}),
+        )
+        .await;
+    assert_eq!(changed.status, StatusCode::OK);
+    lock.rollback().await.unwrap();
+
+    // It opened with the role it read, and heard the change all the same.
+    let mut alice = connecting.await.unwrap().expect("upgrade");
+    alice.until(|c| c.closed.is_some()).await;
+    assert_eq!(alice.closed, Some(4001));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn signing_out_closes_that_session_s_sockets(db: PgPool) {
+    let d = draft(&db).await;
+    let addr = serve(&d.app).await;
+    let other_browser = session(&db, d.team.developer.user).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    let mut elsewhere = Client::join(addr, &d.ws, &other_browser).await;
+
+    let out = d
+        .app
+        .as_user(&d.team.developer)
+        .post_empty("/api/auth/logout")
+        .await;
+    assert!(out.status.is_success(), "{}", out.status);
+    alice.until(|c| c.closed.is_some()).await;
+    assert_eq!(alice.closed, Some(4401));
+    // Their other session is still signed in.
+    elsewhere.edit(append("-- still signed in\n")).await;
+    elsewhere.settle(Duration::from_millis(50)).await;
+    assert_eq!(elsewhere.closed, None);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_expired_session_closes_its_sockets(db: PgPool) {
+    let d = draft_with(
+        &db,
+        Settings {
+            session_check: Duration::from_millis(50),
+            ..quick()
+        },
+    )
+    .await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    let mut carol = Client::join(addr, &d.ws, &d.team.admin).await;
+
+    sqlx::query!(
+        "UPDATE sessions SET expires_at = now() - interval '1 second' WHERE user_id = $1",
+        d.team.developer.user,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    alice.until(|c| c.closed.is_some()).await;
+    assert_eq!(alice.closed, Some(4401));
+    carol.settle(Duration::from_millis(150)).await;
+    assert_eq!(carol.closed, None);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_client_that_answers_no_pings_is_let_go(db: PgPool) {
+    let d = draft_with(
+        &db,
+        Settings {
+            ping_every: Duration::from_millis(30),
+            ..quick()
+        },
+    )
+    .await;
+    let addr = serve(&d.app).await;
+    let mut gone = Client::join(addr, &d.ws, &d.team.developer).await;
+    let mut here = Client::join(addr, &d.ws, &d.team.admin).await;
+
+    // `here` reads (and so answers pings); `gone` reads nothing meanwhile.
+    here.settle(Duration::from_millis(250)).await;
+    assert_eq!(here.closed, None);
+    gone.until(|c| c.closed.is_some()).await;
+    assert_eq!(gone.closed, Some(4002));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_update_past_the_size_cap_is_refused(db: PgPool) {
+    let d = draft_with(
+        &db,
+        Settings {
+            max_doc_bytes: 4096,
+            ..quick()
+        },
+    )
+    .await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    let mut bob = Client::join(addr, &d.ws, &d.team.admin).await;
+    alice.edit(append("-- small\n")).await;
+    bob.until(|c| c.sql().contains("-- small")).await;
+
+    let big = format!("-- {}\n", "x".repeat(8000));
+    alice
+        .edit(move |roots, txn| roots.sql.push(txn, &big))
+        .await;
+    alice.until(|c| c.closed.is_some()).await;
+    assert_eq!(alice.closed, Some(4413));
+    bob.settle(Duration::from_millis(50)).await;
+    assert_eq!(bob.closed, None);
+    assert!(!bob.sql().contains("xxxx"));
+    let kept = d.app.state.collab.content(d.id).await.unwrap().sql;
+    assert_eq!(kept, format!("{V1}-- small\n"));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_being_published_stays_loaded_and_opens_again_if_that_fails(db: PgPool) {
+    let d = draft(&db).await;
+    let addr = serve(&d.app).await;
+    // Frozen with nobody in it, for longer than an empty room stays loaded.
+    d.app
+        .state
+        .collab
+        .freeze(d.id, "Carol")
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::sleep(quick().idle_unload * 4).await;
+
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    let welcome = alice.last_event("welcome").unwrap();
+    assert_eq!(
+        (welcome["status"].clone(), welcome["read_only"].clone()),
+        (json!("publishing"), json!(true))
+    );
+    alice.edit(append("-- dropped while frozen\n")).await;
+
+    // Publishing failed: someone who joined meanwhile edits like everyone.
+    d.app.state.collab.unfreeze(d.id);
+    alice
+        .until(|c| {
+            c.last_event("status")
+                .is_some_and(|e| e["status"] == "open")
+        })
+        .await;
+    alice.edit(append("-- after\n")).await;
+    let sql = server_sql_with(&d, "-- after").await;
+    assert!(sql.contains("-- dropped while frozen"), "resent: {sql}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn joining_a_draft_as_it_is_deleted_lets_go_at_once(db: PgPool) {
+    let d = draft_with(
+        &db,
+        Settings {
+            idle_unload: Duration::from_secs(10),
+            ..quick()
+        },
+    )
+    .await;
+    let addr = serve(&d.app).await;
+    let _ = d.app.state.collab.content(d.id).await.unwrap();
+    // The room knows; the row is not updated yet.
+    d.app.state.collab.deleted(d.id, "Admin");
+
+    let mut bob = Client::connect(addr, &d.ws, Some(&d.team.developer), ORIGIN)
+        .await
+        .expect("upgrade");
+    bob.until(|c| c.closed.is_some()).await;
+    assert_eq!(bob.closed, Some(4404));
+    assert_eq!(bob.last_event("welcome").unwrap()["status"], "deleted");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_loading_as_its_database_is_deleted_comes_up_deleted(db: PgPool) {
+    let d = draft(&db).await;
+    // Announced before its room loads (the database row is not updated yet).
+    d.app.state.collab.database_deleted(d.database, "Admin");
+    let refused = d.app.state.collab.freeze(d.id, "Carol").await.unwrap();
+    assert!(
+        matches!(refused, Err(FreezeError::NotOpen(LiveStatus::Deleted))),
+        "{refused:?}"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_of_a_deleted_database_never_loads_open(db: PgPool) {
+    let d = draft(&db).await;
+    // Its row still open, as a deletion that raced it could leave it.
+    sqlx::query!(
+        "UPDATE databases SET deleted_at = now() WHERE id = $1",
+        d.database
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let refused = d.app.state.collab.freeze(d.id, "Carol").await.unwrap();
+    assert!(
+        matches!(refused, Err(FreezeError::NotOpen(LiveStatus::Deleted))),
+        "{refused:?}"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn everyone_hears_when_edits_cannot_be_stored(db: PgPool) {
+    let d = draft(&db).await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    sqlx::query("ALTER TABLE draft_updates ADD CONSTRAINT refuse_all CHECK (false) NOT VALID")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    alice.edit(append("-- not stored\n")).await;
+    // After the writer's retries (1.5 s).
+    alice.until(|c| c.last_event("save_failed").is_some()).await;
+    let late = Client::join(addr, &d.ws, &d.team.admin).await;
+    assert!(late.last_event("save_failed").is_some());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_rename_compiled_while_frozen_moves_the_table_if_publishing_fails(db: PgPool) {
+    let d = draft_with(
+        &db,
+        Settings {
+            debounce: Duration::from_millis(300),
+            max_wait: Duration::from_secs(1),
+            ..quick()
+        },
+    )
+    .await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    alice.until(|c| c.last_event("compile").is_some()).await;
+
+    // users → members, then frozen before that compiles.
+    alice
+        .edit(|roots, txn| {
+            roots.sql.remove_range(txn, 13, 5);
+            roots.sql.insert(txn, 13, "members");
+        })
+        .await;
+    server_sql_with(&d, "members").await;
+    d.app
+        .state
+        .collab
+        .freeze(d.id, "Carol")
+        .await
+        .unwrap()
+        .unwrap();
+    alice
+        .until(|c| {
+            c.last_event("compile").is_some_and(|e| {
+                e["model"]["entities"]
+                    .as_array()
+                    .is_some_and(|t| t.iter().any(|t| t["name"] == "members"))
+            })
+        })
+        .await;
+    alice.settle(Duration::from_millis(50)).await;
+    let layout = |c: &Client| c.roots.layout(&yrs::Transact::transact(&c.doc)).layout;
+    assert!(
+        layout(&alice).contains_key("public.users"),
+        "not while frozen"
+    );
+
+    d.app.state.collab.unfreeze(d.id);
+    alice
+        .until(|c| layout(c).contains_key("public.members"))
+        .await;
+    assert_eq!(layout(&alice)["public.members"].x, 10.0);
 }
