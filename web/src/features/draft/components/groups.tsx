@@ -92,7 +92,7 @@ export function GroupsMenu({
               : `Group ${picked.length} picked ${picked.length === 1 ? "table" : "tables"}`}
           </Button>
           <p className="text-sm text-muted-foreground">
-            Shift-click tables in the graph to pick them.
+            Shift-click tables in the graph, or press P on one, to pick them.
           </p>
         </div>
       </PopoverContent>

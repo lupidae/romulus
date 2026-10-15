@@ -608,6 +608,12 @@ function GraphCanvas({
           },
         },
       });
+    } else if ((event.key === "p" || event.key === "P") && current && onPickedChange) {
+      // The keyboard's shift-click: pick (or let go of) the selection.
+      const list = picked ?? [];
+      onPickedChange(
+        list.includes(current) ? list.filter((key) => key !== current) : [...list, current],
+      );
     } else if (event.key === "Escape" && pinned) {
       setPinned(null);
     } else if (event.key === "Escape" && picked?.length && onPickedChange) {
@@ -697,7 +703,7 @@ function GraphCanvas({
       >
         <p id={hintId} className="sr-only">
           {graph.tables.length} tables. Arrow keys move between tables, Enter zooms to the selected
-          one, slash finds a table.
+          one, slash finds a table.{onPickedChange && " P picks the selected table for a group."}
         </p>
         <Announcer graph={graph} />
         {arranging ? (
