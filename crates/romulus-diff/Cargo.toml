@@ -1,0 +1,25 @@
+[package]
+name = "romulus-diff"
+description = "Semantic diff between two remus schema models. No I/O."
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+rust-version = "1.97"
+
+[features]
+# `utoipa::ToSchema` on every output type, so the API can put the diff in its
+# OpenAPI document and the SPA gets generated TypeScript types for it.
+utoipa = ["dep:utoipa"]
+
+[dependencies]
+remus-core = "0.1.1"
+remus-sql = "0.1.1"
+serde = { version = "1.0.229", features = ["derive"] }
+utoipa = { version = "6.0.0", optional = true, default-features = false, features = ["macros"] }
+
+[dev-dependencies]
+remus-core = { version = "0.1.1", features = ["fixtures"] }
+insta = "1.49.0"
+proptest = "1.12.0"
+serde_json = "1.0.151"

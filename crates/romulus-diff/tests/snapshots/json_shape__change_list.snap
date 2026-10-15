@@ -1,0 +1,19 @@
+---
+source: tests/json_shape.rs
+expression: text
+---
+1 table added, 3 changed, 1 removed; 1 partition added; 1 enum changed; 1 domain changed; 1 extension added, 1 changed
+
+partition `audit.events_2027` of `audit.events` added: FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')
+table `audit.scratch` removed
+table `shop.coupons` added
+`shop.customers.email`: type shop.email → citext
+`shop.orders.note`: now NOT NULL
+column `shop.orders.coupon_code` added: text
+foreign key `orders_customer_id_fkey` on `shop.orders`: …ON DELETE CASCADE → …ON DELETE RESTRICT
+index `orders_coupon_idx` on `shop.orders` added: CREATE INDEX orders_coupon_idx ON shop.orders USING btree (coupon_code)
+`shop.order_status`: label 'refunded' added
+`shop.money_cents`: check added: CHECK ((VALUE >= 0) AND (VALUE < 100000000))
+`shop.money_cents`: check removed: CHECK ((VALUE >= 0))
+extension `citext` added
+`pgcrypto`: version 1.3 → 1.4

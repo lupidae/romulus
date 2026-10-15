@@ -1,0 +1,79 @@
+---
+source: tests/json_shape.rs
+expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
+---
+{
+  "summary": {
+    "counts": [
+      {
+        "category": "table",
+        "added": 0,
+        "removed": 0,
+        "changed": 1
+      }
+    ],
+    "text": "1 table changed"
+  },
+  "entities": [
+    {
+      "schema": "public",
+      "name": "users",
+      "qualified_name": "public.users",
+      "kind": "table",
+      "status": "changed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "email",
+          "status": "changed",
+          "position": {
+            "before": 0,
+            "after": 0
+          },
+          "changes": [
+            {
+              "field": "type",
+              "before": "text",
+              "after": "citext"
+            }
+          ],
+          "definition": {
+            "before": "text NOT NULL",
+            "after": "citext NOT NULL"
+          }
+        }
+      ],
+      "constraints": [],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "`users.email`: type text → citext"
+      ],
+      "sql": {
+        "before": "CREATE TABLE public.users (\n    email text NOT NULL\n);\n",
+        "after": "CREATE TABLE public.users (\n    email citext NOT NULL\n);\n"
+      }
+    }
+  ],
+  "enums": [],
+  "domains": [],
+  "composites": [],
+  "extensions": [],
+  "orphan_partitions": [],
+  "status": {
+    "entities": {
+      "public.users": {
+        "status": "changed",
+        "columns": {
+          "email": "changed"
+        },
+        "constraints": {}
+      }
+    },
+    "enums": {},
+    "domains": {},
+    "composites": {},
+    "extensions": {}
+  }
+}

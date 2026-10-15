@@ -1,0 +1,583 @@
+---
+source: tests/json_shape.rs
+expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
+---
+{
+  "summary": {
+    "counts": [
+      {
+        "category": "table",
+        "added": 1,
+        "removed": 1,
+        "changed": 3
+      },
+      {
+        "category": "partition",
+        "added": 1,
+        "removed": 0,
+        "changed": 0
+      },
+      {
+        "category": "enum",
+        "added": 0,
+        "removed": 0,
+        "changed": 1
+      },
+      {
+        "category": "domain",
+        "added": 0,
+        "removed": 0,
+        "changed": 1
+      },
+      {
+        "category": "extension",
+        "added": 1,
+        "removed": 0,
+        "changed": 1
+      }
+    ],
+    "text": "1 table added, 3 changed, 1 removed; 1 partition added; 1 enum changed; 1 domain changed; 1 extension added, 1 changed"
+  },
+  "entities": [
+    {
+      "schema": "audit",
+      "name": "events",
+      "qualified_name": "audit.events",
+      "kind": "partitioned_table",
+      "status": "changed",
+      "changes": [],
+      "columns": [],
+      "constraints": [],
+      "indexes": [],
+      "policies": [],
+      "partitions": [
+        {
+          "schema": "audit",
+          "name": "events_2027",
+          "qualified_name": "audit.events_2027",
+          "parent": "audit.events",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')"
+          }
+        }
+      ],
+      "lines": [
+        "partition `audit.events_2027` of `audit.events` added: FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00')"
+      ],
+      "sql": {
+        "before": "CREATE TABLE audit.events (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    occurred_at timestamp with time zone NOT NULL,\n    customer_id bigint,\n    payload jsonb NOT NULL,\n    CONSTRAINT events_pkey PRIMARY KEY (id, occurred_at)\n) PARTITION BY RANGE (occurred_at);\n\nCREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\nCREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n\nALTER TABLE audit.events ADD CONSTRAINT events_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id);\n",
+        "after": "CREATE TABLE audit.events (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    occurred_at timestamp with time zone NOT NULL,\n    customer_id bigint,\n    payload jsonb NOT NULL,\n    CONSTRAINT events_pkey PRIMARY KEY (id, occurred_at)\n) PARTITION BY RANGE (occurred_at);\n\nCREATE TABLE audit.events_2026 PARTITION OF audit.events FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00');\nCREATE TABLE audit.events_2027 PARTITION OF audit.events FOR VALUES FROM ('2027-01-01 00:00:00+00') TO ('2028-01-01 00:00:00+00');\nCREATE TABLE audit.events_default PARTITION OF audit.events DEFAULT;\n\nALTER TABLE audit.events ADD CONSTRAINT events_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id);\n"
+      }
+    },
+    {
+      "schema": "audit",
+      "name": "scratch",
+      "qualified_name": "audit.scratch",
+      "kind": "table",
+      "status": "removed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "id",
+          "status": "removed",
+          "position": {
+            "before": 0,
+            "after": null
+          },
+          "changes": [],
+          "definition": {
+            "before": "integer NOT NULL",
+            "after": null
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "scratch_pkey",
+          "kind": "primary_key",
+          "status": "removed",
+          "changes": [],
+          "definition": {
+            "before": "PRIMARY KEY (id)",
+            "after": null
+          }
+        }
+      ],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "table `audit.scratch` removed"
+      ],
+      "sql": {
+        "before": "CREATE UNLOGGED TABLE audit.scratch (\n    id integer NOT NULL,\n    CONSTRAINT scratch_pkey PRIMARY KEY (id)\n);\n",
+        "after": null
+      }
+    },
+    {
+      "schema": "shop",
+      "name": "coupons",
+      "qualified_name": "shop.coupons",
+      "kind": "table",
+      "status": "added",
+      "changes": [],
+      "columns": [
+        {
+          "name": "region",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 0
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "text NOT NULL"
+          }
+        },
+        {
+          "name": "code",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 1
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "text NOT NULL"
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "coupons_pkey",
+          "kind": "primary_key",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "PRIMARY KEY (region, code)"
+          }
+        }
+      ],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "table `shop.coupons` added"
+      ],
+      "sql": {
+        "before": null,
+        "after": "CREATE TABLE shop.coupons (\n    region text NOT NULL,\n    code text NOT NULL,\n    CONSTRAINT coupons_pkey PRIMARY KEY (region, code)\n);\n\nCOMMENT ON TABLE shop.coupons IS 'Discount codes';\n"
+      }
+    },
+    {
+      "schema": "shop",
+      "name": "customers",
+      "qualified_name": "shop.customers",
+      "kind": "table",
+      "status": "changed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "email",
+          "status": "changed",
+          "position": {
+            "before": 1,
+            "after": 1
+          },
+          "changes": [
+            {
+              "field": "type",
+              "before": "shop.email",
+              "after": "citext"
+            },
+            {
+              "field": "type_kind",
+              "before": "domain",
+              "after": "base"
+            }
+          ],
+          "definition": {
+            "before": "shop.email NOT NULL",
+            "after": "citext NOT NULL"
+          }
+        }
+      ],
+      "constraints": [],
+      "indexes": [],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "`shop.customers.email`: type shop.email → citext"
+      ],
+      "sql": {
+        "before": "CREATE TABLE shop.customers (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    email shop.email NOT NULL,\n    full_name text NOT NULL,\n    \"select\" text,\n    address shop.address,\n    tags text[] DEFAULT '{}'::text[] NOT NULL,\n    referrer_id bigint,\n    created_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT customers_pkey PRIMARY KEY (id),\n    CONSTRAINT customers_email_key UNIQUE (email)\n);\n\nALTER TABLE shop.customers ADD CONSTRAINT customers_referrer_id_fkey FOREIGN KEY (referrer_id) REFERENCES shop.customers(id) ON DELETE SET NULL;\n\nCOMMENT ON TABLE shop.customers IS 'People who buy things';\nCOMMENT ON COLUMN shop.customers.email IS 'Login identifier; unique per customer';\n",
+        "after": "CREATE TABLE shop.customers (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    email citext NOT NULL,\n    full_name text NOT NULL,\n    \"select\" text,\n    address shop.address,\n    tags text[] DEFAULT '{}'::text[] NOT NULL,\n    referrer_id bigint,\n    created_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT customers_pkey PRIMARY KEY (id),\n    CONSTRAINT customers_email_key UNIQUE (email)\n);\n\nALTER TABLE shop.customers ADD CONSTRAINT customers_referrer_id_fkey FOREIGN KEY (referrer_id) REFERENCES shop.customers(id) ON DELETE SET NULL;\n\nCOMMENT ON TABLE shop.customers IS 'People who buy things';\nCOMMENT ON COLUMN shop.customers.email IS 'Login identifier; unique per customer';\n"
+      }
+    },
+    {
+      "schema": "shop",
+      "name": "orders",
+      "qualified_name": "shop.orders",
+      "kind": "table",
+      "status": "changed",
+      "changes": [],
+      "columns": [
+        {
+          "name": "note",
+          "status": "changed",
+          "position": {
+            "before": 7,
+            "after": 7
+          },
+          "changes": [
+            {
+              "field": "not_null",
+              "before": false,
+              "after": true
+            }
+          ],
+          "definition": {
+            "before": "text",
+            "after": "text NOT NULL"
+          }
+        },
+        {
+          "name": "coupon_code",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 8
+          },
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "text"
+          }
+        }
+      ],
+      "constraints": [
+        {
+          "name": "orders_customer_id_fkey",
+          "kind": "foreign_key",
+          "status": "changed",
+          "changes": [
+            {
+              "field": "definition",
+              "before": "FOREIGN KEY (customer_id) REFERENCES shop.customers(id) ON UPDATE RESTRICT ON DELETE CASCADE",
+              "after": "FOREIGN KEY (customer_id) REFERENCES shop.customers(id) ON UPDATE RESTRICT ON DELETE RESTRICT"
+            }
+          ],
+          "definition": {
+            "before": "FOREIGN KEY (customer_id) REFERENCES shop.customers(id) ON UPDATE RESTRICT ON DELETE CASCADE",
+            "after": "FOREIGN KEY (customer_id) REFERENCES shop.customers(id) ON UPDATE RESTRICT ON DELETE RESTRICT"
+          }
+        }
+      ],
+      "indexes": [
+        {
+          "name": "orders_coupon_idx",
+          "status": "added",
+          "changes": [],
+          "definition": {
+            "before": null,
+            "after": "CREATE INDEX orders_coupon_idx ON shop.orders USING btree (coupon_code)"
+          }
+        }
+      ],
+      "policies": [],
+      "partitions": [],
+      "lines": [
+        "`shop.orders.note`: now NOT NULL",
+        "column `shop.orders.coupon_code` added: text",
+        "foreign key `orders_customer_id_fkey` on `shop.orders`: …ON DELETE CASCADE → …ON DELETE RESTRICT",
+        "index `orders_coupon_idx` on `shop.orders` added: CREATE INDEX orders_coupon_idx ON shop.orders USING btree (coupon_code)"
+      ],
+      "sql": {
+        "before": "CREATE SEQUENCE IF NOT EXISTS shop.orders_id_seq;\n\nCREATE TABLE shop.orders (\n    id bigint DEFAULT nextval('shop.orders_id_seq'::regclass) NOT NULL,\n    customer_id bigint NOT NULL,\n    status shop.order_status DEFAULT 'draft'::shop.order_status NOT NULL,\n    subtotal shop.money_cents,\n    tax shop.money_cents,\n    total bigint GENERATED ALWAYS AS (((subtotal)::bigint + (tax)::bigint)) STORED,\n    placed_at timestamp with time zone,\n    note text,\n    CONSTRAINT orders_placed_when_not_draft CHECK (((status = 'draft'::shop.order_status) OR (placed_at IS NOT NULL))),\n    CONSTRAINT orders_pkey PRIMARY KEY (id)\n);\nALTER SEQUENCE shop.orders_id_seq OWNED BY shop.orders.id;\n\nALTER TABLE shop.orders ADD CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id) ON UPDATE RESTRICT ON DELETE CASCADE;\n\nCREATE INDEX orders_customer_idx ON shop.orders USING btree (customer_id);\nCREATE UNIQUE INDEX orders_note_lower_idx ON shop.orders USING btree (lower(note)) WHERE (note IS NOT NULL);\nCREATE INDEX orders_open_idx ON shop.orders USING btree (placed_at DESC) WHERE (status = ANY (ARRAY['placed'::shop.order_status, 'shipped'::shop.order_status]));\n\nALTER TABLE shop.orders ENABLE ROW LEVEL SECURITY;\nALTER TABLE shop.orders FORCE ROW LEVEL SECURITY;\nCREATE POLICY orders_no_cancelled ON shop.orders AS RESTRICTIVE FOR SELECT TO showcase_reader USING (status <> 'cancelled'::shop.order_status);\nCREATE POLICY orders_owner ON shop.orders FOR ALL USING (customer_id = (current_setting('app.customer_id'::text))::bigint) WITH CHECK (customer_id = (current_setting('app.customer_id'::text))::bigint);\n",
+        "after": "CREATE SEQUENCE IF NOT EXISTS shop.orders_id_seq;\n\nCREATE TABLE shop.orders (\n    id bigint DEFAULT nextval('shop.orders_id_seq'::regclass) NOT NULL,\n    customer_id bigint NOT NULL,\n    status shop.order_status DEFAULT 'draft'::shop.order_status NOT NULL,\n    subtotal shop.money_cents,\n    tax shop.money_cents,\n    total bigint GENERATED ALWAYS AS (((subtotal)::bigint + (tax)::bigint)) STORED,\n    placed_at timestamp with time zone,\n    note text NOT NULL,\n    coupon_code text,\n    CONSTRAINT orders_placed_when_not_draft CHECK (((status = 'draft'::shop.order_status) OR (placed_at IS NOT NULL))),\n    CONSTRAINT orders_pkey PRIMARY KEY (id)\n);\nALTER SEQUENCE shop.orders_id_seq OWNED BY shop.orders.id;\n\nALTER TABLE shop.orders ADD CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES shop.customers(id) ON UPDATE RESTRICT ON DELETE RESTRICT;\n\nCREATE INDEX orders_coupon_idx ON shop.orders USING btree (coupon_code);\nCREATE INDEX orders_customer_idx ON shop.orders USING btree (customer_id);\nCREATE UNIQUE INDEX orders_note_lower_idx ON shop.orders USING btree (lower(note)) WHERE (note IS NOT NULL);\nCREATE INDEX orders_open_idx ON shop.orders USING btree (placed_at DESC) WHERE (status = ANY (ARRAY['placed'::shop.order_status, 'shipped'::shop.order_status]));\n\nALTER TABLE shop.orders ENABLE ROW LEVEL SECURITY;\nALTER TABLE shop.orders FORCE ROW LEVEL SECURITY;\nCREATE POLICY orders_no_cancelled ON shop.orders AS RESTRICTIVE FOR SELECT TO showcase_reader USING (status <> 'cancelled'::shop.order_status);\nCREATE POLICY orders_owner ON shop.orders FOR ALL USING (customer_id = (current_setting('app.customer_id'::text))::bigint) WITH CHECK (customer_id = (current_setting('app.customer_id'::text))::bigint);\n\nCOMMENT ON COLUMN shop.orders.coupon_code IS 'Applied at checkout';\n"
+      }
+    }
+  ],
+  "enums": [
+    {
+      "schema": "shop",
+      "name": "order_status",
+      "qualified_name": "shop.order_status",
+      "status": "changed",
+      "changes": [],
+      "labels": [
+        {
+          "label": "refunded",
+          "status": "added",
+          "position": {
+            "before": null,
+            "after": 4
+          }
+        }
+      ],
+      "lines": [
+        "`shop.order_status`: label 'refunded' added"
+      ],
+      "sql": {
+        "before": "CREATE TYPE shop.order_status AS ENUM ('draft', 'placed', 'shipped', 'cancelled');\n\nCOMMENT ON TYPE shop.order_status IS 'Lifecycle of an order';\n",
+        "after": "CREATE TYPE shop.order_status AS ENUM ('draft', 'placed', 'shipped', 'cancelled', 'refunded');\n\nCOMMENT ON TYPE shop.order_status IS 'Lifecycle of an order';\n"
+      }
+    }
+  ],
+  "domains": [
+    {
+      "schema": "shop",
+      "name": "money_cents",
+      "qualified_name": "shop.money_cents",
+      "status": "changed",
+      "changes": [
+        {
+          "field": "constraints",
+          "before": [
+            "CHECK ((VALUE >= 0))"
+          ],
+          "after": [
+            "CHECK ((VALUE >= 0) AND (VALUE < 100000000))"
+          ]
+        }
+      ],
+      "lines": [
+        "`shop.money_cents`: check added: CHECK ((VALUE >= 0) AND (VALUE < 100000000))",
+        "`shop.money_cents`: check removed: CHECK ((VALUE >= 0))"
+      ],
+      "sql": {
+        "before": "CREATE DOMAIN shop.money_cents AS bigint DEFAULT 0 NOT NULL CHECK ((VALUE >= 0));\n\nCOMMENT ON DOMAIN shop.money_cents IS 'Amounts are integers of cents';\n",
+        "after": "CREATE DOMAIN shop.money_cents AS bigint DEFAULT 0 NOT NULL CHECK ((VALUE >= 0) AND (VALUE < 100000000));\n\nCOMMENT ON DOMAIN shop.money_cents IS 'Amounts are integers of cents';\n"
+      }
+    }
+  ],
+  "composites": [],
+  "extensions": [
+    {
+      "name": "citext",
+      "status": "added",
+      "changes": [],
+      "lines": [
+        "extension `citext` added"
+      ],
+      "sql": {
+        "before": null,
+        "after": "CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;\n"
+      }
+    },
+    {
+      "name": "pgcrypto",
+      "status": "changed",
+      "changes": [
+        {
+          "field": "version",
+          "before": "1.3",
+          "after": "1.4"
+        }
+      ],
+      "lines": [
+        "`pgcrypto`: version 1.3 → 1.4"
+      ],
+      "sql": {
+        "before": "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;\n",
+        "after": "CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;\n"
+      }
+    }
+  ],
+  "orphan_partitions": [],
+  "status": {
+    "entities": {
+      "audit.events": {
+        "status": "changed",
+        "columns": {
+          "customer_id": "unchanged",
+          "id": "unchanged",
+          "occurred_at": "unchanged",
+          "payload": "unchanged"
+        },
+        "constraints": {
+          "events_customer_id_fkey": "unchanged",
+          "events_pkey": "unchanged"
+        }
+      },
+      "audit.scratch": {
+        "status": "removed",
+        "columns": {
+          "id": "removed"
+        },
+        "constraints": {
+          "scratch_pkey": "removed"
+        }
+      },
+      "shop.coupons": {
+        "status": "added",
+        "columns": {
+          "code": "added",
+          "region": "added"
+        },
+        "constraints": {
+          "coupons_pkey": "added"
+        }
+      },
+      "shop.customer_profiles": {
+        "status": "unchanged",
+        "columns": {
+          "bio": "unchanged",
+          "customer_id": "unchanged"
+        },
+        "constraints": {
+          "customer_profiles_customer_id_fkey": "unchanged",
+          "customer_profiles_pkey": "unchanged"
+        }
+      },
+      "shop.customers": {
+        "status": "changed",
+        "columns": {
+          "address": "unchanged",
+          "created_at": "unchanged",
+          "email": "changed",
+          "full_name": "unchanged",
+          "id": "unchanged",
+          "referrer_id": "unchanged",
+          "select": "unchanged",
+          "tags": "unchanged"
+        },
+        "constraints": {
+          "customers_email_key": "unchanged",
+          "customers_pkey": "unchanged",
+          "customers_referrer_id_fkey": "unchanged"
+        }
+      },
+      "shop.daily_totals": {
+        "status": "unchanged",
+        "columns": {
+          "day": "unchanged",
+          "total": "unchanged"
+        },
+        "constraints": {}
+      },
+      "shop.open_orders": {
+        "status": "unchanged",
+        "columns": {
+          "customer_id": "unchanged",
+          "id": "unchanged",
+          "total": "unchanged"
+        },
+        "constraints": {}
+      },
+      "shop.open_orders_by_customer": {
+        "status": "unchanged",
+        "columns": {
+          "email": "unchanged",
+          "open_orders": "unchanged"
+        },
+        "constraints": {}
+      },
+      "shop.order_products": {
+        "status": "unchanged",
+        "columns": {
+          "created_at": "unchanged",
+          "order_id": "unchanged",
+          "product_id": "unchanged"
+        },
+        "constraints": {
+          "order_products_order_id_fkey": "unchanged",
+          "order_products_pkey": "unchanged",
+          "order_products_product_id_fkey": "unchanged"
+        }
+      },
+      "shop.orders": {
+        "status": "changed",
+        "columns": {
+          "coupon_code": "added",
+          "customer_id": "unchanged",
+          "id": "unchanged",
+          "note": "changed",
+          "placed_at": "unchanged",
+          "status": "unchanged",
+          "subtotal": "unchanged",
+          "tax": "unchanged",
+          "total": "unchanged"
+        },
+        "constraints": {
+          "orders_customer_id_fkey": "changed",
+          "orders_pkey": "unchanged",
+          "orders_placed_when_not_draft": "unchanged"
+        }
+      },
+      "shop.products": {
+        "status": "unchanged",
+        "columns": {
+          "id": "unchanged",
+          "price": "unchanged",
+          "sku": "unchanged",
+          "statuses": "unchanged",
+          "weight_g": "unchanged"
+        },
+        "constraints": {
+          "products_pkey": "unchanged",
+          "products_sku_key": "unchanged",
+          "products_weight_g_check": "unchanged"
+        }
+      },
+      "shop.promotions": {
+        "status": "unchanged",
+        "columns": {
+          "during": "unchanged",
+          "id": "unchanged",
+          "product_id": "unchanged"
+        },
+        "constraints": {
+          "promotions_pkey": "unchanged",
+          "promotions_product_id_during_excl": "unchanged",
+          "promotions_product_id_fkey": "unchanged"
+        }
+      },
+      "shop.stock": {
+        "status": "unchanged",
+        "columns": {
+          "product_id": "unchanged",
+          "quantity": "unchanged",
+          "region": "unchanged",
+          "warehouse_code": "unchanged"
+        },
+        "constraints": {
+          "stock_pkey": "unchanged",
+          "stock_product_id_fkey": "unchanged",
+          "stock_warehouse_fkey": "unchanged"
+        }
+      },
+      "shop.warehouses": {
+        "status": "unchanged",
+        "columns": {
+          "code": "unchanged",
+          "region": "unchanged"
+        },
+        "constraints": {
+          "warehouses_pkey": "unchanged"
+        }
+      }
+    },
+    "enums": {
+      "shop.order_status": "changed"
+    },
+    "domains": {
+      "shop.email": "unchanged",
+      "shop.money_cents": "changed"
+    },
+    "composites": {
+      "shop.address": "unchanged"
+    },
+    "extensions": {
+      "btree_gist": "unchanged",
+      "citext": "added",
+      "pgcrypto": "changed"
+    }
+  }
+}
