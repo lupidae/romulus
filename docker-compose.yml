@@ -1,0 +1,130 @@
+# The dev and CI stack. The API and the web app run on the host (`just dev`);
+# this file holds what they talk to. Every host port and the project name come
+# from .env, which scripts/dev-env generates per worktree: never hard-code one.
+
+services:
+  # The application database (users, orgs, versions, drafts…).
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: romulus
+      POSTGRES_PASSWORD: romulus
+      POSTGRES_DB: romulus
+    # Dev only: durability buys nothing here and slows every #[sqlx::test].
+    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off]
+    ports:
+      - 127.0.0.1:${ROMULUS_POSTGRES_PORT:?run scripts/dev-env}:5432
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U romulus -d romulus]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Where draft SQL is compiled. Its major version is pinned to the one the
+  # `pg_query` crate's libpg_query parses (pg_query 6.2.1 → PostgreSQL 17.7),
+  # so the server-side allowlist and the compile agree on the grammar. Bump
+  # both together. Ephemeral by design: nothing in it outlives a compile.
+  sandbox-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: sandbox_admin
+      POSTGRES_PASSWORD: sandbox_admin
+      POSTGRES_DB: postgres
+    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off]
+    ports:
+      - 127.0.0.1:${ROMULUS_SANDBOX_PORT:?run scripts/dev-env}:5432
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U sandbox_admin -d postgres]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # Identity (OIDC). Login v1, built into the zitadel binary, so the stack needs
+  # no separate login container or proxy. On a fresh database `start-from-init`
+  # creates the first instance and writes an IAM_OWNER machine PAT to the
+  # bootstrap volume; zitadel-provision then uses that PAT to create what
+  # romulus needs (see deploy/zitadel/provision.sh). The issuer is
+  # http://localhost:${ROMULUS_ZITADEL_PORT}: Zitadel derives it from the Host
+  # header, so anything reaching it from inside the network must send that Host.
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v4.19.4
+    user: "0"
+    command: start-from-init --masterkey MasterkeyNeedsToHave32Characters
+    environment:
+      ZITADEL_PORT: 8080
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: ${ROMULUS_ZITADEL_PORT:?run scripts/dev-env}
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_DATABASE_POSTGRES_DSN: postgresql://postgres:postgres@zitadel-db:5432/zitadel?sslmode=disable
+      ZITADEL_FIRSTINSTANCE_INSTANCENAME: romulus-dev
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: romulus
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: RomulusDev1!
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: provisioner
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: romulus dev provisioner
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/admin.pat
+      # Login v1, and no prompts between the password and the redirect
+      # (MFA / passwordless setup), so a login can be scripted end to end.
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
+      ZITADEL_DEFAULTINSTANCE_LOGINPOLICY_MFAINITSKIPLIFETIME: 0s
+      ZITADEL_DEFAULTINSTANCE_LOGINPOLICY_PASSWORDLESSTYPE: 0
+    ports:
+      - 127.0.0.1:${ROMULUS_ZITADEL_PORT}:8080
+    volumes:
+      - zitadel-bootstrap:/zitadel/bootstrap
+    depends_on:
+      zitadel-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /app/zitadel, ready]
+      interval: 3s
+      timeout: 10s
+      retries: 60
+      start_period: 10s
+
+  zitadel-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: zitadel
+    command: [postgres, -c, fsync=off, -c, synchronous_commit=off, -c, full_page_writes=off]
+    volumes:
+      - zitadel-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d zitadel]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: creates (or finds) the romulus project, the OIDC web app and the
+  # test users, then writes .dev/zitadel/oidc.env and users.json. Idempotent,
+  # so it runs on every `up`. `just up` fails if it does.
+  zitadel-provision:
+    build: deploy/zitadel
+    command: [/provision.sh]
+    environment:
+      ZITADEL_URL: http://zitadel:8080
+      ZITADEL_HOST: localhost:${ROMULUS_ZITADEL_PORT}
+      ROMULUS_PUBLIC_URL: ${ROMULUS_PUBLIC_URL:?run scripts/dev-env}
+      ROMULUS_API_PORT: ${ROMULUS_API_PORT:?run scripts/dev-env}
+      OWNER: ${ROMULUS_UID:-1000}:${ROMULUS_GID:-1000}
+    volumes:
+      - ./deploy/zitadel/provision.sh:/provision.sh:ro
+      - zitadel-bootstrap:/bootstrap:ro
+      - ${ROMULUS_DEV_DIR:-./.dev}/zitadel:/out
+    depends_on:
+      zitadel:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  zitadel-db-data:
+  zitadel-bootstrap:

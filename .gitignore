@@ -1,0 +1,21 @@
+# Rust
+/target
+
+# Per-worktree environment (scripts/dev-env) and runtime state (Zitadel credentials…)
+/.env
+/.dev/
+
+# Web
+node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
+/web/playwright/.cache/
+*.tsbuildinfo
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

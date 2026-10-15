@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Proves the provisioned Zitadel is usable by romulus, the way the API will use
+# it: discovery, the client's credentials at the token endpoint, and a real
+# login as the test user alice (authorization code + PKCE through login v1),
+# down to the claims in the ID token. Needs `just up`; touches nothing.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+# ROMULUS_ENV_FILE points at another stack's env (e.g. a second slot).
+env_file=${ROMULUS_ENV_FILE:-.env}
+[ -f "$env_file" ] || { echo "check-oidc: no $env_file (run scripts/dev-env or just up)" >&2; exit 1; }
+set -a
+# shellcheck disable=SC1090
+source "$env_file"
+dev_dir=${ROMULUS_DEV_DIR:-.dev}
+[ -f "$dev_dir/zitadel/oidc.env" ] || { echo "check-oidc: no $dev_dir/zitadel/oidc.env (run just up)" >&2; exit 1; }
+# shellcheck disable=SC1091
+source "$dev_dir/zitadel/oidc.env"
+set +a
+
+issuer=$ROMULUS_OIDC_ISSUER
+client_id=$ROMULUS_OIDC_CLIENT_ID
+client_secret=$ROMULUS_OIDC_CLIENT_SECRET
+redirect_uri="$ROMULUS_PUBLIC_URL/api/auth/callback"
+email=$(jq -r '.[0].email' "$dev_dir/zitadel/users.json")
+password=$(jq -r '.[0].password' "$dev_dir/zitadel/users.json")
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+jar="$work/cookies"
+
+ok() { echo "✓ $*"; }
+fail() { echo "✗ $*" >&2; exit 1; }
+urlencode() { jq -rn --arg v "$1" '$v | @uri'; }
+b64url_json() {
+    local s=$1
+    s=$(printf %s "$s" | tr '_-' '/+')
+    while [ $(( ${#s} % 4 )) -ne 0 ]; do s="$s="; done
+    jq -rn --arg s "$s" '$s | @base64d'
+}
+# Value of a hidden input in an HTML page.
+form_value() { grep -o "name=\"$1\" value=\"[^\"]*\"" "$2" | head -1 | sed 's/.*value="//; s/"$//'; }
+
+# 1. Discovery
+discovery=$(curl -fsS "$issuer/.well-known/openid-configuration") || fail "discovery: $issuer unreachable"
+[ "$(jq -r .issuer <<<"$discovery")" = "$issuer" ] \
+    || fail "discovery: issuer is $(jq -r .issuer <<<"$discovery"), expected $issuer"
+ok "discovery: issuer $issuer"
+jq -r '"    authorize \(.authorization_endpoint)\n    token     \(.token_endpoint)\n    userinfo  \(.userinfo_endpoint)\n    jwks      \(.jwks_uri)\n    logout    \(.end_session_endpoint)"' <<<"$discovery"
+token_endpoint=$(jq -r .token_endpoint <<<"$discovery")
+authorize_endpoint=$(jq -r .authorization_endpoint <<<"$discovery")
+userinfo_endpoint=$(jq -r .userinfo_endpoint <<<"$discovery")
+
+# 2. Client credentials at the token endpoint. Zitadel authenticates the
+# client before it looks at the code: a wrong secret fails as invalid_client,
+# the right one gets as far as rejecting the bogus code
+# (invalid_request "Errors.User.Code.Invalid").
+token_error() {
+    curl -sS -u "$1:$2" "$token_endpoint" \
+        --data-urlencode grant_type=authorization_code \
+        --data-urlencode code=not-a-code \
+        --data-urlencode "redirect_uri=$redirect_uri" | jq -r '"\(.error // "none"): \(.error_description // "")"'
+}
+right=$(token_error "$client_id" "$client_secret")
+[[ $right != invalid_client* && $right == *Code* ]] \
+    || fail "token endpoint: the provisioned client was not accepted ($right)"
+ok "token endpoint: client $client_id authenticates (bogus code → $right)"
+wrong=$(token_error "$client_id" wrong-secret)
+[[ $wrong == invalid_client* ]] || fail "token endpoint: a wrong secret gave '$wrong', not invalid_client"
+ok "token endpoint: wrong secret → $wrong"
+
+# 3. A real login as the test user: authorize with PKCE, then login v1's two
+# forms (login name, password; each carries a gorilla CSRF token tied to the
+# cookie jar), then the redirect to romulus's callback with a code.
+verifier=$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n')
+challenge=$(printf %s "$verifier" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+state=$(openssl rand -hex 8)
+authorize_url="$authorize_endpoint?client_id=$client_id&response_type=code&scope=$(urlencode 'openid email profile offline_access')&redirect_uri=$(urlencode "$redirect_uri")&state=$state&code_challenge=$challenge&code_challenge_method=S256"
+
+# GET/POST one step without following redirects; prints the Location.
+step() { curl -sS -c "$jar" -b "$jar" -o "$work/page.html" -w '%{redirect_url}' "$@"; }
+
+login_page=$(step "$authorize_url")
+[[ $login_page == "$issuer/ui/login/"* ]] || fail "authorize: expected a redirect to login v1, got '$login_page'"
+step "$login_page" >/dev/null
+auth_request=$(form_value authRequestID "$work/page.html")
+[ -n "$auth_request" ] || fail "login page: no authRequestID"
+step --data-urlencode "gorilla.csrf.Token=$(form_value gorilla.csrf.Token "$work/page.html")" \
+    --data-urlencode "authRequestID=$auth_request" \
+    --data-urlencode "loginName=$email" \
+    "$issuer/ui/login/loginname" >/dev/null
+grep -q 'action="/ui/login/password"' "$work/page.html" || fail "login name: $email was not accepted"
+next=$(step --data-urlencode "gorilla.csrf.Token=$(form_value gorilla.csrf.Token "$work/page.html")" \
+    --data-urlencode "authRequestID=$auth_request" \
+    --data-urlencode "loginName=$email" \
+    --data-urlencode "password=$password" \
+    "$issuer/ui/login/password")
+# Anything other than a redirect here is a page asking for more (MFA setup,
+# password change…), which would break scripted and e2e logins.
+for _ in 1 2 3 4 5; do
+    [[ $next == "$redirect_uri"* ]] && break
+    [ -n "$next" ] || fail "login: stopped on $(grep -o '<title>[^<]*' "$work/page.html" | head -1 | sed 's/<title>//') instead of redirecting"
+    next=$(step "$next")
+done
+[[ $next == "$redirect_uri"* ]] || fail "login: never reached $redirect_uri"
+code=$(sed -n 's/.*[?&]code=\([^&]*\).*/\1/p' <<<"$next")
+[ "$(sed -n 's/.*[?&]state=\([^&]*\).*/\1/p' <<<"$next")" = "$state" ] || fail "callback: state mismatch"
+ok "login: $email signed in, redirected to $redirect_uri with a code"
+
+tokens=$(curl -sS -u "$client_id:$client_secret" "$token_endpoint" \
+    --data-urlencode grant_type=authorization_code \
+    --data-urlencode "code=$code" \
+    --data-urlencode "redirect_uri=$redirect_uri" \
+    --data-urlencode "code_verifier=$verifier")
+id_token=$(jq -r '.id_token // empty' <<<"$tokens")
+[ -n "$id_token" ] || fail "code exchange: $(jq -c . <<<"$tokens")"
+[ -n "$(jq -r '.refresh_token // empty' <<<"$tokens")" ] || fail "code exchange: no refresh token for offline_access"
+ok "code exchange: id, access and refresh tokens (PKCE verifier accepted)"
+
+claims=$(b64url_json "$(cut -d. -f2 <<<"$id_token")")
+[ "$(jq -r .email <<<"$claims")" = "$email" ] || fail "id token: email is $(jq -r .email <<<"$claims")"
+[ "$(jq -r .email_verified <<<"$claims")" = true ] || fail "id token: email_verified is not true"
+[ "$(jq -r .aud <<<"$claims" | grep -c "$client_id")" -ge 1 ] || fail "id token: aud does not contain $client_id"
+ok "id token: $(jq -c '{sub, email, email_verified, name}' <<<"$claims")"
+
+userinfo=$(curl -fsS -H "Authorization: Bearer $(jq -r .access_token <<<"$tokens")" "$userinfo_endpoint")
+[ "$(jq -r .email <<<"$userinfo")" = "$email" ] || fail "userinfo: $(jq -c . <<<"$userinfo")"
+ok "userinfo: $(jq -r .email <<<"$userinfo") via the access token"
