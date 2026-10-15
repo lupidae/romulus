@@ -148,4 +148,4 @@ site-lighthouse: env
 
 # publish the homepage to Cloudflare Pages (site/wrangler.toml; `npx wrangler login` once)
 site-deploy:
-    cd site && npx --yes wrangler@4 pages deploy
+    cd site && npx --yes wrangler@4.151.0 pages deploy

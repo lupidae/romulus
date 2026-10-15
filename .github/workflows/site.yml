@@ -1,0 +1,60 @@
+name: Homepage
+
+# Only when something the homepage is built from changes: site/ itself, the
+# app's tokens and font packages it copies, its port, recipes or this file.
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - web/src/styles/**
+      - web/package.json
+      - web/package-lock.json
+      - scripts/dev-env
+      - justfile
+      - .github/workflows/site.yml
+  pull_request:
+    paths:
+      - site/**
+      - web/src/styles/**
+      - web/package.json
+      - web/package-lock.json
+      - scripts/dev-env
+      - justfile
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  site:
+    name: homepage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            site/package-lock.json
+      # The sync check compares site/public with the app's tokens and font packages.
+      - run: npm ci --prefix web
+      - run: npm ci --prefix site
+      - run: npx --prefix site playwright install --with-deps chromium
+      - run: just site-check
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-playwright-report
+          path: site/playwright-report
+          if-no-files-found: ignore

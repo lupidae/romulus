@@ -66,33 +66,6 @@ jobs:
       - run: cargo sqlx migrate run --source migrations
       - run: just check
 
-  site:
-    name: homepage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: just
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            web/package-lock.json
-            site/package-lock.json
-      # The sync check compares site/public with the app's tokens and font packages.
-      - run: npm ci --prefix web
-      - run: npm ci --prefix site
-      - run: npx --prefix site playwright install --with-deps chromium
-      - run: just site-check
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: site-playwright-report
-          path: site/playwright-report
-          if-no-files-found: ignore
-
   e2e:
     name: end-to-end
     # Manual for now: it boots the whole stack, Zitadel included.

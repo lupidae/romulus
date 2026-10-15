@@ -24,7 +24,7 @@ wrangler.toml      the Cloudflare Pages project
 ```bash
 npm ci --prefix site          # once (Playwright and axe); web/ needs `npm ci` too for sync
 just site                     # serve on $ROMULUS_SITE_PORT (scripts/dev-env, slot + 7)
-just site-check               # tokens/fonts in sync, then Playwright + axe (CI runs this)
+just site-check               # tokens/fonts in sync, then Playwright + axe (CI: .github/workflows/site.yml)
 just site-gen                 # after a token change in web/, or a change to the hero or mark
 just site-lighthouse          # mobile and desktop reports in site/lighthouse/
 ```
@@ -38,7 +38,7 @@ The CSP allows one inline script by hash: if you edit the theme script in
 Not deployed by CI. With `npx wrangler login` done once:
 
 ```bash
-just site-deploy              # wrangler pages deploy, project "romulus-site"
+just site-deploy              # wrangler@4.151.0 pages deploy, project "romulus-site"
 ```
 
 Or connect the repository in the Pages dashboard with these settings:
@@ -53,22 +53,29 @@ Or connect the repository in the Pages dashboard with these settings:
 Then attach the custom domain `romulus.lupidae.com` in the project's Custom
 domains tab (Pages has no wrangler.toml setting for it).
 
-**Links into the app** are root-relative (`/app/signin`), which is right where
-the MVP's one-origin production shape holds (the API serves this directory at
-`/`, the SPA at `/app`, itself at `/api`; it must then send the `_headers`
-equivalents itself). If the homepage stays on Pages while the app lives on
-another host, add the redirect to `public/_redirects`:
+**Links into the app** are root-relative (`/app/signin`, and `/app/…`,
+`/api/…` wherever they appear). The homepage is hosted on Pages and the app's
+host is not decided yet, so until then those links 404 on Pages. When it is,
+add one of these to `public/_redirects`:
 
 ```
+# the app on its own host: send visitors there
 /app/*  https://<app host>/app/:splat  302
 ```
 
-## Decisions and placeholders
+or keep one origin by proxying `/app/*` and `/api/*` to the API (a Pages
+Function or a Worker route in front of Pages), which is the MVP's shape: the
+API serves the SPA at `/app` and itself at `/api`. If the API ever serves this
+directory at `/` instead, it must send the `_headers` equivalents itself.
 
-- Canonical URL `https://romulus.lupidae.com/` (like remus.lupidae.com): in the
-  head of `index.html`, `robots.txt` and `sitemap.xml`.
-- "Request access" mails `romulus@lupidae.com` (lupidae.com has Cloudflare
-  Email Routing): the address needs a routing rule before launch.
+## Decisions
+
+- Hosting: Cloudflare Pages. Canonical URL `https://romulus.lupidae.com/`
+  (in the head of `index.html`, `robots.txt`, `sitemap.xml`; the custom
+  domain is attached in the Pages dashboard).
+- "Request access" opens `mailto:romulus@lupidae.com`.
+- The push snippet follows the spec: `POST /api/databases/<id>/versions` with
+  the database's bearer token, remus JSON as the body.
 - Fonts are self-hosted (Inter with its optical-size axis, so large headings
   get Inter Display's shapes; JetBrains Mono for code), preloaded, `swap`.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows
