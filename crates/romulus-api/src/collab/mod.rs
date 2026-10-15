@@ -230,6 +230,16 @@ impl Hub {
         }
     }
 
+    /// The database was deleted: its drafts' rooms close as deleted drafts do.
+    pub fn database_deleted(&self, database_id: Uuid, by: &str) {
+        let rooms = self.0.rooms();
+        for entry in rooms.values() {
+            if entry.shared.database_id.get() == Some(&database_id) {
+                let _ = entry.commands.send(Command::Deleted { by: by.to_owned() });
+            }
+        }
+    }
+
     /// Who has each of these drafts open.
     pub fn present(&self, drafts: &[Uuid]) -> HashMap<Uuid, Vec<Present>> {
         let rooms = self.0.rooms();

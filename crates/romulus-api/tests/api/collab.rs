@@ -23,6 +23,7 @@ const V1: &str = "CREATE TABLE users (id bigint);\n";
 struct Draft {
     app: TestApp,
     team: Team,
+    database: Uuid,
     id: Uuid,
     ws: String,
 }
@@ -49,6 +50,7 @@ async fn draft_with(db: &PgPool, settings: romulus_api::collab::room::Settings) 
         ws: format!("/api/orgs/acme/drafts/{id}/ws"),
         app,
         team,
+        database: shop,
         id,
     }
 }
@@ -538,4 +540,15 @@ async fn malformed_frames_cost_only_their_connection(db: PgPool) {
     super::harness::member(&db, d.team.org, carol.user, Role::Developer).await;
     let mut late = Client::join(addr, &d.ws, &carol).await;
     late.until(|c| c.sql().contains("-- fine")).await;
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn deleting_the_database_lets_its_drafts_go(db: PgPool) {
+    let d = draft(&db).await;
+    let addr = serve(&d.app).await;
+    let mut alice = Client::join(addr, &d.ws, &d.team.developer).await;
+    d.app.state.collab.database_deleted(d.database, "Admin");
+    alice.until(|c| c.closed.is_some()).await;
+    assert_eq!(alice.closed, Some(4404));
+    assert_eq!(alice.last_event("status").unwrap()["status"], "deleted");
 }
