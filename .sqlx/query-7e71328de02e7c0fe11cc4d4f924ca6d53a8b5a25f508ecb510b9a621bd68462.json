@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT i.id, i.email, i.role AS \"role: Role\", i.created_at, i.expires_at,\n                  i.expires_at <= now() AS \"expired!\", u.id AS \"invited_by_id?\", u.name AS \"invited_by_name?\"\n           FROM invitations i LEFT JOIN users u ON u.id = i.created_by\n           WHERE i.org_id = $1 AND i.accepted_at IS NULL\n           ORDER BY i.created_at DESC",
+  "query": "SELECT i.id, i.email, i.role AS \"role: Role\", i.created_at, i.expires_at,\n                  i.expires_at <= now() AS \"expired!\", i.created_by AS \"invited_by_id?\",\n                  (SELECT name FROM users WHERE id = i.created_by) AS \"invited_by_name?\"\n           FROM invitations i\n           WHERE i.org_id = $1 AND i.accepted_at IS NULL\n           ORDER BY i.created_at DESC",
   "describe": {
     "columns": [
       {
@@ -81,8 +81,8 @@
         "type_info": "Uuid",
         "origin": {
           "Table": {
-            "table": "users",
-            "name": "id"
+            "table": "invitations",
+            "name": "created_by"
           }
         }
       },
@@ -90,12 +90,7 @@
         "ordinal": 7,
         "name": "invited_by_name?",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "users",
-            "name": "name"
-          }
-        }
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -110,9 +105,9 @@
       false,
       false,
       null,
-      false,
-      false
+      true,
+      null
     ]
   },
-  "hash": "55cc9272e4befe904ae3cc5f3c189028202a49bfcd0b3637380347a1ae9d924c"
+  "hash": "7e71328de02e7c0fe11cc4d4f924ca6d53a8b5a25f508ecb510b9a621bd68462"
 }

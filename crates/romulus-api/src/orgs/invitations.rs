@@ -88,10 +88,14 @@ async fn list(
     admin: Member<min::Admin>,
     State(db): State<PgPool>,
 ) -> ApiResult<Json<Vec<Invitation>>> {
+    // Scalar subqueries, not LEFT JOINs: sqlx infers a joined column's
+    // nullability from the query plan, which varies with the data, and the
+    // offline query data (`.sqlx`) must not.
     let rows = sqlx::query!(
         r#"SELECT i.id, i.email, i.role AS "role: Role", i.created_at, i.expires_at,
-                  i.expires_at <= now() AS "expired!", u.id AS "invited_by_id?", u.name AS "invited_by_name?"
-           FROM invitations i LEFT JOIN users u ON u.id = i.created_by
+                  i.expires_at <= now() AS "expired!", i.created_by AS "invited_by_id?",
+                  (SELECT name FROM users WHERE id = i.created_by) AS "invited_by_name?"
+           FROM invitations i
            WHERE i.org_id = $1 AND i.accepted_at IS NULL
            ORDER BY i.created_at DESC"#,
         admin.org.id,
@@ -318,14 +322,14 @@ async fn find(db: &PgPool, link: &str, viewer: Option<&CurrentUser>) -> ApiResul
     let Some(row) = sqlx::query!(
         r#"SELECT i.id, i.org_id, i.email, i.role AS "role: Role", i.expires_at,
                   i.accepted_at IS NOT NULL AS "used!", i.expires_at <= now() AS "expired!",
-                  o.name AS org_name, o.slug AS org_slug, u.name AS "invited_by?",
-                  m.role AS "member_role?: Role",
+                  o.name AS org_name, o.slug AS org_slug,
+                  (SELECT name FROM users WHERE id = i.created_by) AS "invited_by?",
+                  (SELECT role FROM memberships WHERE org_id = i.org_id AND user_id = $2)
+                    AS "member_role?: Role",
                   coalesce(lower(i.email COLLATE pg_unicode_fast) = lower($3 COLLATE pg_unicode_fast), false)
                     AS "viewer_is_invitee!"
            FROM invitations i
            JOIN organizations o ON o.id = i.org_id
-           LEFT JOIN users u ON u.id = i.created_by
-           LEFT JOIN memberships m ON m.org_id = i.org_id AND m.user_id = $2
            WHERE i.token_hash = $1
              AND EXISTS (SELECT 1 FROM memberships author
                          WHERE author.org_id = i.org_id AND author.user_id = i.created_by
