@@ -38,6 +38,10 @@ pub struct Config {
     /// at `/app` (the `web` module). Unset in development, where Vite serves
     /// it; the container image sets it.
     pub web_dir: Option<PathBuf>,
+    /// `ROMULUS_EDGE_KEY`: when the API is reached through an edge proxy
+    /// (the preview's Pages Function), the secret that proxy sends; requests
+    /// without it are refused (the `edge` module). At least 32 characters.
+    pub edge_key: Option<Secret>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +102,7 @@ impl Config {
             session_cookie: "romulus_session".to_owned(),
             dev_signin: false,
             web_dir: None,
+            edge_key: None,
         }
     }
 
@@ -192,6 +197,14 @@ impl Config {
             });
         }
 
+        let edge_key = get("ROMULUS_EDGE_KEY").map(Secret);
+        if edge_key.as_ref().is_some_and(|key| key.0.len() < 32) {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_EDGE_KEY",
+                reason: "use at least 32 characters (openssl rand -hex 32)".to_owned(),
+            });
+        }
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             api_addr,
@@ -203,6 +216,7 @@ impl Config {
                 .unwrap_or_else(|| "romulus_session".to_owned()),
             dev_signin,
             web_dir,
+            edge_key,
         })
     }
 }
@@ -362,6 +376,26 @@ mod tests {
             Some(dir.as_path())
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_edge_key_is_long_and_secret() {
+        assert!(config(&BASE).unwrap().edge_key.is_none());
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_EDGE_KEY", "short"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_EDGE_KEY",
+                ..
+            })
+        ));
+        let key = "k".repeat(32);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_EDGE_KEY", &key));
+        let config = config(&vars).unwrap();
+        assert!(!format!("{config:?}").contains(&key));
+        assert_eq!(config.edge_key.unwrap().expose(), key);
     }
 
     #[test]

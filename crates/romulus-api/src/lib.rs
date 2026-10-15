@@ -16,6 +16,7 @@ pub mod databases;
 pub mod db;
 pub mod domain;
 pub mod drafts;
+pub mod edge;
 pub mod email;
 pub mod error;
 pub mod extract;
@@ -87,6 +88,9 @@ pub fn app(state: AppState) -> Router {
     let router = router
         .fallback(error::not_found)
         .layer(middleware::from_fn_with_state(state.clone(), csrf::guard))
+        // Outside the CSRF guard: a request that did not come through the
+        // edge is refused before anything else looks at it.
+        .layer(middleware::from_fn_with_state(state.clone(), edge::guard))
         .with_state(state);
     layers::around(router)
 }
