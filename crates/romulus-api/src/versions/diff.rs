@@ -189,8 +189,9 @@ fn summary_of(version: &VersionDetail) -> VersionSummary {
 /// metadata of `like`: the header names the database and server version,
 /// which differ between an upload (compiled in the sandbox) and a push (from
 /// wherever remus ran) without the schema differing. Rendered as a JSON
-/// version's SQL tab is (`compile::render_sql`).
-fn sql_like(schema: &Schema, like: &Schema) -> String {
+/// version's SQL tab is (`compile::render_sql`). A draft's publish preview
+/// renders its two sides with it too, `like` being the draft's model.
+pub(crate) fn sql_like(schema: &Schema, like: &Schema) -> String {
     let mut schema = romulus_diff::normalize(schema);
     like.remus_version.clone_into(&mut schema.remus_version);
     like.database.clone_into(&mut schema.database);
