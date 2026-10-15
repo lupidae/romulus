@@ -3,10 +3,10 @@
 use axum::{
     Router,
     body::{Body, Bytes},
-    http::{HeaderMap, Request, StatusCode, header},
+    http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
-use romulus_api::{AppState, Config, app, csrf, domain::Role};
+use romulus_api::{AppState, Config, app, csrf, domain::Role, token};
 use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -17,12 +17,19 @@ pub const ORIGIN: &str = "http://localhost:41000";
 
 pub struct TestApp {
     router: Router,
+    pub state: AppState,
 }
 
 impl TestApp {
     pub fn new(db: PgPool) -> Self {
+        Self::with_config(db, Config::for_tests())
+    }
+
+    pub fn with_config(db: PgPool, config: Config) -> Self {
+        let state = AppState::new(db, config);
         Self {
-            router: app(AppState::new(db, Config::for_tests())),
+            router: app(state.clone()),
+            state,
         }
     }
 
@@ -55,13 +62,77 @@ impl TestApp {
 
     /// A JSON POST as the web app sends it: CSRF header and same `Origin`.
     pub async fn post_json(&self, path: &str, body: &Value) -> TestResponse {
-        let request = Request::post(path)
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::ORIGIN, ORIGIN)
-            .header(csrf::HEADER, "1")
-            .body(Body::from(body.to_string()))
-            .expect("request");
-        self.send(request).await
+        self.call(Method::POST, path, None, Some(body)).await
+    }
+
+    /// A request as the web app sends it, as `session` (or signed out): the
+    /// CSRF header and our `Origin` on anything but a GET.
+    pub async fn call(
+        &self,
+        method: Method,
+        path: &str,
+        session: Option<&Session>,
+        body: Option<&Value>,
+    ) -> TestResponse {
+        let mut request = Request::builder().method(method.clone()).uri(path);
+        if method != Method::GET {
+            request = request
+                .header(header::ORIGIN, ORIGIN)
+                .header(csrf::HEADER, "1");
+        }
+        if let Some(session) = session {
+            request = request.header(header::COOKIE, session.cookie());
+        }
+        let body = match body {
+            Some(json) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Body::from(json.to_string())
+            }
+            None => Body::empty(),
+        };
+        self.send(request.body(body).expect("request")).await
+    }
+
+    /// `alice.get("/api/me")` reads better than `call(GET, …, Some(&alice))`.
+    pub fn as_user<'a>(&'a self, session: &'a Session) -> As<'a> {
+        As { app: self, session }
+    }
+}
+
+pub struct As<'a> {
+    app: &'a TestApp,
+    session: &'a Session,
+}
+
+impl As<'_> {
+    pub async fn get(&self, path: &str) -> TestResponse {
+        self.app
+            .call(Method::GET, path, Some(self.session), None)
+            .await
+    }
+
+    pub async fn post(&self, path: &str, body: &Value) -> TestResponse {
+        self.app
+            .call(Method::POST, path, Some(self.session), Some(body))
+            .await
+    }
+
+    pub async fn post_empty(&self, path: &str) -> TestResponse {
+        self.app
+            .call(Method::POST, path, Some(self.session), None)
+            .await
+    }
+
+    pub async fn patch(&self, path: &str, body: &Value) -> TestResponse {
+        self.app
+            .call(Method::PATCH, path, Some(self.session), Some(body))
+            .await
+    }
+
+    pub async fn delete(&self, path: &str) -> TestResponse {
+        self.app
+            .call(Method::DELETE, path, Some(self.session), None)
+            .await
     }
 }
 
@@ -85,6 +156,62 @@ impl TestResponse {
             .expect("an error body")
             .to_owned()
     }
+
+    pub fn location(&self) -> &str {
+        self.headers[header::LOCATION]
+            .to_str()
+            .expect("an ASCII Location")
+    }
+
+    /// The `Set-Cookie` for `name`, whole (value and attributes).
+    pub fn set_cookie(&self, name: &str) -> Option<String> {
+        self.headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with(&format!("{name}=")))
+            .map(str::to_owned)
+    }
+
+    /// Just the value of the cookie `name` this response sets.
+    pub fn cookie_value(&self, name: &str) -> Option<String> {
+        let set = self.set_cookie(name)?;
+        let pair = set.split(';').next()?;
+        Some(pair.split_once('=')?.1.to_owned())
+    }
+}
+
+/// A signed-in browser: the session cookie's value.
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub user: Uuid,
+    pub token: String,
+}
+
+impl Session {
+    pub fn cookie(&self) -> String {
+        format!("{}={}", Config::for_tests().session_cookie, self.token)
+    }
+}
+
+/// A session for `user`, as the sign-in would create it.
+pub async fn session(db: &PgPool, user: Uuid) -> Session {
+    let token = token::generate();
+    sqlx::query!(
+        "INSERT INTO sessions (id_hash, user_id, expires_at) VALUES ($1, $2, now() + interval '7 days')",
+        token::hash(&token),
+        user,
+    )
+    .execute(db)
+    .await
+    .expect("insert session");
+    Session { user, token }
+}
+
+/// A user and a session for them.
+pub async fn signed_in(db: &PgPool, name: &str) -> Session {
+    let id = user(db, name).await;
+    session(db, id).await
 }
 
 pub async fn user(db: &PgPool, name: &str) -> Uuid {
@@ -131,4 +258,49 @@ pub async fn database(db: &PgPool, org: Uuid, slug: &str) -> Uuid {
     .fetch_one(db)
     .await
     .expect("insert database")
+}
+
+/// An organization with one signed-in member per role, and someone signed
+/// in who is not a member.
+pub struct Team {
+    pub org: Uuid,
+    pub slug: String,
+    pub admin: Session,
+    pub developer: Session,
+    pub reviewer: Session,
+    pub outsider: Session,
+}
+
+impl Team {
+    pub async fn new(db: &PgPool, slug: &str) -> Self {
+        let org = org(db, slug).await;
+        let mut sessions = Vec::new();
+        for (who, role) in [
+            ("Admin", Some(Role::Admin)),
+            ("Developer", Some(Role::Developer)),
+            ("Reviewer", Some(Role::Reviewer)),
+            ("Outsider", None),
+        ] {
+            let id = user(db, &format!("{who}-{slug}")).await;
+            if let Some(role) = role {
+                member(db, org, id, role).await;
+            }
+            sessions.push(session(db, id).await);
+        }
+        let [admin, developer, reviewer, outsider] =
+            <[Session; 4]>::try_from(sessions).expect("four sessions");
+        Self {
+            org,
+            slug: slug.to_owned(),
+            admin,
+            developer,
+            reviewer,
+            outsider,
+        }
+    }
+
+    /// `/api/orgs/<slug><rest>`.
+    pub fn path(&self, rest: &str) -> String {
+        format!("/api/orgs/{}{rest}", self.slug)
+    }
 }

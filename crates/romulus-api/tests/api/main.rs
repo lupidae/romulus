@@ -4,7 +4,10 @@
 //! migrated database on the server `DATABASE_URL` points at (`.env` in dev, a
 //! service container in CI), dropped when the test passes.
 
+mod auth;
 mod csrf;
 mod harness;
 mod health;
+mod idp;
+mod oidc;
 mod schema;

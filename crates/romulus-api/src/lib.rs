@@ -20,6 +20,7 @@ pub mod health;
 mod layers;
 pub mod orgs;
 pub mod state;
+pub mod token;
 pub mod versions;
 
 use std::sync::Arc;

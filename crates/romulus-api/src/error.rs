@@ -39,9 +39,17 @@ pub enum ApiError {
     /// 401: no valid session or token.
     #[error("sign in to continue")]
     Unauthorized,
+    /// 401: the request carried a session cookie, but that session expired
+    /// (or was signed out elsewhere). The web app says so on the sign-in page.
+    #[error("Your session expired. Sign in again to continue.")]
+    SessionExpired,
     /// 403: signed in, but the role does not allow it.
     #[error("{0}")]
     Forbidden(String),
+    /// 403 with a specific code the web app branches on (`wrong_account`,
+    /// `email_unverified`…), where `Forbidden`'s generic code is not enough.
+    #[error("{message}")]
+    Denied { code: &'static str, message: String },
     /// 403: a cookie-authenticated mutation without the CSRF header or the right `Origin`.
     #[error("cross-site request refused")]
     Csrf,
@@ -84,8 +92,8 @@ impl ApiError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Forbidden(_) | Self::Csrf => StatusCode::FORBIDDEN,
+            Self::Unauthorized | Self::SessionExpired => StatusCode::UNAUTHORIZED,
+            Self::Forbidden(_) | Self::Denied { .. } | Self::Csrf => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::Conflict { .. } => StatusCode::CONFLICT,
@@ -101,11 +109,12 @@ impl ApiError {
             Self::BadRequest(_) => "bad_request",
             Self::Validation { .. } => "validation",
             Self::Unauthorized => "unauthorized",
+            Self::SessionExpired => "session_expired",
             Self::Forbidden(_) => "forbidden",
             Self::Csrf => "csrf",
             Self::NotFound(_) => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",
-            Self::Conflict { code, .. } => code,
+            Self::Denied { code, .. } | Self::Conflict { code, .. } => code,
             Self::PayloadTooLarge => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::Unavailable(_) => "unavailable",
@@ -230,6 +239,22 @@ mod tests {
         assert_eq!(
             (err.status(), err.code()),
             (StatusCode::CONFLICT, "slug_taken")
+        );
+    }
+
+    #[test]
+    fn denials_carry_their_own_code() {
+        let err = ApiError::Denied {
+            code: "wrong_account",
+            message: "no".into(),
+        };
+        assert_eq!(
+            (err.status(), err.code()),
+            (StatusCode::FORBIDDEN, "wrong_account")
+        );
+        assert_eq!(
+            ApiError::SessionExpired.status(),
+            ApiError::Unauthorized.status()
         );
     }
 

@@ -1,5 +1,6 @@
-//! No POST endpoint exists yet, so these go to an unknown path: 404 means the
-//! guard let the request through, 403 `csrf` means it stopped it.
+//! The guard runs before routing, so these go to an unknown path: 404 means
+//! it let the request through, 403 `csrf` means it stopped it. Real endpoints
+//! check it too (`auth.rs`, `invitations.rs`).
 
 use axum::{
     body::Body,

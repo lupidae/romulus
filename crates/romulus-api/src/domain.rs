@@ -19,6 +19,23 @@ pub enum Role {
 }
 
 impl Role {
+    /// Every role, most powerful first.
+    pub const ALL: [Self; 3] = [Self::Admin, Self::Developer, Self::Reviewer];
+
+    /// Whether this role has every capability of `min`: the roles nest
+    /// (admin ⊃ developer ⊃ reviewer, docs/MVP.md "Roles").
+    pub fn at_least(self, min: Self) -> bool {
+        self.rank() >= min.rank()
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Admin => 3,
+            Self::Developer => 2,
+            Self::Reviewer => 1,
+        }
+    }
+
     /// Edit drafts, create versions, upload, manage API tokens, create and
     /// delete databases.
     pub fn can_write(self) -> bool {
@@ -81,6 +98,19 @@ mod tests {
         assert!(Role::Developer.can_write());
         assert!(!Role::Developer.can_manage_members());
         assert!(Role::Admin.can_manage_members());
+    }
+
+    #[test]
+    fn roles_nest() {
+        for role in Role::ALL {
+            assert!(role.at_least(Role::Reviewer), "{role:?}");
+            assert_eq!(role.at_least(Role::Developer), role.can_write(), "{role:?}");
+            assert_eq!(
+                role.at_least(Role::Admin),
+                role.can_manage_members(),
+                "{role:?}"
+            );
+        }
     }
 
     #[test]

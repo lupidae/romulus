@@ -16,11 +16,20 @@ remus-core = "0.1.1"
 remus-sql = "0.1.1"
 
 axum = { version = "0.8.9", features = ["macros"] }
+axum-extra = { version = "0.12.6", features = ["cookie"] }
+base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+cookie = "0.18.2"
 dotenvy = "0.15.7"
+getrandom = "0.4.3"
 http-body-util = "0.1.5"
+openidconnect = "4.0.1"
+# Tests only: the fake IdP signs ID tokens with a key made at test time.
+rand = "0.8.5"
+rsa = "0.9.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.10.9"
 sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
     "json",
@@ -32,7 +41,7 @@ sqlx = { version = "0.9.0", default-features = false, features = [
     "uuid",
 ] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.53.3", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["catch-panic", "limit", "request-id", "timeout", "trace", "util"] }
 tracing = "0.1.44"
@@ -61,4 +70,8 @@ print_stderr = "warn"
 
 [profile.dev.package.sqlx-macros]
 # The query macros run on every build; an optimised build of them pays off fast.
+opt-level = 3
+
+# The API tests' fake IdP generates an RSA key: seconds unoptimised, instant here.
+[profile.dev.package.num-bigint-dig]
 opt-level = 3
