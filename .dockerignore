@@ -1,0 +1,20 @@
+# The API image (Dockerfile) builds from crates/, migrations/, .sqlx/, web/ and
+# the workspace files: nothing local (build output, dependencies, state,
+# secrets) goes into the context.
+.git
+target
+**/node_modules
+web/dist
+web/dist-perf
+web/test-results
+web/playwright-report
+web/blob-report
+web/playwright/.cache
+**/*.tsbuildinfo
+.env
+.dev
+.superset
+deploy
+site
+docs
+**/.DS_Store

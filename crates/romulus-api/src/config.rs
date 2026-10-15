@@ -4,7 +4,7 @@
 //! `scripts/dev-env`) and `.dev/zitadel/oidc.env` (written by the Zitadel
 //! provisioner); variables already set always win.
 
-use std::{env, fmt, net::SocketAddr};
+use std::{env, fmt, net::SocketAddr, path::PathBuf};
 
 use url::Url;
 
@@ -34,6 +34,10 @@ pub struct Config {
     /// Refused at startup unless `public_url` is a loopback host, so a
     /// deployed instance can never be started with it.
     pub dev_signin: bool,
+    /// `ROMULUS_WEB_DIR`: the web app's production build (`web/dist`), served
+    /// at `/app` (the `web` module). Unset in development, where Vite serves
+    /// it; the container image sets it.
+    pub web_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,7 @@ impl Config {
             oidc: None,
             session_cookie: "romulus_session".to_owned(),
             dev_signin: false,
+            web_dir: None,
         }
     }
 
@@ -176,6 +181,17 @@ impl Config {
             });
         }
 
+        // Checked now: a typo would otherwise only show as a 404 page.
+        let web_dir = get("ROMULUS_WEB_DIR").map(PathBuf::from);
+        if let Some(dir) = &web_dir
+            && !dir.join("index.html").is_file()
+        {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_WEB_DIR",
+                reason: format!("{} has no index.html (build web/ first)", dir.display()),
+            });
+        }
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             api_addr,
@@ -186,6 +202,7 @@ impl Config {
             session_cookie: get("ROMULUS_SESSION_COOKIE")
                 .unwrap_or_else(|| "romulus_session".to_owned()),
             dev_signin,
+            web_dir,
         })
     }
 }
@@ -322,6 +339,29 @@ mod tests {
             vars.push(("ROMULUS_SANDBOX_PREFIX", bad));
             assert!(config(&vars).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_web_dir_must_hold_a_build() {
+        assert!(config(&BASE).unwrap().web_dir.is_none());
+        let dir = std::env::temp_dir().join(format!("romulus-web-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut vars = BASE.to_vec();
+        let path = dir.to_str().unwrap().to_owned();
+        vars.push(("ROMULUS_WEB_DIR", &path));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_WEB_DIR",
+                ..
+            })
+        ));
+        std::fs::write(dir.join("index.html"), "<!doctype html>").unwrap();
+        assert_eq!(
+            config(&vars).unwrap().web_dir.as_deref(),
+            Some(dir.as_path())
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

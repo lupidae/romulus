@@ -4,6 +4,8 @@
 //! `collab`, `compile`) each expose `router()`, an [`OpenApiRouter`] whose
 //! paths are relative to `/api`. [`routes`] merges them; it is the only place
 //! that lists every module, so adding endpoints never means editing it.
+//! With `ROMULUS_WEB_DIR` set, [`app`] also serves the web app at `/app`
+//! ([`web`]).
 
 pub mod auth;
 pub mod collab;
@@ -24,6 +26,7 @@ pub mod rate;
 pub mod state;
 pub mod token;
 pub mod versions;
+pub mod web;
 
 use std::sync::Arc;
 
@@ -77,8 +80,11 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 pub fn app(state: AppState) -> Router {
     let (router, spec) = router_and_spec();
     let spec = Arc::new(spec);
+    let mut router = router.route("/api/openapi.json", get(move || async move { Json(spec) }));
+    if let Some(dir) = &state.config.web_dir {
+        router = router.merge(web::router(dir));
+    }
     let router = router
-        .route("/api/openapi.json", get(move || async move { Json(spec) }))
         .fallback(error::not_found)
         .layer(middleware::from_fn_with_state(state.clone(), csrf::guard))
         .with_state(state);
