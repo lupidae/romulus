@@ -185,7 +185,7 @@ async fn tidy_never_changes_the_schema(db: PgPool) {
         .edit(|roots, txn| {
             roots
                 .sql
-                .push(txn, "CREATE FOREIGN TABLE remote (id int) SERVER s;\n")
+                .push(txn, "CREATE FOREIGN TABLE remote (id int) SERVER s;\n");
         })
         .await;
     alice
