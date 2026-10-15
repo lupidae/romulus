@@ -92,6 +92,17 @@ impl CompilerStatus {
     }
 }
 
+/// A text with conflict blocks from "Update draft" (or stray markers) is
+/// never compiled: it is not what anyone means yet, and refusing it is what
+/// keeps such a draft from being published.
+fn refused(sql: &str) -> Option<Compiled> {
+    let diagnostics = romulus_sandbox::merge::conflict_diagnostics(sql);
+    (!diagnostics.is_empty()).then_some(Compiled {
+        model: None,
+        diagnostics,
+    })
+}
+
 /// Between start attempts: doubling from 1 s, at most this.
 const MAX_RETRY: Duration = Duration::from_secs(30);
 
@@ -124,6 +135,9 @@ impl SqlCompiler {
     }
 
     pub async fn compile(&self, sql: &str) -> ApiResult<Compiled> {
+        if let Some(refused) = refused(sql) {
+            return Ok(refused);
+        }
         match &self.0 {
             Backend::None => Err(unavailable()),
             Backend::Sandbox(sandbox) => {
@@ -162,6 +176,9 @@ impl SqlCompiler {
     /// waiting when a newer one for the same key arrives answers
     /// [`Rejected::Superseded`]. Without a sandbox (tests), a plain compile.
     pub async fn compile_for(&self, key: &str, sql: String) -> Result<Compiled, Rejected> {
+        if let Some(refused) = refused(&sql) {
+            return Ok(refused);
+        }
         let Backend::Sandbox(sandbox) = &self.0 else {
             return Ok(self.compile(&sql).await?);
         };

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT base_sql FROM drafts WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "base_sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "base_sql"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "072bead6a9553e24c8e5c1c92a05436f1ad7bdbf4436d892564b00ebb66b96ee"
+}

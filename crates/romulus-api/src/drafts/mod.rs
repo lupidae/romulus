@@ -17,15 +17,16 @@
 //!
 //! - `POST …/drafts/{id}/tidy` [developer]: rewrite the SQL in remus's
 //!   canonical form, as a minimal edit ([`tidy`]).
-//!
-//! "Update draft" (the three-way merge when someone published first) is
-//! milestone 6; until then a stale draft answers 409 `stale_base`.
+//! - `POST …/drafts/{id}/update` [developer]: "Update draft", when someone
+//!   published since the draft started: merges the latest version in
+//!   ([`update`]); publishing a stale draft answers 409 `stale_base`.
 //!
 //! Tables: `drafts`, `draft_compiles` (with `collab`'s `draft_updates`,
 //! `draft_snapshots`).
 
 pub mod publish;
 pub mod tidy;
+pub mod update;
 pub mod versions;
 
 use axum::{extract::State, http::StatusCode};
@@ -42,7 +43,7 @@ use crate::{
     auth::{Member, min},
     collab::{Hub, Present, compile, doc},
     databases::{self, DatabaseRef},
-    domain::{DraftStatus, Schema, SourceKind},
+    domain::{DraftStatus, SourceKind},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
@@ -55,6 +56,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get, rename, delete))
         .routes(routes!(publish::preview, publish::publish))
         .routes(routes!(tidy::tidy))
+        .routes(routes!(update::update))
 }
 
 /// A draft, as the database page and the editor show it.
@@ -252,13 +254,8 @@ async fn create(
             // The version's model is what its SQL compiles to only when the
             // SQL is the source; SQL rendered from a pushed model is compiled
             // like any other text (the SQL is what counts).
-            let (sql, model) = match version.source_kind {
-                SourceKind::Sql => (version.source.clone(), Some(&version.model)),
-                SourceKind::RemusJson => {
-                    let schema = Schema::deserialize(&version.model).map_err(ApiError::internal)?;
-                    (romulus_sandbox::render_sql(&schema), None)
-                }
-            };
+            let model = (version.source_kind == SourceKind::Sql).then_some(&version.model);
+            let sql = version.sql()?;
             (
                 format!("Draft from v{}", version.number),
                 sql,
@@ -414,7 +411,7 @@ async fn delete(
     if state.collab.delete(id, &member.user.name).await.is_err() {
         return Err(ApiError::Conflict {
             code: "draft_busy",
-            message: "This draft is being published. Try again in a moment.".into(),
+            message: "This draft is being published or updated. Try again in a moment.".into(),
         });
     }
     let deleted = sqlx::query!(

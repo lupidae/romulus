@@ -2,6 +2,7 @@
 //! versions module's [`store`], which numbers versions under the lock on the
 //! database row and checks the expected base there).
 
+use serde::Deserialize as _;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -23,6 +24,34 @@ pub struct Version {
     pub source: String,
     pub source_kind: SourceKind,
     pub layout: Value,
+}
+
+impl Version {
+    pub fn schema(&self) -> ApiResult<Schema> {
+        Schema::deserialize(&self.model).map_err(ApiError::internal)
+    }
+
+    /// Its SQL as a draft has it: the source, or `render_sql` of a pushed
+    /// model.
+    pub fn sql(&self) -> ApiResult<String> {
+        Ok(match self.source_kind {
+            SourceKind::Sql => self.source.clone(),
+            SourceKind::RemusJson => romulus_sandbox::render_sql(&self.schema()?),
+        })
+    }
+}
+
+/// One version of the database.
+pub async fn by_id(db: &PgPool, database_id: Uuid, id: Uuid) -> ApiResult<Option<Version>> {
+    Ok(sqlx::query_as!(
+        Version,
+        r#"SELECT id, number, model, source, source_kind AS "source_kind: SourceKind", layout
+           FROM versions WHERE database_id = $1 AND id = $2"#,
+        database_id,
+        id,
+    )
+    .fetch_optional(db)
+    .await?)
 }
 
 /// The database's latest version, if it has one.

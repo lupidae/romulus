@@ -430,8 +430,8 @@ side (list with presence, one-click create, rename, soft delete, publish).
 - **Websocket** `GET /api/orgs/{org}/drafts/{id}/ws`: `csrf::SameOrigin` +
   `Member`. y-sync as y-websocket speaks it, plus **tag 100**:
   `collab::protocol::ServerEvent` JSON (welcome, compile, status, renamed,
-  version_created), a message only the server sends (results never live in
-  the doc: clients could forge them). Decoding runs in the socket task behind
+  version_created, updated, save_failed), a message only the server sends
+  (results never live in the doc: clients could forge them). Decoding runs in the socket task behind
   `catch_unwind` (yrs debug-asserts on client ids past 2^53). Close codes:
   1012 restart, 4000 too slow, 4001 membership changed (reconnect), 4404
   deleted (final: y-websocket treats 4400–4499 as such).
@@ -450,10 +450,25 @@ side (list with presence, one-click create, rename, soft delete, publish).
   written by the server. `draft_compiles.good_model` is the graph while the
   text has errors.
 - **Versions from drafts** go through `versions::store` with the draft's
-  `VersionLayout` and `expected_base`: base moved → 409 `stale_base`
-  (milestone 6 brings "Update draft"). Creating a version (upload, push,
+  `VersionLayout` and `expected_base`: base moved → 409 `stale_base`, and
+  the editor offers "Update draft". Creating a version (upload, push,
   publish) calls `collab.version_created`; deleting a database calls
   `collab.database_deleted`.
+- **Update draft** (`POST …/drafts/{id}/update`, `drafts::update`): freezes
+  the room (`LiveStatus::Updating`), merges with `romulus_sandbox::merge`
+  (statement-level: atoms per object, "theirs changed" decided on
+  `render_sql` of the two models, ours against `drafts.base_sql`, the text
+  the draft is relative to), writes the merged SQL with `Hub::rewrite`
+  (`patch::changes`, like Tidy; allowed while frozen for an update) and the
+  layout with `Hub::merge_layout` (which waits until everything is written),
+  then moves `base_version_id`, stores the new `base_sql`, broadcasts
+  `updated`. Statements under the graph edits' marker merge by their own
+  keys; the marker line itself never moves.
+  Conflicts are blocks of SQL comments (`-- <<<<<<< yours` … `-- =======
+  vN` … `-- >>>>>>> vN`); `SqlCompiler` refuses text with any
+  (`Code::Conflict`), which is what blocks publishing. The web app finds
+  them with `features/draft/conflicts.ts` and draws them in CodeMirror
+  (a `StateField`) with Keep yours / theirs / both.
 - **Tests** (`tests/api/live.rs`): `live_app(db, quick())` (`draft_compiler()`:
   a table per `CREATE TABLE`, an error at `ERROR`), `serve(&app)` for a real
   socket, `Client::join(addr, path, &session)` (a y-websocket client made of

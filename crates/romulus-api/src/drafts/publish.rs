@@ -334,10 +334,10 @@ pub(super) async fn compiled(
 }
 
 /// A frozen draft: unfrozen when dropped, unless it was published.
-struct Frozen<'a> {
-    hub: &'a Hub,
-    draft: Uuid,
-    done: bool,
+pub(super) struct Frozen<'a> {
+    pub(super) hub: &'a Hub,
+    pub(super) draft: Uuid,
+    pub(super) done: bool,
 }
 
 impl Frozen<'_> {

@@ -15,17 +15,19 @@
 //!   [`Settings::max_wait`] after the first); its result goes to everyone
 //!   and to `draft_compiles`. A rename typed in the text moves the table's
 //!   layout and group entries (docs/MVP.md "Renames").
-//! - **Rewrites**: the server replacing the SQL (Tidy) sends the changes
-//!   it computed against one text ([`super::patch`]); the room applies them
-//!   in one transaction if the text is still that one, and refuses
-//!   otherwise (the caller computes again). The same transaction notes the
-//!   rewrite in `meta` (`Roots::note_rewrite`): every client drops its undo
-//!   history, which could otherwise delete characters the rewrite reused.
+//! - **Rewrites**: the server replacing the SQL (Tidy, Update draft's
+//!   merge) sends the changes it computed against one text
+//!   ([`super::patch`]); the room applies them in one transaction if the
+//!   text is still that one (and the room open, or frozen for an update),
+//!   and refuses otherwise (the caller computes again). The same
+//!   transaction notes the rewrite in `meta` (`Roots::note_rewrite`): every
+//!   client drops its undo history, which could otherwise delete characters
+//!   the rewrite reused.
 //! - **Graph edits markers**: two editors making their first graph edit at
 //!   once each append `-- edits from the graph`; before compiling, the room
 //!   removes all but the first (a server edit).
-//! - **Publishing** freezes the room (every update dropped) until it is
-//!   published or the attempt fails; then every connection is asked to sync
+//! - **Publishing** and **updating** freeze the room (every update dropped)
+//!   until they are done or fail; then every connection is asked to sync
 //!   again, which brings back what was dropped meanwhile. A frozen room
 //!   never unloads.
 //! - **Unloading**: [`Settings::idle_unload`] after the last connection
@@ -71,7 +73,10 @@ use super::{
     protocol::{self, LiveStatus, ServerEvent},
     store::{self, CompileRow, Job, Loaded, Writer},
 };
-use crate::{domain::DraftStatus, versions::layout::VersionLayout};
+use crate::{
+    domain::DraftStatus,
+    versions::layout::{TableGroup, TablePosition, VersionLayout},
+};
 
 /// Timings and thresholds; [`Settings::default`] in production, shorter in
 /// tests.
@@ -273,6 +278,13 @@ pub enum RewriteError {
     Changed,
 }
 
+/// Why a draft is frozen: what everyone sees meanwhile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreezeFor {
+    Publish,
+    Update,
+}
+
 pub enum Command {
     Join {
         conn: ConnId,
@@ -292,7 +304,15 @@ pub enum Command {
     },
     Freeze {
         by: String,
+        purpose: FreezeFor,
         reply: oneshot::Sender<Result<Content, FreezeError>>,
+    },
+    /// "Update draft"'s layout and group changes; answered once everything
+    /// the room changed is written (handled by the loop).
+    MergeLayout {
+        layout: Vec<(String, Option<TablePosition>)>,
+        groups: Vec<(String, Option<TableGroup>)>,
+        reply: oneshot::Sender<()>,
     },
     Unfreeze,
     Published {
@@ -320,6 +340,12 @@ pub enum Command {
         changes: Vec<patch::Change>,
         reason: &'static str,
         reply: oneshot::Sender<Result<bool, RewriteError>>,
+    },
+    /// The draft was updated to a newer version (its base moved).
+    Updated {
+        version: i32,
+        by: String,
+        conflicts: u32,
     },
     Shutdown,
 }
@@ -453,7 +479,7 @@ pub async fn run(
         // edits the publish then silently drops.
         let idle_at = room
             .idle_since
-            .filter(|_| room.status != LiveStatus::Publishing)
+            .filter(|_| !room.status.is_frozen())
             .map(|since| since + room.settings.idle_unload);
         tokio::select! {
             biased;
@@ -463,6 +489,15 @@ pub async fn run(
                     room.persist().await;
                     room.hub.remove(id, generation);
                     return;
+                }
+                Some(Command::MergeLayout { layout, groups, reply }) => {
+                    if room.status.is_frozen() || room.status == LiveStatus::Open {
+                        room.server_edit(|roots, txn| roots.apply_layout(txn, &layout, &groups));
+                    }
+                    // Written before the draft's base moves.
+                    room.flush_pending();
+                    room.writer.flush().await;
+                    let _ = reply.send(());
                 }
                 Some(command) => room.handle(command),
             },
@@ -587,7 +622,6 @@ impl Room {
         Ok(room)
     }
 
-    #[expect(clippy::too_many_lines, reason = "one short arm per command")]
     fn handle(&mut self, command: Command) {
         match command {
             Command::Join {
@@ -610,44 +644,8 @@ impl Room {
                 self.flush_pending();
                 let _ = reply.send(self.content());
             }
-            Command::Freeze { by, reply } => {
-                if self.status != LiveStatus::Open {
-                    let _ = reply.send(Err(FreezeError::NotOpen(self.status)));
-                    return;
-                }
-                self.status = LiveStatus::Publishing;
-                self.flush_pending();
-                self.broadcast_event(
-                    &ServerEvent::Status {
-                        status: self.status,
-                        version: None,
-                        by: Some(by),
-                    },
-                    None,
-                );
-                let _ = reply.send(Ok(self.content()));
-            }
-            Command::Unfreeze => {
-                if self.status == LiveStatus::Publishing {
-                    self.status = LiveStatus::Open;
-                    self.broadcast_event(
-                        &ServerEvent::Status {
-                            status: self.status,
-                            version: None,
-                            by: None,
-                        },
-                        None,
-                    );
-                    // Edits made while frozen were dropped: ask everyone
-                    // for what they have that the doc lacks.
-                    let step1 = protocol::sync_step1(&self.doc.transact().state_vector());
-                    self.broadcast(&step1, None);
-                    let renames = std::mem::take(&mut self.deferred_renames);
-                    if !renames.is_empty() {
-                        self.server_edit(|roots, txn| roots.rename(txn, &renames));
-                    }
-                }
-            }
+            Command::Freeze { by, purpose, reply } => self.freeze(by, purpose, reply),
+            Command::Unfreeze => self.unfreeze(),
             Command::Published { version, by } => {
                 self.status = LiveStatus::Published;
                 self.dirty = None;
@@ -665,7 +663,7 @@ impl Room {
                 self.broadcast_event(&ServerEvent::Renamed { name }, None);
             }
             Command::Delete { by, reply } => {
-                if self.status == LiveStatus::Publishing {
+                if self.status.is_frozen() {
                     let _ = reply.send(Err(super::Publishing));
                     return;
                 }
@@ -685,6 +683,20 @@ impl Room {
                 );
                 self.close_all(close::DELETED, "the draft was deleted");
             }
+            Command::Updated {
+                version,
+                by,
+                conflicts,
+            } => {
+                self.broadcast_event(
+                    &ServerEvent::Updated {
+                        version,
+                        by,
+                        conflicts,
+                    },
+                    None,
+                );
+            }
             Command::VersionCreated { number } => {
                 self.broadcast_event(&ServerEvent::VersionCreated { number }, None);
             }
@@ -697,7 +709,7 @@ impl Room {
                 let _ = reply.send(self.rewrite(&from, &changes, reason));
             }
             // Handled by the loop.
-            Command::Shutdown => {}
+            Command::Shutdown | Command::MergeLayout { .. } => {}
         }
     }
 
@@ -915,6 +927,55 @@ impl Room {
         self.queue_write(update.into());
     }
 
+    fn freeze(
+        &mut self,
+        by: String,
+        purpose: FreezeFor,
+        reply: oneshot::Sender<Result<Content, FreezeError>>,
+    ) {
+        if self.status != LiveStatus::Open {
+            let _ = reply.send(Err(FreezeError::NotOpen(self.status)));
+            return;
+        }
+        self.status = match purpose {
+            FreezeFor::Publish => LiveStatus::Publishing,
+            FreezeFor::Update => LiveStatus::Updating,
+        };
+        self.flush_pending();
+        self.broadcast_event(
+            &ServerEvent::Status {
+                status: self.status,
+                version: None,
+                by: Some(by),
+            },
+            None,
+        );
+        let _ = reply.send(Ok(self.content()));
+    }
+
+    fn unfreeze(&mut self) {
+        if !self.status.is_frozen() {
+            return;
+        }
+        self.status = LiveStatus::Open;
+        self.broadcast_event(
+            &ServerEvent::Status {
+                status: self.status,
+                version: None,
+                by: None,
+            },
+            None,
+        );
+        // Edits made while frozen were dropped: ask everyone for what they
+        // have that the doc lacks.
+        let step1 = protocol::sync_step1(&self.doc.transact().state_vector());
+        self.broadcast(&step1, None);
+        let renames = std::mem::take(&mut self.deferred_renames);
+        if !renames.is_empty() {
+            self.server_edit(|roots, txn| roots.rename(txn, &renames));
+        }
+    }
+
     /// Applies a rewrite of the SQL if the text is still the one it was
     /// computed against (see [`Command::Rewrite`]).
     fn rewrite(
@@ -923,7 +984,8 @@ impl Room {
         changes: &[patch::Change],
         reason: &str,
     ) -> Result<bool, RewriteError> {
-        if self.status != LiveStatus::Open {
+        // Open, or frozen for an update (this rewrite is its merge).
+        if !matches!(self.status, LiveStatus::Open | LiveStatus::Updating) {
             return Err(RewriteError::NotOpen(self.status));
         }
         let current = self.roots.sql(&self.doc.transact());
@@ -1209,7 +1271,9 @@ impl Room {
                     self.server_edit(|roots, txn| roots.rename(txn, &renames));
                 }
                 // Moved if publishing fails (and moot if it succeeds).
-                LiveStatus::Publishing => self.deferred_renames.extend(renames),
+                LiveStatus::Publishing | LiveStatus::Updating => {
+                    self.deferred_renames.extend(renames);
+                }
                 LiveStatus::Published | LiveStatus::Deleted => {}
             }
             let model = Arc::new(serde_json::to_value(&model).unwrap_or_default());

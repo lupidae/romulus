@@ -169,9 +169,9 @@ pub(super) async fn tidy(
 
 fn closed(status: LiveStatus) -> ApiError {
     match status {
-        LiveStatus::Publishing => ApiError::Conflict {
+        LiveStatus::Publishing | LiveStatus::Updating => ApiError::Conflict {
             code: "draft_busy",
-            message: "Someone is publishing this draft right now.".into(),
+            message: "Someone is publishing or updating this draft right now.".into(),
         },
         LiveStatus::Published => not_open(DraftStatus::Published),
         LiveStatus::Open | LiveStatus::Deleted => not_open(DraftStatus::Deleted),

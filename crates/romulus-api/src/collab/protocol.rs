@@ -78,6 +78,9 @@ pub enum LiveStatus {
     /// Someone is publishing it: edits are refused until that succeeds
     /// (then `published`) or fails (back to `open`).
     Publishing,
+    /// Someone is updating it to the latest version ("Update draft"): edits
+    /// are refused for that moment, then sent again.
+    Updating,
     /// It became a version; nothing changes it any more.
     Published,
     /// Deleted: the editor should leave.
@@ -132,6 +135,20 @@ pub enum ServerEvent {
     /// The server could not store some edits (its database failing): they
     /// live in the open tabs only.
     SaveFailed,
+    /// The draft was updated to a newer version ("Update draft"): its base
+    /// is now `version`; `conflicts` blocks are left to resolve.
+    Updated {
+        version: i32,
+        by: String,
+        conflicts: u32,
+    },
+}
+
+impl LiveStatus {
+    /// Publishing or updating: edits are dropped, the room stays loaded.
+    pub fn is_frozen(self) -> bool {
+        matches!(self, Self::Publishing | Self::Updating)
+    }
 }
 
 #[cfg(test)]

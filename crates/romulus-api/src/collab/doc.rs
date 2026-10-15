@@ -25,7 +25,7 @@ use yrs::{
     Transact, TransactionMut, Update, types::ToJson, updates::decoder::Decode,
 };
 
-use crate::versions::layout::{TableGroup, VersionLayout};
+use crate::versions::layout::{TableGroup, TablePosition, VersionLayout};
 
 pub const SQL: &str = "sql";
 pub const LAYOUT: &str = "layout";
@@ -163,6 +163,39 @@ pub fn extra_markers(sql: &str) -> Vec<std::ops::Range<usize>> {
         start = end;
     }
     out
+}
+
+impl Roots {
+    /// "Update draft"'s layout and group changes (`None`: remove). Returns
+    /// whether there were any.
+    pub fn apply_layout(
+        &self,
+        txn: &mut TransactionMut,
+        layout: &[(String, Option<TablePosition>)],
+        groups: &[(String, Option<TableGroup>)],
+    ) -> bool {
+        for (key, position) in layout {
+            match position {
+                Some(position) => {
+                    self.layout.insert(txn, key.as_str(), to_any(position));
+                }
+                None => {
+                    self.layout.remove(txn, key);
+                }
+            }
+        }
+        for (id, group) in groups {
+            match group {
+                Some(group) => {
+                    self.groups.insert(txn, id.as_str(), to_any(group));
+                }
+                None => {
+                    self.groups.remove(txn, id);
+                }
+            }
+        }
+        !(layout.is_empty() && groups.is_empty())
+    }
 }
 
 /// The values of a map that read as `T`; the others (a client writing

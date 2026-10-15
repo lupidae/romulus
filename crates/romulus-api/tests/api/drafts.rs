@@ -590,3 +590,442 @@ async fn a_draft_from_a_pushed_model_compiles_its_own_sql(db: PgPool) {
         .until(|c| c.last_event("compile").is_some_and(|e| e["state"] == "ok"))
         .await;
 }
+
+// ---- Update draft ---------------------------------------------------------------
+
+/// A model whose tables have these columns (name, type).
+fn model_json(tables: &[(&str, &[(&str, &str)])]) -> Value {
+    let entities: Vec<Value> = tables
+        .iter()
+        .map(|(name, columns)| {
+            let columns: Vec<Value> = columns
+                .iter()
+                .map(|(column, ty)| {
+                    json!({
+                        "name": column, "type": ty, "type_schema": "pg_catalog",
+                        "type_name": ty, "type_kind": "b", "not_null": false,
+                        "default": null, "identity": null, "generated": null, "comment": null,
+                    })
+                })
+                .collect();
+            json!({
+                "schema": "public", "name": name, "kind": "r", "comment": null,
+                "partition_key": null, "view_definition": null, "columns": columns,
+            })
+        })
+        .collect();
+    json!({
+        "remus_version": "0.2", "database": "shop", "server_version": "17",
+        "entities": entities,
+    })
+}
+
+/// Version `number` with its SQL and the model it compiles to; `pushed`: as
+/// remus JSON (the model is its source).
+async fn version_of(
+    db: &PgPool,
+    database: Uuid,
+    number: i32,
+    sql: &str,
+    model: &Value,
+    pushed: bool,
+) {
+    let (source, kind, origin) = if pushed {
+        (model.to_string(), "remus_json", "push")
+    } else {
+        (sql.to_owned(), "sql", "upload")
+    };
+    sqlx::query!(
+        "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout)
+         VALUES ($1, $2, $3, $4, $5::text::version_source_kind, $6::text::version_origin, '{}')",
+        database,
+        number,
+        model,
+        source,
+        kind,
+        origin,
+    )
+    .execute(db)
+    .await
+    .expect("insert version");
+}
+
+const U1: &str =
+    "CREATE TABLE users (id bigint, email text);\n\nCREATE TABLE orders (id bigint);\n";
+const USERS: (&str, &[(&str, &str)]) = ("users", &[("id", "bigint"), ("email", "text")]);
+const ORDERS: (&str, &[(&str, &str)]) = ("orders", &[("id", "bigint")]);
+
+/// A team whose database `shop` has v1 = [`U1`], a draft from it, and Alice
+/// (a developer) in it.
+async fn stale_setup(db: &PgPool) -> (TestApp, Team, Uuid, Value, Client) {
+    let app = live_app(db.clone(), quick());
+    let team = Team::new(db, "acme").await;
+    let shop = database(db, team.org, "shop").await;
+    version_of(db, shop, 1, U1, &model_json(&[USERS, ORDERS]), false).await;
+    let draft = new_draft(&app, &team).await;
+    let addr = serve(&app).await;
+    let ws = format!("/api/orgs/acme/drafts/{}/ws", draft["id"].as_str().unwrap());
+    let alice = Client::join(addr, &ws, &team.developer).await;
+    (app, team, shop, draft, alice)
+}
+
+/// Inserts `text` right after the first occurrence of `after`.
+fn insert_after(
+    after: &'static str,
+    text: &'static str,
+) -> impl FnOnce(&romulus_api::collab::doc::Roots, &mut yrs::TransactionMut) {
+    move |roots, txn| {
+        use yrs::Text;
+        let sql = roots.sql(txn);
+        let at = sql.find(after).expect("anchor") + after.len();
+        roots.sql.insert(txn, u32::try_from(at).unwrap(), text);
+    }
+}
+
+async fn room_sql_with(app: &TestApp, id: Uuid, needle: &str) -> String {
+    for _ in 0..100 {
+        let sql = app.state.collab.content(id).await.unwrap().sql;
+        if sql.contains(needle) {
+            return sql;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the room never got {needle:?}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn updating_merges_the_latest_version_and_moves_the_base(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    alice
+        .edit(insert_after("orders (id bigint", ", total numeric"))
+        .await;
+    alice
+        .edit(|roots, txn| {
+            use yrs::Text;
+            roots.sql.push(txn, "CREATE TABLE coupons (code text);\n");
+        })
+        .await;
+    room_sql_with(&app, id, "coupons").await;
+
+    // Someone published v2: users got a column.
+    let v2 = "CREATE TABLE users (id bigint, email text, plan text);\n\nCREATE TABLE orders (id bigint);\n";
+    version_of(
+        &db,
+        shop,
+        2,
+        v2,
+        &model_json(&[
+            (
+                "users",
+                &[("id", "bigint"), ("email", "text"), ("plan", "text")],
+            ),
+            ORDERS,
+        ]),
+        false,
+    )
+    .await;
+    let stale = app
+        .as_user(&team.developer)
+        .get(&draft_path(&team, &draft, ""))
+        .await
+        .json();
+    assert_eq!(
+        (stale["stale"].clone(), stale["latest_version"].clone()),
+        (json!(true), json!(2))
+    );
+
+    let updated = app
+        .as_user(&team.developer)
+        .post_empty(&draft_path(&team, &draft, "/update"))
+        .await;
+    assert_eq!(updated.status, StatusCode::OK, "{}", updated.json());
+    assert_eq!(
+        updated.json(),
+        json!({"base_version": 2, "conflicts": 0, "changed": true})
+    );
+
+    // Everyone has the merged text: theirs' users, ours' orders and coupons.
+    let merged = "CREATE TABLE users (id bigint, email text, plan text);\n\n\
+                  CREATE TABLE orders (id bigint, total numeric);\n\
+                  CREATE TABLE coupons (code text);\n";
+    alice.until(|c| c.sql() == merged).await;
+    alice
+        .until(|c| {
+            c.last_event("updated").is_some()
+                && c.last_event("status")
+                    .is_some_and(|e| e["status"] == "open")
+        })
+        .await;
+    let statuses: Vec<_> = alice
+        .events
+        .iter()
+        .filter(|e| e["type"] == "status")
+        .map(|e| e["status"].clone())
+        .collect();
+    assert_eq!(statuses, [json!("updating"), json!("open")]);
+    assert_eq!(
+        alice.last_event("updated").unwrap(),
+        &json!({"type": "updated", "version": 2, "by": "Developer-acme", "conflicts": 0})
+    );
+    let now = app
+        .as_user(&team.developer)
+        .get(&draft_path(&team, &draft, ""))
+        .await
+        .json();
+    assert_eq!(
+        (now["stale"].clone(), now["base_version"].clone()),
+        (json!(false), json!(2))
+    );
+    let base_sql = sqlx::query_scalar!("SELECT base_sql FROM drafts WHERE id = $1", id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(base_sql.as_deref(), Some(v2));
+
+    // Publishing now creates v3.
+    let preview = app
+        .as_user(&team.developer)
+        .get(&draft_path(&team, &draft, "/publish"))
+        .await
+        .json();
+    assert_eq!(preview["number"], 3);
+    assert_eq!(preview["stale"], false);
+
+    // Nothing newer: updating again changes nothing.
+    let again = app
+        .as_user(&team.developer)
+        .post_empty(&draft_path(&team, &draft, "/update"))
+        .await;
+    assert_eq!(
+        again.json(),
+        json!({"base_version": 2, "conflicts": 0, "changed": false})
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn conflicts_block_publishing_until_resolved(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    alice
+        .edit(insert_after("orders (id bigint", ", total numeric"))
+        .await;
+    room_sql_with(&app, id, "total").await;
+    let v2 = "CREATE TABLE users (id bigint, email text);\n\nCREATE TABLE orders (id bigint, placed date);\n";
+    version_of(
+        &db,
+        shop,
+        2,
+        v2,
+        &model_json(&[USERS, ("orders", &[("id", "bigint"), ("placed", "date")])]),
+        false,
+    )
+    .await;
+
+    let updated = app
+        .as_user(&team.developer)
+        .post_empty(&draft_path(&team, &draft, "/update"))
+        .await;
+    assert_eq!(updated.json()["conflicts"], 1, "{}", updated.json());
+    let block = "-- <<<<<<< yours\nCREATE TABLE orders (id bigint, total numeric);\n\
+                 -- ======= v2\nCREATE TABLE orders (id bigint, placed date);\n-- >>>>>>> v2";
+    alice.until(|c| c.sql().contains(block)).await;
+
+    // The compile refuses it, and so does publishing.
+    alice
+        .until(|c| {
+            c.last_event("compile")
+                .is_some_and(|e| e["diagnostics"][0]["code"] == "conflict")
+        })
+        .await;
+    let preview = app
+        .as_user(&team.developer)
+        .get(&draft_path(&team, &draft, "/publish"))
+        .await
+        .json();
+    assert_eq!(preview["diagnostics"][0]["code"], "conflict");
+    let refused = app
+        .as_user(&team.developer)
+        .post(
+            &draft_path(&team, &draft, "/publish"),
+            &json!({"sha256": preview["sha256"]}),
+        )
+        .await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "compile_failed")
+    );
+
+    // Keep theirs: the block becomes theirs' statement.
+    alice
+        .edit(move |roots, txn| {
+            use yrs::Text;
+            let sql = roots.sql(txn);
+            let at = sql.find(block).unwrap();
+            let at = u32::try_from(at).unwrap();
+            roots
+                .sql
+                .remove_range(txn, at, u32::try_from(block.len()).unwrap());
+            roots
+                .sql
+                .insert(txn, at, "CREATE TABLE orders (id bigint, placed date);");
+        })
+        .await;
+    alice
+        .until(|c| c.last_event("compile").is_some_and(|e| e["state"] == "ok"))
+        .await;
+    let preview = app
+        .as_user(&team.developer)
+        .get(&draft_path(&team, &draft, "/publish"))
+        .await
+        .json();
+    assert_eq!(preview["diagnostics"], json!([]));
+    assert_eq!(preview["number"], 3);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_pushed_version_merges_without_spurious_conflicts(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    alice
+        .edit(insert_after("orders (id bigint", ", total numeric"))
+        .await;
+    room_sql_with(&app, id, "total").await;
+    // v2 pushed as remus JSON: its SQL is render_sql's, nothing like ours.
+    version_of(
+        &db,
+        shop,
+        2,
+        "",
+        &model_json(&[
+            (
+                "users",
+                &[("id", "bigint"), ("email", "text"), ("plan", "text")],
+            ),
+            ORDERS,
+        ]),
+        true,
+    )
+    .await;
+
+    let updated = app
+        .as_user(&team.developer)
+        .post_empty(&draft_path(&team, &draft, "/update"))
+        .await;
+    assert_eq!(updated.json()["conflicts"], 0, "{}", updated.json());
+    // users comes in as render_sql writes it; orders is ours, as typed.
+    alice.until(|c| c.sql().contains("plan text")).await;
+    let sql = alice.sql();
+    assert!(sql.starts_with("CREATE TABLE public.users ("), "{sql}");
+    assert!(
+        sql.contains("\n\nCREATE TABLE orders (id bigint, total numeric);\n"),
+        "{sql}"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_newer_version_while_conflicts_remain_updates_them(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    alice
+        .edit(insert_after("orders (id bigint", ", total numeric"))
+        .await;
+    room_sql_with(&app, id, "total").await;
+    for (n, ty) in [(2, "date"), (3, "timestamptz")] {
+        let columns = [("id", "bigint"), ("placed", ty)];
+        let sql = format!(
+            "CREATE TABLE users (id bigint, email text);\n\nCREATE TABLE orders (id bigint, placed {ty});\n"
+        );
+        version_of(
+            &db,
+            shop,
+            n,
+            &sql,
+            &model_json(&[USERS, ("orders", columns.as_slice())]),
+            false,
+        )
+        .await;
+        if n == 2 {
+            let first = app
+                .as_user(&team.developer)
+                .post_empty(&draft_path(&team, &draft, "/update"))
+                .await;
+            assert_eq!(first.json()["conflicts"], 1);
+            alice.until(|c| c.sql().contains("-- >>>>>>> v2")).await;
+        }
+    }
+    let second = app
+        .as_user(&team.developer)
+        .post_empty(&draft_path(&team, &draft, "/update"))
+        .await;
+    assert_eq!(
+        second.json(),
+        json!({"base_version": 3, "conflicts": 1, "changed": true})
+    );
+    alice.until(|c| c.sql().contains("-- >>>>>>> v3")).await;
+    let sql = alice.sql();
+    assert!(
+        sql.contains("placed timestamptz") && !sql.contains("placed date"),
+        "{sql}"
+    );
+    assert!(sql.contains("total numeric"), "{sql}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn who_may_update_and_when(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    let path = draft_path(&team, &draft, "/update");
+    version_of(
+        &db,
+        shop,
+        2,
+        "CREATE TABLE users (id bigint, email text, plan text);\n\nCREATE TABLE orders (id bigint);\n",
+        &model_json(&[("users", &[("id", "bigint"), ("email", "text"), ("plan", "text")]), ORDERS]),
+        false,
+    )
+    .await;
+    assert_eq!(
+        app.as_user(&team.reviewer).post_empty(&path).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.as_user(&team.outsider).post_empty(&path).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Being published: busy.
+    app.state.collab.freeze(id, "Carol").await.unwrap().unwrap();
+    let busy = app.as_user(&team.developer).post_empty(&path).await;
+    assert_eq!(
+        (busy.status, busy.code().as_str()),
+        (StatusCode::CONFLICT, "draft_busy")
+    );
+    app.state.collab.unfreeze(id);
+
+    // Text that does not parse is not merged; the draft stays editable.
+    alice
+        .edit(|roots, txn| {
+            use yrs::Text;
+            roots.sql.push(txn, "CREATE TABLE (\n");
+        })
+        .await;
+    room_sql_with(&app, id, "CREATE TABLE (").await;
+    let refused = app.as_user(&team.developer).post_empty(&path).await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "draft_has_errors")
+    );
+    assert_eq!(
+        refused.json()["details"]["diagnostics"][0]["code"],
+        "syntax_error"
+    );
+    assert!(app.state.collab.freeze(id, "x").await.unwrap().is_ok());
+    app.state.collab.unfreeze(id);
+    let still = app
+        .as_user(&team.developer)
+        .get(&draft_path(&team, &draft, ""))
+        .await
+        .json();
+    assert_eq!(still["base_version"], 1);
+}

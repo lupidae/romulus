@@ -249,6 +249,13 @@ off that line. Branching should be invisible: nobody has to know the word.
   markers, so everyone sees them and they survive a reload; the compiler
   rejects text with markers, which is what blocks publishing. The draft's
   `base_version_id` moves to v13.
+- **Layout and groups merge key by key.** What one side changed comes from
+  it. A table both sides moved keeps the draft's position: the people in the
+  draft are arranging it now, a position is cosmetic, and moving tables
+  under them would undo their work (v13's arrangement stays in its
+  version). A group both changed takes v13's name and color and both
+  sides' members; a table is never in two groups (it stays where the draft
+  had it).
 - **Publishing** freezes the draft first (status change broadcast; the server
   drops further updates), then compiles and stores exactly that frozen state.
   Version numbers are assigned under a lock on the database row, with

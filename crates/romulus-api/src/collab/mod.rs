@@ -55,8 +55,8 @@ use self::{
     awareness::Peer,
     compile::SqlCompiler,
     room::{
-        Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, Incoming, Outbox, RewriteError,
-        Settings, Shared,
+        Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, FreezeFor, Incoming, Outbox,
+        RewriteError, Settings, Shared,
     },
 };
 use crate::AppState;
@@ -119,9 +119,9 @@ pub enum HubError {
     Closing,
 }
 
-/// Why a draft cannot be deleted now.
+/// Why a draft cannot be deleted now: it is being published or updated.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("the draft is being published")]
+#[error("the draft is being published or updated")]
 pub struct Publishing;
 
 /// A socket's place in a room.
@@ -216,11 +216,25 @@ impl Hub {
         draft: Uuid,
         by: &str,
     ) -> Result<Result<Content, FreezeError>, HubError> {
+        self.freeze_for(draft, by, FreezeFor::Publish).await
+    }
+
+    /// [`Hub::freeze`] for publishing or for "Update draft" (everyone sees
+    /// which). Follow an update with [`Hub::rewrite`] and
+    /// [`Hub::merge_layout`], then
+    /// [`Hub::unfreeze`].
+    pub async fn freeze_for(
+        &self,
+        draft: Uuid,
+        by: &str,
+        purpose: FreezeFor,
+    ) -> Result<Result<Content, FreezeError>, HubError> {
         let (reply, wait) = oneshot::channel();
         self.0.send(
             draft,
             Command::Freeze {
                 by: by.to_owned(),
+                purpose,
                 reply,
             },
         )?;
@@ -253,9 +267,43 @@ impl Hub {
         wait.await.map_err(|_| HubError::Unavailable)
     }
 
+    /// Applies "Update draft"'s layout and group changes (after its
+    /// [`Hub::rewrite`] of the SQL), and answers once everything the room
+    /// changed is written: the draft's base may move then.
+    pub async fn merge_layout(
+        &self,
+        draft: Uuid,
+        layout: Vec<(String, Option<crate::versions::layout::TablePosition>)>,
+        groups: Vec<(String, Option<crate::versions::layout::TableGroup>)>,
+    ) -> Result<(), HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::MergeLayout {
+                layout,
+                groups,
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
     /// Publishing failed: the draft is editable again.
     pub fn unfreeze(&self, draft: Uuid) {
         self.0.tell(draft, Command::Unfreeze);
+    }
+
+    /// "Update draft" moved the draft's base to `version`: everyone hears it
+    /// (before the unfreeze).
+    pub fn updated(&self, draft: Uuid, version: i32, by: &str, conflicts: u32) {
+        self.0.tell(
+            draft,
+            Command::Updated {
+                version,
+                by: by.to_owned(),
+                conflicts,
+            },
+        );
     }
 
     pub fn published(&self, draft: Uuid, version: i32, by: &str) {
