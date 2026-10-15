@@ -15,6 +15,7 @@ pub mod db;
 pub mod domain;
 pub mod drafts;
 pub mod error;
+pub mod extract;
 pub mod health;
 mod layers;
 pub mod orgs;
@@ -23,13 +24,14 @@ pub mod versions;
 
 use std::sync::Arc;
 
-use axum::{Json, Router, middleware, routing::get};
+use axum::{Router, middleware, routing::get};
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
 pub use crate::{
     config::Config,
     error::{ApiError, ApiResult},
+    extract::Json,
     state::AppState,
 };
 

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use axum::{Json, extract::State};
+use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use utoipa::ToSchema;
@@ -11,6 +11,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::{
     AppState,
     error::{ApiError, ApiResult, Chain, ErrorBody},
+    extract::Json,
 };
 
 pub fn router() -> OpenApiRouter<AppState> {

@@ -1,14 +1,13 @@
 //! The one error type handlers return, and the JSON body every error has.
 
 use axum::{
-    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::db;
+use crate::{db, extract::Json};
 
 /// The body of every error response.
 ///
@@ -49,15 +48,24 @@ pub enum ApiError {
     /// 404.
     #[error("{0}")]
     NotFound(String),
+    /// 405: the path exists, the method does not.
+    #[error("method not allowed")]
+    MethodNotAllowed,
     /// 409, with a specific code (`slug_taken`, `last_admin`, `stale_base`…).
     #[error("{message}")]
     Conflict { code: &'static str, message: String },
     /// 413.
     #[error("request body too large")]
     PayloadTooLarge,
+    /// 415: e.g. a JSON endpoint called without `Content-Type: application/json`.
+    #[error("{0}")]
+    UnsupportedMediaType(String),
     /// 503: a dependency (the database, the sandbox) is unreachable.
     #[error("{0}")]
     Unavailable(String),
+    /// 503: the request did not finish within the server's time limit.
+    #[error("the request took too long")]
+    Timeout,
     /// 500. The cause is logged, never sent to the client.
     #[error("internal error")]
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -79,9 +87,11 @@ impl ApiError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden(_) | Self::Csrf => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::Unavailable(_) | Self::Timeout => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -94,10 +104,39 @@ impl ApiError {
             Self::Forbidden(_) => "forbidden",
             Self::Csrf => "csrf",
             Self::NotFound(_) => "not_found",
+            Self::MethodNotAllowed => "method_not_allowed",
             Self::Conflict { code, .. } => code,
             Self::PayloadTooLarge => "payload_too_large",
+            Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::Unavailable(_) => "unavailable",
+            Self::Timeout => "timeout",
             Self::Internal(_) => "internal",
+        }
+    }
+}
+
+impl ApiError {
+    /// An error response produced outside our handlers (a 405 from routing, a
+    /// raw extractor's rejection, the timeout), for `layers::errors_as_json`.
+    /// `text` is the original body, kept for 4xx; a 5xx never echoes it.
+    pub fn from_status(status: StatusCode, text: Option<String>) -> Self {
+        let text = text.unwrap_or_else(|| status.to_string());
+        match status {
+            StatusCode::UNAUTHORIZED => Self::Unauthorized,
+            StatusCode::FORBIDDEN => Self::Forbidden(text),
+            StatusCode::NOT_FOUND => Self::NotFound(text),
+            StatusCode::METHOD_NOT_ALLOWED => Self::MethodNotAllowed,
+            StatusCode::PAYLOAD_TOO_LARGE => Self::PayloadTooLarge,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE => Self::UnsupportedMediaType(text),
+            StatusCode::UNPROCESSABLE_ENTITY => Self::Validation {
+                message: text,
+                details: None,
+            },
+            StatusCode::REQUEST_TIMEOUT
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT => Self::Timeout,
+            s if s.is_client_error() => Self::BadRequest(text),
+            s => Self::Internal(format!("{s}: {text}").into()),
         }
     }
 }
@@ -107,15 +146,25 @@ impl ApiError {
 /// with [`db::constraint`] or [`db::is_unique_violation`].
 impl From<sqlx::Error> for ApiError {
     fn from(err: sqlx::Error) -> Self {
-        if db::constraint(&err) == Some(db::ORGANIZATION_NEEDS_AN_ADMIN) {
-            return Self::Conflict {
-                code: "last_admin",
-                message:
-                    "An organization needs at least one admin. Make another member an admin first."
-                        .to_owned(),
-            };
+        let conflict = |code, message: &str| Self::Conflict {
+            code,
+            message: message.to_owned(),
+        };
+        match db::constraint(&err) {
+            Some(db::ORGANIZATION_NEEDS_AN_ADMIN) => conflict(
+                "last_admin",
+                "An organization needs at least one admin. Make another member an admin first.",
+            ),
+            Some(db::VERSIONS_ARE_IMMUTABLE | db::VERSIONS_ARE_PERMANENT) => conflict(
+                "version_immutable",
+                "Versions cannot be changed or deleted.",
+            ),
+            _ if db::is_serialization_failure(&err) => conflict(
+                "concurrent_change",
+                "Someone changed this at the same time. Try again.",
+            ),
+            _ => Self::internal(err),
         }
-        Self::internal(err)
     }
 }
 
@@ -182,6 +231,25 @@ mod tests {
             (err.status(), err.code()),
             (StatusCode::CONFLICT, "slug_taken")
         );
+    }
+
+    #[test]
+    fn foreign_error_responses_keep_their_meaning() {
+        let cases = [
+            (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"),
+            (StatusCode::REQUEST_TIMEOUT, "timeout"),
+            (StatusCode::SERVICE_UNAVAILABLE, "timeout"),
+            (StatusCode::BAD_REQUEST, "bad_request"),
+            (StatusCode::IM_A_TEAPOT, "bad_request"),
+            (StatusCode::BAD_GATEWAY, "internal"),
+        ];
+        for (status, code) in cases {
+            assert_eq!(ApiError::from_status(status, None).code(), code, "{status}");
+        }
+        let err = ApiError::from_status(StatusCode::BAD_GATEWAY, Some("secret detail".into()));
+        assert!(!err.to_string().contains("secret"));
     }
 
     #[test]

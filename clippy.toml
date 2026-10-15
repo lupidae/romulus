@@ -1,2 +1,10 @@
 # Proper nouns doc_markdown should not ask to wrap in backticks. ".." keeps the defaults.
 doc-valid-idents = ["..", "OpenAPI", "IdP", "OIDC", "PKCE", "CSRF", "Yjs", "Zitadel"]
+
+# Handlers use crate::extract's wrappers, which answer rejections in the API's
+# JSON error format (see CLAUDE.md, "Errors").
+disallowed-types = [
+    { path = "axum::Json", reason = "use romulus_api::extract::Json: rejections become API errors" },
+    { path = "axum::extract::Path", reason = "use romulus_api::extract::Path: rejections become API errors" },
+    { path = "axum::extract::Query", reason = "use romulus_api::extract::Query: rejections become API errors" },
+]

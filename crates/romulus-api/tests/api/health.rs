@@ -42,3 +42,12 @@ async fn unknown_endpoints_answer_json_404(db: PgPool) {
     assert_eq!(response.status, StatusCode::NOT_FOUND);
     assert_eq!(response.code(), "not_found");
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_wrong_method_answers_in_the_api_format(db: PgPool) {
+    let response = TestApp::new(db)
+        .post_json("/api/health", &serde_json::json!({}))
+        .await;
+    assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(response.code(), "method_not_allowed");
+}
