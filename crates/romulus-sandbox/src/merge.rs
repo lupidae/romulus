@@ -221,15 +221,12 @@ pub(crate) fn conflicts_in(sql: &str, parsed: &ParsedSql) -> (Vec<Conflict>, Vec
             }
             _ => None,
         };
-        match complete {
-            Some(block) => {
-                open.clear();
-                blocks.push(block);
-            }
-            None => {
-                stray.extend(open.drain(..).map(|(l, _)| l.text));
-                stray.push(line.text);
-            }
+        if let Some(block) = complete {
+            open.clear();
+            blocks.push(block);
+        } else {
+            stray.extend(open.drain(..).map(|(l, _)| l.text));
+            stray.push(line.text);
         }
     }
     stray.extend(open.into_iter().map(|(l, _)| l.text));

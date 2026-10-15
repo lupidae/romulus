@@ -27,13 +27,6 @@ CREATE TABLE orders (
 );
 ";
 
-fn show(name: &str, r: &Merged) {
-    eprintln!(
-        "===== {name}: conflicts={}\n{}\n----- ancestor:\n{}",
-        r.conflicts, r.text, r.ancestor
-    );
-}
-
 #[test]
 fn s01_graph_edit_new_table_and_fk_order() {
     // v2 was published from a draft whose graph edits created a table and an FK to it.
@@ -41,7 +34,6 @@ fn s01_graph_edit_new_table_and_fk_order() {
         "{BASE}\n-- edits from the graph\nCREATE TABLE public.plans (id bigint PRIMARY KEY);\nALTER TABLE public.orders ADD COLUMN plan_id bigint REFERENCES public.plans (id);\n"
     );
     let r = m(BASE, BASE, &theirs);
-    show("s01", &r);
     let fk = r.text.find("REFERENCES public.plans").unwrap();
     let plans = r.text.find("CREATE TABLE public.plans").unwrap();
     assert!(plans < fk, "FK before its table");
@@ -56,9 +48,7 @@ fn s02_double_update_with_stale_ancestor() {
     );
     let theirs = format!("{BASE}\nALTER TABLE users ADD COLUMN plan text;\n");
     let first = m(BASE, &ours, &theirs);
-    show("s02 first", &first);
     let again = m(BASE, &first.text, &theirs);
-    show("s02 again (stale ancestor)", &again);
     assert_eq!(again.text, first.text);
 }
 
@@ -70,9 +60,7 @@ fn s03_partial_twice_stale() {
         "email text NOT NULL,\n    plan text\n",
     );
     let first = m(BASE, &ours, &theirs);
-    show("s03 first", &first);
     let again = m(BASE, &first.text, &theirs);
-    show("s03 again", &again);
     assert_eq!(again.conflicts, 0);
 }
 
@@ -80,19 +68,19 @@ fn s03_partial_twice_stale() {
 fn s04_user_typed_marker_like_text() {
     // A comment a user might write.
     let sql = "-- <<<<<<< yours truly, this is the users table\nCREATE TABLE a (id int);\n";
-    let d = conflict_diagnostics(sql);
-    eprintln!("{d:?}");
+    assert_eq!(conflict_diagnostics(sql), []);
     let sql2 = "CREATE TABLE a (id int); -- ======= separator\n";
-    eprintln!("{:?}", conflict_diagnostics(sql2));
+    assert_eq!(conflict_diagnostics(sql2), []);
     // marker inside a dollar-quoted body / string literal
     let sql3 =
         "COMMENT ON TABLE users IS '\n-- <<<<<<< yours\nx\n-- ======= v2\ny\n-- >>>>>>> v2\n';\n";
     let (b, s) = conflicts(sql3);
-    eprintln!("in string literal: blocks={} stray={}", b.len(), s.len());
-    assert!(
-        b.is_empty(),
+    assert_eq!(
+        b,
+        [],
         "marker inside a string literal is treated as a block"
     );
+    assert_eq!(s, []);
 }
 
 #[test]
@@ -103,13 +91,11 @@ fn s05_multi_command_alter() {
         "REFERENCES users (id),\n    total numeric\n",
     );
     let r = m(BASE, &ours, &theirs);
-    show("s05", &r);
     assert_eq!(r.conflicts, 0);
     // both edit users differently via multi-command alters
     let theirs2 =
         format!("{BASE}\nALTER TABLE users ADD COLUMN c text, ALTER COLUMN email DROP NOT NULL;\n");
     let r = m(BASE, &ours, &theirs2);
-    show("s05b", &r);
     // Different columns: both statements stay, theirs' after users.
     assert_eq!(r.conflicts, 0);
     let theirs_at = r.text.find("ADD COLUMN c text").unwrap();
@@ -122,7 +108,6 @@ fn s06_create_schema_with_elements() {
     let base = "CREATE SCHEMA app CREATE TABLE app.t (id int);\n";
     let theirs = "CREATE SCHEMA app CREATE TABLE app.t (id int, x int);\n";
     let r = m(base, base, theirs);
-    show("s06", &r);
     assert_eq!(r.text, theirs);
 }
 
@@ -133,7 +118,6 @@ fn s07_rename_by_graph_and_theirs_edits_old_name() {
         format!("{BASE}\n-- edits from the graph\nALTER TABLE public.users RENAME TO members;\n");
     let theirs = format!("{BASE}\nALTER TABLE users ADD COLUMN plan text;\n");
     let r = m(BASE, &ours, &theirs);
-    show("s07", &r);
     // theirs' ALTER on users must come before the rename, else it targets a missing table.
     let rename = r.text.find("RENAME TO members").unwrap();
     let add = r.text.find("plan text").unwrap();
@@ -148,7 +132,6 @@ fn s08_theirs_renames_ours_edits() {
     );
     let theirs = format!("{BASE}\nALTER TABLE users RENAME TO members;\n");
     let r = m(BASE, &ours, &theirs);
-    show("s08", &r);
     // These texts stand for their models, so theirs' rename is a statement
     // of its own (a real model would show `members` instead of `users`:
     // a dropped table ours edited, a conflict).
@@ -162,7 +145,6 @@ fn s09_enum_both_add_same_label_different_place() {
     let ours = "CREATE TYPE mood AS ENUM ('ok', 'sad', 'happy');\n";
     let theirs = "CREATE TYPE mood AS ENUM ('happy', 'ok', 'sad');\n";
     let r = m(base, ours, theirs);
-    show("s09", &r);
     // The same label, added at different places: one label, where ours put
     // it, and nothing to resolve.
     assert_eq!(r.conflicts, 0);
@@ -171,7 +153,6 @@ fn s09_enum_both_add_same_label_different_place() {
     let ours = "CREATE TYPE mood AS ENUM ('ok', 'sad');\nALTER TYPE mood ADD VALUE 'x';\n";
     let theirs = "CREATE TYPE mood AS ENUM ('ok', 'sad');\nALTER TYPE mood ADD VALUE 'y';\n";
     let r = m(base, ours, theirs);
-    show("s09b", &r);
     assert_eq!(r.conflicts, 0);
     assert!(r.text.contains("ADD VALUE 'x'") && r.text.contains("ADD VALUE 'y'"));
 }
@@ -181,7 +162,6 @@ fn s10_index_added_by_both_differently() {
     let ours = format!("{BASE}\nCREATE INDEX orders_user_idx ON orders (user_id);\n");
     let theirs = format!("{BASE}\nCREATE INDEX orders_user_idx ON orders (user_id, id);\n");
     let r = m(BASE, &ours, &theirs);
-    show("s10", &r);
     assert_eq!(r.conflicts, 1);
 }
 
@@ -193,7 +173,6 @@ fn s11_ours_drop_column_theirs_adds_fk_on_it() {
         "user_id bigint NOT NULL REFERENCES users (id) ON DELETE CASCADE",
     );
     let r = m(BASE, &ours, &theirs);
-    show("s11", &r);
     assert_eq!(r.conflicts, 1);
 }
 
@@ -202,7 +181,6 @@ fn s12_ours_comment_on_column_theirs_drops_table() {
     let ours = format!("{BASE}\nCOMMENT ON COLUMN orders.user_id IS 'buyer';\n");
     let theirs = "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text NOT NULL\n);\n";
     let r = m(BASE, &ours, theirs);
-    show("s12", &r);
     assert_eq!(r.conflicts, 1, "comment on a table theirs dropped");
 }
 
@@ -226,7 +204,6 @@ fn s13_pushed_theirs_unchanged_no_spurious() {
         label: "v2",
     })
     .unwrap();
-    show("s13", &r);
     assert_eq!(r.conflicts, 0);
     assert!(r.text.contains("CREATE INDEX ON orders (user_id);"));
 }
@@ -241,7 +218,6 @@ fn s14_both_change_fk_inline_vs_alter() {
     );
     let theirs = BASE.replace("user_id bigint NOT NULL", "user_id integer NOT NULL");
     let r = m(ancestor, &ours, &theirs);
-    show("s14", &r);
     // One statement, changed by both.
     assert_eq!(r.conflicts, 1);
 }
@@ -275,7 +251,6 @@ fn s15_reapply_blocks_three_times_stable() {
 fn s16_whole_file_marker_in_dollar_function() {
     let sql = "CREATE TABLE a (id int);\nCREATE VIEW v AS SELECT $$\n-- >>>>>>> v2\n$$ AS x;\n";
     let d = conflict_diagnostics(sql);
-    eprintln!("s16 {d:?}");
     assert!(d.is_empty(), "marker-like line inside a literal refused");
 }
 
@@ -283,7 +258,6 @@ fn s16_whole_file_marker_in_dollar_function() {
 fn s17_banner_comment_refused() {
     let sql = "-- ==========================================\n-- Users\n-- ==========================================\nCREATE TABLE users (id int);\n";
     let d = conflict_diagnostics(sql);
-    eprintln!("s17 {d:?}");
     assert!(
         d.is_empty(),
         "a banner comment is refused as a stray conflict marker"
@@ -295,7 +269,6 @@ fn s18_theirs_drops_table_ours_alter_adds_column() {
     let ours = format!("{BASE}\nALTER TABLE orders ADD COLUMN note text;\n");
     let theirs = "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text NOT NULL\n);\n";
     let r = m(BASE, &ours, theirs);
-    show("s18", &r);
     assert_eq!(r.conflicts, 1, "ALTER on a table theirs dropped");
 }
 
@@ -304,7 +277,6 @@ fn s19_ours_drops_table_theirs_adds_index() {
     let ours = "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text NOT NULL\n);\n";
     let theirs = format!("{BASE}\nCREATE INDEX orders_user_idx ON orders (user_id);\n");
     let r = m(BASE, ours, &theirs);
-    show("s19", &r);
     assert_eq!(r.conflicts, 1, "index on a table ours dropped");
 }
 
