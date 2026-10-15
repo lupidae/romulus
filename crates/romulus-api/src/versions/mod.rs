@@ -216,6 +216,32 @@ impl From<SummaryRow> for VersionSummary {
     }
 }
 
+/// Up to `limit` versions numbered below `before` (any, when `None`), newest
+/// first, as summaries: the history's pages, and a diff's two versions.
+async fn page(
+    db: &PgPool,
+    database_id: Uuid,
+    before: Option<i32>,
+    limit: i64,
+) -> Result<Vec<SummaryRow>, sqlx::Error> {
+    sqlx::query_as!(
+        SummaryRow,
+        r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
+                  v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
+                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
+           FROM versions v
+           LEFT JOIN users u ON u.id = v.created_by
+           LEFT JOIN api_tokens t ON t.id = v.created_by_token
+           WHERE v.database_id = $1 AND ($2::int IS NULL OR v.number < $2)
+           ORDER BY v.number DESC LIMIT $3"#,
+        database_id,
+        before,
+        limit,
+    )
+    .fetch_all(db)
+    .await
+}
+
 /// One version's summary, by id.
 async fn summary(db: &PgPool, id: Uuid) -> ApiResult<VersionSummary> {
     let row = sqlx::query_as!(
@@ -331,22 +357,7 @@ async fn list(
 ) -> ApiResult<Json<VersionPage>> {
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     let database = databases::find(&db, member.org.id, &slug).await?;
-    let mut rows = sqlx::query_as!(
-        SummaryRow,
-        r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
-                  v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
-                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
-           FROM versions v
-           LEFT JOIN users u ON u.id = v.created_by
-           LEFT JOIN api_tokens t ON t.id = v.created_by_token
-           WHERE v.database_id = $1 AND ($2::int IS NULL OR v.number < $2)
-           ORDER BY v.number DESC LIMIT $3"#,
-        database.id,
-        query.before,
-        limit + 1,
-    )
-    .fetch_all(&db)
-    .await?;
+    let mut rows = page(&db, database.id, query.before, limit + 1).await?;
     let more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
     rows.truncate(rows.len().min(usize::try_from(limit).unwrap_or(usize::MAX)));
     let next_before = more.then(|| rows.last().map(|r| r.number)).flatten();

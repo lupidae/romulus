@@ -28,12 +28,11 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::{SummaryRow, VersionDetail, VersionSummary, detail, layout::VersionLayout};
+use super::{VersionDetail, VersionSummary, detail, layout::VersionLayout, page};
 use crate::{
     ApiError, ApiResult, AppState,
     auth::Member,
     compile, databases,
-    domain::{SourceKind, VersionOrigin},
     error::ErrorBody,
     extract::{Path, Query},
     orgs::invalid,
@@ -153,33 +152,27 @@ async fn summaries(
     from: i32,
     to: i32,
 ) -> ApiResult<(VersionSummary, VersionSummary)> {
-    let rows = sqlx::query_as!(
-        SummaryRow,
-        r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
-                  v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
-                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
-           FROM versions v
-           LEFT JOIN users u ON u.id = v.created_by
-           LEFT JOIN api_tokens t ON t.id = v.created_by_token
-           WHERE v.database_id = $1 AND v.number IN ($2, $3)"#,
-        database_id,
-        from,
-        to,
-    )
-    .fetch_all(db)
-    .await?;
-    let summaries: Vec<VersionSummary> = rows.into_iter().map(Into::into).collect();
-    let find = |number: i32| {
-        summaries
-            .iter()
-            .find(|s| s.number == number)
-            .cloned()
+    let one = async |number: i32| -> ApiResult<VersionSummary> {
+        // The history's query: the newest version below number + 1.
+        let rows = match number.checked_add(1) {
+            Some(below) => page(db, database_id, Some(below), 1).await?,
+            None => Vec::new(),
+        };
+        rows.into_iter()
+            .next()
+            .filter(|row| row.number == number)
+            .map(Into::into)
             .ok_or_else(|| {
                 ApiError::not_found(format!("There is no version {number} of this database."))
             })
     };
-    let (from, to) = (find(from)?, find(to)?);
-    Ok((from, to))
+    let from_summary = one(from).await?;
+    let to_summary = if to == from {
+        from_summary.clone()
+    } else {
+        one(to).await?
+    };
+    Ok((from_summary, to_summary))
 }
 
 /// What a diff holds besides the two summaries: what is cached.
@@ -377,6 +370,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::domain::{SourceKind, VersionOrigin};
 
     fn model(tables: &[&str]) -> Schema {
         let entities: Vec<_> = tables
