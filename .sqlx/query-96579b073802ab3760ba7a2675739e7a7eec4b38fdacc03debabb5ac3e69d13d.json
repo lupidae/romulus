@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO databases (org_id, name, slug) VALUES ($1, 'Shop', 'shop')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "96579b073802ab3760ba7a2675739e7a7eec4b38fdacc03debabb5ac3e69d13d"
+}

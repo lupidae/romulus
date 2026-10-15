@@ -1,0 +1,62 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lupidae/romulus"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+remus-core = "0.1.1"
+
+axum = { version = "0.8.9", features = ["macros"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
+dotenvy = "0.15.7"
+http-body-util = "0.1.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "chrono",
+    "json",
+    "macros",
+    "migrate",
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls",
+    "uuid",
+] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.3", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["catch-panic", "limit", "request-id", "timeout", "trace", "util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+url = "2.5.8"
+utoipa = { version = "6.0.0", features = ["chrono", "uuid"] }
+utoipa-axum = "0.3.0"
+uuid = { version = "1.28.0", features = ["serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic, but noise for a web service: every handler returns Result, and
+# naming a type after its module (orgs::OrgsError) reads fine at the call site.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+# Restriction lints that catch leftovers.
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.dev.package.sqlx-macros]
+# The query macros run on every build; an optimised build of them pays off fast.
+opt-level = 3
