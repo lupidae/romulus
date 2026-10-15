@@ -8,6 +8,7 @@ mod auth;
 mod collab;
 mod csrf;
 mod databases;
+mod diff;
 mod drafts;
 mod harness;
 mod health;

@@ -19,10 +19,15 @@
 //! - `GET /databases/{database_id}/versions/{version}` [`full` scope]: a
 //!   version by number, or `latest`.
 //!
+//! Diffs ([`diff`]):
+//! - `GET /orgs/{org}/databases/{db}/diff?from=&to=` [member]: two versions
+//!   compared (`romulus-diff`), with both models, their SQL and the layout
+//!   of their union; cached by version ids.
+//!
 //! Table: `versions` (immutable by trigger). Numbers are assigned under a
-//! lock on the `databases` row ([`store`]). Diffs between versions come
-//! with milestone 3 (`romulus-diff`).
+//! lock on the `databases` row ([`store`]).
 
+pub mod diff;
 pub mod layout;
 pub mod push;
 pub mod store;
@@ -58,6 +63,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(check))
         .routes(routes!(get))
         .routes(routes!(texts))
+        .merge(diff::router())
         .merge(push::router())
 }
 

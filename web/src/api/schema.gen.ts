@@ -293,6 +293,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/diff": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Compares two versions: what changed from `from` to `to`, three ways. */
+    get: operations["diff_versions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/drafts": {
     parameters: {
       query?: never;
@@ -933,6 +950,16 @@ export interface components {
        *     order when the text parsed, else in source order.
        */
       statement?: number | null;
+    };
+    DiffModels: {
+      /** @description `to`'s remus model. */
+      after: Record<string, never>;
+      /** @description `from`'s remus model. */
+      before: Record<string, never>;
+    };
+    DiffSql: {
+      after: string;
+      before: string;
     };
     /**
      * @description A change to a domain.
@@ -1780,6 +1807,32 @@ export interface components {
       /** @description What was uploaded or pushed, verbatim: SQL, or remus JSON. */
       source: string;
       source_kind: components["schemas"]["SourceKind"];
+    };
+    /** @description `from` compared with `to`. */
+    VersionDiff: {
+      /**
+       * @description From `from`'s model to `to`'s: the change list, the summary and the
+       *     status of every object for the graph.
+       */
+      diff: components["schemas"]["SchemaDiff"];
+      from: components["schemas"]["VersionSummary"];
+      /**
+       * @description Where the union's tables sit: the newer version's positions and
+       *     groups; the older one's positions for tables the newer did not place
+       *     (the ones it removed, say), each in its old group if the newer one
+       *     still has it, or in its old group alone if not.
+       */
+      layout: components["schemas"]["VersionLayout"];
+      /** @description Both models: the graph draws their union, styled by `diff.status`. */
+      models: components["schemas"]["DiffModels"];
+      /**
+       * @description Both models as SQL, rendered the same way whatever their source (an
+       *     upload's text or a push's JSON): canonical order, and the newer
+       *     version's header on both, so a line diff of the two shows only what
+       *     the schema changed.
+       */
+      sql: components["schemas"]["DiffSql"];
+      to: components["schemas"]["VersionSummary"];
     };
     /** @description Where tables sit, and their groups. */
     VersionLayout: {
@@ -2664,6 +2717,65 @@ export interface operations {
       };
       /** @description `unavailable`: the compiler is down */
       503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  diff_versions: {
+    parameters: {
+      query: {
+        /** @description The version compared from: the left side, `before` in the diff. */
+        from: number;
+        /**
+         * @description The version compared to: the right side, `after`. May equal `from`
+         *     (nothing changed), or be older (the diff then reads backwards).
+         */
+        to: number;
+      };
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionDiff"];
+        };
+      };
+      /** @description `bad_request`: a number that is not one */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `not_found`: no such database, or no such version */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`: a number below 1 */
+      422: {
         headers: {
           [name: string]: unknown;
         };

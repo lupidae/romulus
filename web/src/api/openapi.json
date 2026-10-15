@@ -1101,6 +1101,96 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/diff": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Compares two versions: what changed from `from` to `to`, three ways.",
+        "operationId": "diff_versions",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The version compared from: the left side, `before` in the diff.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The version compared to: the right side, `after`. May equal `from`\n(nothing changed), or be older (the diff then reads backwards).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDiff"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_request`: a number that is not one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such database, or no such version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: a number below 1",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/drafts": {
       "get": {
         "tags": [
@@ -3623,6 +3713,38 @@
           }
         }
       },
+      "DiffModels": {
+        "type": "object",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": "object",
+            "description": "`to`'s remus model."
+          },
+          "before": {
+            "type": "object",
+            "description": "`from`'s remus model."
+          }
+        }
+      },
+      "DiffSql": {
+        "type": "object",
+        "required": [
+          "before",
+          "after"
+        ],
+        "properties": {
+          "after": {
+            "type": "string"
+          },
+          "before": {
+            "type": "string"
+          }
+        }
+      },
       "DomainChange": {
         "oneOf": [
           {
@@ -5963,6 +6085,42 @@
           },
           "source_kind": {
             "$ref": "#/components/schemas/SourceKind"
+          }
+        }
+      },
+      "VersionDiff": {
+        "type": "object",
+        "description": "`from` compared with `to`.",
+        "required": [
+          "from",
+          "to",
+          "diff",
+          "models",
+          "sql",
+          "layout"
+        ],
+        "properties": {
+          "diff": {
+            "$ref": "#/components/schemas/SchemaDiff",
+            "description": "From `from`'s model to `to`'s: the change list, the summary and the\nstatus of every object for the graph."
+          },
+          "from": {
+            "$ref": "#/components/schemas/VersionSummary"
+          },
+          "layout": {
+            "$ref": "#/components/schemas/VersionLayout",
+            "description": "Where the union's tables sit: the newer version's positions and\ngroups; the older one's positions for tables the newer did not place\n(the ones it removed, say), each in its old group if the newer one\nstill has it, or in its old group alone if not."
+          },
+          "models": {
+            "$ref": "#/components/schemas/DiffModels",
+            "description": "Both models: the graph draws their union, styled by `diff.status`."
+          },
+          "sql": {
+            "$ref": "#/components/schemas/DiffSql",
+            "description": "Both models as SQL, rendered the same way whatever their source (an\nupload's text or a push's JSON): canonical order, and the newer\nversion's header on both, so a line diff of the two shows only what\nthe schema changed."
+          },
+          "to": {
+            "$ref": "#/components/schemas/VersionSummary"
           }
         }
       },

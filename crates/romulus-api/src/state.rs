@@ -10,6 +10,7 @@ use crate::{
     compile::SqlCompiler,
     orgs::events::MembershipEvents,
     rate::Limits,
+    versions::diff::DiffCache,
 };
 
 /// Shared by every handler. Cheap to clone: a pool handle and `Arc`s.
@@ -32,6 +33,8 @@ pub struct AppState {
     pub limits: Arc<Limits>,
     /// The drafts open right now (the collab server); compiles with `compiler`.
     pub collab: Hub,
+    /// Diffs between versions, computed once (versions never change).
+    pub diffs: Arc<DiffCache>,
 }
 
 impl AppState {
@@ -46,6 +49,7 @@ impl AppState {
             sessions: SessionEvents::new(),
             compiler: SqlCompiler::unavailable(),
             limits: Arc::new(Limits::default()),
+            diffs: Arc::new(DiffCache::default()),
         }
     }
 
