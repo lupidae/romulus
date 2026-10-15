@@ -198,11 +198,13 @@ keep in sync.
   statement (same statement index, matched by libpg_query locations), its layout
   entry is moved over. Otherwise the orphaned entry is kept until the version is
   saved, so undo brings the table back where it was.
-- **Schema edits from the graph rewrite in place**: the edit finds every
-  reference through the libpg_query parse tree and its locations (foreign keys
-  in other statements, indexes, `COMMENT ON`, policies, view bodies) and
-  rewrites them in one Yjs transaction. It never appends `ALTER … RENAME`, so
-  the text stays a clean description of the schema, not a migration log.
+- **Schema edits from the graph append SQL**: each edit appends the matching
+  statement (`ALTER TABLE … RENAME …`, `ADD COLUMN`, `ADD CONSTRAINT … FOREIGN
+  KEY`, `COMMENT ON …`) under a `-- edits from the graph` marker, so Postgres
+  itself carries a rename to every constraint, index, comment and view. A
+  **Tidy** action rewrites the whole text in remus's canonical form (via the
+  compiled model and `remus-sql`), as one Yjs transaction, for whoever wants a
+  clean file again. Chosen over in-place rewriting (2026-10-15).
 - **Undo**: one `Y.UndoManager` per client over `sql`, `layout` and `groups`,
   tracking local origins only, so a graph edit that touches text and layout
   undoes as one step and nobody undoes someone else's typing.
@@ -346,6 +348,13 @@ romulus/
   contexts** editing one draft (cursors, concurrent text + graph edits,
   reviewer read-only, publish, update draft).
 
+Local development has a dev-only sign-in bypass (env-gated, refused unless
+the public URL is local) so QA and end-to-end tests do not depend on Zitadel's
+UI. In production the API serves the homepage at `/`, the SPA at `/app` and
+itself at `/api`: one origin, which keeps the cookie and CSRF story simple.
+Compiles are cached by SHA-256 of the SQL, so everyone in a draft costs one
+sandbox run.
+
 The libpg_query wasm and elkjs are loaded lazily, elkjs in a web worker: both
 are heavy and only the editor needs them. Partitions stay collapsed under their
 parent (remus's rule) and the graph has to stay usable at a few hundred tables.
@@ -394,7 +403,7 @@ All seven are the MVP.
   stubs never reach the model.
 - "Update draft" merges SQL per statement, keyed by the object defined, on the
   server, applied as a minimal Yjs edit.
-- Graph schema edits rewrite every reference in place, never append `ALTER`.
+- Graph schema edits append SQL statements; Tidy rewrites canonically.
 - Invitations are copy-link; no email provider in the MVP.
 - Zitadel is identity only; romulus owns organizations and roles.
 - One API instance in the MVP (Yjs docs in memory).
