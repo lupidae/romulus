@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM users WHERE lower(email) = lower($1) ORDER BY updated_at DESC LIMIT 1",
+  "query": "SELECT id FROM users WHERE lower(email) = lower($1) ORDER BY created_at, id LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "f07ab2870556711d602ea2b63b5869c0cd63fd75b9ebade74971de067d4f06a1"
+  "hash": "6377a71de5c51c04dc05cb0297581bb0cbe20ddee26e11cdf87379ef3a0ec0f2"
 }

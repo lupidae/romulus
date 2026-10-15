@@ -415,7 +415,7 @@ async fn dev_signin(
         )));
     }
     let existing = sqlx::query_scalar!(
-        "SELECT id FROM users WHERE lower(email) = lower($1) ORDER BY updated_at DESC LIMIT 1",
+        "SELECT id FROM users WHERE lower(email) = lower($1) ORDER BY created_at, id LIMIT 1",
         email,
     )
     .fetch_optional(&state.db)
