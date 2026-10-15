@@ -215,16 +215,16 @@ export function ChangeList({
         )}
       </div>
       {hints && (
-        <footer className="hidden shrink-0 items-center gap-x-3 gap-y-1 border-t border-border px-3 py-2 text-xs text-muted-foreground pointer-fine:flex">
+        <footer className="hidden shrink-0 items-center gap-x-4 gap-y-1 border-t border-border px-3 py-2 text-xs whitespace-nowrap text-muted-foreground pointer-fine:flex">
           <span className="flex items-center gap-1">
             <Kbd>J</Kbd>
             <Kbd>K</Kbd>
-            next, previous
+            <span className="ml-0.5">changes</span>
           </span>
           <span className="flex items-center gap-1">
             <Kbd>[</Kbd>
             <Kbd>]</Kbd>
-            older, newer pair
+            <span className="ml-0.5">versions</span>
           </span>
         </footer>
       )}

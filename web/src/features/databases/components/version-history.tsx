@@ -159,8 +159,17 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
                 </Button>
               </Tooltip>
             ) : (
-              // Keeps the column: v1 has nothing before it.
-              <span aria-hidden className="w-7 shrink-0 sm:w-23" />
+              // Keeps the column at the button's exact width: v1 has nothing before it.
+              <Button
+                variant="ghost"
+                size="sm"
+                tabIndex={-1}
+                aria-hidden
+                className="invisible max-sm:px-2"
+              >
+                <GitCompareIcon />
+                <span className="max-sm:hidden">Compare</span>
+              </Button>
             )}
             <NavArrowRightIcon
               aria-hidden
