@@ -1,0 +1,63 @@
+/* React Flow's own variables, pointed at the design tokens (no raw values
+   here: globals.css holds them). Its base stylesheet is imported next to the
+   component, so a page without a graph never loads it. */
+.schema-graph .react-flow {
+  --xy-background-color: var(--color-background);
+  --xy-background-pattern-color: var(--color-border-strong);
+  --xy-edge-stroke: var(--color-border-strong);
+  --xy-minimap-background-color: var(--color-card);
+  --xy-minimap-mask-background-color: color-mix(in oklab, var(--color-background) 72%, transparent);
+  --xy-minimap-mask-stroke-color: var(--color-primary);
+  --xy-minimap-mask-stroke-width: 1.5;
+  --xy-minimap-node-background-color: var(--color-border-strong);
+  --xy-minimap-node-stroke-color: transparent;
+  --xy-node-border-radius: var(--radius-lg);
+}
+
+.schema-graph .react-flow__minimap {
+  border: 0.0625rem solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+}
+
+/* Nodes draw their own frame; React Flow's wrapper adds nothing. */
+.schema-graph .react-flow__node-table,
+.schema-graph .react-flow__node-tableGroup,
+.schema-graph .react-flow__node-areaLabel {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.schema-graph .react-flow__node-tableGroup,
+.schema-graph .react-flow__node-areaLabel {
+  pointer-events: none;
+}
+
+/* The minimap reads status and schema from the same tokens as the nodes. */
+.schema-graph .react-flow__minimap-node.minimap-added {
+  fill: var(--color-success);
+}
+.schema-graph .react-flow__minimap-node.minimap-removed {
+  fill: var(--color-destructive);
+}
+.schema-graph .react-flow__minimap-node.minimap-changed {
+  fill: var(--color-warning);
+}
+.schema-graph .react-flow__minimap-node.minimap-selected {
+  fill: var(--color-primary);
+}
+.schema-graph .react-flow__minimap-node.minimap-group {
+  fill: transparent;
+}
+
+.schema-graph .react-flow__attribution {
+  background: transparent;
+  padding: 0 0.75rem 0.25rem;
+  font-size: 0.625rem;
+}
+.schema-graph .react-flow__attribution a {
+  color: var(--color-faint-foreground);
+}
