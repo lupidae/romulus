@@ -247,6 +247,7 @@ function Workspace({
         // A closed draft disconnects on purpose: nothing to report.
         connection={status === "open" ? (state?.connection ?? "connecting") : "connected"}
         synced={state?.synced ?? false}
+        unsynced={unsynced}
         peers={peers}
         meId={meId}
         canUndo={canUndo}

@@ -44,6 +44,8 @@ interface EditorBarProps {
   compile: CompileView;
   connection: Connection;
   synced: boolean;
+  /** Edits made here while disconnected, not on the server yet. */
+  unsynced: boolean;
   peers: Peer[];
   meId: string;
   canUndo: boolean;
@@ -99,7 +101,7 @@ export function EditorBar(props: EditorBarProps) {
 
       <div className="flex min-w-0 shrink items-center">
         {synced && <CompileStatus compile={compile} onJump={props.onJump} />}
-        <ConnectionStatus connection={connection} synced={synced} />
+        <ConnectionStatus connection={connection} synced={synced} unsynced={props.unsynced} />
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-1 md:gap-1.5">
@@ -286,8 +288,21 @@ function DraftName({
   );
 }
 
-function ConnectionStatus({ connection, synced }: { connection: Connection; synced: boolean }) {
+function ConnectionStatus({
+  connection,
+  synced,
+  unsynced,
+}: {
+  connection: Connection;
+  synced: boolean;
+  unsynced: boolean;
+}) {
   if (!synced || connection === "connected" || connection === "connecting") return null;
+  const label = unsynced
+    ? "Edits not sent yet"
+    : connection === "offline"
+      ? "Offline"
+      : "Reconnecting…";
   return (
     <Tooltip content="Your edits are kept here and sent as soon as you are back online.">
       <Button
@@ -298,9 +313,7 @@ function ConnectionStatus({ connection, synced }: { connection: Connection; sync
         aria-live="polite"
       >
         <WifiOffIcon />
-        <span className="max-sm:sr-only">
-          {connection === "offline" ? "Offline" : "Reconnecting…"}
-        </span>
+        <span className="max-sm:sr-only">{label}</span>
       </Button>
     </Tooltip>
   );
