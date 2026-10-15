@@ -11,3 +11,8 @@ ALTER TABLE versions ADD CONSTRAINT versions_message_length
     CHECK (message IS NULL OR (btrim(message) <> '' AND char_length(message) <= 1000));
 
 COMMENT ON COLUMN versions.message IS 'What changed, in a line (the uploader''s or the pusher''s). NULL when none was given.';
+
+-- One layout shape everywhere (versions::layout::VersionLayout).
+ALTER TABLE versions ALTER COLUMN layout SET DEFAULT '{"layout": {}, "groups": {}}';
+COMMENT ON COLUMN versions.layout IS
+    'Table positions and groups: {"layout": {"<schema>.<table>": {"x", "y"}}, "groups": {"<id>": {"name", "color", "members": [qualified names]}}}, pruned to the model''s tables. An empty object reads as an empty layout.';

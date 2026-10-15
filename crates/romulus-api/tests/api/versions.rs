@@ -8,7 +8,10 @@ use romulus_api::{
     AppState, Config,
     compile::SqlCompiler,
     domain::{SourceKind, TokenScope, VersionOrigin},
-    versions::store::{NewVersion, StoreError, Stored, store},
+    versions::{
+        layout::VersionLayout,
+        store::{NewVersion, StoreError, Stored, store},
+    },
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -56,7 +59,7 @@ async fn an_upload_stores_the_model_and_the_sql_verbatim(db: PgPool) {
         .map(|e| e["name"].as_str().unwrap())
         .collect();
     assert_eq!(tables, ["invoices", "plans"]);
-    assert_eq!(version["layout"], json!({}));
+    assert_eq!(version["layout"], json!({ "layout": {}, "groups": {} }));
 
     // The SQL tab shows exactly what was uploaded; the rest is rendered.
     let texts = dev
@@ -362,25 +365,63 @@ fn new_version(database_id: Uuid, tables: &[&str]) -> NewVersion {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn a_version_inherits_the_layout_unless_given_one(db: PgPool) {
+async fn a_version_inherits_the_layout_pruned_to_its_tables(db: PgPool) {
     let team = Team::new(&db, "acme").await;
     let id = database(&db, team.org, "billing").await;
-    let arranged = json!({ "layout": { "public.users": { "x": 10, "y": 20 } }, "groups": {} });
+    let layouts = async |db: &PgPool| -> Vec<Value> {
+        sqlx::query_scalar!(
+            "SELECT layout FROM versions WHERE database_id = $1 ORDER BY number",
+            id
+        )
+        .fetch_all(db)
+        .await
+        .unwrap()
+    };
 
-    let mut first = new_version(id, &["users"]);
-    first.layout = Some(arranged.clone());
-    store(&db, first, false).await.unwrap();
-    store(&db, new_version(id, &["users", "orders"]), false)
+    // Without one: the empty layout, never null.
+    store(&db, new_version(id, &["users"]), false)
         .await
         .unwrap();
-    let layouts: Vec<Value> = sqlx::query_scalar!(
-        "SELECT layout FROM versions WHERE database_id = $1 ORDER BY number",
-        id
-    )
-    .fetch_all(&db)
-    .await
-    .unwrap();
-    assert_eq!(layouts, [arranged.clone(), arranged]);
+    assert_eq!(layouts(&db).await, [json!({ "layout": {}, "groups": {} })]);
+
+    // A draft's layout is stored as given, without tables the model lacks.
+    let mut arranged = new_version(id, &["users", "orders"]);
+    arranged.layout = Some(VersionLayout::from_value(&json!({
+        "layout": {
+            "public.users": { "x": 10, "y": 20 },
+            "public.orders": { "x": 300, "y": 20 },
+            "public.ghost": { "x": 0, "y": 0 }
+        },
+        "groups": { "g1": { "name": "Shop", "color": "amber",
+                            "members": ["public.orders", "public.ghost"] } }
+    })));
+    store(&db, arranged, false).await.unwrap();
+    let v2 = json!({
+        "layout": { "public.orders": { "x": 300.0, "y": 20.0 }, "public.users": { "x": 10.0, "y": 20.0 } },
+        "groups": { "g1": { "name": "Shop", "color": "amber", "members": ["public.orders"] } }
+    });
+    assert_eq!(layouts(&db).await[1], v2);
+
+    // The next one inherits it, minus the table it dropped.
+    store(&db, new_version(id, &["users"]), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        layouts(&db).await[2],
+        json!({
+            "layout": { "public.users": { "x": 10.0, "y": 20.0 } },
+            "groups": { "g1": { "name": "Shop", "color": "amber", "members": [] } }
+        })
+    );
+
+    // The API serves it typed.
+    let app = TestApp::new(db);
+    let version = app
+        .as_user(&team.reviewer)
+        .get(&team.path("/databases/billing/versions/2"))
+        .await
+        .json();
+    assert_eq!(version["layout"], v2);
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

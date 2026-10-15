@@ -3,11 +3,10 @@
 
 use remus_core::Schema;
 use serde::Deserialize;
-use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{VersionSummary, summary};
+use super::{VersionSummary, layout::VersionLayout, summary};
 use crate::{
     ApiError,
     databases::no_such_database,
@@ -26,9 +25,10 @@ pub struct NewVersion {
     pub message: Option<String>,
     pub created_by: Option<Uuid>,
     pub created_by_token: Option<Uuid>,
-    /// `None`: the previous version's layout (`{}` for the first). `Some`:
-    /// this one (a draft publishes its layout and groups).
-    pub layout: Option<serde_json::Value>,
+    /// `None`: the previous version's layout (empty for the first). `Some`:
+    /// this one (a draft publishes its layout and groups). Either way it is
+    /// stored pruned to `model`.
+    pub layout: Option<VersionLayout>,
     /// `Some(base)`: only if the latest version is still `base` (`None`:
     /// still no version), checked under the same lock as the number;
     /// otherwise [`StoreError::StaleBase`]. A draft publishes this way, so
@@ -141,8 +141,12 @@ pub async fn store(
     let number = latest.as_ref().map_or(1, |latest| latest.number + 1);
     let layout = match new.layout {
         Some(layout) => layout,
-        None => latest.map_or_else(|| json!({}), |latest| latest.layout),
-    };
+        None => latest
+            .map(|latest| VersionLayout::from_value(&latest.layout))
+            .unwrap_or_default(),
+    }
+    .pruned(&new.model);
+    let layout = serde_json::to_value(&layout).map_err(ApiError::internal)?;
     let model = serde_json::to_value(&new.model).map_err(ApiError::internal)?;
     let id = sqlx::query_scalar!(
         "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,

@@ -21,7 +21,6 @@ import {
   MenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
-import type { Groups, Layout } from "@/features/schema/layout";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
@@ -57,7 +56,8 @@ export function VersionView({ org, database, number }: VersionViewProps) {
   const model = React.useMemo(() => {
     if (!version.data) return undefined;
     try {
-      return { schema: parseSchema(version.data.model), ...presentation(version.data.layout) };
+      const { layout, groups } = version.data.layout;
+      return { schema: parseSchema(version.data.model), layout, groups };
     } catch (error) {
       return { error: error instanceof SchemaParseError ? error.message : String(error) };
     }
@@ -115,17 +115,6 @@ export function VersionView({ org, database, number }: VersionViewProps) {
       </div>
     </div>
   );
-}
-
-/** A version's layout snapshot (`{layout, groups}`, as drafts publish it), leniently. */
-function presentation(value: unknown): { layout?: Layout; groups?: Groups } {
-  if (typeof value !== "object" || value === null) return {};
-  const { layout, groups } = value as { layout?: unknown; groups?: unknown };
-  const isMap = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
-  return {
-    layout: isMap(layout) ? (layout as Layout) : undefined,
-    groups: isMap(groups) ? (groups as Groups) : undefined,
-  };
 }
 
 function VersionStrip({

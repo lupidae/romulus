@@ -142,7 +142,10 @@ Made in the skeleton (S0):
   `oidc_flows` (sign-ins in flight: PKCE verifier, nonce; where to land rides
   in the flow cookie, so an invitation token never sits in the database; at
   most 20 started per client IP, then one per 3 s), the
-  `organizations_slug_not_reserved` check and the `*_email_nfc` checks.
+  `organizations_slug_not_reserved` check and the `*_email_nfc` checks;
+  `databases_slug_not_reserved` (a database slug must not shadow
+  `/app/<org>/settings`…) and length checks on database descriptions and
+  version messages.
 - **Design system**: Tailwind v4 + Radix primitives, owned components in
   `web/src/components/ui` (shadcn-style, not a dependency). Chosen because
   every agent already knows the idiom, tokens are plain CSS variables, and
@@ -201,9 +204,31 @@ Made in the skeleton (S0):
   `lower(x COLLATE pg_unicode_fast)` on both sides (Unicode case mapping
   whatever the database locale; the indexes use the same expression), or
   `email::key` in Rust (a test keeps the two in agreement).
-- **Secrets handed out** (session ids, invitation links, later API tokens):
+- **Secrets handed out** (session ids, invitation links, API tokens):
   `token::generate()` (32 random bytes, base64url) and store
-  `token::hash(..)` (sha256, fits the `*_hash bytea` checks).
+  `token::hash(..)` (sha256, fits the `*_hash bytea` checks). API tokens are
+  `rom_` + that (`databases::tokens::PREFIX`), shown once.
+- **The machine API** (remus, CI) lives at `/api/databases/{database_id}/…`
+  and authenticates with `databases::tokens::Bearer<scope::Push | Full>`
+  only (the path segment must be named `database_id`; it answers 401
+  `invalid_token`, 403 `wrong_database` / `insufficient_scope`, and records
+  `last_used_at`). The CSRF guard answers an unsafe request there without a
+  bearer with 401 `invalid_token`, not `csrf`. Browser endpoints stay
+  org-scoped (`/orgs/{org}/databases/{db}/…`).
+- **Creating a version** always goes through `versions::store::store`: it
+  numbers it under `FOR NO KEY UPDATE` on the databases row (no gaps, no
+  duplicates), inherits the previous layout unless given one (`layout`),
+  skips an unchanged model when asked (pushes), and with `expected_base`
+  refuses with `StoreError::StaleBase` (409 `stale_base`) when the latest
+  version moved (drafts publishing).
+- **A version's layout** has one shape everywhere,
+  `versions::layout::VersionLayout`: `{"layout": {"<schema>.<table>": {"x",
+  "y"}}, "groups": {"<id>": {"name", "color", "members"}}}`, stored pruned to
+  the model's tables, never null (empty is `{"layout": {}, "groups": {}}`;
+  `{}` reads as empty). The viewer gets `layout.layout` and `layout.groups`
+  as `<SchemaViewer layout groups>`.
+- **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
+  per person for SQL compiles), 429 `rate_limited` with `Retry-After`.
 - **CSRF** is global middleware: every non-GET request needs
   `X-Romulus-Csrf: 1` and an `Origin` equal to `ROMULUS_PUBLIC_URL`, unless it
   carries `Authorization: Bearer` (API tokens). Bearer requests must never fall
@@ -246,13 +271,17 @@ src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field
                          (SelectItem `description`), Dialog, ConfirmDialog, Popover, Sheet, Menu,
                          Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
                          EmptyState, Skeleton, Tooltip, Kbd, Alert, Card, Separator, Spinner,
-                         Sidebar*
+                         Sidebar*, TabNav (link tabs, one URL each), CodeBlock (copyable
+                         lines), FileButton (opens the file picker)
 src/components/shell/    AppShell (top bar, org switcher, user menu, nav, panel), PageHeader,
                          PageBody, status pages (404/500), the sign-in preview
 src/components/icons/    Iconoir only, generated: `npm --prefix web run icons:add -- <name>`
 src/features/<module>/   per-feature code: queries (queryOptions), mutations, components
 src/features/schema/     SchemaViewer / SchemaGraph / SchemaText (graph + SQL panes), remus model
                          types (parseSchema), fixtures; /app/dev/viewer shows them
+src/features/databases/  databases, versions, API tokens: queries, mutations, the upload dialog
+                         (useOpenUpload), VersionView, DraftsSlot (where drafts list, above the
+                         history)
 src/api/                 client.ts (typed openapi-fetch + CSRF header), generated types
 src/styles/globals.css   every token; the only file with raw colors
 ```
@@ -271,6 +300,15 @@ src/styles/globals.css   every token; the only file with raw colors
   any query or mutation sends the user to sign-in and back; a 403 refetches
   the orgs (main.tsx). `/app/dev/kit` and `/app/dev/shell` exist in dev
   builds only.
+- **Database pages** are `routes/$org/$db.tsx` (header, tabs Schema /
+  History / Settings, the upload dialog) with children `index` (the latest
+  version), `v/$number`, `history`, `settings`; drafts (milestone 4) go under
+  `$db/drafts/…`. They declare `staticData: { fullBleed: true }`, so the org
+  layout skips `PageBody` and the viewer gets the whole panel; a child page
+  that wants the usual measure pads itself. Database slugs must not shadow
+  the org's own pages (`settings`, `new`, `members`, `invitations`,
+  `search`, `activity`). Versions are cached forever, keyed by database id
+  (`databaseKeys.version`): they never change.
 - **Data**: TanStack Query owns server state. Export `queryOptions` from
   `features/<module>/`, call `api.GET/POST(...)` through `unwrap` (throws
   `ApiError` with the API's `code`). Never hand-write an API type: change the
@@ -304,14 +342,19 @@ src/styles/globals.css   every token; the only file with raw colors
 
 ## Sandbox compiler (`crates/romulus-sandbox`)
 
-The API will hold one `Compiler` (`Compiler::start(SandboxConfig::new(
-config.sandbox_url))` at startup, privileged: it creates the pool's roles and
-databases). `compile(sql)` for uploads, `compile_for(draft_id, sql)` for
-drafts (coalesced per draft: a superseded caller gets `Rejected::Superseded`
-and should drop it). Both return a `Compilation`: `model` (canonical,
-`database` = `"sandbox"`: set the real name) or `diagnostics`, each with a
-stable `code` and a `Span` in bytes, UTF-16 (CodeMirror/Yjs) and line/column.
-`SandboxError` means the sandbox itself failed: answer 503, don't store it.
+The API holds one `Compiler`, behind `compile::SqlCompiler` (`AppState::
+compiler`): never call `Compiler::start` elsewhere (one process per pool
+prefix). `SqlCompiler::sandbox(&config)` starts it in the background and
+retries until the sandbox answers, so the API boots without it; until then
+compiles answer 503. `ROMULUS_SANDBOX_PREFIX` (default `romulus_sandbox`)
+names the pool: Playwright's API uses `romulus_e2e`. `compile(sql)` for
+uploads, `compile_for(draft_id, sql)` for drafts (coalesced per draft: a
+superseded caller gets `compile::Rejected::Superseded` and should drop it).
+Both return a `Compiled`: `model` (canonical, `database` = `"sandbox"`: set
+the real name) or `diagnostics`, each with a stable `code` and a `Span` in
+bytes, UTF-16 (CodeMirror/Yjs) and line/column. A sandbox failure is a 503,
+never stored. `/api/health` reports `sandbox` (`ok`, `unavailable`, `off`)
+from `Compiler::check_admin`. Tests use `SqlCompiler::from_fn`.
 
 - **Pure tooling**: `parse(sql)` → statements with spans and `Key`s
   (`table:public.users`, `fk:public.orders.x_fkey`, `comment:column:…`;
@@ -360,7 +403,11 @@ stable `code` and a `Span` in bytes, UTF-16 (CodeMirror/Yjs) and line/column.
   Fixtures: `harness::{user, org, member, database}`; signed in:
   `signed_in(&db, "Alice")` or `session(&db, user)`, then
   `app.as_user(&session).get/post/patch/delete(…)`; `Team::new(&db, "acme")`
-  gives an org with one session per role plus an outsider. `idp::FakeIdp`
+  gives an org with one session per role plus an outsider; `api_token(&db,
+  database, scope)`, `model(&["users"])` / `model_json(..)` (remus models),
+  `app.push(database, token, content_type, body)`, and
+  `TestApp::compiling(db)` with a fake compiler (`CREATE TABLE x` makes a
+  table, `oops` is a located syntax error). `idp::FakeIdp`
   plays the OIDC provider (`TestApp::with_config(db, idp.config())`). Unit
   tests inline in `#[cfg(test)] mod tests`, named as assertions.
 - Web: Vitest + Testing Library next to the code (`*.test.tsx`) for behaviour;

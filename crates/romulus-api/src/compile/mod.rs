@@ -20,8 +20,8 @@
 //! [`render_sql`] is the SQL of a model that came as remus JSON, and the
 //! [`render`] functions its other formats.
 //!
-//! Drafts (milestone 4) will compile here too, with `Compiler::compile_for`
-//! (coalesced per draft) and the last result cached in `draft_compiles`.
+//! Drafts (milestone 4) compile with [`SqlCompiler::compile_for`] (coalesced
+//! per draft; a superseded request answers [`Rejected::Superseded`]).
 
 use std::{
     sync::{Arc, OnceLock},

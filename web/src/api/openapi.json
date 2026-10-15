@@ -2759,6 +2759,47 @@
           }
         }
       },
+      "TableGroup": {
+        "type": "object",
+        "required": [
+          "name",
+          "color",
+          "members"
+        ],
+        "properties": {
+          "color": {
+            "type": "string",
+            "description": "A color name (`stone`, `red`, `amber`, `green`, `teal`, `blue`,\n`violet`, `pink`); the web app draws an unknown one as `stone`."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Qualified names of the tables in it."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TablePosition": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "format": "double"
+          },
+          "y": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "TokenScope": {
         "type": "string",
         "description": "What an API token may do (`api_token_scope`).",
@@ -2861,8 +2902,8 @@
             "format": "uuid"
           },
           "layout": {
-            "type": "object",
-            "description": "Table positions and groups, keyed by qualified name (`{}` until a\ndraft arranges them)."
+            "$ref": "#/components/schemas/VersionLayout",
+            "description": "Table positions and groups, keyed by qualified name (empty until a\ndraft arranges them)."
           },
           "message": {
             "type": [
@@ -2887,6 +2928,36 @@
           },
           "source_kind": {
             "$ref": "#/components/schemas/SourceKind"
+          }
+        }
+      },
+      "VersionLayout": {
+        "type": "object",
+        "description": "Where tables sit, and their groups.",
+        "required": [
+          "layout",
+          "groups"
+        ],
+        "properties": {
+          "groups": {
+            "type": "object",
+            "description": "By group id.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TableGroup"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "layout": {
+            "type": "object",
+            "description": "Top-left corner of each table in graph coordinates, by qualified name.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TablePosition"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },

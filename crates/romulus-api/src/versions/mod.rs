@@ -23,6 +23,7 @@
 //! lock on the `databases` row ([`store`]). Diffs between versions come
 //! with milestone 3 (`romulus-diff`).
 
+pub mod layout;
 pub mod push;
 pub mod store;
 
@@ -36,7 +37,10 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use self::store::{NewVersion, Stored, store};
+use self::{
+    layout::VersionLayout,
+    store::{NewVersion, Stored, store},
+};
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
@@ -111,10 +115,9 @@ pub struct VersionDetail {
     pub model: serde_json::Value,
     /// What was uploaded or pushed, verbatim: SQL, or remus JSON.
     pub source: String,
-    /// Table positions and groups, keyed by qualified name (`{}` until a
+    /// Table positions and groups, keyed by qualified name (empty until a
     /// draft arranges them).
-    #[schema(value_type = Object)]
-    pub layout: serde_json::Value,
+    pub layout: VersionLayout,
 }
 
 /// A version's model in every format the viewer shows.
@@ -256,7 +259,7 @@ async fn detail(db: &PgPool, database_id: Uuid, number: Option<i32>) -> ApiResul
         author: Author::from_columns(row.user_id, row.user_name, row.token_id, row.token_name),
         model: row.model,
         source: row.source,
-        layout: row.layout,
+        layout: VersionLayout::from_value(&row.layout),
     })
 }
 

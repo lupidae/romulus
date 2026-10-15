@@ -801,6 +801,22 @@ export interface components {
       /** @description `start` in UTF-16 code units: a JavaScript string index. */
       utf16_start: number;
     };
+    TableGroup: {
+      /**
+       * @description A color name (`stone`, `red`, `amber`, `green`, `teal`, `blue`,
+       *     `violet`, `pink`); the web app draws an unknown one as `stone`.
+       */
+      color: string;
+      /** @description Qualified names of the tables in it. */
+      members: string[];
+      name: string;
+    };
+    TablePosition: {
+      /** Format: double */
+      x: number;
+      /** Format: double */
+      y: number;
+    };
     /**
      * @description What an API token may do (`api_token_scope`).
      * @enum {string}
@@ -831,10 +847,10 @@ export interface components {
       /** Format: uuid */
       id: string;
       /**
-       * @description Table positions and groups, keyed by qualified name (`{}` until a
+       * @description Table positions and groups, keyed by qualified name (empty until a
        *     draft arranges them).
        */
-      layout: Record<string, never>;
+      layout: components["schemas"]["VersionLayout"];
       message?: string | null;
       /** @description The remus model (`remus_core::Schema` as JSON), canonical. */
       model: Record<string, never>;
@@ -844,6 +860,17 @@ export interface components {
       /** @description What was uploaded or pushed, verbatim: SQL, or remus JSON. */
       source: string;
       source_kind: components["schemas"]["SourceKind"];
+    };
+    /** @description Where tables sit, and their groups. */
+    VersionLayout: {
+      /** @description By group id. */
+      groups: {
+        [key: string]: components["schemas"]["TableGroup"];
+      };
+      /** @description Top-left corner of each table in graph coordinates, by qualified name. */
+      layout: {
+        [key: string]: components["schemas"]["TablePosition"];
+      };
     };
     /**
      * @description How a version came to be (`version_origin`).
