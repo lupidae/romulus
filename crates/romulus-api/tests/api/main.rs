@@ -6,6 +6,7 @@
 
 mod auth;
 mod csrf;
+mod databases;
 mod harness;
 mod health;
 mod idp;
@@ -14,3 +15,4 @@ mod members;
 mod oidc;
 mod orgs;
 mod schema;
+mod tokens;

@@ -34,6 +34,11 @@ use crate::{ApiError, Config};
 /// The header the web app sends on every request (`web/src/api/client.ts`).
 pub const HEADER: &str = "x-romulus-csrf";
 
+/// The machine API (`versions::push`): bearer tokens only, never a cookie.
+/// An unsafe request there without a token is refused as such (401
+/// `invalid_token`), which tells a CI script what is missing.
+pub const MACHINE_API: &str = "/api/databases/";
+
 pub async fn guard(
     State(config): State<Arc<Config>>,
     request: Request,
@@ -41,6 +46,14 @@ pub async fn guard(
 ) -> Result<Response, ApiError> {
     if request.method().is_safe() || has_bearer(request.headers()) {
         return Ok(next.run(request).await);
+    }
+    // The machine API only ever takes a token: say that, not "cross-site".
+    if request.uri().path().starts_with(MACHINE_API) {
+        return Err(ApiError::InvalidToken(
+            "Authenticate with an API token: `Authorization: Bearer rom_…`. \
+             Create one in the database's settings."
+                .into(),
+        ));
     }
     let headers = request.headers();
     let marked = headers.get(HEADER).is_some_and(|value| value == "1");

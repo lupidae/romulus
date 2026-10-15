@@ -1,7 +1,7 @@
 //! The one error type handlers return, and the JSON body every error has.
 
 use axum::{
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -36,9 +36,21 @@ pub enum ApiError {
         message: String,
         details: Option<serde_json::Value>,
     },
+    /// 422 with a specific code (`compile_failed`, `invalid_schema`) and
+    /// structured `details`, where `Validation`'s per-field shape does not fit.
+    #[error("{message}")]
+    Unprocessable {
+        code: &'static str,
+        message: String,
+        details: Option<serde_json::Value>,
+    },
     /// 401: no valid session or token.
     #[error("sign in to continue")]
     Unauthorized,
+    /// 401 on the machine API (`Authorization: Bearer`): no token, or one that
+    /// is unknown or revoked. The message says how to get a working one.
+    #[error("{0}")]
+    InvalidToken(String),
     /// 401: the request carried a session cookie, but that session expired
     /// (or was signed out elsewhere). The web app says so on the sign-in page.
     #[error("Your session expired. Sign in again to continue.")]
@@ -68,6 +80,10 @@ pub enum ApiError {
     /// 415: e.g. a JSON endpoint called without `Content-Type: application/json`.
     #[error("{0}")]
     UnsupportedMediaType(String),
+    /// 429: too many requests from this token or person; `Retry-After` says
+    /// when the next one is allowed.
+    #[error("Too many requests. Try again in {} s.", whole_seconds(*retry_after))]
+    RateLimited { retry_after: std::time::Duration },
     /// 503: a dependency (the database, the sandbox) is unreachable.
     #[error("{0}")]
     Unavailable(String),
@@ -91,14 +107,19 @@ impl ApiError {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::Unauthorized | Self::SessionExpired => StatusCode::UNAUTHORIZED,
+            Self::Validation { .. } | Self::Unprocessable { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
+            Self::Unauthorized | Self::SessionExpired | Self::InvalidToken(_) => {
+                StatusCode::UNAUTHORIZED
+            }
             Self::Forbidden(_) | Self::Denied { .. } | Self::Csrf => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable(_) | Self::Timeout => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -110,13 +131,17 @@ impl ApiError {
             Self::Validation { .. } => "validation",
             Self::Unauthorized => "unauthorized",
             Self::SessionExpired => "session_expired",
+            Self::InvalidToken(_) => "invalid_token",
             Self::Forbidden(_) => "forbidden",
             Self::Csrf => "csrf",
             Self::NotFound(_) => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",
-            Self::Denied { code, .. } | Self::Conflict { code, .. } => code,
+            Self::Denied { code, .. }
+            | Self::Conflict { code, .. }
+            | Self::Unprocessable { code, .. } => code,
             Self::PayloadTooLarge => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
+            Self::RateLimited { .. } => "rate_limited",
             Self::Unavailable(_) => "unavailable",
             Self::Timeout => "timeout",
             Self::Internal(_) => "internal",
@@ -181,7 +206,9 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let details = match &self {
-            Self::Validation { details, .. } => details.clone(),
+            Self::Validation { details, .. } | Self::Unprocessable { details, .. } => {
+                details.clone()
+            }
             _ => None,
         };
         let message = if let Self::Internal(cause) = &self {
@@ -195,8 +222,21 @@ impl IntoResponse for ApiError {
             message,
             details,
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let Self::RateLimited { retry_after } = &self {
+            let seconds = whole_seconds(*retry_after);
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        }
+        response
     }
+}
+
+/// A wait in whole seconds, rounded up and at least 1: `Retry-After: 0`
+/// would have a client retry at once.
+fn whole_seconds(duration: std::time::Duration) -> u64 {
+    (duration.as_secs() + u64::from(duration.subsec_nanos() > 0)).max(1)
 }
 
 /// The fallback for routes that do not exist, in the same JSON shape.
@@ -256,6 +296,22 @@ mod tests {
             ApiError::SessionExpired.status(),
             ApiError::Unauthorized.status()
         );
+    }
+
+    #[test]
+    fn a_rate_limit_says_when_to_come_back() {
+        let response = ApiError::RateLimited {
+            retry_after: std::time::Duration::from_millis(2500),
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "3");
+        // Never "0": a client would retry at once.
+        let soon = ApiError::RateLimited {
+            retry_after: std::time::Duration::from_millis(10),
+        }
+        .into_response();
+        assert_eq!(soon.headers()[header::RETRY_AFTER], "1");
     }
 
     #[test]

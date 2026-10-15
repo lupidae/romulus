@@ -1,0 +1,13 @@
+-- Database pages live at /app/<org>/<database>, next to the organization's
+-- own pages: a slug must not shadow one of them (the API refuses them too,
+-- `databases::slug::RESERVED`; keep both lists equal).
+ALTER TABLE databases ADD CONSTRAINT databases_slug_not_reserved
+    CHECK (slug NOT IN ('settings', 'new', 'members', 'invitations', 'search', 'activity'));
+
+-- The API keeps both short; these are the backstops.
+ALTER TABLE databases ADD CONSTRAINT databases_description_length
+    CHECK (char_length(description) <= 1000);
+ALTER TABLE versions ADD CONSTRAINT versions_message_length
+    CHECK (message IS NULL OR (btrim(message) <> '' AND char_length(message) <= 1000));
+
+COMMENT ON COLUMN versions.message IS 'What changed, in a line (the uploader''s or the pusher''s). NULL when none was given.';

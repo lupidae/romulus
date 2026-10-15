@@ -10,6 +10,10 @@ publish.workspace = true
 
 [dependencies]
 remus-core.workspace = true
+remus-dbml.workspace = true
+remus-mermaid.workspace = true
+remus-sql.workspace = true
+romulus-diff.workspace = true
 
 axum.workspace = true
 axum-extra.workspace = true
@@ -36,6 +40,7 @@ utoipa-axum.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+remus-core = { workspace = true, features = ["fixtures"] }
 http-body-util.workspace = true
 rand.workspace = true
 rsa.workspace = true

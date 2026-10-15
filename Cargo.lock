@@ -2203,6 +2203,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "remus-dbml"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a11336b6dd40bfabaeb7389cd47b944930ee8569947420dfb5ffeced94ffa86e"
+dependencies = [
+ "remus-core",
+]
+
+[[package]]
+name = "remus-mermaid"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "764e4413e2eb494a11235f598daad296c2d355fb5849db4ad9b247004076210e"
+dependencies = [
+ "remus-core",
+]
+
+[[package]]
 name = "remus-sql"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2288,6 +2306,10 @@ dependencies = [
  "openidconnect",
  "rand 0.8.8",
  "remus-core",
+ "remus-dbml",
+ "remus-mermaid",
+ "remus-sql",
+ "romulus-diff",
  "rsa",
  "serde",
  "serde_json",

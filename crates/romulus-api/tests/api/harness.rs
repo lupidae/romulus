@@ -6,7 +6,13 @@ use axum::{
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use http_body_util::BodyExt;
-use romulus_api::{AppState, Config, app, csrf, domain::Role, token};
+use romulus_api::{
+    AppState, Config, app,
+    compile::{Code, Compiled, Diagnostic, Span, SqlCompiler},
+    csrf,
+    domain::{Role, Schema, TokenScope},
+    token,
+};
 use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -26,11 +32,46 @@ impl TestApp {
     }
 
     pub fn with_config(db: PgPool, config: Config) -> Self {
-        let state = AppState::new(db, config);
+        Self::with_state(AppState::new(db, config))
+    }
+
+    /// With [`fake_compiler`], so SQL uploads and pushes work without a sandbox.
+    pub fn compiling(db: PgPool) -> Self {
+        Self::with_state(AppState::new(db, Config::for_tests()).with_compiler(fake_compiler()))
+    }
+
+    pub fn with_state(state: AppState) -> Self {
         Self {
             router: app(state.clone()),
             state,
         }
+    }
+
+    /// A machine API push: `Authorization: Bearer`, no cookie, no CSRF header.
+    pub async fn push(
+        &self,
+        database: Uuid,
+        token: &str,
+        content_type: Option<&str>,
+        body: impl Into<Body>,
+    ) -> TestResponse {
+        let mut request = Request::post(format!("/api/databases/{database}/versions"))
+            .header(header::AUTHORIZATION, format!("Bearer {token}"));
+        if let Some(content_type) = content_type {
+            request = request.header(header::CONTENT_TYPE, content_type);
+        }
+        self.send(request.body(body.into()).expect("request")).await
+    }
+
+    /// A machine API read with a token.
+    pub async fn get_with_token(&self, path: &str, token: &str) -> TestResponse {
+        self.send(
+            Request::get(path)
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
     }
 
     pub async fn send(&self, request: Request<Body>) -> TestResponse {
@@ -303,4 +344,77 @@ impl Team {
     pub fn path(&self, rest: &str) -> String {
         format!("/api/orgs/{}{rest}", self.slug)
     }
+}
+
+/// An API token for `database`, as the API would create it; returns the secret.
+pub async fn api_token(db: &PgPool, database: Uuid, scope: TokenScope) -> String {
+    let secret = format!("rom_{}", token::generate());
+    sqlx::query!(
+        "INSERT INTO api_tokens (database_id, name, token_hash, scope) VALUES ($1, $2, $3, $4)",
+        database,
+        format!("{scope:?} token"),
+        token::hash(&secret),
+        scope as TokenScope,
+    )
+    .execute(db)
+    .await
+    .expect("insert API token");
+    secret
+}
+
+/// A remus model with one table per name, each with a `bigint` id.
+pub fn model(tables: &[&str]) -> Schema {
+    let entities: Vec<Value> = tables
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "schema": "public", "name": name, "kind": "r", "comment": null,
+                "partition_key": null, "view_definition": null,
+                "columns": [{
+                    "name": "id", "type": "bigint", "type_schema": "pg_catalog",
+                    "type_name": "int8", "type_kind": "b", "not_null": true,
+                    "default": null, "identity": null, "generated": null, "comment": null
+                }]
+            })
+        })
+        .collect();
+    Schema::from_json(
+        &serde_json::json!({
+            "remus_version": "0.1", "database": "app", "server_version": "17",
+            "entities": entities
+        })
+        .to_string(),
+    )
+    .expect("a valid model")
+}
+
+/// [`model`] as a push body.
+pub fn model_json(tables: &[&str]) -> String {
+    serde_json::to_string(&model(tables)).expect("serialisable")
+}
+
+/// Stands in for the sandbox: `CREATE TABLE <name>` makes a table (see
+/// [`model`]); the word `oops` is a syntax error located where it is.
+pub fn fake_compiler() -> SqlCompiler {
+    SqlCompiler::from_fn(|sql| {
+        if let Some(at) = sql.find("oops") {
+            return Compiled {
+                model: None,
+                diagnostics: vec![
+                    Diagnostic::error(Code::SyntaxError, "syntax error at or near \"oops\"")
+                        .with_span(Span::of(sql, at, at + 4)),
+                ],
+            };
+        }
+        let tables: Vec<&str> = sql
+            .match_indices("CREATE TABLE ")
+            .filter_map(|(at, _)| sql[at + 13..].split([' ', '(', ';']).next())
+            .collect();
+        let mut model = model(&tables);
+        model.database = "sandbox".into();
+        Compiled {
+            model: Some(model),
+            diagnostics: Vec::new(),
+        }
+    })
 }
