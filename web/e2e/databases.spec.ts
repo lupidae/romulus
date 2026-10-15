@@ -128,11 +128,17 @@ test("a database, from its first upload to a push from CI, read-only for reviewe
   await expect(reviewer.getByRole("dialog")).toHaveCount(0);
 });
 
-test("an unknown database or version is a page that leads back", async ({ page }) => {
+test("an unknown database, or an unknown path, is a page that leads back", async ({ page }) => {
   await devSignIn(page, `lost-${Date.now().toString(36)}@romulus.test`, "/app/new");
   const slug = await createOrg(page, unique("Lost"));
   await page.goto(`./${slug}/nope`);
   await expect(page.getByRole("heading", { name: "No such database" })).toBeVisible();
   await page.getByRole("link", { name: "All databases" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/${slug}$`));
+
+  // A path no page has is the app's 404, even in the shape of a database's.
+  await page.goto(`./${slug}/nope/no-such-tab`);
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await page.goto(`./${slug}/settings/no-such-page`);
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
 });

@@ -58,6 +58,12 @@ const router = createRouter({
   // Loaders read through TanStack Query, which owns caching.
   defaultPreloadStaleTime: 0,
   scrollRestoration: true,
+  // A path no page has (/app/acme/billing/typo) is the app's 404, for
+  // everyone; only a loader that looked something up and found nothing
+  // (an unknown database) shows its route's own not-found state. The
+  // default, "fuzzy", would render it inside the deepest matching layout,
+  // behind that layout's sign-in check.
+  notFoundMode: "root",
 });
 
 declare module "@tanstack/react-router" {
