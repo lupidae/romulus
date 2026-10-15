@@ -71,7 +71,7 @@ jobs:
           docker build -t romulus-sandbox deploy/sandbox
           # The memory settings of docker-compose.yml (deploy/sandbox/README.md).
           docker run -d --name sandbox -p 5433:5432 \
-            --memory 768m --ulimit data=134217728 --oom-score-adj -1000 \
+            --memory 768m --oom-score-adj -1000 \
             -e PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj -e PG_OOM_ADJUST_VALUE=1000 \
             -e POSTGRES_USER=sandbox_admin -e POSTGRES_PASSWORD=sandbox_admin -e POSTGRES_DB=postgres \
             romulus-sandbox postgres -c synchronous_commit=off -c wal_level=minimal -c max_wal_senders=0 \

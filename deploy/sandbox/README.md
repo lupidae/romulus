@@ -20,12 +20,18 @@ last:
    changeable by the SQL): `work_mem` 4 MB, `maintenance_work_mem` 16 MB,
    `hash_mem_multiplier` 1, `temp_file_limit` 64 MB, no parallel workers,
    no JIT, `statement_timeout`, `lock_timeout`.
-3. **A 128 MB cap on each process's private memory** (`ulimit -d`, i.e.
-   `RLIMIT_DATA`, which Linux ≥ 4.7 applies to `malloc`'s mmaps too; shared
-   buffers are shared memory and do not count). An allocation past it fails,
-   and Postgres reports an ordinary `out of memory` error for that statement:
-   the backend lives on, nothing restarts. Measured: every allowlisted
-   extension installs well under it.
+3. **A 128 MB cap on each Postgres process's private memory**
+   (`RLIMIT_DATA`, which Linux ≥ 4.7 applies to `malloc`'s mmaps too;
+   shared buffers are shared memory and do not count). The image's
+   entrypoint (`romulus-entrypoint.sh`) sets it with `ulimit -d` before
+   starting the server, so the postmaster and every backend it forks
+   inherit it; `ROMULUS_SANDBOX_MAX_DATA_KB` changes it (default 131072).
+   It is not set with `docker run --ulimit data=…`: that also caps the
+   container runtime's own init, which then may fail to start the
+   container at all (it does on GitHub's runners). An allocation past it
+   fails, and Postgres reports an ordinary `out of memory` error for that
+   statement: the backend lives on, nothing restarts. Measured: every
+   allowlisted extension installs well under it.
 4. **The container limit** (768 MB) is sized for the pool: 4 compile
    backends, the admin and the probe connection at 128 MB each. If it is
    reached anyway, the kernel's OOM killer picks the process with the highest
@@ -46,14 +52,15 @@ compile deadline bounds.
 
 Running it elsewhere (production):
 
-- Keep 3 and 4, and the lock table: `-c max_locks_per_transaction=2048`,
-  `--ulimit data=134217728`, `--oom-score-adj -1000`,
+- Keep 3 and 4, and the lock table: this image (its entrypoint sets the
+  memory cap), `-c max_locks_per_transaction=2048`, `--oom-score-adj -1000`,
   `PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj`, `PG_OOM_ADJUST_VALUE=1000`,
   and a memory limit of at least (pool size + 2) × 128 MB plus shared
   buffers. Raising the pool means raising the limit.
 - On a dedicated VM rather than a container, Postgres's own advice applies:
   `vm.overcommit_memory = 2` so allocations fail instead of the OOM killer
-  firing, and the postmaster started with `oom_score_adj` -1000.
+  firing, and the postmaster started with `oom_score_adj` -1000; set the
+  per-process cap in its service (systemd `LimitDATA=128M`).
 - Give it its own host or VM: a busy sandbox must not starve the app
   database or the API.
 - Data: on a volume with `fsync` on (an unclean stop with `fsync` off

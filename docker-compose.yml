@@ -48,14 +48,13 @@ services:
               -c, min_wal_size=32MB, -c, checkpoint_timeout=60s,
               -c, shared_buffers=32MB, -c, work_mem=4MB, -c, maintenance_work_mem=32MB,
               -c, max_connections=60, -c, max_locks_per_transaction=2048]
-    # Memory, in depth (deploy/sandbox/README.md): every process may allocate
-    # at most 128 MB of private memory, so an oversized value fails with an
-    # ordinary "out of memory" error instead of growing; past the container
+    # Memory, in depth (deploy/sandbox/README.md): every Postgres process may
+    # allocate at most 128 MB of private memory (the image's entrypoint sets
+    # it), so an oversized value fails with an ordinary "out of memory" error
+    # instead of growing; past the container
     # limit the kernel kills a backend (OOM score 1000), never the postmaster
     # (-1000), which then restarts its backends while the pool reconnects.
     mem_limit: 768m
-    ulimits:
-      data: 134217728
     oom_score_adj: -1000
     restart: unless-stopped
     ports:

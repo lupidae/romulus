@@ -34,3 +34,10 @@ RUN set -eu; \
       echo "trusted = true" >> "$control"; \
     done < /tmp/trusted-extensions.txt; \
     rm /tmp/trusted-extensions.txt
+
+# The per-process memory cap (see romulus-entrypoint.sh). Setting ENTRYPOINT
+# clears the base image's CMD, hence CMD again.
+COPY romulus-entrypoint.sh /usr/local/bin/romulus-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/romulus-entrypoint.sh
+ENTRYPOINT ["romulus-entrypoint.sh"]
+CMD ["postgres"]
