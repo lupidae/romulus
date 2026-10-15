@@ -11,6 +11,8 @@ export type Lod = "overview" | "detail";
 
 export interface GraphUiState {
   selected: string | null;
+  /** Tables picked for an action on several (shift- or ⌘-click), by key. */
+  picked: readonly string[];
   hovered: string | null;
   /** Unfolded columns or partitions, by table key. */
   nodeState: Record<string, NodeState>;
@@ -27,6 +29,7 @@ export function createGraphUiStore(initial: Partial<GraphUiState> = {}): GraphUi
   // Overview until the zoom is known: no node mounts rows it may not show.
   let state: GraphUiState = {
     selected: null,
+    picked: [],
     hovered: null,
     nodeState: {},
     lod: "overview",

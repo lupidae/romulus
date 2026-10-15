@@ -24,6 +24,7 @@ import { TabNav, TabNavItem } from "@/components/ui/tab-nav";
 import { toast } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UploadDialog } from "@/features/databases/components/upload-dialog";
+import { NewDraftButton, OpenDrafts } from "@/features/draft/components/drafts-section";
 import { databaseQuery } from "@/features/databases/queries";
 import { UploadContext } from "@/features/databases/upload-context";
 import { orgQuery } from "@/features/orgs/queries";
@@ -90,9 +91,10 @@ function DatabaseLayout() {
                 </p>
               </div>
             </div>
-            {/* Milestone 4 adds "New draft" here. */}
-            {writer && (
-              <div className="flex shrink-0 items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
+              <OpenDrafts org={org} db={db} />
+              {writer && <NewDraftButton org={org} db={db} compact />}
+              {writer && (
                 <Tooltip content="Upload SQL as a new version" shortcut={["U"]}>
                   <Button
                     variant="primary"
@@ -104,8 +106,8 @@ function DatabaseLayout() {
                     <span className="max-sm:hidden">Upload SQL</span>
                   </Button>
                 </Tooltip>
-              </div>
-            )}
+              )}
+            </div>
           </div>
           <TabNav aria-label={database.name} className="mt-3">
             <TabNavItem asChild>

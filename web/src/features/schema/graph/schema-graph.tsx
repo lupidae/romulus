@@ -76,6 +76,13 @@ export interface SchemaGraphProps {
   /** The selected table's qualified name. Leave undefined to let the graph own it. */
   selected?: string | null;
   onSelectedChange?: (key: string | null) => void;
+  /**
+   * Tables picked for an action on several (a draft's groups): shift- or
+   * ⌘-click adds or removes one, Esc clears. Without `onPickedChange`, those
+   * clicks select like any other.
+   */
+  picked?: readonly string[];
+  onPickedChange?: (keys: string[]) => void;
   /** ⌘K and / open the table search. Turn off when two graphs share a page. */
   shortcuts?: boolean;
   /** Shown instead of the graph when the schema has no tables. */
@@ -147,6 +154,8 @@ function GraphCanvas({
   editable = false,
   selected,
   onSelectedChange,
+  picked,
+  onPickedChange,
   shortcuts = true,
   empty,
   controls,
@@ -217,6 +226,10 @@ function GraphCanvas({
   useEffect(() => {
     if (ready) performance.mark("schema graph: drawn");
   }, [ready]);
+
+  useEffect(() => {
+    store.set({ picked: picked ?? [] });
+  }, [picked, store]);
 
   // Zoom-driven styling, written to the element (see ZoomLevel).
   const applyZoom = useCallback(
@@ -597,6 +610,8 @@ function GraphCanvas({
       });
     } else if (event.key === "Escape" && pinned) {
       setPinned(null);
+    } else if (event.key === "Escape" && picked?.length && onPickedChange) {
+      onPickedChange([]);
     } else if (event.key === "Escape" && current) {
       select(null);
     } else if (event.key === "+" || event.key === "=") {
@@ -700,8 +715,18 @@ function GraphCanvas({
             edgeTypes={edgeTypes}
             onNodesChange={editable ? onNodesChange : undefined}
             onNodeDragStop={editable ? onNodeDragStop : undefined}
-            onNodeClick={(_, node) => {
-              if (node.type === "table") select(node.id);
+            onNodeClick={(event, node) => {
+              if (node.type !== "table") return;
+              if (onPickedChange && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+                const current = picked ?? [];
+                onPickedChange(
+                  current.includes(node.id)
+                    ? current.filter((key) => key !== node.id)
+                    : [...current, node.id],
+                );
+                return;
+              }
+              select(node.id);
             }}
             onNodeDoubleClick={(_, node) => {
               if (node.type === "table") zoomToTable(node.id);

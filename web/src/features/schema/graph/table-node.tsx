@@ -80,6 +80,7 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
           ? "dimmed"
           : "neighbour";
 
+  const picked = useGraphUi((s) => s.picked.includes(id));
   const Icon = KIND_ICON[table.kind];
   const kindLabel = KIND_LABEL[table.kind];
   const isView = table.kind === "view" || table.kind === "materialized";
@@ -88,11 +89,13 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
   return (
     <div
       data-selected={emphasis === "selected" ? "" : undefined}
+      data-picked={picked ? "" : undefined}
       className={cn(
         "sg-node relative flex flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-raised",
         "transition-[opacity,box-shadow,border-color] duration-(--duration-fast)",
         table.status ? BORDER_STATUS[table.status] : "border-border-strong",
         emphasis === "selected" && "border-primary shadow-popover ring-3 ring-primary/20",
+        picked && "border-primary ring-2 ring-primary/45",
         emphasis === "dimmed" && "opacity-35",
         quiet && emphasis === "normal" && "opacity-60",
       )}

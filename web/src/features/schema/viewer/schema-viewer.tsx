@@ -46,6 +46,11 @@ export interface SchemaViewerProps {
   storageKey?: string;
   /** Rendered inside the graph's flow (remote cursors…). */
   graphChildren?: ReactNode;
+  /** More buttons in the graph's toolbar (a draft's groups). */
+  graphControls?: ReactNode;
+  /** Tables picked for an action on several: see `SchemaGraph`. */
+  picked?: readonly string[];
+  onPickedChange?: (keys: string[]) => void;
   className?: string;
 }
 
@@ -76,6 +81,9 @@ export function SchemaViewer({
   onFormatChange,
   storageKey = "romulus:schema-viewer",
   graphChildren,
+  graphControls,
+  picked,
+  onPickedChange,
   className,
 }: SchemaViewerProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
@@ -157,7 +165,14 @@ export function SchemaViewer({
       editable={editable}
       selected={selected}
       onSelectedChange={select}
-      controls={wide && hidden === "text" && layoutMenu}
+      picked={picked}
+      onPickedChange={onPickedChange}
+      controls={
+        <>
+          {graphControls}
+          {wide && hidden === "text" && layoutMenu}
+        </>
+      }
     >
       {graphChildren}
     </SchemaGraph>

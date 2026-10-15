@@ -80,7 +80,8 @@ export function Avatar({ name, id, src, size = "md", className }: AvatarProps) {
 }
 
 export interface AvatarStackProps {
-  people: { id: string; name: string; src?: string }[];
+  /** `detail` follows the name in its tooltip: “Bob · watching”. */
+  people: { id: string; name: string; src?: string; detail?: string }[];
   /** Avatars shown before collapsing the rest into “+N”. */
   max?: number;
   size?: keyof typeof sizes;
@@ -97,8 +98,8 @@ export function AvatarStack({ people, max = 4, size = "md", className }: AvatarS
       : shown.map((p) => p.name).join(", ");
   return (
     <div role="group" aria-label={label} className={cn("flex items-center -space-x-1", className)}>
-      {shown.map((person) => (
-        <Tooltip key={person.id} content={person.name}>
+      {shown.map(({ detail, ...person }) => (
+        <Tooltip key={person.id} content={detail ? `${person.name} · ${detail}` : person.name}>
           <span tabIndex={-1} className="rounded-full ring-2 ring-card">
             <Avatar {...person} size={size} />
           </span>

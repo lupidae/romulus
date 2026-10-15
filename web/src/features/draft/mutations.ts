@@ -1,0 +1,82 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+
+import { api, succeed, unwrap } from "@/api/client";
+
+import { type Draft, draftKeys } from "./queries";
+
+/** One click: a draft from the latest version, ready to open. */
+export function useCreateDraft(org: string, db: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(api.POST("/api/orgs/{org}/databases/{db}/drafts", { params: { path: { org, db } } })),
+    onSuccess: (draft) => {
+      queryClient.setQueryData(draftKeys.one(org, db, draft.id), draft);
+      queryClient.setQueryData<Draft[]>(draftKeys.list(org, db), (drafts) =>
+        drafts ? [draft, ...drafts] : drafts,
+      );
+      void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
+    },
+  });
+}
+
+/** Renames at once, and puts the name back if the API refuses. */
+export function useRenameDraft(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  const key = draftKeys.one(org, db, id);
+  return useMutation({
+    mutationFn: (name: string) =>
+      unwrap(
+        api.PATCH("/api/orgs/{org}/databases/{db}/drafts/{id}", {
+          params: { path: { org, db, id } },
+          body: { name },
+        }),
+      ),
+    onMutate: async (name) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<Draft>(key);
+      queryClient.setQueryData<Draft>(key, (draft) => (draft ? { ...draft, name } : draft));
+      return { previous };
+    },
+    onError: (_error, _name, context) => queryClient.setQueryData(key, context?.previous),
+    onSuccess: (draft) => queryClient.setQueryData(key, draft),
+    onSettled: () =>
+      void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true }),
+  });
+}
+
+export function useDeleteDraft(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      succeed(
+        api.DELETE("/api/orgs/{org}/databases/{db}/drafts/{id}", {
+          params: { path: { org, db, id } },
+        }),
+      ),
+    onSuccess: () => {
+      queryClient.setQueryData<Draft[]>(draftKeys.list(org, db), (drafts) =>
+        drafts?.filter((d) => d.id !== id),
+      );
+      queryClient.removeQueries({ queryKey: draftKeys.one(org, db, id) });
+    },
+  });
+}
+
+export function usePublishDraft(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { sha256: string; message?: string }) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/publish", {
+          params: { path: { org, db, id } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["drafts", org, db] });
+      // The database page's versions (milestone 2's queries) are keyed by the database.
+      void queryClient.invalidateQueries({ queryKey: ["databases", org] });
+    },
+  });
+}

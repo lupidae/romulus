@@ -29,6 +29,7 @@ import { Route as DevShellIndexRouteImport } from './routes/dev/shell/index'
 import { Route as DevShellMembersRouteImport } from './routes/dev/shell/members'
 import { Route as DevShellSettingsRouteImport } from './routes/dev/shell/settings'
 import { Route as OrgDbVNumberRouteImport } from './routes/$org/$db/v/$number'
+import { Route as OrgDbDraftsDraftRouteImport } from './routes/$org_.$db.drafts.$draft'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -130,6 +131,11 @@ const OrgDbVNumberRoute = OrgDbVNumberRouteImport.update({
   path: '/v/$number',
   getParentRoute: () => OrgDbRoute,
 } as any)
+const OrgDbDraftsDraftRoute = OrgDbDraftsDraftRouteImport.update({
+  id: '/$org_/$db/drafts/$draft',
+  path: '/$org/$db/drafts/$draft',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -152,6 +158,7 @@ export interface FileRoutesByFullPath {
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
+  '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -171,6 +178,7 @@ export interface FileRoutesByTo {
   '/$org/settings': typeof OrgSettingsIndexRoute
   '/dev/shell': typeof DevShellIndexRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
+  '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -194,6 +202,7 @@ export interface FileRoutesById {
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
+  '/$org_/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/$org/settings/'
     | '/dev/shell/'
     | '/$org/$db/v/$number'
+    | '/$org/$db/drafts/$draft'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/$org/settings'
     | '/dev/shell'
     | '/$org/$db/v/$number'
+    | '/$org/$db/drafts/$draft'
   id:
     | '__root__'
     | '/'
@@ -259,6 +270,7 @@ export interface FileRouteTypes {
     | '/$org/settings/'
     | '/dev/shell/'
     | '/$org/$db/v/$number'
+    | '/$org_/$db/drafts/$draft'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -270,6 +282,7 @@ export interface RootRouteChildren {
   DevShellRoute: typeof DevShellRouteWithChildren
   DevViewerRoute: typeof DevViewerRoute
   InviteTokenRoute: typeof InviteTokenRoute
+  OrgDbDraftsDraftRoute: typeof OrgDbDraftsDraftRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -414,6 +427,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgDbVNumberRouteImport
       parentRoute: typeof OrgDbRoute
     }
+    '/$org_/$db/drafts/$draft': {
+      id: '/$org_/$db/drafts/$draft'
+      path: '/$org/$db/drafts/$draft'
+      fullPath: '/$org/$db/drafts/$draft'
+      preLoaderRoute: typeof OrgDbDraftsDraftRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -476,6 +496,7 @@ const rootRouteChildren: RootRouteChildren = {
   DevShellRoute: DevShellRouteWithChildren,
   DevViewerRoute: DevViewerRoute,
   InviteTokenRoute: InviteTokenRoute,
+  OrgDbDraftsDraftRoute: OrgDbDraftsDraftRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
