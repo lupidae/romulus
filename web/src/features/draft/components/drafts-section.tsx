@@ -145,13 +145,19 @@ export function DraftsSection({
   );
 }
 
+/** "Edited just now", "Edited 5 minutes ago", "Edited yesterday". */
+function edited(iso: string): string {
+  return Date.now() - new Date(iso).getTime() < 60_000
+    ? "Edited just now"
+    : `Edited ${fromNow(iso)}`;
+}
+
 function DraftRow({ org, db, draft }: { org: string; db: string; draft: Draft }) {
   const people = draft.present.map((p) => ({
     id: p.user_id,
     name: p.name,
     detail: p.editing ? "editing" : "watching",
   }));
-  const origin = draft.base_version ? `From v${draft.base_version}` : "From scratch";
   return (
     <Link
       to="/$org/$db/drafts/$draft"
@@ -162,19 +168,17 @@ function DraftRow({ org, db, draft }: { org: string; db: string; draft: Draft })
       <div className="grid min-w-0 flex-1 gap-0.5">
         <p className="flex min-w-0 items-center gap-2">
           <span className="truncate text-base font-medium text-foreground">{draft.name}</span>
-          {draft.stale && <Badge variant="warning">v{draft.latest_version} is out</Badge>}
-        </p>
-        <p className="truncate text-sm text-muted-foreground">
-          {people.length > 0 ? (
-            <span className="text-foreground">{presenceLine(draft.present)}</span>
+          {draft.stale ? (
+            <Badge variant="warning">v{draft.latest_version} is out</Badge>
           ) : (
-            <>
-              {origin}
-              {draft.created_by && ` · ${draft.created_by.name}`} · edited{" "}
-              {fromNow(draft.updated_at)}
-            </>
+            draft.base_version && <Badge variant="outline">from v{draft.base_version}</Badge>
           )}
         </p>
+        {people.length > 0 ? (
+          <p className="truncate text-sm text-foreground">{presenceLine(draft.present)}</p>
+        ) : (
+          <p className="truncate text-sm text-muted-foreground">{edited(draft.updated_at)}</p>
+        )}
       </div>
       {people.length > 0 && <AvatarStack people={people} size="sm" max={4} />}
       <NavArrowRightIcon

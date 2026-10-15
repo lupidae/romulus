@@ -366,7 +366,7 @@ function Notice({
         title={`${state.statusBy ?? "Someone"} published this draft as v${state.publishedVersion}`}
         action={<BackButton org={org} db={db} name={draft.database.name} />}
       >
-        It is closed now; its SQL and layout live on as v{state.publishedVersion}.
+        This draft is closed.
       </Alert>
     );
   }
@@ -407,11 +407,15 @@ function Notice({
       <Alert
         variant="warning"
         className={strip}
-        title={`v${draft.latest_version} was published since this draft started`}
-      >
-        Bringing its changes into this draft comes with the next release of romulus; until then this
-        draft cannot be published.
-      </Alert>
+        title={
+          <>
+            v{draft.latest_version} was published after this draft started.{" "}
+            <span className="font-normal text-muted-foreground">
+              Publishing waits until drafts can take in a newer version, in the next release.
+            </span>
+          </>
+        }
+      />
     );
   }
   return null;

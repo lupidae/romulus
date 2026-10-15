@@ -159,7 +159,7 @@ export function EditorBar(props: EditorBarProps) {
         open={deleting}
         onOpenChange={setDeleting}
         title={`Delete “${draft.name}”?`}
-        description="Everyone in it is let go and its SQL is gone. Published versions are not affected."
+        description="Its SQL is deleted for everyone in it. Published versions stay."
         confirmLabel="Delete draft"
         destructive
         onConfirm={async () => {
@@ -189,9 +189,8 @@ function PublishButton({ draft, onPublish }: { draft: Draft; onPublish: () => vo
         <PopoverContent align="end" className="grid w-80 gap-1">
           <p className="text-sm font-semibold text-foreground">v{draft.latest_version} is out</p>
           <p className="text-sm text-muted-foreground">
-            This draft started from v{draft.base_version}. Bringing v{draft.latest_version}’s
-            changes in comes with the next release of romulus; until then this draft cannot be
-            published.
+            Drafts learn to take in a newer version in the next release. Until then this one cannot
+            be published.
           </p>
         </PopoverContent>
       </Popover>
@@ -290,7 +289,7 @@ function DraftName({
 function ConnectionStatus({ connection, synced }: { connection: Connection; synced: boolean }) {
   if (!synced || connection === "connected" || connection === "connecting") return null;
   return (
-    <Tooltip content="Your edits stay on this device and sync when the connection is back.">
+    <Tooltip content="Your edits are kept here and sent as soon as you are back online.">
       <Button
         variant="ghost"
         size="sm"

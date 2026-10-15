@@ -84,8 +84,7 @@ function Details({
   if (compile.state === "unavailable") {
     return (
       <Explain title="The SQL could not be checked">
-        The compiler is not reachable right now. Your edits are saved and will be checked as soon as
-        it is back.
+        The compiler is unreachable. Your edits are saved and checked once it is back.
       </Explain>
     );
   }

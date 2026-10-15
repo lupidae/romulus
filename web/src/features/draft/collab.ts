@@ -67,9 +67,7 @@ const theme = EditorView.theme({
     fontSize: "var(--text-sm)",
     maxWidth: "28rem",
   },
-  ".cm-diagnostic": { padding: "0.375rem 0.625rem", borderLeftWidth: "0.1875rem" },
-  ".cm-diagnostic-error": { borderLeftColor: "var(--color-destructive)" },
-  ".cm-diagnostic-info": { borderLeftColor: "var(--color-info)" },
+  ".cm-diagnostic": { padding: "0.375rem 0.625rem", borderLeft: "none", whiteSpace: "pre-wrap" },
 });
 
 /**
