@@ -51,10 +51,18 @@ async fn a_token_is_shown_once_and_only_its_hash_is_stored(db: PgPool) {
 
     // It works, and its use is recorded.
     let push = app
-        .push(id, &secret, Some("application/json"), model_json(&["users"]))
+        .push(
+            id,
+            &secret,
+            Some("application/json"),
+            model_json(&["users"]),
+        )
         .await;
     assert_eq!(push.status, StatusCode::CREATED);
-    let list = dev.get(&team.path("/databases/billing/tokens")).await.json();
+    let list = dev
+        .get(&team.path("/databases/billing/tokens"))
+        .await
+        .json();
     assert!(list[0]["last_used_at"].is_string());
 }
 
@@ -74,12 +82,18 @@ async fn only_developers_and_admins_manage_tokens(db: PgPool) {
 
     let reviewer = app.as_user(&team.reviewer);
     assert_eq!(reviewer.get(&path).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(reviewer.post(&path, &body).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        reviewer.post(&path, &body).await.status,
+        StatusCode::FORBIDDEN
+    );
     assert_eq!(reviewer.delete(&one).await.status, StatusCode::FORBIDDEN);
 
     let outsider = app.as_user(&team.outsider);
     assert_eq!(outsider.get(&path).await.status, StatusCode::NOT_FOUND);
-    assert_eq!(outsider.post(&path, &body).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        outsider.post(&path, &body).await.status,
+        StatusCode::NOT_FOUND
+    );
 
     let admin = app.as_user(&team.admin);
     assert_eq!(admin.get(&path).await.status, StatusCode::OK);
@@ -119,7 +133,9 @@ async fn a_revoked_token_stops_working_at_once(db: PgPool) {
     );
     // Gone from the list; revoking again is a 404.
     assert_eq!(
-        dev.get(&team.path("/databases/billing/tokens")).await.json(),
+        dev.get(&team.path("/databases/billing/tokens"))
+            .await
+            .json(),
         json!([])
     );
     assert_eq!(dev.delete(&path).await.status, StatusCode::NOT_FOUND);
@@ -132,10 +148,14 @@ async fn a_token_names_its_purpose(db: PgPool) {
     let app = TestApp::new(db);
     let dev = app.as_user(&team.developer);
     let path = team.path("/databases/billing/tokens");
-    let blank = dev.post(&path, &json!({ "name": "  ", "scope": "push" })).await;
+    let blank = dev
+        .post(&path, &json!({ "name": "  ", "scope": "push" }))
+        .await;
     assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(blank.json()["details"]["name"].is_string());
-    let bad_scope = dev.post(&path, &json!({ "name": "CI", "scope": "admin" })).await;
+    let bad_scope = dev
+        .post(&path, &json!({ "name": "CI", "scope": "admin" }))
+        .await;
     assert_eq!(bad_scope.status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
@@ -148,7 +168,12 @@ async fn a_token_works_for_its_own_database_only(db: PgPool) {
     let app = TestApp::new(db);
 
     let push = app
-        .push(other, &token, Some("application/json"), model_json(&["users"]))
+        .push(
+            other,
+            &token,
+            Some("application/json"),
+            model_json(&["users"]),
+        )
         .await;
     assert_eq!(
         (push.status, push.code().as_str()),
@@ -213,14 +238,22 @@ async fn the_machine_api_takes_tokens_never_cookies(db: PgPool) {
         (signed_in.status, signed_in.code().as_str()),
         (StatusCode::UNAUTHORIZED, "invalid_token")
     );
-    let read = app.as_user(&team.admin).get(&format!("{path}/latest")).await;
+    let read = app
+        .as_user(&team.admin)
+        .get(&format!("{path}/latest"))
+        .await;
     assert_eq!(read.code(), "invalid_token");
     let garbage = app
         .push(id, "not-a-token", Some("application/json"), "{}")
         .await;
     assert_eq!(garbage.code(), "invalid_token");
     let unknown = app
-        .push(id, &format!("rom_{}", token::generate()), Some("application/json"), "{}")
+        .push(
+            id,
+            &format!("rom_{}", token::generate()),
+            Some("application/json"),
+            "{}",
+        )
         .await;
     assert_eq!(unknown.code(), "invalid_token");
 }

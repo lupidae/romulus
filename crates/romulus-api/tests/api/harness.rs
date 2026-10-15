@@ -8,7 +8,7 @@ use axum::{
 use http_body_util::BodyExt;
 use romulus_api::{
     AppState, Config, app,
-    compile::{Code, Compiled, Diagnostic, Span, SqlCompiler},
+    compile::{Code, Compiled, Diagnostic, LineIndex, SqlCompiler},
     csrf,
     domain::{Role, Schema, TokenScope},
     token,
@@ -402,7 +402,7 @@ pub fn fake_compiler() -> SqlCompiler {
                 model: None,
                 diagnostics: vec![
                     Diagnostic::error(Code::SyntaxError, "syntax error at or near \"oops\"")
-                        .with_span(Span::of(sql, at, at + 4)),
+                        .with_span(LineIndex::new(sql).span(sql, at..at + 4)),
                 ],
             };
         }

@@ -75,7 +75,9 @@ pub struct CreatedToken {
 
 /// Whether `value` has the shape of a token this module hands out.
 pub fn is_well_formed(value: &str) -> bool {
-    value.strip_prefix(PREFIX).is_some_and(token::is_well_formed)
+    value
+        .strip_prefix(PREFIX)
+        .is_some_and(token::is_well_formed)
 }
 
 /// The database's live tokens, newest first.
@@ -208,7 +210,9 @@ async fn revoke(
     .await?
     .rows_affected();
     if revoked == 0 {
-        return Err(ApiError::not_found("No such token. It may already be revoked."));
+        return Err(ApiError::not_found(
+            "No such token. It may already be revoked.",
+        ));
     }
     tracing::info!(org = %member.org.slug, database = %slug, token = %id, "API token revoked");
     Ok(StatusCode::NO_CONTENT)
@@ -243,7 +247,8 @@ pub mod scope {
         fn allows(scope: TokenScope) -> bool {
             scope == TokenScope::Full
         }
-        const DENIED: &'static str = "This token can only push versions. Create a token with the full scope to read them.";
+        const DENIED: &'static str =
+            "This token can only push versions. Create a token with the full scope to read them.";
     }
 }
 

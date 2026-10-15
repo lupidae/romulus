@@ -25,7 +25,10 @@ async fn a_developer_creates_a_database_and_every_member_sees_it(db: PgPool) {
     assert_eq!(created["description"], "Invoices and plans");
     assert!(created["latest"].is_null());
 
-    let list = app.as_user(&team.reviewer).get(&team.path("/databases")).await;
+    let list = app
+        .as_user(&team.reviewer)
+        .get(&team.path("/databases"))
+        .await;
     assert_eq!(list.status, StatusCode::OK);
     assert_eq!(list.json().as_array().unwrap().len(), 1);
     let one = app
@@ -44,7 +47,10 @@ async fn the_role_matrix_holds(db: PgPool) {
 
     // Reviewers read, but neither create, edit nor delete.
     let reviewer = app.as_user(&team.reviewer);
-    assert_eq!(reviewer.get(&team.path("/databases")).await.status, StatusCode::OK);
+    assert_eq!(
+        reviewer.get(&team.path("/databases")).await.status,
+        StatusCode::OK
+    );
     assert_eq!(
         reviewer.get(&team.path("/databases/billing")).await.status,
         StatusCode::OK
@@ -61,7 +67,10 @@ async fn the_role_matrix_holds(db: PgPool) {
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        reviewer.delete(&team.path("/databases/billing")).await.status,
+        reviewer
+            .delete(&team.path("/databases/billing"))
+            .await
+            .status,
         StatusCode::FORBIDDEN
     );
 
@@ -90,7 +99,10 @@ async fn the_role_matrix_holds(db: PgPool) {
     );
     assert_eq!(
         admin
-            .patch(&team.path("/databases/other"), &json!({ "name": "Renamed" }))
+            .patch(
+                &team.path("/databases/other"),
+                &json!({ "name": "Renamed" })
+            )
             .await
             .status,
         StatusCode::OK
@@ -111,7 +123,10 @@ async fn bad_input_names_the_field(db: PgPool) {
         (json!({ "name": "x".repeat(101), "slug": "a" }), "name"),
         (json!({ "name": "A", "slug": "Not A Slug" }), "slug"),
         (json!({ "name": "A", "slug": "settings" }), "slug"),
-        (json!({ "name": "A", "slug": "a", "description": "x".repeat(1001) }), "description"),
+        (
+            json!({ "name": "A", "slug": "a", "description": "x".repeat(1001) }),
+            "description",
+        ),
     ] {
         let response = dev.post(&team.path("/databases"), &body).await;
         assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
@@ -121,7 +136,9 @@ async fn bad_input_names_the_field(db: PgPool) {
             response.json()
         );
     }
-    let missing = dev.post(&team.path("/databases"), &json!({ "name": "A" })).await;
+    let missing = dev
+        .post(&team.path("/databases"), &json!({ "name": "A" }))
+        .await;
     assert_eq!(missing.code(), "validation");
 }
 
@@ -146,8 +163,11 @@ async fn slugs_are_unique_among_live_databases_of_one_org(db: PgPool) {
     );
 
     // Renaming onto a taken slug is refused the same way.
-    dev.post(&team.path("/databases"), &json!({ "name": "B", "slug": "b" }))
-        .await;
+    dev.post(
+        &team.path("/databases"),
+        &json!({ "name": "B", "slug": "b" }),
+    )
+    .await;
     let moved = dev
         .patch(&team.path("/databases/b"), &json!({ "slug": "billing" }))
         .await;
@@ -176,7 +196,10 @@ async fn updates_change_only_what_is_given(db: PgPool) {
     .await;
 
     let response = dev
-        .patch(&team.path("/databases/billing"), &json!({ "slug": "payments" }))
+        .patch(
+            &team.path("/databases/billing"),
+            &json!({ "slug": "payments" }),
+        )
         .await;
     assert_eq!(response.status, StatusCode::OK);
     let updated = response.json();
@@ -191,7 +214,10 @@ async fn updates_change_only_what_is_given(db: PgPool) {
     );
 
     let cleared = dev
-        .patch(&team.path("/databases/payments"), &json!({ "description": "" }))
+        .patch(
+            &team.path("/databases/payments"),
+            &json!({ "description": "" }),
+        )
         .await
         .json();
     assert_eq!(cleared["description"], "");
@@ -250,7 +276,11 @@ async fn the_list_shows_each_latest_version_most_recent_first(db: PgPool) {
         assert_eq!(response.status, StatusCode::CREATED);
     }
 
-    let list = app.as_user(&team.reviewer).get(&team.path("/databases")).await.json();
+    let list = app
+        .as_user(&team.reviewer)
+        .get(&team.path("/databases"))
+        .await
+        .json();
     let list = list.as_array().unwrap();
     assert_eq!(list[0]["slug"], "busy");
     assert_eq!(list[0]["latest"]["number"], 2);

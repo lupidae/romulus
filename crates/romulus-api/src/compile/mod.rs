@@ -3,31 +3,37 @@
 //!
 //! [`SqlCompiler`] is the one seam handlers call: [`SqlCompiler::compile`]
 //! answers a [`Compiled`], the canonical model or [`Diagnostic`]s located in
-//! the text. Only the compiler itself failing is an error (503 `unavailable`),
-//! and nothing is ever stored from one. Its backends:
+//! the text. Only the compiler itself failing (`romulus_sandbox::SandboxError`)
+//! is an error, a 503 `unavailable`, and nothing is ever stored from one.
+//! Its backends:
 //!
 //! - the sandbox compiler (`romulus-sandbox`: DDL allowlist, auto-stubs, a
-//!   pool of sandbox databases, results cached by SHA-256), started from
-//!   `Config::sandbox_url`. It lands separately; until it is wired here,
-//!   [`SqlCompiler::unavailable`] stands in;
+//!   pool of sandbox databases, results cached by SHA-256), when
+//!   `Config::sandbox_url` is set. [`SqlCompiler::sandbox`] starts it in the
+//!   background and retries until the sandbox answers, so the API never
+//!   waits on it at startup; compiles answer 503 until it is ready. Uploads
+//!   use `Compiler::compile` (cancel-safe, at most `upload_concurrency` of
+//!   the pool); the per-person rate limit is `rate::Limits::compile`;
 //! - none: every compile answers 503 (no sandbox configured);
 //! - a function, for tests that need a model without a sandbox.
 //!
 //! [`render_sql`] is the SQL of a model that came as remus JSON, and the
 //! [`render`] functions its other formats.
 //!
-//! Drafts (milestone 4) will compile here too, debounced and coalesced per
-//! draft, with the last result cached in `draft_compiles`.
+//! Drafts (milestone 4) will compile here too, with `Compiler::compile_for`
+//! (coalesced per draft) and the last result cached in `draft_compiles`.
 
-pub mod diagnostic;
-
-use std::sync::Arc;
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use remus_core::emit::DiagramOptions;
+pub use romulus_sandbox::{Code, Diagnostic, LineIndex, Position, Severity, Span};
+use romulus_sandbox::{Compiler, SandboxConfig, SandboxError};
 use utoipa_axum::router::OpenApiRouter;
 
-pub use self::diagnostic::{Code, Diagnostic, Position, Severity, Span};
-use crate::{ApiError, ApiResult, AppState, domain::Schema};
+use crate::{ApiError, ApiResult, AppState, Config, domain::Schema, error::Chain};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -43,23 +49,42 @@ pub struct Compiled {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-impl Compiled {
-    pub fn errors(&self) -> impl Iterator<Item = &Diagnostic> {
-        self.diagnostics.iter().filter(|d| d.is_error())
-    }
-}
-
 type CompileFn = dyn Fn(&str) -> Compiled + Send + Sync;
 
 #[derive(Clone)]
 enum Backend {
     None,
+    /// Set once the background start succeeds.
+    Sandbox(Arc<OnceLock<Compiler>>),
     Function(Arc<CompileFn>),
 }
 
 /// Turns SQL into a model. Cheap to clone. See the module documentation.
 #[derive(Clone)]
 pub struct SqlCompiler(Backend);
+
+/// What the health check reports about the compiler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompilerStatus {
+    Ok,
+    /// Configured, not reachable yet (or any more).
+    Unavailable,
+    /// No sandbox configured.
+    Off,
+}
+
+impl CompilerStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Unavailable => "unavailable",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Between start attempts: doubling from 1 s, at most this.
+const MAX_RETRY: Duration = Duration::from_secs(30);
 
 impl SqlCompiler {
     /// No compiler: every compile answers 503 `unavailable`.
@@ -72,15 +97,43 @@ impl SqlCompiler {
         Self(Backend::Function(Arc::new(compile)))
     }
 
-    pub fn is_available(&self) -> bool {
-        !matches!(self.0, Backend::None)
+    /// The sandbox compiler for `config` (none without `sandbox_url`),
+    /// started in the background: see the module documentation. Call from
+    /// within a Tokio runtime.
+    pub fn sandbox(config: &Config) -> Self {
+        let Some(url) = config.sandbox_url.clone() else {
+            return Self::unavailable();
+        };
+        let mut sandbox = SandboxConfig::new(url);
+        sandbox.prefix.clone_from(&config.sandbox_prefix);
+        let ready = Arc::new(OnceLock::new());
+        tokio::spawn(start(sandbox, Arc::clone(&ready)));
+        Self(Backend::Sandbox(ready))
     }
 
     pub async fn compile(&self, sql: &str) -> ApiResult<Compiled> {
         match &self.0 {
-            Backend::None => Err(ApiError::Unavailable(
-                "The SQL compiler is not available right now. Try again in a minute.".into(),
-            )),
+            Backend::None => Err(unavailable()),
+            Backend::Sandbox(ready) => {
+                let compiler = ready.get().ok_or_else(|| {
+                    ApiError::Unavailable(
+                        "The SQL compiler is starting. Try again in a moment.".into(),
+                    )
+                })?;
+                let compilation = compiler.compile(sql).await.map_err(|err| {
+                    tracing::warn!(error = %Chain(&err), "sandbox compile failed");
+                    match err {
+                        SandboxError::Busy(_) => ApiError::Unavailable(
+                            "The SQL compiler is busy. Try again in a moment.".into(),
+                        ),
+                        _ => unavailable(),
+                    }
+                })?;
+                Ok(Compiled {
+                    model: compilation.model,
+                    diagnostics: compilation.diagnostics,
+                })
+            }
             Backend::Function(compile) => {
                 let (compile, sql) = (Arc::clone(compile), sql.to_owned());
                 let mut compiled = tokio::task::spawn_blocking(move || compile(&sql))
@@ -91,16 +144,112 @@ impl SqlCompiler {
             }
         }
     }
+
+    /// A draft's compile: coalesced per `key` (the draft id), never two at
+    /// once for one key, rate-limited per key by the sandbox. A request still
+    /// waiting when a newer one for the same key arrives answers
+    /// [`Rejected::Superseded`]. Without a sandbox (tests), a plain compile.
+    pub async fn compile_for(&self, key: &str, sql: String) -> Result<Compiled, Rejected> {
+        let Backend::Sandbox(ready) = &self.0 else {
+            return Ok(self.compile(&sql).await?);
+        };
+        let compiler = ready.get().ok_or_else(|| {
+            ApiError::Unavailable("The SQL compiler is starting. Try again in a moment.".into())
+        })?;
+        match compiler.compile_for(key, sql).await {
+            Ok(compilation) => Ok(Compiled {
+                model: compilation.model,
+                diagnostics: compilation.diagnostics,
+            }),
+            Err(romulus_sandbox::Rejected::Superseded) => Err(Rejected::Superseded),
+            Err(romulus_sandbox::Rejected::Sandbox(err)) => {
+                tracing::warn!(error = %Chain(&err), key, "sandbox draft compile failed");
+                Err(Rejected::Api(unavailable()))
+            }
+        }
+    }
+
+    /// For `/api/health`: whether compiles can run now. A sandbox compiler
+    /// that lost its prefix to another process (`PrefixInUse`) has stopped
+    /// compiling for good and says so here.
+    pub async fn status(&self) -> CompilerStatus {
+        match &self.0 {
+            Backend::None => CompilerStatus::Off,
+            Backend::Function(_) => CompilerStatus::Ok,
+            Backend::Sandbox(ready) => match ready.get() {
+                None => CompilerStatus::Unavailable,
+                Some(compiler) => match compiler.check_admin().await {
+                    Ok(()) => CompilerStatus::Ok,
+                    Err(err) => {
+                        tracing::warn!(error = %Chain(&err), "health: the sandbox compiler is down");
+                        CompilerStatus::Unavailable
+                    }
+                },
+            },
+        }
+    }
+
+    /// Releases the sandbox pool (and its prefix), on shutdown.
+    pub async fn close(&self) {
+        if let Backend::Sandbox(ready) = &self.0
+            && let Some(compiler) = ready.get()
+        {
+            compiler.close().await;
+        }
+    }
+}
+
+/// Why [`SqlCompiler::compile_for`] returned no compilation.
+#[derive(Debug, thiserror::Error)]
+pub enum Rejected {
+    /// A newer compile of the same key replaced this one before it ran: its
+    /// result is the one to show, drop this request.
+    #[error("superseded by a newer compile of the same key")]
+    Superseded,
+    /// The compiler is unavailable (503), as for [`SqlCompiler::compile`].
+    #[error(transparent)]
+    Api(#[from] ApiError),
+}
+
+fn unavailable() -> ApiError {
+    ApiError::Unavailable(
+        "The SQL compiler is not available right now. Try again in a minute.".into(),
+    )
+}
+
+/// Starts the compiler, retrying while the sandbox is not there yet (or
+/// another process holds the prefix); a version mismatch is for good.
+async fn start(config: SandboxConfig, ready: Arc<OnceLock<Compiler>>) {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        match Compiler::start(config.clone()).await {
+            Ok(compiler) => {
+                tracing::info!(
+                    prefix = %config.prefix,
+                    server = compiler.server_version(),
+                    "sandbox compiler ready"
+                );
+                let _ = ready.set(compiler);
+                return;
+            }
+            Err(err @ SandboxError::VersionMismatch { .. }) => {
+                tracing::error!(error = %Chain(&err), "sandbox compiler disabled");
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(error = %Chain(&err), retry_in = ?wait, "sandbox compiler not ready");
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(MAX_RETRY);
+            }
+        }
+    }
 }
 
 /// The SQL of a model, for versions that came as remus JSON: what their
-/// SQL tab shows and what a draft started from them holds.
-///
-/// `remus_sql::render` for now; `romulus_sandbox::render_sql` (the same,
-/// reordered where remus-sql's output would not compile back) once the
-/// sandbox lands.
+/// SQL tab shows and what a draft started from them holds. remus-sql,
+/// reordered where it would not compile back (`romulus_sandbox::render_sql`).
 pub fn render_sql(schema: &Schema) -> String {
-    remus_sql::render(schema)
+    romulus_sandbox::render_sql(schema)
 }
 
 /// The other formats of a model, as remus emits them.

@@ -159,7 +159,7 @@ pub struct CompileSql {
 }
 
 /// A dry run: whether the SQL compiles, and what it would change.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct CompileReport {
     /// Errors (when it does not compile), then notes, located in the text.
     pub diagnostics: Vec<Diagnostic>,
@@ -375,7 +375,10 @@ async fn upload(
 ) -> ApiResult<(StatusCode, Json<VersionSummary>)> {
     let message = checked_message(body.message.as_deref())?;
     if body.sql.trim().is_empty() {
-        return Err(invalid("sql", "Paste the SQL of the schema, or drop a .sql file."));
+        return Err(invalid(
+            "sql",
+            "Paste the SQL of the schema, or drop a .sql file.",
+        ));
     }
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     state.limits.compile.check(member.user.id)?;
@@ -389,6 +392,8 @@ async fn upload(
         message,
         created_by: Some(member.user.id),
         created_by_token: None,
+        layout: None,
+        expected_base: None,
     };
     match store(&state.db, new, false).await? {
         Stored::Created(version) | Stored::Unchanged(version) => {
@@ -523,7 +528,9 @@ async fn texts(
     )
     .fetch_optional(&db)
     .await?
-    .ok_or_else(|| ApiError::not_found(format!("There is no version {number} of this database.")))?;
+    .ok_or_else(|| {
+        ApiError::not_found(format!("There is no version {number} of this database."))
+    })?;
     let model = Schema::deserialize(&row.model).map_err(ApiError::internal)?;
     // Rendering a few hundred tables takes milliseconds; off the async
     // workers all the same.

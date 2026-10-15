@@ -19,6 +19,11 @@ pub struct Config {
     pub public_url: Url,
     /// `ROMULUS_SANDBOX_URL`: an admin connection to the sandbox Postgres.
     pub sandbox_url: Option<String>,
+    /// `ROMULUS_SANDBOX_PREFIX`: names of this process's sandbox roles and
+    /// databases (`<prefix>_<n>`), `romulus_sandbox` by default. One process
+    /// per prefix: a second API on the same sandbox (Playwright's) needs its
+    /// own.
+    pub sandbox_prefix: String,
     /// `ROMULUS_OIDC_*`: `None` until the Zitadel provisioner has run.
     pub oidc: Option<OidcConfig>,
     /// `ROMULUS_SESSION_COOKIE`: per stack, because cookies are not
@@ -84,6 +89,7 @@ impl Config {
             api_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             public_url: Url::parse("http://localhost:41000").expect("valid URL"),
             sandbox_url: None,
+            sandbox_prefix: "romulus_sandbox".to_owned(),
             oidc: None,
             session_cookie: "romulus_session".to_owned(),
             dev_signin: false,
@@ -156,11 +162,26 @@ impl Config {
             return Err(ConfigError::DevSigninNotLoopbackAddr(api_addr));
         }
 
+        let sandbox_prefix =
+            get("ROMULUS_SANDBOX_PREFIX").unwrap_or_else(|| "romulus_sandbox".to_owned());
+        let identifier = sandbox_prefix.len() <= 40
+            && sandbox_prefix.starts_with(|c: char| c.is_ascii_lowercase())
+            && sandbox_prefix
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        if !identifier {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_SANDBOX_PREFIX",
+                reason: "use at most 40 lowercase letters, digits and underscores, starting with a letter".to_owned(),
+            });
+        }
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             api_addr,
             public_url,
             sandbox_url: get("ROMULUS_SANDBOX_URL"),
+            sandbox_prefix,
             oidc,
             session_cookie: get("ROMULUS_SESSION_COOKIE")
                 .unwrap_or_else(|| "romulus_session".to_owned()),
@@ -287,6 +308,19 @@ mod tests {
                 ("ROMULUS_DEV_SIGNIN", "1"),
             ];
             assert!(config(&vars).unwrap().dev_signin, "{public}");
+        }
+    }
+
+    #[test]
+    fn the_sandbox_prefix_is_an_identifier() {
+        assert_eq!(config(&BASE).unwrap().sandbox_prefix, "romulus_sandbox");
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SANDBOX_PREFIX", "romulus_e2e"));
+        assert_eq!(config(&vars).unwrap().sandbox_prefix, "romulus_e2e");
+        for bad in ["Romulus", "1st", "a-b", "x; drop", &"a".repeat(41)] {
+            let mut vars = BASE.to_vec();
+            vars.push(("ROMULUS_SANDBOX_PREFIX", bad));
+            assert!(config(&vars).is_err(), "{bad}");
         }
     }
 

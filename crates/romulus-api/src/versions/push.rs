@@ -181,6 +181,8 @@ async fn push(
         message,
         created_by: None,
         created_by_token: Some(token.token_id),
+        layout: None,
+        expected_base: None,
     };
     Ok(match store(&state.db, new, true).await? {
         Stored::Created(version) => (
@@ -265,9 +267,15 @@ mod tests {
     fn curl_defaults_are_sniffed() {
         let format = |t, body: &str| format(&typed(t), body.as_bytes()).ok();
         let curl = Some("application/x-www-form-urlencoded");
-        assert_eq!(format(curl, "\n  {\"remus_version\": 1}"), Some(Format::Json));
+        assert_eq!(
+            format(curl, "\n  {\"remus_version\": 1}"),
+            Some(Format::Json)
+        );
         assert_eq!(format(curl, "CREATE TABLE t ();"), Some(Format::Sql));
         assert_eq!(format(None, "{}"), Some(Format::Json));
-        assert_eq!(format(Some("application/octet-stream"), "--"), Some(Format::Sql));
+        assert_eq!(
+            format(Some("application/octet-stream"), "--"),
+            Some(Format::Sql)
+        );
     }
 }

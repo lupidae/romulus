@@ -36,7 +36,10 @@ pub struct Limiter<K> {
 impl<K: Hash + Eq> Limiter<K> {
     /// `burst` requests at once, then one per `refill`.
     pub fn new(burst: u32, refill: Duration) -> Self {
-        assert!(burst > 0 && !refill.is_zero(), "a limiter must allow something");
+        assert!(
+            burst > 0 && !refill.is_zero(),
+            "a limiter must allow something"
+        );
         Self {
             burst,
             refill,
@@ -54,8 +57,9 @@ impl<K: Hash + Eq> Limiter<K> {
         let burst = f64::from(self.burst);
         let refill = self.refill.as_secs_f64();
         let mut buckets = self.buckets.lock().unwrap_or_else(PoisonError::into_inner);
-        let level =
-            |b: &Bucket| (b.tokens + now.saturating_duration_since(b.at).as_secs_f64() / refill).min(burst);
+        let level = |b: &Bucket| {
+            (b.tokens + now.saturating_duration_since(b.at).as_secs_f64() / refill).min(burst)
+        };
         if buckets.len() >= MAX_TRACKED {
             buckets.retain(|_, bucket| level(bucket) < burst);
         }

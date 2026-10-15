@@ -179,7 +179,13 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
     Ok(rows
         .into_iter()
         .map(|r| {
-            let latest = match (r.v_id, r.v_number, r.v_origin, r.v_source_kind, r.v_created_at) {
+            let latest = match (
+                r.v_id,
+                r.v_number,
+                r.v_origin,
+                r.v_source_kind,
+                r.v_created_at,
+            ) {
                 (Some(id), Some(number), Some(origin), Some(source_kind), Some(created_at)) => {
                     Some(VersionSummary {
                         id,
@@ -188,7 +194,12 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                         source_kind,
                         message: r.v_message,
                         created_at,
-                        author: Author::from_columns(r.user_id, r.user_name, r.token_id, r.token_name),
+                        author: Author::from_columns(
+                            r.user_id,
+                            r.user_name,
+                            r.token_id,
+                            r.token_name,
+                        ),
                     })
                 }
                 _ => None,

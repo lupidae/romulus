@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE databases\n         SET name = coalesce($3, name), slug = coalesce($4, slug), description = coalesce($5, description)\n         WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL\n         RETURNING slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "slug"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3385639d80a659796d03e59ff3d00bddc9bf88bbbf3f091a154776b15923778c"
+}

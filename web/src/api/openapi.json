@@ -144,6 +144,219 @@
         }
       }
     },
+    "/api/databases/{database_id}/versions": {
+      "post": {
+        "tags": [
+          "push"
+        ],
+        "summary": "Pushes a version: remus JSON or SQL. See the module documentation.",
+        "operationId": "push_version",
+        "parameters": [
+          {
+            "name": "database_id",
+            "in": "path",
+            "description": "The database's id (its settings show it)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "message",
+            "in": "query",
+            "description": "What changed, in a line, e.g. the commit subject.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "remus JSON (`remus -f json`), or SQL DDL",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/sql": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Unchanged: nothing stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Stored as a new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`wrong_database`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_schema`, `compile_failed` (`details.diagnostics`) or `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`, with `Retry-After`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: SQL could not be compiled now; nothing stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/databases/{database_id}/versions/{version}": {
+      "get": {
+        "tags": [
+          "push"
+        ],
+        "summary": "Reads a version back: by number, or the latest. Tokens with the `full`\nscope only.",
+        "operationId": "read_version",
+        "parameters": [
+          {
+            "name": "database_id",
+            "in": "path",
+            "description": "The database's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "A version number, or `latest`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`wrong_database`, `insufficient_scope`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
@@ -492,6 +705,873 @@
             }
           },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "The organization's databases, most recently active first.",
+        "operationId": "list_databases",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Database"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such organization, or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Creates a database (with no version yet). Developers and admins.",
+        "operationId": "create_database",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDatabase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Database"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`slug_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`, `details` names the field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "One database.",
+        "operationId": "get_database",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Database"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such database (or organization)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Deletes a database: it disappears from the organization, its versions\nare kept but unreachable, its API tokens stop working, and its slug can be\nused again. Developers and admins.",
+        "operationId": "delete_database",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Renames a database, moves it to another slug, or changes its\ndescription. Developers and admins.",
+        "operationId": "update_database",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDatabase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Database"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`slug_taken`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/compile": {
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Compiles SQL without storing anything: its errors, or what it would\nchange against the latest version. Developers and admins.",
+        "operationId": "compile_sql",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompileSql"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompileReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: the compiler is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/tokens": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "The database's live tokens, newest first.",
+        "operationId": "list_api_tokens",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiToken"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Creates a token and answers its secret, once.",
+        "operationId": "create_api_token",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Revokes a token: it stops working at once.",
+        "operationId": "revoke_api_token",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The token's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "The database's versions, newest first.",
+        "operationId": "list_versions",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Versions numbered below this (from `next_before`).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 100; 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Uploads SQL as the next version. Developers and admins.",
+        "operationId": "upload_version",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadSql"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`compile_failed` (`details.diagnostics`: `Diagnostic[]`), or `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: the compiler is down; nothing was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "One version: its model, source, layout and author.",
+        "operationId": "get_version",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The version's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/texts": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "One version's model as SQL, JSON, DBML and Mermaid.",
+        "operationId": "get_version_texts",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The version's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionTexts"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -871,6 +1951,48 @@
           }
         }
       },
+      "ApiToken": {
+        "type": "object",
+        "description": "An API token, without its secret.",
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who created it; `null` once their account is gone."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last request it authenticated; `null` if never used."
+          },
+          "name": {
+            "type": "string",
+            "description": "What it is for: \"GitHub Actions\", \"remus on prod\"."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TokenScope"
+          }
+        }
+      },
       "AuthMethods": {
         "type": "object",
         "required": [
@@ -888,6 +2010,57 @@
           }
         }
       },
+      "Author": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "token"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Who made a version: a person (uploads, drafts) or an API token (pushes)."
+      },
       "ChangeRole": {
         "type": "object",
         "required": [
@@ -896,6 +2069,106 @@
         "properties": {
           "role": {
             "$ref": "#/components/schemas/Role"
+          }
+        }
+      },
+      "Changes": {
+        "type": "object",
+        "required": [
+          "summary",
+          "unchanged"
+        ],
+        "properties": {
+          "against": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it was compared with; `null` when there is none yet (the\nsummary then counts what the SQL creates)."
+          },
+          "summary": {
+            "type": "string",
+            "description": "`\"3 tables added, 1 changed; 1 enum changed\"`, or `\"no changes\"`."
+          },
+          "unchanged": {
+            "type": "boolean",
+            "description": "The model is the latest version's: uploading it would add a version\nidentical to it."
+          }
+        }
+      },
+      "Code": {
+        "type": "string",
+        "description": "Why a [`Diagnostic`] was raised. Serialised in `snake_case`.",
+        "enum": [
+          "syntax_error",
+          "not_allowed",
+          "function_not_allowed",
+          "extension_not_available",
+          "too_large",
+          "too_many_statements",
+          "sql",
+          "timeout",
+          "unavailable",
+          "provided_by_extension"
+        ]
+      },
+      "CompileReport": {
+        "type": "object",
+        "description": "A dry run: whether the SQL compiles, and what it would change.",
+        "required": [
+          "diagnostics"
+        ],
+        "properties": {
+          "changes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Changes",
+                "description": "When it compiles: the difference with the latest version."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "description": "Errors (when it does not compile), then notes, located in the text."
+          }
+        }
+      },
+      "CompileSql": {
+        "type": "object",
+        "required": [
+          "sql"
+        ],
+        "properties": {
+          "sql": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateDatabase": {
+        "type": "object",
+        "required": [
+          "name",
+          "slug"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "At most 1000 characters."
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters."
+          },
+          "slug": {
+            "type": "string",
+            "description": "Lowercase letters, digits and single hyphens, at most 63 characters,\nnot one of the organization's own pages."
           }
         }
       },
@@ -931,6 +2204,22 @@
           }
         }
       },
+      "CreateToken": {
+        "type": "object",
+        "required": [
+          "name",
+          "scope"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/TokenScope"
+          }
+        }
+      },
       "CreatedInvitation": {
         "type": "object",
         "required": [
@@ -944,6 +2233,23 @@
           "url": {
             "type": "string",
             "description": "The one-time link to send to the invitee. Shown only now."
+          }
+        }
+      },
+      "CreatedToken": {
+        "type": "object",
+        "description": "A token just created: the only time its secret is shown.",
+        "required": [
+          "token",
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "`rom_…`, for `Authorization: Bearer`. Not stored: copy it now."
+          },
+          "token": {
+            "$ref": "#/components/schemas/ApiToken"
           }
         }
       },
@@ -973,6 +2279,122 @@
           }
         }
       },
+      "Database": {
+        "type": "object",
+        "description": "A schema kept in romulus, as its organization's members see it.",
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "created_at",
+          "updated_at",
+          "last_activity_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string",
+            "description": "Empty when none was given."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When something last happened: the newest version, or an edit."
+          },
+          "latest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VersionSummary",
+                "description": "The newest version (its `number` is also how many there are);\n`null` before the first upload or push."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "Its address: `/app/<org>/<slug>`."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Diagnostic": {
+        "type": "object",
+        "description": "One message about the SQL, located in the text the user wrote (never in\nthe prepared script the sandbox ran).",
+        "required": [
+          "severity",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Code",
+            "description": "Stable: the web app branches on it."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres's `DETAIL`, or ours."
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres's `HINT`, or ours: what to do about it."
+          },
+          "message": {
+            "type": "string",
+            "description": "One sentence, Postgres's own message for [`Code::Sql`]."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "span": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Span",
+                "description": "Where in the text. `None` only for problems with the whole text (too\nlarge, sandbox unavailable)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sqlstate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SQLSTATE, for [`Code::Sql`] and [`Code::Timeout`]."
+          },
+          "statement": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Index of the statement it is about, in [`crate::ParsedSql::statements`]\norder when the text parsed, else in source order.",
+            "minimum": 0
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The body of every error response.\n\n`code` is stable and machine-readable (the web app switches on it);\n`message` is for people and may change.",
@@ -998,12 +2420,17 @@
         "required": [
           "status",
           "database",
+          "sandbox",
           "version"
         ],
         "properties": {
           "database": {
             "type": "string",
             "description": "`ok` when a query round-trips."
+          },
+          "sandbox": {
+            "type": "string",
+            "description": "The SQL compiler (uploads, SQL pushes): `ok`, `unavailable` (starting,\nor the sandbox is down) or `off` (no sandbox configured). Not part of\nthe status: the rest of the API works without it."
           },
           "status": {
             "type": "string",
@@ -1211,6 +2638,49 @@
           }
         }
       },
+      "Position": {
+        "type": "object",
+        "description": "A 1-based line and column. Columns count Unicode scalar values, which is\nwhat an editor's \"Ln 3, Col 7\" shows for text without combining marks.",
+        "required": [
+          "line",
+          "column"
+        ],
+        "properties": {
+          "column": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "PushResult": {
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/PushStatus"
+          },
+          "version": {
+            "$ref": "#/components/schemas/VersionSummary",
+            "description": "The version created, or the latest one when unchanged."
+          }
+        }
+      },
+      "PushStatus": {
+        "type": "string",
+        "enum": [
+          "created",
+          "unchanged"
+        ]
+      },
       "Role": {
         "type": "string",
         "description": "A member's role in an organization (`member_role`).",
@@ -1218,6 +2688,13 @@
           "admin",
           "developer",
           "reviewer"
+        ]
+      },
+      "Severity": {
+        "type": "string",
+        "enum": [
+          "error",
+          "info"
         ]
       },
       "SignedOut": {
@@ -1229,6 +2706,88 @@
           "redirect_url": {
             "type": "string",
             "description": "Where the browser goes next: the IdP's logout (which comes back to\nthe sign-in page), or the sign-in page itself."
+          }
+        }
+      },
+      "SourceKind": {
+        "type": "string",
+        "description": "What a version's `source` holds (`version_source_kind`).",
+        "enum": [
+          "sql",
+          "remus_json"
+        ]
+      },
+      "Span": {
+        "type": "object",
+        "description": "A range of a SQL text, `start..end`, in bytes, UTF-16 code units and\nline/column.",
+        "required": [
+          "start",
+          "end",
+          "utf16_start",
+          "utf16_end",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "description": "Byte offset just past the last character.",
+            "minimum": 0
+          },
+          "from": {
+            "$ref": "#/components/schemas/Position",
+            "description": "Where `start` is."
+          },
+          "start": {
+            "type": "integer",
+            "description": "Byte offset of the first character.",
+            "minimum": 0
+          },
+          "to": {
+            "$ref": "#/components/schemas/Position",
+            "description": "Where `end` is (the position just past the range)."
+          },
+          "utf16_end": {
+            "type": "integer",
+            "description": "`end` in UTF-16 code units.",
+            "minimum": 0
+          },
+          "utf16_start": {
+            "type": "integer",
+            "description": "`start` in UTF-16 code units: a JavaScript string index.",
+            "minimum": 0
+          }
+        }
+      },
+      "TokenScope": {
+        "type": "string",
+        "description": "What an API token may do (`api_token_scope`).",
+        "enum": [
+          "push",
+          "full"
+        ]
+      },
+      "UpdateDatabase": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Changing it changes every link to the database (pushes use its id)."
           }
         }
       },
@@ -1247,6 +2806,195 @@
               "null"
             ],
             "description": "Changing it changes every link to the organization."
+          }
+        }
+      },
+      "UploadSql": {
+        "type": "object",
+        "required": [
+          "sql"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed, in a line (at most 1000 characters)."
+          },
+          "sql": {
+            "type": "string",
+            "description": "The schema as SQL DDL, at most 1 MiB."
+          }
+        }
+      },
+      "VersionDetail": {
+        "type": "object",
+        "description": "One version, whole.",
+        "required": [
+          "id",
+          "number",
+          "origin",
+          "source_kind",
+          "created_at",
+          "model",
+          "source",
+          "layout"
+        ],
+        "properties": {
+          "author": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Author"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "layout": {
+            "type": "object",
+            "description": "Table positions and groups, keyed by qualified name (`{}` until a\ndraft arranges them)."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "object",
+            "description": "The remus model (`remus_core::Schema` as JSON), canonical."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/VersionOrigin"
+          },
+          "source": {
+            "type": "string",
+            "description": "What was uploaded or pushed, verbatim: SQL, or remus JSON."
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          }
+        }
+      },
+      "VersionOrigin": {
+        "type": "string",
+        "description": "How a version came to be (`version_origin`).",
+        "enum": [
+          "upload",
+          "push",
+          "draft"
+        ]
+      },
+      "VersionPage": {
+        "type": "object",
+        "description": "A page of versions, newest first.",
+        "required": [
+          "versions"
+        ],
+        "properties": {
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Pass as `before` for the next page; `null` on the last one."
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VersionSummary"
+            }
+          }
+        }
+      },
+      "VersionSummary": {
+        "type": "object",
+        "description": "A version in a list.",
+        "required": [
+          "id",
+          "number",
+          "origin",
+          "source_kind",
+          "created_at"
+        ],
+        "properties": {
+          "author": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Author",
+                "description": "`null` once the person's account or the token is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What changed, in a line; `null` when none was given."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1, 2, 3… per database, without gaps."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/VersionOrigin"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          }
+        }
+      },
+      "VersionTexts": {
+        "type": "object",
+        "description": "A version's model in every format the viewer shows.",
+        "required": [
+          "sql",
+          "json",
+          "dbml",
+          "mermaid"
+        ],
+        "properties": {
+          "dbml": {
+            "type": "string"
+          },
+          "json": {
+            "type": "string",
+            "description": "Pretty-printed remus JSON."
+          },
+          "mermaid": {
+            "type": "string"
+          },
+          "sql": {
+            "type": "string",
+            "description": "The source for SQL versions; rendered from the model for JSON ones."
           }
         }
       }

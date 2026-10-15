@@ -82,6 +82,43 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/databases/{database_id}/versions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Pushes a version: remus JSON or SQL. See the module documentation. */
+    post: operations["push_version"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/databases/{database_id}/versions/{version}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Reads a version back: by number, or the latest. Tokens with the `full`
+     *     scope only.
+     */
+    get: operations["read_version"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/health": {
     parameters: {
       query?: never;
@@ -192,6 +229,157 @@ export interface paths {
     patch: operations["update_org"];
     trace?: never;
   };
+  "/api/orgs/{org}/databases": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The organization's databases, most recently active first. */
+    get: operations["list_databases"];
+    put?: never;
+    /** Creates a database (with no version yet). Developers and admins. */
+    post: operations["create_database"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One database. */
+    get: operations["get_database"];
+    put?: never;
+    post?: never;
+    /**
+     * Deletes a database: it disappears from the organization, its versions
+     *     are kept but unreachable, its API tokens stop working, and its slug can be
+     *     used again. Developers and admins.
+     */
+    delete: operations["delete_database"];
+    options?: never;
+    head?: never;
+    /**
+     * Renames a database, moves it to another slug, or changes its
+     *     description. Developers and admins.
+     */
+    patch: operations["update_database"];
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/compile": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Compiles SQL without storing anything: its errors, or what it would
+     *     change against the latest version. Developers and admins.
+     */
+    post: operations["compile_sql"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/tokens": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The database's live tokens, newest first. */
+    get: operations["list_api_tokens"];
+    put?: never;
+    /** Creates a token and answers its secret, once. */
+    post: operations["create_api_token"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/tokens/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revokes a token: it stops working at once. */
+    delete: operations["revoke_api_token"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The database's versions, newest first. */
+    get: operations["list_versions"];
+    put?: never;
+    /** Uploads SQL as the next version. Developers and admins. */
+    post: operations["upload_version"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One version: its model, source, layout and author. */
+    get: operations["get_version"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/texts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One version's model as SQL, JSON, DBML and Mermaid. */
+    get: operations["get_version_texts"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/invitations": {
     parameters: {
       query?: never;
@@ -282,14 +470,97 @@ export interface components {
       already_member: boolean;
       org: components["schemas"]["Org"];
     };
+    /** @description An API token, without its secret. */
+    ApiToken: {
+      /** Format: date-time */
+      created_at: string;
+      /** @description Who created it; `null` once their account is gone. */
+      created_by?: string | null;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: date-time
+       * @description The last request it authenticated; `null` if never used.
+       */
+      last_used_at?: string | null;
+      /** @description What it is for: "GitHub Actions", "remus on prod". */
+      name: string;
+      scope: components["schemas"]["TokenScope"];
+    };
     AuthMethods: {
       /** @description The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`). */
       dev_signin: boolean;
       /** @description Single sign-on is configured (Zitadel is provisioned). */
       sso: boolean;
     };
+    /** @description Who made a version: a person (uploads, drafts) or an API token (pushes). */
+    Author:
+      | {
+          /** Format: uuid */
+          id: string;
+          /** @enum {string} */
+          kind: "user";
+          name: string;
+        }
+      | {
+          /** Format: uuid */
+          id: string;
+          /** @enum {string} */
+          kind: "token";
+          name: string;
+        };
     ChangeRole: {
       role: components["schemas"]["Role"];
+    };
+    Changes: {
+      /**
+       * Format: int32
+       * @description The version it was compared with; `null` when there is none yet (the
+       *     summary then counts what the SQL creates).
+       */
+      against?: number | null;
+      /** @description `"3 tables added, 1 changed; 1 enum changed"`, or `"no changes"`. */
+      summary: string;
+      /**
+       * @description The model is the latest version's: uploading it would add a version
+       *     identical to it.
+       */
+      unchanged: boolean;
+    };
+    /**
+     * @description Why a [`Diagnostic`] was raised. Serialised in `snake_case`.
+     * @enum {string}
+     */
+    Code:
+      | "syntax_error"
+      | "not_allowed"
+      | "function_not_allowed"
+      | "extension_not_available"
+      | "too_large"
+      | "too_many_statements"
+      | "sql"
+      | "timeout"
+      | "unavailable"
+      | "provided_by_extension";
+    /** @description A dry run: whether the SQL compiles, and what it would change. */
+    CompileReport: {
+      changes?: components["schemas"]["Changes"] | null;
+      /** @description Errors (when it does not compile), then notes, located in the text. */
+      diagnostics: components["schemas"]["Diagnostic"][];
+    };
+    CompileSql: {
+      sql: string;
+    };
+    CreateDatabase: {
+      /** @description At most 1000 characters. */
+      description?: string;
+      /** @description 1 to 100 characters. */
+      name: string;
+      /**
+       * @description Lowercase letters, digits and single hyphens, at most 63 characters,
+       *     not one of the organization's own pages.
+       */
+      slug: string;
     };
     CreateInvitation: {
       email: string;
@@ -304,10 +575,21 @@ export interface components {
        */
       slug: string;
     };
+    CreateToken: {
+      /** @description 1 to 100 characters. */
+      name: string;
+      scope: components["schemas"]["TokenScope"];
+    };
     CreatedInvitation: {
       invitation: components["schemas"]["Invitation"];
       /** @description The one-time link to send to the invitee. Shown only now. */
       url: string;
+    };
+    /** @description A token just created: the only time its secret is shown. */
+    CreatedToken: {
+      /** @description `rom_…`, for `Authorization: Bearer`. Not stored: copy it now. */
+      secret: string;
+      token: components["schemas"]["ApiToken"];
     };
     /**
      * @description The signed-in user, from the session cookie. Every endpoint that needs a
@@ -326,6 +608,49 @@ export interface components {
       id: string;
       name: string;
     };
+    /** @description A schema kept in romulus, as its organization's members see it. */
+    Database: {
+      /** Format: date-time */
+      created_at: string;
+      /** @description Empty when none was given. */
+      description: string;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: date-time
+       * @description When something last happened: the newest version, or an edit.
+       */
+      last_activity_at: string;
+      latest?: components["schemas"]["VersionSummary"] | null;
+      name: string;
+      /** @description Its address: `/app/<org>/<slug>`. */
+      slug: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    /**
+     * @description One message about the SQL, located in the text the user wrote (never in
+     *     the prepared script the sandbox ran).
+     */
+    Diagnostic: {
+      /** @description Stable: the web app branches on it. */
+      code: components["schemas"]["Code"];
+      /** @description Postgres's `DETAIL`, or ours. */
+      detail?: string | null;
+      /** @description Postgres's `HINT`, or ours: what to do about it. */
+      hint?: string | null;
+      /** @description One sentence, Postgres's own message for [`Code::Sql`]. */
+      message: string;
+      severity: components["schemas"]["Severity"];
+      span?: components["schemas"]["Span"] | null;
+      /** @description The SQLSTATE, for [`Code::Sql`] and [`Code::Timeout`]. */
+      sqlstate?: string | null;
+      /**
+       * @description Index of the statement it is about, in [`crate::ParsedSql::statements`]
+       *     order when the text parsed, else in source order.
+       */
+      statement?: number | null;
+    };
     /**
      * @description The body of every error response.
      *
@@ -342,6 +667,12 @@ export interface components {
     Health: {
       /** @description `ok` when a query round-trips. */
       database: string;
+      /**
+       * @description The SQL compiler (uploads, SQL pushes): `ok`, `unavailable` (starting,
+       *     or the sandbox is down) or `off` (no sandbox configured). Not part of
+       *     the status: the rest of the API works without it.
+       */
+      sandbox: string;
       /** @description Always `ok` in a 200. */
       status: string;
       /** @description The API's crate version. */
@@ -417,10 +748,29 @@ export interface components {
       name: string;
     };
     /**
+     * @description A 1-based line and column. Columns count Unicode scalar values, which is
+     *     what an editor's "Ln 3, Col 7" shows for text without combining marks.
+     */
+    Position: {
+      /** Format: int32 */
+      column: number;
+      /** Format: int32 */
+      line: number;
+    };
+    PushResult: {
+      status: components["schemas"]["PushStatus"];
+      /** @description The version created, or the latest one when unchanged. */
+      version: components["schemas"]["VersionSummary"];
+    };
+    /** @enum {string} */
+    PushStatus: "created" | "unchanged";
+    /**
      * @description A member's role in an organization (`member_role`).
      * @enum {string}
      */
     Role: "admin" | "developer" | "reviewer";
+    /** @enum {string} */
+    Severity: "error" | "info";
     SignedOut: {
       /**
        * @description Where the browser goes next: the IdP's logout (which comes back to
@@ -428,10 +778,112 @@ export interface components {
        */
       redirect_url: string;
     };
+    /**
+     * @description What a version's `source` holds (`version_source_kind`).
+     * @enum {string}
+     */
+    SourceKind: "sql" | "remus_json";
+    /**
+     * @description A range of a SQL text, `start..end`, in bytes, UTF-16 code units and
+     *     line/column.
+     */
+    Span: {
+      /** @description Byte offset just past the last character. */
+      end: number;
+      /** @description Where `start` is. */
+      from: components["schemas"]["Position"];
+      /** @description Byte offset of the first character. */
+      start: number;
+      /** @description Where `end` is (the position just past the range). */
+      to: components["schemas"]["Position"];
+      /** @description `end` in UTF-16 code units. */
+      utf16_end: number;
+      /** @description `start` in UTF-16 code units: a JavaScript string index. */
+      utf16_start: number;
+    };
+    /**
+     * @description What an API token may do (`api_token_scope`).
+     * @enum {string}
+     */
+    TokenScope: "push" | "full";
+    UpdateDatabase: {
+      description?: string | null;
+      name?: string | null;
+      /** @description Changing it changes every link to the database (pushes use its id). */
+      slug?: string | null;
+    };
     UpdateOrg: {
       name?: string | null;
       /** @description Changing it changes every link to the organization. */
       slug?: string | null;
+    };
+    UploadSql: {
+      /** @description What changed, in a line (at most 1000 characters). */
+      message?: string | null;
+      /** @description The schema as SQL DDL, at most 1 MiB. */
+      sql: string;
+    };
+    /** @description One version, whole. */
+    VersionDetail: {
+      author?: components["schemas"]["Author"] | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      /**
+       * @description Table positions and groups, keyed by qualified name (`{}` until a
+       *     draft arranges them).
+       */
+      layout: Record<string, never>;
+      message?: string | null;
+      /** @description The remus model (`remus_core::Schema` as JSON), canonical. */
+      model: Record<string, never>;
+      /** Format: int32 */
+      number: number;
+      origin: components["schemas"]["VersionOrigin"];
+      /** @description What was uploaded or pushed, verbatim: SQL, or remus JSON. */
+      source: string;
+      source_kind: components["schemas"]["SourceKind"];
+    };
+    /**
+     * @description How a version came to be (`version_origin`).
+     * @enum {string}
+     */
+    VersionOrigin: "upload" | "push" | "draft";
+    /** @description A page of versions, newest first. */
+    VersionPage: {
+      /**
+       * Format: int32
+       * @description Pass as `before` for the next page; `null` on the last one.
+       */
+      next_before?: number | null;
+      versions: components["schemas"]["VersionSummary"][];
+    };
+    /** @description A version in a list. */
+    VersionSummary: {
+      author?: components["schemas"]["Author"] | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      /** @description What changed, in a line; `null` when none was given. */
+      message?: string | null;
+      /**
+       * Format: int32
+       * @description 1, 2, 3… per database, without gaps.
+       */
+      number: number;
+      origin: components["schemas"]["VersionOrigin"];
+      source_kind: components["schemas"]["SourceKind"];
+    };
+    /** @description A version's model in every format the viewer shows. */
+    VersionTexts: {
+      dbml: string;
+      /** @description Pretty-printed remus JSON. */
+      json: string;
+      mermaid: string;
+      /** @description The source for SQL versions; rendered from the model for JSON ones. */
+      sql: string;
     };
   };
   responses: never;
@@ -543,6 +995,161 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AuthMethods"];
+        };
+      };
+    };
+  };
+  push_version: {
+    parameters: {
+      query?: {
+        /** @description What changed, in a line, e.g. the commit subject. */
+        message?: string;
+      };
+      header?: never;
+      path: {
+        /** @description The database's id (its settings show it) */
+        database_id: string;
+      };
+      cookie?: never;
+    };
+    /** @description remus JSON (`remus -f json`), or SQL DDL */
+    requestBody: {
+      content: {
+        "application/json": string;
+        "application/sql": string;
+        "text/plain": string;
+      };
+    };
+    responses: {
+      /** @description Unchanged: nothing stored */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PushResult"];
+        };
+      };
+      /** @description Stored as a new version */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PushResult"];
+        };
+      };
+      /** @description `invalid_token` */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `wrong_database` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `payload_too_large` */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `unsupported_media_type` */
+      415: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `invalid_schema`, `compile_failed` (`details.diagnostics`) or `validation` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited`, with `Retry-After` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `unavailable`: SQL could not be compiled now; nothing stored */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  read_version: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The database's id */
+        database_id: string;
+        /** @description A version number, or `latest` */
+        version: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionDetail"];
+        };
+      };
+      /** @description `invalid_token` */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `wrong_database`, `insufficient_scope` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
     };
@@ -832,6 +1439,594 @@ export interface operations {
         };
       };
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_databases: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Database"][];
+        };
+      };
+      /** @description No such organization, or not a member */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_database: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateDatabase"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Database"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `slug_taken` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`, `details` names the field */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_database: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Database"];
+        };
+      };
+      /** @description No such database (or organization) */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_database: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deleted */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  update_database: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateDatabase"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Database"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `slug_taken` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  compile_sql: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CompileSql"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CompileReport"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `unavailable`: the compiler is down */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_api_tokens: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiToken"][];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_api_token: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateToken"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreatedToken"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  revoke_api_token: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The token's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such live token */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_versions: {
+    parameters: {
+      query?: {
+        /** @description Versions numbered below this (from `next_before`). */
+        before?: number;
+        /** @description 1 to 100; 50 by default. */
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionPage"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  upload_version: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UploadSql"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionSummary"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `compile_failed` (`details.diagnostics`: `Diagnostic[]`), or `validation` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `unavailable`: the compiler is down; nothing was stored */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_version: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The version's number */
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionDetail"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_version_texts: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The version's number */
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionTexts"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

@@ -51,7 +51,15 @@ mod tests {
 
     #[test]
     fn malformed_slugs_are_refused() {
-        for slug in ["", "Billing", "billing_db", "-a", "a-", "a--b", &"a".repeat(64)] {
+        for slug in [
+            "",
+            "Billing",
+            "billing_db",
+            "-a",
+            "a-",
+            "a--b",
+            &"a".repeat(64),
+        ] {
             assert!(problem(slug).is_some(), "{slug:?}");
         }
     }

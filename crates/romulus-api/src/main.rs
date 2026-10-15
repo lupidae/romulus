@@ -5,7 +5,9 @@ use std::{
     process::ExitCode,
 };
 
-use romulus_api::{AppState, Config, app, config::ConfigError, db, error::Chain};
+use romulus_api::{
+    AppState, Config, app, compile::SqlCompiler, config::ConfigError, db, error::Chain,
+};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -129,11 +131,16 @@ async fn serve() -> Result<(), MainError> {
         config.public_url
     );
     // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
-    let app = app(AppState::new(pool, config))
+    let compiler = SqlCompiler::sandbox(&config);
+    if config.sandbox_url.is_none() {
+        tracing::warn!("no sandbox configured (ROMULUS_SANDBOX_URL): SQL uploads answer 503");
+    }
+    let app = app(AppState::new(pool, config).with_compiler(compiler.clone()))
         .into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    compiler.close().await;
     tracing::info!("shut down cleanly");
     Ok(())
 }

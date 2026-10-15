@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::{VersionSummary, summary};
 use crate::{
-    ApiError, ApiResult,
+    ApiError,
     databases::no_such_database,
     domain::{SourceKind, VersionOrigin},
 };
@@ -26,8 +26,58 @@ pub struct NewVersion {
     pub message: Option<String>,
     pub created_by: Option<Uuid>,
     pub created_by_token: Option<Uuid>,
+    /// `None`: the previous version's layout (`{}` for the first). `Some`:
+    /// this one (a draft publishes its layout and groups).
+    pub layout: Option<serde_json::Value>,
+    /// `Some(base)`: only if the latest version is still `base` (`None`:
+    /// still no version), checked under the same lock as the number;
+    /// otherwise [`StoreError::StaleBase`]. A draft publishes this way, so
+    /// it never silently overwrites a version published meanwhile.
+    pub expected_base: Option<Option<Uuid>>,
 }
 
+/// Why [`store`] stored nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    /// The latest version is no longer `expected_base`.
+    #[error("the base version is no longer the latest")]
+    StaleBase {
+        /// The latest version now.
+        latest: Option<VersionSummary>,
+    },
+    #[error(transparent)]
+    Api(#[from] ApiError),
+}
+
+impl From<sqlx::Error> for StoreError {
+    fn from(err: sqlx::Error) -> Self {
+        Self::Api(err.into())
+    }
+}
+
+/// 409 `stale_base`, `details.latest` the version that came out meanwhile.
+impl From<StoreError> for ApiError {
+    fn from(err: StoreError) -> Self {
+        match err {
+            StoreError::Api(err) => err,
+            StoreError::StaleBase { latest } => ApiError::Conflict {
+                code: STALE_BASE,
+                message: match &latest {
+                    Some(latest) => format!(
+                        "v{} came out meanwhile. Update the draft, then publish again.",
+                        latest.number
+                    ),
+                    None => "The database's versions changed meanwhile.".to_owned(),
+                },
+            },
+        }
+    }
+}
+
+/// The 409's code when the base moved.
+pub const STALE_BASE: &str = "stale_base";
+
+#[derive(Debug)]
 pub enum Stored {
     Created(VersionSummary),
     /// The model equals the latest version's: nothing was stored, here is
@@ -45,8 +95,12 @@ pub enum Stored {
 /// takes `KEY SHARE`), so numbers have no gaps and no duplicates;
 /// `UNIQUE (database_id, number)` is the backstop. The unchanged check runs
 /// under the same lock, so two identical pushes at once create one version.
-/// A new version starts with the previous one's layout.
-pub async fn store(db: &PgPool, new: NewVersion, skip_unchanged: bool) -> ApiResult<Stored> {
+/// A new version starts with the previous one's layout unless given one.
+pub async fn store(
+    db: &PgPool,
+    new: NewVersion,
+    skip_unchanged: bool,
+) -> Result<Stored, StoreError> {
     let mut tx = db.begin().await?;
     sqlx::query_scalar!(
         "SELECT id FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
@@ -63,6 +117,17 @@ pub async fn store(db: &PgPool, new: NewVersion, skip_unchanged: bool) -> ApiRes
     .fetch_optional(&mut *tx)
     .await?;
 
+    if let Some(expected) = new.expected_base
+        && latest.as_ref().map(|latest| latest.id) != expected
+    {
+        tx.rollback().await?;
+        let latest = match latest {
+            Some(latest) => Some(summary(db, latest.id).await?),
+            None => None,
+        };
+        return Err(StoreError::StaleBase { latest });
+    }
+
     if skip_unchanged && let Some(latest) = &latest {
         // A stored model that no longer parses (an older remus) counts as changed.
         let unchanged = Schema::deserialize(&latest.model)
@@ -74,7 +139,10 @@ pub async fn store(db: &PgPool, new: NewVersion, skip_unchanged: bool) -> ApiRes
     }
 
     let number = latest.as_ref().map_or(1, |latest| latest.number + 1);
-    let layout = latest.map_or_else(|| json!({}), |latest| latest.layout);
+    let layout = match new.layout {
+        Some(layout) => layout,
+        None => latest.map_or_else(|| json!({}), |latest| latest.layout),
+    };
     let model = serde_json::to_value(&new.model).map_err(ApiError::internal)?;
     let id = sqlx::query_scalar!(
         "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,
