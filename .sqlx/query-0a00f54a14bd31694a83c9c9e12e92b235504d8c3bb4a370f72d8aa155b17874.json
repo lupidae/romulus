@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT upto_update_id FROM draft_snapshots WHERE draft_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "upto_update_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "draft_snapshots",
+            "name": "upto_update_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0a00f54a14bd31694a83c9c9e12e92b235504d8c3bb4a370f72d8aa155b17874"
+}

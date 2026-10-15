@@ -5,12 +5,15 @@
 //! service container in CI), dropped when the test passes.
 
 mod auth;
+mod collab;
 mod csrf;
 mod databases;
+mod drafts;
 mod harness;
 mod health;
 mod idp;
 mod invitations;
+mod live;
 mod members;
 mod oidc;
 mod orgs;

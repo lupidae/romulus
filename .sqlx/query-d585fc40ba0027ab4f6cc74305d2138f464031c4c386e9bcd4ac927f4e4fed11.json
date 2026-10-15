@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT update AS \"update!\" FROM draft_updates WHERE draft_id = $1 AND id > $2 ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "update!",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "draft_updates",
+            "name": "update"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d585fc40ba0027ab4f6cc74305d2138f464031c4c386e9bcd4ac927f4e4fed11"
+}
