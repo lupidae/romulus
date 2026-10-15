@@ -379,11 +379,199 @@ fn constraint_lines(table: &str, c: &ConstraintDiff) -> Vec<String> {
                 constraint_kind(*after)
             ),
             ConstraintChange::Definition { before, after } => {
-                format!("{me}: {}", arrow(before, after))
+                format!("{me}: {}", definition_change(c.kind, before, after))
             }
             ConstraintChange::Comment { before, after } => comment(&me, before, after),
         })
         .collect()
+}
+
+/// A constraint's new definition, said in its own terms when the rest of it
+/// stays: a foreign key on the same columns and target names the clauses
+/// that moved (`on delete set null → cascade`), a check its condition
+/// (`length(note) < 500 → length(note) <= 500`). Anything else is
+/// `X → Y`.
+fn definition_change(kind: ConstraintKind, before: &str, after: &str) -> String {
+    match kind {
+        ConstraintKind::ForeignKey => {
+            if let (Some(b), Some(a)) = (ForeignKey::parse(before), ForeignKey::parse(after))
+                && b.head == a.head
+            {
+                let moved = b.changes_to(&a);
+                if !moved.is_empty() {
+                    return moved.join(", ");
+                }
+            }
+        }
+        ConstraintKind::Check => {
+            if let (Some(b), Some(a)) = (check_condition(before), check_condition(after)) {
+                return arrow(b, a);
+            }
+        }
+        _ => {}
+    }
+    arrow(before, after)
+}
+
+/// A foreign key as `pg_get_constraintdef` prints it, `FOREIGN KEY (a)
+/// REFERENCES s.t(id)` then its clauses, with Postgres's defaults for the
+/// ones it leaves out.
+#[derive(Debug, PartialEq, Eq)]
+struct ForeignKey<'a> {
+    /// Up to the target's columns: what must stay for a clause-only change.
+    head: &'a str,
+    matching: String,
+    on_update: String,
+    on_delete: String,
+    deferrable: bool,
+    deferred: bool,
+    valid: bool,
+}
+
+impl<'a> ForeignKey<'a> {
+    fn parse(definition: &'a str) -> Option<Self> {
+        let definition = definition.trim();
+        let references = definition.find(" REFERENCES ")?;
+        let close = references + definition[references..].find(')')? + 1;
+        let mut fk = Self {
+            head: &definition[..close],
+            matching: "simple".into(),
+            on_update: "no action".into(),
+            on_delete: "no action".into(),
+            deferrable: false,
+            deferred: false,
+            valid: true,
+        };
+        let words: Vec<&str> = definition[close..].split_whitespace().collect();
+        let keyword = |w: &str| matches!(w, "ON" | "MATCH" | "DEFERRABLE" | "NOT" | "INITIALLY");
+        let mut i = 0;
+        while i < words.len() {
+            match (words[i], words.get(i + 1).copied()) {
+                ("MATCH", Some(kind)) => {
+                    fk.matching = kind.to_lowercase();
+                    i += 2;
+                }
+                ("ON", Some(event @ ("UPDATE" | "DELETE"))) => {
+                    let end = (i + 2..words.len())
+                        .find(|&j| keyword(words[j]))
+                        .unwrap_or(words.len());
+                    if end == i + 2 {
+                        return None;
+                    }
+                    let action = words[i + 2..end].join(" ").to_lowercase();
+                    if event == "UPDATE" {
+                        fk.on_update = action;
+                    } else {
+                        fk.on_delete = action;
+                    }
+                    i = end;
+                }
+                ("DEFERRABLE", _) => {
+                    fk.deferrable = true;
+                    i += 1;
+                }
+                ("NOT", Some("DEFERRABLE")) => {
+                    fk.deferrable = false;
+                    i += 2;
+                }
+                ("NOT", Some("VALID")) => {
+                    fk.valid = false;
+                    i += 2;
+                }
+                ("INITIALLY", Some(when @ ("DEFERRED" | "IMMEDIATE"))) => {
+                    fk.deferred = when == "DEFERRED";
+                    i += 2;
+                }
+                // A clause this does not know: say the whole definition.
+                _ => return None,
+            }
+        }
+        Some(fk)
+    }
+
+    /// `on delete set null → cascade`, `now deferrable`…: what moved.
+    fn changes_to(&self, new: &Self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (what, before, after) in [
+            ("match", &self.matching, &new.matching),
+            ("on update", &self.on_update, &new.on_update),
+            ("on delete", &self.on_delete, &new.on_delete),
+        ] {
+            if before != after {
+                out.push(format!("{what} {before} → {after}"));
+            }
+        }
+        if self.deferrable != new.deferrable {
+            out.push(
+                if new.deferrable {
+                    "now deferrable"
+                } else {
+                    "no longer deferrable"
+                }
+                .into(),
+            );
+        }
+        if self.deferred != new.deferred {
+            out.push(
+                if new.deferred {
+                    "now initially deferred"
+                } else {
+                    "now initially immediate"
+                }
+                .into(),
+            );
+        }
+        if self.valid != new.valid {
+            out.push(
+                if new.valid {
+                    "now validated"
+                } else {
+                    "now NOT VALID"
+                }
+                .into(),
+            );
+        }
+        out
+    }
+}
+
+/// The condition of `CHECK ((a > 0))`: `a > 0`. `None` when anything
+/// follows it (`NOT VALID`, `NO INHERIT`), which a change may be about.
+fn check_condition(definition: &str) -> Option<&str> {
+    let inner = definition
+        .trim()
+        .strip_prefix("CHECK (")?
+        .strip_suffix(')')?;
+    if !balanced(inner) {
+        return None;
+    }
+    // Postgres wraps the expression once more: drop that pair too.
+    match inner.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        Some(bare) if balanced(bare) => Some(bare),
+        _ => Some(inner),
+    }
+}
+
+/// Parentheses outside quotes pair up, none closing before it opens.
+fn balanced(text: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quote = None;
+    for c in text.chars() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '(') => depth += 1,
+            (None, ')') => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0 && quote.is_none()
 }
 
 fn index_lines(table: &str, i: &IndexDiff) -> Vec<String> {
@@ -710,4 +898,89 @@ fn sentence(count: &Count) -> String {
         let _ = write!(out, ", {n} {verb}");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FK: &str = "FOREIGN KEY (author_id) REFERENCES public.users(id)";
+
+    fn fk(clauses: &str) -> String {
+        format!("{FK}{clauses}")
+    }
+
+    #[test]
+    fn a_foreign_key_on_the_same_columns_says_which_clauses_moved() {
+        let change =
+            |b: &str, a: &str| definition_change(ConstraintKind::ForeignKey, &fk(b), &fk(a));
+        assert_eq!(
+            change(" ON DELETE SET NULL", " ON DELETE CASCADE"),
+            "on delete set null → cascade"
+        );
+        // Postgres leaves the defaults out.
+        assert_eq!(
+            change("", " ON UPDATE CASCADE"),
+            "on update no action → cascade"
+        );
+        assert_eq!(
+            change(
+                " MATCH FULL ON DELETE RESTRICT",
+                " ON DELETE SET DEFAULT DEFERRABLE"
+            ),
+            "match full → simple, on delete restrict → set default, now deferrable"
+        );
+        assert_eq!(
+            change(" DEFERRABLE INITIALLY DEFERRED", " NOT VALID"),
+            "no longer deferrable, now initially immediate, now NOT VALID"
+        );
+        assert_eq!(
+            change(" ON DELETE SET NULL (author_id)", " ON DELETE SET NULL"),
+            "on delete set null (author_id) → set null"
+        );
+    }
+
+    #[test]
+    fn a_foreign_key_to_another_target_says_both_definitions() {
+        let before = fk(" ON DELETE CASCADE");
+        let after = "FOREIGN KEY (author_id) REFERENCES public.people(id) ON DELETE CASCADE";
+        assert_eq!(
+            definition_change(ConstraintKind::ForeignKey, &before, after),
+            format!("{before} → {after}")
+        );
+        // A clause it does not know is no reason to guess.
+        assert_eq!(
+            definition_change(ConstraintKind::ForeignKey, &fk(" ENFORCED"), &fk("")),
+            format!("{} → {FK}", fk(" ENFORCED"))
+        );
+    }
+
+    #[test]
+    fn a_check_says_its_condition() {
+        let change = |b: &str, a: &str| definition_change(ConstraintKind::Check, b, a);
+        assert_eq!(
+            change(
+                "CHECK ((length(note) < 500))",
+                "CHECK ((length(note) <= 500))"
+            ),
+            "length(note) < 500 → length(note) <= 500"
+        );
+        // Two groups are not one pair of parentheses to drop.
+        assert_eq!(
+            change(
+                "CHECK (((a > 0) AND (b > 0)))",
+                "CHECK ((a > 0) AND (b > 1))"
+            ),
+            "(a > 0) AND (b > 0) → (a > 0) AND (b > 1)"
+        );
+        // Becoming NOT VALID is part of the change: both said whole.
+        assert_eq!(
+            change("CHECK ((a > 0))", "CHECK ((a > 0)) NOT VALID"),
+            "CHECK ((a > 0)) → CHECK ((a > 0)) NOT VALID"
+        );
+        assert_eq!(
+            check_condition("CHECK ((note <> ')'::text))"),
+            Some("note <> ')'::text")
+        );
+    }
 }

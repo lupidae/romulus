@@ -292,7 +292,7 @@ expression: "serde_json::to_string_pretty(&diff(&old, &new)).unwrap()"
       "lines": [
         "`shop.orders.note`: now NOT NULL",
         "column `shop.orders.coupon_code` added: text",
-        "foreign key `orders_customer_id_fkey` on `shop.orders`: …ON DELETE CASCADE → …ON DELETE RESTRICT",
+        "foreign key `orders_customer_id_fkey` on `shop.orders`: on delete cascade → restrict",
         "index `orders_coupon_idx` on `shop.orders` added: CREATE INDEX orders_coupon_idx ON shop.orders USING btree (coupon_code)"
       ],
       "sql": {

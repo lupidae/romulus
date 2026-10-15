@@ -67,7 +67,7 @@
       "partitions": [],
       "lines": [
         "`comments.author_id`: now NOT NULL",
-        "foreign key `comments_author_id_fkey` on `comments`: FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE SET NULL → FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE CASCADE"
+        "foreign key `comments_author_id_fkey` on `comments`: on delete set null → cascade"
       ],
       "sql": {
         "before": "CREATE TABLE public.comments (\n    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,\n    post_id bigint NOT NULL,\n    author_id bigint,\n    parent_id bigint,\n    body text NOT NULL,\n    posted_at timestamp with time zone DEFAULT now() NOT NULL,\n    CONSTRAINT comments_pkey PRIMARY KEY (id)\n);\n\nALTER TABLE public.comments ADD CONSTRAINT comments_author_id_fkey FOREIGN KEY (author_id) REFERENCES public.users(id) ON DELETE SET NULL;\nALTER TABLE public.comments ADD CONSTRAINT comments_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.comments(id) ON DELETE CASCADE;\nALTER TABLE public.comments ADD CONSTRAINT comments_post_id_fkey FOREIGN KEY (post_id) REFERENCES public.posts(id) ON DELETE CASCADE;\n",

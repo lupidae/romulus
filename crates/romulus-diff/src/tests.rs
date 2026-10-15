@@ -546,8 +546,8 @@ fn constraints_added_removed_and_redefined() {
     assert_eq!(
         orders.lines,
         [
-            // Long definitions lose their shared words, never the difference.
-            "foreign key `orders_customer_id_fkey` on `shop.orders`: …ON DELETE CASCADE → …ON DELETE RESTRICT",
+            // Same columns and target: only the clause that moved.
+            "foreign key `orders_customer_id_fkey` on `shop.orders`: on delete cascade → restrict",
             "foreign key `orders_customer_id_fkey` on `shop.orders`: comment 'owner' added",
             "check constraint `orders_note_short` on `shop.orders` added: CHECK ((length(note) < 500))",
             "check constraint `orders_placed_when_not_draft` on `shop.orders` removed",
