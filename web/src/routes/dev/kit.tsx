@@ -20,6 +20,7 @@ import { Avatar, AvatarStack } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CodeBlock } from "@/components/ui/code-block";
 import { CopyField } from "@/components/ui/copy-field";
@@ -47,6 +48,7 @@ import { Field } from "@/components/ui/field";
 import { FileButton } from "@/components/ui/file-button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -67,6 +69,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toaster";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
@@ -93,6 +96,7 @@ const sections = [
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
+  ["toggles", "ToggleGroup, Checkbox"],
   ["overlays", "Menu, Popover, Dialog, Toast"],
   ["feedback", "Alert, Spinner, Skeleton"],
   ["empty", "Empty state"],
@@ -159,6 +163,7 @@ function Kit() {
           <Badges />
           <Avatars />
           <TabsDemo />
+          <Toggles />
           <Overlays />
           <Feedback />
           <Empty />
@@ -536,6 +541,54 @@ function TabsDemo() {
             </pre>
           </TabsContent>
         </Tabs>
+      </Card>
+    </Section>
+  );
+}
+
+function Toggles() {
+  const [layout, setLayout] = React.useState("split");
+  const [picked, setPicked] = React.useState<Record<string, boolean>>({ v3: true });
+  return (
+    <Section id="toggles" title="ToggleGroup, Checkbox">
+      <Card className="grid gap-5 p-4">
+        <div className="grid gap-2">
+          <p className="text-sm text-muted-foreground">
+            One choice among a few, all in view (a filter, a layout). Tabs are for panels.
+          </p>
+          <ToggleGroup
+            type="single"
+            value={layout}
+            onValueChange={(v) => v && setLayout(v)}
+            aria-label="Diff layout"
+            className="w-fit"
+          >
+            <ToggleGroupItem value="split">Side by side</ToggleGroupItem>
+            <ToggleGroupItem value="unified">Unified</ToggleGroupItem>
+            <ToggleGroupItem value="none" disabled>
+              Disabled
+            </ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+        <div className="grid gap-2">
+          <p className="text-sm text-muted-foreground">Ticks, with a Label or an aria-label.</p>
+          <div className="flex flex-wrap items-center gap-5">
+            {["v3", "v4", "v5"].map((v) => (
+              <div key={v} className="flex items-center gap-2">
+                <Checkbox
+                  id={`kit-${v}`}
+                  checked={picked[v] ?? false}
+                  onCheckedChange={(on) => setPicked({ ...picked, [v]: on === true })}
+                />
+                <Label htmlFor={`kit-${v}`}>Compare {v}</Label>
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <Checkbox id="kit-disabled" disabled />
+              <Label htmlFor="kit-disabled">Disabled</Label>
+            </div>
+          </div>
+        </div>
       </Card>
     </Section>
   );

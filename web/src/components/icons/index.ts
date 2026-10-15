@@ -2,6 +2,8 @@
 // `npm run icons:add -- <name>` (names: https://icon-sets.iconify.design/iconoir/).
 // Never mix in another icon library.
 export { ArrowLeftIcon } from "./arrow-left";
+export { ArrowRightIcon } from "./arrow-right";
+export { ArrowSeparateVerticalIcon } from "./arrow-separate-vertical";
 export { BellIcon } from "./bell";
 export { BuildingIcon } from "./building";
 export { CheckIcon } from "./check";
@@ -14,6 +16,7 @@ export { CompassIcon } from "./compass";
 export { ComputerIcon } from "./computer";
 export { CopyIcon } from "./copy";
 export { CursorPointerIcon } from "./cursor-pointer";
+export { DataTransferBothIcon } from "./data-transfer-both";
 export { DatabaseIcon } from "./database";
 export { EditPencilIcon } from "./edit-pencil";
 export { ExpandIcon } from "./expand";
@@ -30,6 +33,7 @@ export { InfoCircleIcon } from "./info-circle";
 export { KeyIcon } from "./key";
 export { KeyCommandIcon } from "./key-command";
 export { LinkIcon } from "./link";
+export { ListIcon } from "./list";
 export { LockIcon } from "./lock";
 export { LogOutIcon } from "./log-out";
 export { MailIcon } from "./mail";
