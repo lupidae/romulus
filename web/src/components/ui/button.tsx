@@ -13,6 +13,9 @@ export const buttonVariants = cva(
     "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
     "disabled:pointer-events-none disabled:opacity-45",
     "[&_svg]:pointer-events-none [&_svg]:shrink-0",
+    // Touch screens: an invisible 44px hit area around small buttons, so the
+    // dense desktop sizes stay tappable without growing on screen.
+    "pointer-coarse:after:absolute pointer-coarse:after:top-1/2 pointer-coarse:after:left-1/2 pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 pointer-coarse:after:-translate-1/2",
   ],
   {
     variants: {

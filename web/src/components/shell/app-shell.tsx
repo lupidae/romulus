@@ -61,40 +61,42 @@ export function AppShell({
         Skip to content
       </a>
 
-      <header className="flex h-12 shrink-0 items-center gap-1 px-2 md:px-3">
-        <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
-          <SheetTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label="Open navigation" className="md:hidden">
-              <MenuIcon />
-            </Button>
-          </SheetTrigger>
-          <SheetContent>
-            <SheetTitle className="sr-only">Navigation</SheetTitle>
-            <div className="flex h-12 items-center gap-2 px-4">
-              <LogoMark />
-              <span className="truncate text-sm font-semibold text-foreground">{org.name}</span>
-            </div>
-            <div className="flex-1 overflow-y-auto px-2 py-2">{nav}</div>
-          </SheetContent>
-        </Sheet>
+      <header className="flex h-12 shrink-0 items-center justify-between gap-4 px-2 md:px-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="Open navigation" className="md:hidden">
+                <MenuIcon />
+              </Button>
+            </SheetTrigger>
+            <SheetContent>
+              <SheetTitle className="sr-only">Navigation</SheetTitle>
+              <div className="flex h-12 items-center gap-2 px-4">
+                <LogoMark />
+                <span className="truncate text-sm font-semibold text-foreground">{org.name}</span>
+              </div>
+              <div className="flex-1 overflow-y-auto px-2 py-2">{nav}</div>
+            </SheetContent>
+          </Sheet>
 
-        <Link
-          to="/"
-          aria-label="romulus home"
-          className="hidden size-8 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring md:flex"
-        >
-          <LogoMark />
-        </Link>
-        <span aria-hidden className="mx-1 hidden h-5 w-px rotate-12 bg-border-strong md:block" />
-        <OrgSwitcher current={org} orgs={orgs} onSelect={onSwitchOrg} onCreate={onCreateOrg} />
-        {breadcrumb && (
-          <div className="hidden min-w-0 items-center gap-1 md:flex">
-            <span aria-hidden className="mx-1 h-5 w-px rotate-12 bg-border-strong" />
-            {breadcrumb}
-          </div>
-        )}
+          <Link
+            to="/"
+            aria-label="romulus home"
+            className="hidden size-8 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring md:flex"
+          >
+            <LogoMark />
+          </Link>
+          <Slash />
+          <OrgSwitcher current={org} orgs={orgs} onSelect={onSwitchOrg} onCreate={onCreateOrg} />
+          {breadcrumb && (
+            <>
+              <Slash />
+              <div className="hidden min-w-0 items-center gap-1.5 md:flex">{breadcrumb}</div>
+            </>
+          )}
+        </div>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1.5">
           <UserMenu user={user} onSignOut={onSignOut} />
         </div>
       </header>
@@ -113,6 +115,11 @@ export function AppShell({
       </div>
     </div>
   );
+}
+
+/** The separator between levels of the top bar (logo / org / database). */
+function Slash() {
+  return <span aria-hidden className="hidden h-5 w-px rotate-12 bg-border-strong md:block" />;
 }
 
 /**

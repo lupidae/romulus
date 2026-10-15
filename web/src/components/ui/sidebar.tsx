@@ -47,7 +47,7 @@ export function SidebarItem({
       <Comp
         data-slot="sidebar-item"
         className={cn(
-          "flex h-8 items-center gap-2.5 rounded-md px-2 text-sm font-medium outline-none",
+          "flex h-8 items-center gap-2.5 rounded-md px-2 text-sm font-medium outline-none pointer-coarse:h-11",
           "transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
           "focus-visible:ring-2 focus-visible:ring-ring",
           "data-[status=active]:bg-sidebar-accent data-[status=active]:text-sidebar-accent-foreground",
