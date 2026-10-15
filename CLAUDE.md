@@ -21,14 +21,15 @@ docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, pr
 ## Run it
 
 Needs: rustup, Docker, Node 24 + npm, `just`, `cargo install sqlx-cli
---no-default-features --features postgres,rustls`, nightly rustfmt
-(`rustup toolchain install nightly --component rustfmt`).
+--version 0.9.0 --locked --no-default-features --features postgres,rustls`,
+and the pinned nightly rustfmt (`rustup toolchain install nightly-2026-10-14
+--profile minimal --component rustfmt`; the date lives in the justfile and CI).
 
 ```bash
 just up          # .env if missing, then the stack; Zitadel provisioned (~15 s from scratch)
 just dev         # up + API (cargo run) + web (vite); open $ROMULUS_PUBLIC_URL/app/
 just check       # the CI gate: fmt, clippy + tests (--all-features), sqlx prepare --check, gen-check, web, build
-just e2e         # Playwright against a production build + the real API (needs `just up`)
+just e2e         # Playwright: production build + its own API, on the preview origin (needs `just up`)
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
@@ -41,9 +42,10 @@ same password.
 
 ## Ports and worktrees
 
-Several worktrees run their own stacks at once, so **nothing is a fixed port**.
-`scripts/dev-env` gives each worktree a slot N (registry in the git common
-dir, `romulus-slots`) and writes `.env` (gitignored) with:
+Several worktrees (and clones) run their own stacks at once, so **nothing is a
+fixed port**. `scripts/dev-env` gives each worktree a slot N (one registry per
+user: `~/.local/state/romulus/slots`, so clones never collide) and writes
+`.env` (gitignored; never copy it between worktrees) with:
 
 | offset | variable | what |
 |---|---|---|
@@ -52,9 +54,15 @@ dir, `romulus-slots`) and writes `.env` (gitignored) with:
 | +2 | `ROMULUS_POSTGRES_PORT` | app database (`DATABASE_URL`) |
 | +3 | `ROMULUS_SANDBOX_PORT` | sandbox Postgres (`ROMULUS_SANDBOX_URL`, superuser) |
 | +4 | `ROMULUS_ZITADEL_PORT` | Zitadel, issuer `http://localhost:<port>` |
-| +5 | `ROMULUS_PREVIEW_PORT` | `vite preview` for Playwright |
+| +5 | `ROMULUS_PREVIEW_PORT` | `vite preview`: the origin Playwright drives |
+| +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
 
-Base port is `41000 + 10·N`; the compose project is `romulus-<worktree dir>`.
+Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
+the worktree path>`, computed by `scripts/dev-env --project-name` and passed
+with `-p` by every recipe, so `down -v` can only ever reach this worktree's
+stack. Zitadel registers both browser origins (web and preview) for the OIDC
+callback, and the e2e API's public URL is the preview origin: CSRF's exact
+`Origin` check and the redirect agree with what Playwright's browser sends.
 `ROMULUS_SLOT=<n> scripts/dev-env` moves a worktree; `scripts/dev-env
 --release` frees its slot (Superset teardown does it). Never write a port
 literal anywhere: read the variable.
@@ -83,8 +91,16 @@ Made in the skeleton (S0):
   dev-only sign-in the auth module adds (see `src/auth/mod.rs`); config
   refuses to start with it unless `ROMULUS_PUBLIC_URL` is loopback.
 - **Invariants live in Postgres**: last admin (trigger, constraint
-  `organization_needs_an_admin` → 409 `last_admin`), immutable versions,
-  remus JSON only from pushes, drafts based on their own database's versions.
+  `organization_needs_an_admin` → 409 `last_admin`), versions never updated
+  and only deleted with their database (`versions_are_immutable`,
+  `versions_are_permanent` → 409 `version_immutable`), remus JSON only from
+  pushes, drafts based on their own database's versions.
+- **The last-admin trigger is safe at every isolation level** because it
+  writes (unchanged) the organization row, not just locks it: READ COMMITTED
+  waits and recounts; REPEATABLE READ and SERIALIZABLE abort the stale
+  transaction with 40001 (`db::is_serialization_failure`). Membership changes
+  run at the default READ COMMITTED; if you raise the isolation, retry on
+  40001 (or let it answer 409 `concurrent_change`).
 - **Deviations from MVP.md's data model**: `UNIQUE (org_id, slug)` on
   databases only among live rows (a deleted database frees its slug);
   `drafts.base_version_id` may be NULL (a database with no version yet);
@@ -110,9 +126,20 @@ Made in the skeleton (S0):
   `{"code", "message", "details"?}`; `code` is stable and the web app branches
   on it. Use the `ApiError` variants (`BadRequest`, `Validation` (422),
   `Unauthorized`, `Forbidden`, `NotFound`, `Conflict { code, message }`,
-  `PayloadTooLarge`); `?` on a `sqlx::Error` is a logged 500 with a generic
-  message. `db::constraint(&err)` / `db::is_unique_violation(&err)` map
+  `PayloadTooLarge`, `Unavailable`…). `?` on a `sqlx::Error` maps the database
+  invariants (`last_admin`, `version_immutable`, `concurrent_change` for a
+  40001) and is otherwise a logged 500 with a generic message.
+  `db::constraint(&err)` / `db::is_unique_violation(&err)` map other
   constraint errors to a 409 with your own code. `thiserror`, no `anyhow`.
+- **Extractors**: always `romulus_api::extract::{Json, Path, Query, Bytes}`,
+  never axum's (clippy's `disallowed-types` refuses them). Their rejections
+  answer in the API format: malformed JSON 400 `bad_request`, a missing or
+  wrong field 422 `validation` naming it, wrong content type 415
+  `unsupported_media_type`, a body over the limit 413 `payload_too_large`, a
+  bad path or query parameter 400. `extract::Json` is also the response type.
+  Anything else that errors outside a handler (a 405, the 30 s timeout's 503
+  `timeout`, another extractor) is rewritten to the same format by
+  `layers::errors_as_json`, but prefer a precise code from your handler.
 - **State**: `AppState { db, config }` derives `FromRef`: take `State<PgPool>`
   or `State<Arc<Config>>` directly.
 - **CSRF** is global middleware: every non-GET request needs
@@ -122,8 +149,9 @@ Made in the skeleton (S0):
 - **Shared types**: `domain.rs` maps every Postgres enum (`Role`,
   `SourceKind`, `VersionOrigin`, `DraftStatus`, `TokenScope`) and re-exports
   `remus_core::Schema`. Don't redefine them in a module.
-- **Config** comes from the environment only (`config.rs`); `main` loads `.env`
-  and `.dev/zitadel/oidc.env` first, real env always wins. A new setting is a
+- **Config** comes from the environment only (`config.rs`); a debug build's
+  `main` first loads `.env` and `.dev/zitadel/oidc.env` (real env always
+  wins), a release build reads its real environment only. A new setting is a
   field + a test there, and a line in `scripts/dev-env` if dev needs it.
 - **Graceful shutdown** waits for open connections: anything long-lived
   (websockets) must close on the shutdown signal.
@@ -187,7 +215,10 @@ src/styles/globals.css   every token; the only file with raw colors
     (EmptyState with the action that fills it) and error states. Mutations
     confirm with `toast`, never only with a toast for important information.
   - Keyboard: everything reachable and visibly focused; icon-only buttons get
-    an `aria-label` and usually a `Tooltip`; dialogs need a `DialogTitle`.
+    an `aria-label` and usually a `Tooltip`; dialogs need a `DialogTitle`
+    and usually a `DialogDescription` (it becomes their accessible
+    description). A loading `Button` keeps its label as its accessible name.
+  - Redirect targets from the URL go through `safePath` (`lib/safe-path.ts`).
   - Check your screen in light and dark, at 1440 and 390 px, before you call
     it done.
 - **Collaborator colors**: `presenceIndex(userId)` (FNV-1a, 1–8) picks the
@@ -202,8 +233,10 @@ src/styles/globals.css   every token; the only file with raw colors
   Fixtures: `harness::{user, org, member, database}`. Unit tests inline in
   `#[cfg(test)] mod tests`, named as assertions.
 - Web: Vitest + Testing Library next to the code (`*.test.tsx`) for behaviour;
-  Playwright in `web/e2e/` for flows, against the production build. Prefer
-  role/label queries; they double as an accessibility check.
+  Playwright in `web/e2e/` for flows, against the production build on the
+  preview origin with its own API (`playwright.config.ts` starts both, or
+  reuses them). Prefer role/label queries; they double as an accessibility
+  check.
 - Every feature PR: its endpoints tested (happy path, permission denied per
   role, validation), its screens with at least one Playwright path. `just check`
   green before pushing.
