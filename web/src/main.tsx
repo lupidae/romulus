@@ -64,6 +64,10 @@ declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router;
   }
+  interface StaticDataRouteOption {
+    /** The page lays itself out edge to edge in the shell, without `PageBody`. */
+    fullBleed?: boolean;
+  }
 }
 
 const root = document.getElementById("root");

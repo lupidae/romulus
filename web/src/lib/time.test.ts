@@ -1,4 +1,4 @@
-import { formatDate, fromNow } from "./time";
+import { formatDate, fromNow, timeAgo } from "./time";
 
 const now = new Date("2026-10-15T12:00:00Z");
 
@@ -8,6 +8,12 @@ describe("time", () => {
     expect(fromNow("2026-10-16T12:00:00Z", now)).toBe("tomorrow");
     expect(fromNow("2026-10-15T15:00:00Z", now)).toBe("in 3 hours");
     expect(fromNow("2026-10-13T12:00:00Z", now)).toBe("2 days ago");
+  });
+
+  it("says just now rather than this minute", () => {
+    expect(timeAgo("2026-10-15T11:59:30Z", now)).toBe("just now");
+    expect(timeAgo("2026-10-15T11:55:00Z", now)).toBe("5 minutes ago");
+    expect(timeAgo("2026-10-14T12:00:00Z", now)).toBe("yesterday");
   });
 
   it("adds the year only when it is not this one", () => {

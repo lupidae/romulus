@@ -52,6 +52,7 @@ export { SparksIcon } from "./sparks";
 export { SunLightIcon } from "./sun-light";
 export { TableIcon } from "./table";
 export { TrashIcon } from "./trash";
+export { UploadIcon } from "./upload";
 export { UserIcon } from "./user";
 export { UserPlusIcon } from "./user-plus";
 export { ViewColumns2Icon } from "./view-columns-2";

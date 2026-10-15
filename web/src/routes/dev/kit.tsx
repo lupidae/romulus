@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CodeBlock } from "@/components/ui/code-block";
 import { CopyField } from "@/components/ui/copy-field";
 import {
   Dialog,
@@ -43,6 +44,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
+import { FileButton } from "@/components/ui/file-button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import {
@@ -53,6 +55,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TabNav, TabNavItem } from "@/components/ui/tab-nav";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -93,7 +96,7 @@ const sections = [
   ["overlays", "Menu, Popover, Dialog, Toast"],
   ["feedback", "Alert, Spinner, Skeleton"],
   ["empty", "Empty state"],
-  ["table", "Table, CopyField, ConfirmDialog"],
+  ["table", "Table, CopyField, CodeBlock, TabNav"],
   ["shell", "App shell"],
 ] as const;
 
@@ -707,7 +710,7 @@ function TableAndFriends() {
     { id: "u-bob", name: "Bob Durand", email: "bob@acme.dev", role: "Developer" },
   ];
   return (
-    <Section id="table" title="Table, CopyField, ConfirmDialog">
+    <Section id="table" title="Table, CopyField, CodeBlock, TabNav, ConfirmDialog">
       <Card>
         <Table>
           <TableHeader>
@@ -747,6 +750,32 @@ function TableAndFriends() {
             label="Invitation link"
             className="w-full max-w-md"
           />
+        </Specimen>
+        <Specimen label="CodeBlock">
+          <CodeBlock
+            className="w-full max-w-xl"
+            label="Push command"
+            code={
+              'remus -f json | curl -fsS -H "Authorization: Bearer $ROMULUS_TOKEN" \\\n  --data-binary @- https://romulus.app/api/databases/0193…/versions'
+            }
+          />
+        </Specimen>
+        <Specimen label="FileButton">
+          <FileButton
+            accept=".sql,text/plain"
+            onFile={(file) => toast(`Picked ${file.name}`, { description: `${file.size} bytes` })}
+          >
+            Open file
+          </FileButton>
+        </Specimen>
+        <Specimen label="TabNav (links, one per page)">
+          <TabNav aria-label="Example" className="w-full border-b border-border">
+            <TabNavItem href="#table" aria-current="page">
+              Schema
+            </TabNavItem>
+            <TabNavItem href="#table">History</TabNavItem>
+            <TabNavItem href="#table">Settings</TabNavItem>
+          </TabNav>
         </Specimen>
         <Specimen label="ConfirmDialog">
           <Button onClick={() => setConfirming(true)}>

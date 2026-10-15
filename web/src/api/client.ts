@@ -11,6 +11,8 @@ export class ApiError extends Error {
   readonly code: string;
   /** Per-field messages of a 422 `validation`, keyed by field name. */
   readonly fields: Record<string, string>;
+  /** The body's structured context as sent (e.g. `diagnostics` of a `compile_failed`). */
+  readonly details: unknown;
 
   constructor(status: number, body: Partial<ErrorBody> | undefined) {
     super(body?.message ?? `Request failed (${status})`);
@@ -18,6 +20,7 @@ export class ApiError extends Error {
     this.status = status;
     this.code = body?.code ?? "unknown";
     this.fields = fieldMessages(body?.details);
+    this.details = body?.details;
   }
 }
 

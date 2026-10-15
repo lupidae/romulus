@@ -1,5 +1,13 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, notFound, Outlet, useNavigate } from "@tanstack/react-router";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import {
+  createFileRoute,
+  Link,
+  notFound,
+  Outlet,
+  useMatches,
+  useNavigate,
+  useParams,
+} from "@tanstack/react-router";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
@@ -9,6 +17,7 @@ import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar
 import { toast } from "@/components/ui/toaster";
 import { meQuery } from "@/features/auth/queries";
 import { requireUser, signOut } from "@/features/auth/session";
+import { databaseQuery } from "@/features/databases/queries";
 import { rememberLastOrg } from "@/features/orgs/last-org";
 import { orgQuery, orgsQuery } from "@/features/orgs/queries";
 import { canManageMembers } from "@/features/orgs/roles";
@@ -40,6 +49,11 @@ function OrgLayout() {
   const { data: orgs } = useSuspenseQuery(orgsQuery);
   const navigate = useNavigate();
   const params = { org: slug };
+  // Database pages lay themselves out edge to edge (the schema viewer).
+  const { db } = useParams({ strict: false });
+  const fullBleed = useMatches({
+    select: (matches) => matches.some((m) => m.staticData.fullBleed),
+  });
 
   // Here, not in the loader: hovering another org in the switcher preloads it.
   React.useEffect(() => rememberLastOrg(slug), [slug]);
@@ -86,15 +100,34 @@ function OrgLayout() {
       // The list may lag a moment behind a join or a rename; never hide the current one.
       orgs={orgs.some((o) => o.id === org.id) ? orgs : [...orgs, org]}
       nav={nav}
+      breadcrumb={db ? <DatabaseCrumb org={slug} db={db} /> : undefined}
       onSwitchOrg={(next) => void navigate({ to: "/$org", params: { org: next.slug } })}
       onCreateOrg={() => void navigate({ to: "/new" })}
       onSignOut={() =>
         void signOut().catch(() => toast.error("Could not sign out. Check your connection."))
       }
     >
-      <PageBody>
+      {fullBleed ? (
         <Outlet />
-      </PageBody>
+      ) : (
+        <PageBody>
+          <Outlet />
+        </PageBody>
+      )}
     </AppShell>
+  );
+}
+
+/** The database being looked at, after the organization in the top bar. */
+function DatabaseCrumb({ org, db }: { org: string; db: string }) {
+  const database = useQuery(databaseQuery(org, db));
+  return (
+    <Link
+      to="/$org/$db"
+      params={{ org, db }}
+      className="truncate rounded-md px-1.5 py-1 text-sm font-medium text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {database.data?.name ?? db}
+    </Link>
   );
 }

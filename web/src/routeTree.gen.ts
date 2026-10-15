@@ -14,16 +14,21 @@ import { Route as OrgRouteImport } from './routes/$org'
 import { Route as NewRouteImport } from './routes/new'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as OrgIndexRouteImport } from './routes/$org/index'
+import { Route as OrgDbRouteImport } from './routes/$org/$db'
 import { Route as DevKitRouteImport } from './routes/dev/kit'
 import { Route as DevShellRouteImport } from './routes/dev/shell'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
+import { Route as OrgDbIndexRouteImport } from './routes/$org/$db/index'
+import { Route as OrgDbHistoryRouteImport } from './routes/$org/$db/history'
+import { Route as OrgDbSettingsRouteImport } from './routes/$org/$db/settings'
 import { Route as OrgSettingsIndexRouteImport } from './routes/$org/settings/index'
 import { Route as OrgSettingsInvitationsRouteImport } from './routes/$org/settings/invitations'
 import { Route as OrgSettingsMembersRouteImport } from './routes/$org/settings/members'
 import { Route as DevShellIndexRouteImport } from './routes/dev/shell/index'
 import { Route as DevShellMembersRouteImport } from './routes/dev/shell/members'
 import { Route as DevShellSettingsRouteImport } from './routes/dev/shell/settings'
+import { Route as OrgDbVNumberRouteImport } from './routes/$org/$db/v/$number'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -50,6 +55,11 @@ const OrgIndexRoute = OrgIndexRouteImport.update({
   path: '/',
   getParentRoute: () => OrgRoute,
 } as any)
+const OrgDbRoute = OrgDbRouteImport.update({
+  id: '/$db',
+  path: '/$db',
+  getParentRoute: () => OrgRoute,
+} as any)
 const DevKitRoute = DevKitRouteImport.update({
   id: '/dev/kit',
   path: '/dev/kit',
@@ -69,6 +79,21 @@ const InviteTokenRoute = InviteTokenRouteImport.update({
   id: '/invite/$token',
   path: '/invite/$token',
   getParentRoute: () => rootRouteImport,
+} as any)
+const OrgDbIndexRoute = OrgDbIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => OrgDbRoute,
+} as any)
+const OrgDbHistoryRoute = OrgDbHistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => OrgDbRoute,
+} as any)
+const OrgDbSettingsRoute = OrgDbSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => OrgDbRoute,
 } as any)
 const OrgSettingsIndexRoute = OrgSettingsIndexRouteImport.update({
   id: '/settings/',
@@ -100,23 +125,33 @@ const DevShellSettingsRoute = DevShellSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => DevShellRoute,
 } as any)
+const OrgDbVNumberRoute = OrgDbVNumberRouteImport.update({
+  id: '/v/$number',
+  path: '/v/$number',
+  getParentRoute: () => OrgDbRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$org': typeof OrgRouteWithChildren
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
+  '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
   '/$org/': typeof OrgIndexRoute
+  '/$org/$db/history': typeof OrgDbHistoryRoute
+  '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
   '/dev/shell/settings': typeof DevShellSettingsRoute
+  '/$org/$db/': typeof OrgDbIndexRoute
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
+  '/$org/$db/v/$number': typeof OrgDbVNumberRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -126,12 +161,16 @@ export interface FileRoutesByTo {
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
   '/$org': typeof OrgIndexRoute
+  '/$org/$db/history': typeof OrgDbHistoryRoute
+  '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
   '/dev/shell/settings': typeof DevShellSettingsRoute
+  '/$org/$db': typeof OrgDbIndexRoute
   '/$org/settings': typeof OrgSettingsIndexRoute
   '/dev/shell': typeof DevShellIndexRoute
+  '/$org/$db/v/$number': typeof OrgDbVNumberRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -139,17 +178,22 @@ export interface FileRoutesById {
   '/$org': typeof OrgRouteWithChildren
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
+  '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
   '/$org/': typeof OrgIndexRoute
+  '/$org/$db/history': typeof OrgDbHistoryRoute
+  '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
   '/dev/shell/settings': typeof DevShellSettingsRoute
+  '/$org/$db/': typeof OrgDbIndexRoute
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
+  '/$org/$db/v/$number': typeof OrgDbVNumberRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -158,17 +202,22 @@ export interface FileRouteTypes {
     | '/$org'
     | '/new'
     | '/signin'
+    | '/$org/$db'
     | '/dev/kit'
     | '/dev/shell'
     | '/dev/viewer'
     | '/invite/$token'
     | '/$org/'
+    | '/$org/$db/history'
+    | '/$org/$db/settings'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
     | '/dev/shell/settings'
+    | '/$org/$db/'
     | '/$org/settings/'
     | '/dev/shell/'
+    | '/$org/$db/v/$number'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -178,29 +227,38 @@ export interface FileRouteTypes {
     | '/dev/viewer'
     | '/invite/$token'
     | '/$org'
+    | '/$org/$db/history'
+    | '/$org/$db/settings'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
     | '/dev/shell/settings'
+    | '/$org/$db'
     | '/$org/settings'
     | '/dev/shell'
+    | '/$org/$db/v/$number'
   id:
     | '__root__'
     | '/'
     | '/$org'
     | '/new'
     | '/signin'
+    | '/$org/$db'
     | '/dev/kit'
     | '/dev/shell'
     | '/dev/viewer'
     | '/invite/$token'
     | '/$org/'
+    | '/$org/$db/history'
+    | '/$org/$db/settings'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
     | '/dev/shell/settings'
+    | '/$org/$db/'
     | '/$org/settings/'
     | '/dev/shell/'
+    | '/$org/$db/v/$number'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -251,6 +309,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgIndexRouteImport
       parentRoute: typeof OrgRoute
     }
+    '/$org/$db': {
+      id: '/$org/$db'
+      path: '/$db'
+      fullPath: '/$org/$db'
+      preLoaderRoute: typeof OrgDbRouteImport
+      parentRoute: typeof OrgRoute
+    }
     '/dev/kit': {
       id: '/dev/kit'
       path: '/dev/kit'
@@ -278,6 +343,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/invite/$token'
       preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/$org/$db/': {
+      id: '/$org/$db/'
+      path: '/'
+      fullPath: '/$org/$db/'
+      preLoaderRoute: typeof OrgDbIndexRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
+    '/$org/$db/history': {
+      id: '/$org/$db/history'
+      path: '/history'
+      fullPath: '/$org/$db/history'
+      preLoaderRoute: typeof OrgDbHistoryRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
+    '/$org/$db/settings': {
+      id: '/$org/$db/settings'
+      path: '/settings'
+      fullPath: '/$org/$db/settings'
+      preLoaderRoute: typeof OrgDbSettingsRouteImport
+      parentRoute: typeof OrgDbRoute
     }
     '/$org/settings/': {
       id: '/$org/settings/'
@@ -321,10 +407,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevShellSettingsRouteImport
       parentRoute: typeof DevShellRoute
     }
+    '/$org/$db/v/$number': {
+      id: '/$org/$db/v/$number'
+      path: '/v/$number'
+      fullPath: '/$org/$db/v/$number'
+      preLoaderRoute: typeof OrgDbVNumberRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
   }
 }
 
+interface OrgDbRouteChildren {
+  OrgDbHistoryRoute: typeof OrgDbHistoryRoute
+  OrgDbSettingsRoute: typeof OrgDbSettingsRoute
+  OrgDbIndexRoute: typeof OrgDbIndexRoute
+  OrgDbVNumberRoute: typeof OrgDbVNumberRoute
+}
+
+const OrgDbRouteChildren: OrgDbRouteChildren = {
+  OrgDbHistoryRoute: OrgDbHistoryRoute,
+  OrgDbSettingsRoute: OrgDbSettingsRoute,
+  OrgDbIndexRoute: OrgDbIndexRoute,
+  OrgDbVNumberRoute: OrgDbVNumberRoute,
+}
+
+const OrgDbRouteWithChildren = OrgDbRoute._addFileChildren(OrgDbRouteChildren)
+
 interface OrgRouteChildren {
+  OrgDbRoute: typeof OrgDbRouteWithChildren
   OrgIndexRoute: typeof OrgIndexRoute
   OrgSettingsInvitationsRoute: typeof OrgSettingsInvitationsRoute
   OrgSettingsMembersRoute: typeof OrgSettingsMembersRoute
@@ -332,6 +442,7 @@ interface OrgRouteChildren {
 }
 
 const OrgRouteChildren: OrgRouteChildren = {
+  OrgDbRoute: OrgDbRouteWithChildren,
   OrgIndexRoute: OrgIndexRoute,
   OrgSettingsInvitationsRoute: OrgSettingsInvitationsRoute,
   OrgSettingsMembersRoute: OrgSettingsMembersRoute,

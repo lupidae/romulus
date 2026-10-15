@@ -20,3 +20,16 @@ export function fromNow(iso: string, now = new Date()): string {
   if (Math.abs(hours) < 24) return relative.format(Math.round(hours), "hour");
   return relative.format(Math.round(hours / 24), "day");
 }
+
+/** "just now", "5 minutes ago", "yesterday", "3 days ago"; past `iso` times only. */
+export function timeAgo(iso: string, now = new Date()): string {
+  if (now.getTime() - new Date(iso).getTime() < 60_000) return "just now";
+  return fromNow(iso, now);
+}
+
+const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+/** "Oct 15, 2026, 2:05 PM": the exact time, for a tooltip or `title`. */
+export function formatDateTime(iso: string): string {
+  return fullFormat.format(new Date(iso));
+}
