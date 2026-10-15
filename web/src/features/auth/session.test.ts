@@ -1,4 +1,19 @@
-import { appPath, devSigninUrl, loginUrl } from "./session";
+import { afterSignIn, appPath, devSigninUrl, loginUrl } from "./session";
+
+describe("afterSignIn", () => {
+  it("goes on to a path in the app", () => {
+    expect(afterSignIn("/app/acme/settings?tab=1")).toBe("/acme/settings?tab=1");
+    expect(afterSignIn(undefined)).toBe("/");
+    expect(afterSignIn("/app/")).toBe("/");
+  });
+
+  it.each(["/app//evil.test", "/app/\\evil.test", "https://evil.test/app/x", "/apple", "/api/me"])(
+    "refuses %s",
+    (next) => {
+      expect(afterSignIn(next)).toBe("/");
+    },
+  );
+});
 
 describe("auth URLs", () => {
   it("prefixes router paths with the app's base, once", () => {

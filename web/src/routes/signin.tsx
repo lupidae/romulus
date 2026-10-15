@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { authMethodsQuery, meQuery } from "@/features/auth/queries";
-import { devSigninUrl, loginUrl } from "@/features/auth/session";
+import { afterSignIn, devSigninUrl, loginUrl } from "@/features/auth/session";
 import { safePath } from "@/lib/safe-path";
 
 interface SigninSearch {
@@ -57,6 +57,10 @@ const errors: Record<string, SigninMessage> = {
     title: "Single sign-on is not answering",
     body: "romulus could not reach your identity provider. Try again in a moment.",
   },
+  too_many_sign_ins: {
+    title: "Too many sign-in attempts",
+    body: "Wait a minute, then try again.",
+  },
 };
 const fallbackError: SigninMessage = {
   title: "Sign-in did not complete",
@@ -78,10 +82,7 @@ export const Route = createFileRoute("/signin")({
     const me = await context.queryClient
       .fetchQuery({ ...meQuery, staleTime: 0 })
       .catch(() => undefined);
-    if (me) {
-      const next = search.next?.startsWith("/app/") ? search.next.slice(4) : "/";
-      throw redirect({ href: next, replace: true });
-    }
+    if (me) throw redirect({ href: afterSignIn(search.next), replace: true });
   },
   head: () => ({ meta: [{ title: "Sign in – romulus" }] }),
   component: SignIn,

@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { redirect } from "@tanstack/react-router";
 
 import { api, ApiError, unwrap } from "@/api/client";
+import { safePath } from "@/lib/safe-path";
 
 import { meQuery } from "./queries";
 
@@ -13,6 +14,16 @@ export function appPath(routerHref: string): string {
   return routerHref.startsWith(`${APP_BASE}/`) || routerHref === APP_BASE
     ? routerHref
     : `${APP_BASE}${routerHref.startsWith("/") ? "" : "/"}${routerHref}`;
+}
+
+/**
+ * Where someone already signed in goes from the sign-in page: `next` as a
+ * router path (without the /app base), or home. Checked here, not left to
+ * the router: `/app//evil.test` must not become `//evil.test`.
+ */
+export function afterSignIn(next: string | undefined): string {
+  const path = next?.startsWith(`${APP_BASE}/`) ? next.slice(APP_BASE.length) : undefined;
+  return safePath(path) ?? "/";
 }
 
 /** The API route that starts SSO, coming back to `next`. */
