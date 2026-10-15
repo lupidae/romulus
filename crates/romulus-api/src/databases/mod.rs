@@ -349,10 +349,14 @@ async fn update(
         .map(checked_description)
         .transpose()?;
     let shown = new_slug.clone().unwrap_or_default();
+    // Only a real change is written: a no-op save leaves updated_at (and the
+    // list's "last activity") alone.
     let updated = sqlx::query_scalar!(
         "UPDATE databases
          SET name = coalesce($3, name), slug = coalesce($4, slug), description = coalesce($5, description)
          WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL
+           AND (name, slug, description)
+               IS DISTINCT FROM (coalesce($3, name), coalesce($4, slug), coalesce($5, description))
          RETURNING slug",
         member.org.id,
         slug,
@@ -362,9 +366,13 @@ async fn update(
     )
     .fetch_optional(&db)
     .await
-    .map_err(slug_taken(&shown))?
-    .ok_or_else(no_such_database)?;
-    Ok(Json(load_one(&db, member.org.id, &updated).await?))
+    .map_err(slug_taken(&shown))?;
+    let current = match updated {
+        Some(updated) => updated,
+        // Nothing to change, or nothing there: `find` says which.
+        None => find(&db, member.org.id, &slug).await?.slug,
+    };
+    Ok(Json(load_one(&db, member.org.id, &current).await?))
 }
 
 /// Deletes a database: it disappears from the organization, its versions

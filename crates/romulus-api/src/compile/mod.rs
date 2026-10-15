@@ -24,8 +24,8 @@
 //! per draft; a superseded request answers [`Rejected::Superseded`]).
 
 use std::{
-    sync::{Arc, OnceLock},
-    time::Duration,
+    sync::{Arc, Mutex, OnceLock, PoisonError},
+    time::{Duration, Instant},
 };
 
 use remus_core::emit::DiagramOptions;
@@ -54,10 +54,19 @@ type CompileFn = dyn Fn(&str) -> Compiled + Send + Sync;
 #[derive(Clone)]
 enum Backend {
     None,
-    /// Set once the background start succeeds.
-    Sandbox(Arc<OnceLock<Compiler>>),
+    Sandbox(Arc<Sandbox>),
     Function(Arc<CompileFn>),
 }
+
+struct Sandbox {
+    /// Set once the background start succeeds.
+    ready: OnceLock<Compiler>,
+    /// The last health check, reused for [`HEALTH_TTL`].
+    health: Mutex<Option<(Instant, CompilerStatus)>>,
+}
+
+/// `/api/health` asks the sandbox at most this often.
+const HEALTH_TTL: Duration = Duration::from_secs(5);
 
 /// Turns SQL into a model. Cheap to clone. See the module documentation.
 #[derive(Clone)]
@@ -106,16 +115,19 @@ impl SqlCompiler {
         };
         let mut sandbox = SandboxConfig::new(url);
         sandbox.prefix.clone_from(&config.sandbox_prefix);
-        let ready = Arc::new(OnceLock::new());
-        tokio::spawn(start(sandbox, Arc::clone(&ready)));
-        Self(Backend::Sandbox(ready))
+        let state = Arc::new(Sandbox {
+            ready: OnceLock::new(),
+            health: Mutex::new(None),
+        });
+        tokio::spawn(start(sandbox, Arc::clone(&state)));
+        Self(Backend::Sandbox(state))
     }
 
     pub async fn compile(&self, sql: &str) -> ApiResult<Compiled> {
         match &self.0 {
             Backend::None => Err(unavailable()),
-            Backend::Sandbox(ready) => {
-                let compiler = ready.get().ok_or_else(|| {
+            Backend::Sandbox(sandbox) => {
+                let compiler = sandbox.ready.get().ok_or_else(|| {
                     ApiError::Unavailable(
                         "The SQL compiler is starting. Try again in a moment.".into(),
                     )
@@ -150,10 +162,10 @@ impl SqlCompiler {
     /// waiting when a newer one for the same key arrives answers
     /// [`Rejected::Superseded`]. Without a sandbox (tests), a plain compile.
     pub async fn compile_for(&self, key: &str, sql: String) -> Result<Compiled, Rejected> {
-        let Backend::Sandbox(ready) = &self.0 else {
+        let Backend::Sandbox(sandbox) = &self.0 else {
             return Ok(self.compile(&sql).await?);
         };
-        let compiler = ready.get().ok_or_else(|| {
+        let compiler = sandbox.ready.get().ok_or_else(|| {
             ApiError::Unavailable("The SQL compiler is starting. Try again in a moment.".into())
         })?;
         match compiler.compile_for(key, sql).await {
@@ -169,30 +181,43 @@ impl SqlCompiler {
         }
     }
 
-    /// For `/api/health`: whether compiles can run now. A sandbox compiler
-    /// that lost its prefix to another process (`PrefixInUse`) has stopped
-    /// compiling for good and says so here.
+    /// For `/api/health`: whether compiles can run now, asked of the
+    /// sandbox at most every [`HEALTH_TTL`]. A sandbox compiler that lost
+    /// its prefix to another process (`PrefixInUse`) has stopped compiling
+    /// for good and says so here.
     pub async fn status(&self) -> CompilerStatus {
-        match &self.0 {
-            Backend::None => CompilerStatus::Off,
-            Backend::Function(_) => CompilerStatus::Ok,
-            Backend::Sandbox(ready) => match ready.get() {
-                None => CompilerStatus::Unavailable,
-                Some(compiler) => match compiler.check_admin().await {
-                    Ok(()) => CompilerStatus::Ok,
-                    Err(err) => {
-                        tracing::warn!(error = %Chain(&err), "health: the sandbox compiler is down");
-                        CompilerStatus::Unavailable
-                    }
-                },
-            },
+        let sandbox = match &self.0 {
+            Backend::None => return CompilerStatus::Off,
+            Backend::Function(_) => return CompilerStatus::Ok,
+            Backend::Sandbox(sandbox) => sandbox,
+        };
+        let Some(compiler) = sandbox.ready.get() else {
+            return CompilerStatus::Unavailable;
+        };
+        let lock = || {
+            sandbox
+                .health
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        };
+        if let Some(status) = fresh(*lock(), Instant::now()) {
+            return status;
         }
+        let status = match compiler.check_admin().await {
+            Ok(()) => CompilerStatus::Ok,
+            Err(err) => {
+                tracing::warn!(error = %Chain(&err), "health: the sandbox compiler is down");
+                CompilerStatus::Unavailable
+            }
+        };
+        *lock() = Some((Instant::now(), status));
+        status
     }
 
     /// Releases the sandbox pool (and its prefix), on shutdown.
     pub async fn close(&self) {
-        if let Backend::Sandbox(ready) = &self.0
-            && let Some(compiler) = ready.get()
+        if let Backend::Sandbox(sandbox) = &self.0
+            && let Some(compiler) = sandbox.ready.get()
         {
             compiler.close().await;
         }
@@ -211,6 +236,13 @@ pub enum Rejected {
     Api(#[from] ApiError),
 }
 
+/// A cached health status still young enough to answer with.
+fn fresh(cached: Option<(Instant, CompilerStatus)>, now: Instant) -> Option<CompilerStatus> {
+    cached
+        .filter(|(at, _)| now.saturating_duration_since(*at) < HEALTH_TTL)
+        .map(|(_, status)| status)
+}
+
 fn unavailable() -> ApiError {
     ApiError::Unavailable(
         "The SQL compiler is not available right now. Try again in a minute.".into(),
@@ -219,7 +251,7 @@ fn unavailable() -> ApiError {
 
 /// Starts the compiler, retrying while the sandbox is not there yet (or
 /// another process holds the prefix); a version mismatch is for good.
-async fn start(config: SandboxConfig, ready: Arc<OnceLock<Compiler>>) {
+async fn start(config: SandboxConfig, sandbox: Arc<Sandbox>) {
     let mut wait = Duration::from_secs(1);
     loop {
         match Compiler::start(config.clone()).await {
@@ -229,7 +261,7 @@ async fn start(config: SandboxConfig, ready: Arc<OnceLock<Compiler>>) {
                     server = compiler.server_version(),
                     "sandbox compiler ready"
                 );
-                let _ = ready.set(compiler);
+                let _ = sandbox.ready.set(compiler);
                 return;
             }
             Err(err @ SandboxError::VersionMismatch { .. }) => {
@@ -271,5 +303,22 @@ pub mod render {
 
     pub fn mermaid(schema: &Schema) -> String {
         remus_mermaid::render(schema, &DiagramOptions::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_health_status_is_reused_for_a_few_seconds() {
+        let at = Instant::now();
+        let cached = Some((at, CompilerStatus::Unavailable));
+        assert_eq!(
+            fresh(cached, at + Duration::from_secs(1)),
+            Some(CompilerStatus::Unavailable)
+        );
+        assert_eq!(fresh(cached, at + HEALTH_TTL), None);
+        assert_eq!(fresh(None, at), None);
     }
 }

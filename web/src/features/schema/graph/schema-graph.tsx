@@ -5,7 +5,6 @@ import {
   Background,
   BackgroundVariant,
   type Edge,
-  MiniMap,
   type Node,
   type NodeChange,
   Panel,
@@ -49,6 +48,7 @@ import {
   tableSize,
 } from "./geometry";
 import { type DetailsTarget, HoverDetails } from "./hover-details";
+import { NavigatorMap } from "./navigator-map";
 import { KIND_LABEL } from "./kind";
 import { type Box, type Direction, nearestInDirection, nearestTo } from "./navigation";
 import { RelationEdge, type RelationFlowEdge } from "./relation-edge";
@@ -761,7 +761,7 @@ function GraphCanvas({
             <Panel position="bottom-left" className="!m-3">
               <ZoomControls />
             </Panel>
-            <MiniMap
+            <NavigatorMap
               pannable
               zoomable
               ariaLabel="Overview of the graph"

@@ -322,3 +322,108 @@ async fn a_token_that_pushes_in_a_loop_is_slowed_down(db: PgPool) {
         20
     );
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn identical_pushes_at_once_create_one_version(db: PgPool) {
+    let (_, id, token) = pushable(&db).await;
+    let app = std::sync::Arc::new(TestApp::new(db.clone()));
+    let tasks: Vec<_> = (0..8)
+        .map(|_| {
+            let (app, token) = (app.clone(), token.clone());
+            tokio::spawn(async move {
+                app.push(id, &token, Some("application/json"), model_json(&["users"]))
+                    .await
+                    .status
+            })
+        })
+        .collect();
+    let mut statuses = Vec::new();
+    for task in tasks {
+        statuses.push(task.await.unwrap());
+    }
+    statuses.sort();
+    let created = statuses
+        .iter()
+        .filter(|s| **s == StatusCode::CREATED)
+        .count();
+    assert_eq!(created, 1, "{statuses:?}");
+    assert_eq!(count(&db, id).await, 1);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_rate_limited_push_is_refused_before_its_body_is_read(db: PgPool) {
+    let (_, id, token) = pushable(&db).await;
+    let app = TestApp::new(db);
+    for i in 0..20 {
+        app.push(
+            id,
+            &token,
+            Some("application/json"),
+            model_json(&[&format!("t{i}")]),
+        )
+        .await;
+    }
+    // Over the size limit too: the rate limit answers first.
+    let huge = "x".repeat(PUSH_BODY_LIMIT + 1);
+    let response = app.push(id, &token, Some("text/plain"), huge).await;
+    assert_eq!(response.code(), "rate_limited");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn sql_pushes_share_a_compile_budget_per_database(db: PgPool) {
+    let (_, id, _) = pushable(&db).await;
+    // Tokens cost nothing to create: four of them still share one budget.
+    let mut tokens = Vec::new();
+    for _ in 0..4 {
+        tokens.push(api_token(&db, id, TokenScope::Push).await);
+    }
+    let app = TestApp::compiling(db);
+    let mut created = 0;
+    let mut limited = 0;
+    for (t, token) in tokens.iter().enumerate() {
+        for i in 0..20 {
+            let response = app
+                .push(
+                    id,
+                    token,
+                    Some("text/plain"),
+                    format!("CREATE TABLE t{t}_{i} (id bigint);"),
+                )
+                .await;
+            match response.status {
+                StatusCode::CREATED => created += 1,
+                StatusCode::TOO_MANY_REQUESTS => limited += 1,
+                other => panic!("{other}: {}", response.json()),
+            }
+        }
+    }
+    // The database's burst is 60, refilling at one a second: a slow run may
+    // earn one or two more, never the 80 four tokens could push alone.
+    assert!((60..=65).contains(&created), "{created} created");
+    assert_eq!(created + limited, 80);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_token_records_its_use_at_most_once_a_minute(db: PgPool) {
+    let (_, id, token) = pushable(&db).await;
+    let app = TestApp::new(db.clone());
+    let last_used = async || -> chrono::DateTime<chrono::Utc> {
+        sqlx::query_scalar!(r#"SELECT last_used_at AS "at!" FROM api_tokens"#)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    };
+    app.push(id, &token, Some("application/json"), model_json(&["a"]))
+        .await;
+    let first = last_used().await;
+    app.push(id, &token, Some("application/json"), model_json(&["b"]))
+        .await;
+    assert_eq!(last_used().await, first);
+    sqlx::query!("UPDATE api_tokens SET last_used_at = now() - interval '2 minutes'")
+        .execute(&db)
+        .await
+        .unwrap();
+    app.push(id, &token, Some("application/json"), model_json(&["c"]))
+        .await;
+    assert!(last_used().await >= first);
+}

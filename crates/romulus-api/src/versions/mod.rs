@@ -385,6 +385,7 @@ async fn upload(
     }
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     state.limits.compile.check(member.user.id)?;
+    state.limits.database_compiles.check(database.id)?;
     let model = compiled_model(&state.compiler, &body.sql, &database.slug).await?;
     let new = NewVersion {
         database_id: database.id,
@@ -398,11 +399,12 @@ async fn upload(
         layout: None,
         expected_base: None,
     };
-    match store(&state.db, new, false).await? {
-        Stored::Created(version) | Stored::Unchanged(version) => {
-            Ok((StatusCode::CREATED, Json(version)))
-        }
-    }
+    // Uploads always create a version (`skip_unchanged` is false): a person
+    // asked for it, and the source may differ even when the model does not.
+    let Stored::Created(version) = store(&state.db, new, false).await? else {
+        unreachable!("store skips an unchanged model only when asked to");
+    };
+    Ok((StatusCode::CREATED, Json(version)))
 }
 
 /// Compiles SQL without storing anything: its errors, or what it would
@@ -433,6 +435,7 @@ async fn check(
 ) -> ApiResult<Json<CompileReport>> {
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     state.limits.compile.check(member.user.id)?;
+    state.limits.database_compiles.check(database.id)?;
     let compiled = state.compiler.compile(&body.sql).await?;
     let Some(model) = compiled.model else {
         return Ok(Json(CompileReport {
@@ -446,21 +449,27 @@ async fn check(
     )
     .fetch_optional(&state.db)
     .await?;
-    let (against, previous) = match latest {
-        Some(latest) => (
-            Some(latest.number),
-            Schema::deserialize(&latest.model).unwrap_or_else(|_| empty(&model)),
-        ),
-        None => (None, empty(&model)),
-    };
-    let diff = romulus_diff::diff(&previous, &model);
-    Ok(Json(CompileReport {
-        diagnostics: compiled.diagnostics,
-        changes: Some(Changes {
+    // Parsing the latest model and diffing: off the async workers.
+    let changes = tokio::task::spawn_blocking(move || {
+        let (against, previous) = match latest {
+            Some(latest) => (
+                Some(latest.number),
+                Schema::deserialize(&latest.model).unwrap_or_else(|_| empty(&model)),
+            ),
+            None => (None, empty(&model)),
+        };
+        let diff = romulus_diff::diff(&previous, &model);
+        Changes {
             against,
             unchanged: against.is_some() && diff.is_empty(),
             summary: diff.summary.text,
-        }),
+        }
+    })
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(CompileReport {
+        diagnostics: compiled.diagnostics,
+        changes: Some(changes),
     }))
 }
 

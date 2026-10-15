@@ -66,6 +66,34 @@ impl<S: Send + Sync> FromRequest<S> for Bytes {
     }
 }
 
+/// Reads a raw body (`axum::body::Body`, taken last by a handler that must
+/// decide something before reading it, such as a rate limit), refusing more
+/// than `limit` bytes with 413 in the API's format: at once when
+/// `Content-Length` says so, otherwise as soon as the stream goes past it.
+pub async fn read_body(
+    headers: &axum::http::HeaderMap,
+    body: axum::body::Body,
+    limit: usize,
+) -> Result<axum::body::Bytes, ApiError> {
+    let declared = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if declared.is_some_and(|length| length > limit as u64) {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    axum::body::to_bytes(body, limit).await.map_err(|err| {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&err);
+        while let Some(cause) = source {
+            if cause.is::<http_body_util::LengthLimitError>() {
+                return ApiError::PayloadTooLarge;
+            }
+            source = cause.source();
+        }
+        ApiError::BadRequest(format!("The body could not be read: {err}"))
+    })
+}
+
 /// Maps an axum rejection by its status; the text says what was wrong
 /// (serde's message names the field and position).
 fn rejected(status: StatusCode, text: String) -> ApiError {

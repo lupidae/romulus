@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE databases\n         SET name = coalesce($3, name), slug = coalesce($4, slug), description = coalesce($5, description)\n         WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL\n         RETURNING slug",
+  "query": "UPDATE databases\n         SET name = coalesce($3, name), slug = coalesce($4, slug), description = coalesce($5, description)\n         WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL\n           AND (name, slug, description)\n               IS DISTINCT FROM (coalesce($3, name), coalesce($4, slug), coalesce($5, description))\n         RETURNING slug",
   "describe": {
     "columns": [
       {
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "3385639d80a659796d03e59ff3d00bddc9bf88bbbf3f091a154776b15923778c"
+  "hash": "24d2a79dbed23b91146436af4df46850ed6c9764a79c6037b01a0ce4dd959a91"
 }

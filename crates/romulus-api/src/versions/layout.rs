@@ -50,9 +50,30 @@ pub struct TableGroup {
 }
 
 impl VersionLayout {
-    /// A stored layout, leniently: anything that is not one is empty.
+    /// A stored layout, leniently, entry by entry: a position or a group that
+    /// does not read is left out, the rest is kept; anything that is not an
+    /// object at all is empty.
     pub fn from_value(value: &serde_json::Value) -> Self {
-        Self::deserialize(value).unwrap_or_default()
+        fn entries<T: for<'de> Deserialize<'de>>(
+            value: &serde_json::Value,
+            key: &str,
+        ) -> BTreeMap<String, T> {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(name, entry)| {
+                            Some((name.clone(), T::deserialize(entry).ok()?))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        Self {
+            layout: entries(value, "layout"),
+            groups: entries(value, "groups"),
+        }
     }
 
     /// Only what `model` still has: positions of its tables, and group
@@ -106,6 +127,19 @@ mod tests {
         );
         let empty = serde_json::to_value(VersionLayout::default()).unwrap();
         assert_eq!(empty, json!({ "layout": {}, "groups": {} }));
+    }
+
+    #[test]
+    fn a_bad_entry_does_not_lose_the_rest() {
+        let layout = VersionLayout::from_value(&json!({
+            "layout": { "public.users": { "x": 1, "y": 2 }, "public.bad": { "x": "left" } },
+            "groups": {
+                "good": { "name": "Core", "color": "blue", "members": ["public.users"] },
+                "bad": { "name": 3 }
+            }
+        }));
+        assert_eq!(layout.layout.keys().collect::<Vec<_>>(), ["public.users"]);
+        assert_eq!(layout.groups.keys().collect::<Vec<_>>(), ["good"]);
     }
 
     #[test]

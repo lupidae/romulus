@@ -67,6 +67,19 @@ test("a database, from its first upload to a push from CI, read-only for reviewe
   const secret = await admin.getByRole("textbox", { name: "API token" }).inputValue();
   expect(secret).toMatch(/^rom_/);
   await admin.getByRole("button", { name: "Done" }).click();
+  // A second token starts from an empty form: the first secret is gone.
+  await admin.getByRole("button", { name: "New token" }).click();
+  const second = admin.getByRole("dialog", { name: "New API token" });
+  await expect(second.getByLabel("Name")).toHaveValue("");
+  await expect(admin.getByRole("textbox", { name: "API token" })).toHaveCount(0);
+  await second.getByLabel("Name").fill("remus on prod");
+  await second.getByRole("button", { name: "Create token" }).click();
+  const secondSecret = await admin.getByRole("textbox", { name: "API token" }).inputValue();
+  expect(secondSecret).not.toBe(secret);
+  await admin.getByRole("button", { name: "Done" }).click();
+  await expect(admin.getByRole("list", { name: "API tokens" }).getByRole("listitem")).toHaveCount(
+    2,
+  );
   const databaseId = await admin.getByRole("textbox", { name: "Database ID" }).inputValue();
   const push = await request.post(`/api/databases/${databaseId}/versions?message=Add%20invoices`, {
     headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/sql" },
@@ -79,6 +92,14 @@ test("a database, from its first upload to a push from CI, read-only for reviewe
     data: `${FIXED}CREATE TABLE invoices (id bigint PRIMARY KEY, order_id bigint REFERENCES orders (id));\n`,
   });
   expect(await again.json()).toMatchObject({ status: "unchanged" });
+
+  // The page does not know of v2 yet; the version picker does, and v2 opens.
+  await admin.getByRole("link", { name: "Schema", exact: true }).click();
+  await admin.getByRole("button", { name: /choose another version/ }).click();
+  await admin.getByRole("menuitem", { name: /^v2/ }).click();
+  await expect(admin).toHaveURL(new RegExp(`/app/${slug}/billing/v/2$`));
+  await expect(admin.getByText("Latest")).toBeVisible();
+  await expect(admin.locator(".react-flow__node", { hasText: "invoices" })).toBeVisible();
 
   // The history has both; v1 opens read-only, marked as older.
   await admin.getByRole("link", { name: /History/ }).click();

@@ -191,15 +191,21 @@ function CreateTokenDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The secret lives only while the dialog that showed it is open: every
+  // way of closing forgets it, and every opening starts from the form
+  // (adjusted during render, so a reopened dialog never paints the old one).
   const [created, setCreated] = React.useState<CreatedToken | null>(null);
+  const [shownOpen, setShownOpen] = React.useState(open);
+  if (open !== shownOpen) {
+    setShownOpen(open);
+    if (open) setCreated(null);
+  }
+  const close = () => {
+    setCreated(null);
+    onOpenChange(false);
+  };
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        onOpenChange(next);
-        if (!next) setCreated(null);
-      }}
-    >
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
       <DialogContent className="max-w-lg">
         {created ? (
           <>
@@ -219,7 +225,7 @@ function CreateTokenDialog({
               <CodeBlock code={pushCommand(database.id)} label="Push command" />
             </div>
             <DialogFooter>
-              <Button variant="primary" onClick={() => onOpenChange(false)}>
+              <Button variant="primary" onClick={close}>
                 Done
               </Button>
             </DialogFooter>
@@ -235,7 +241,7 @@ function CreateTokenDialog({
                 org={org}
                 db={database.slug}
                 onCreated={setCreated}
-                onCancel={() => onOpenChange(false)}
+                onCancel={close}
               />
             )}
           </>

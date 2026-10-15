@@ -20,7 +20,7 @@
 //! push on every run; otherwise `201 {"status": "created", "version": …}`.
 
 use axum::{
-    extract::{DefaultBodyLimit, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
 };
 use remus_core::Schema;
@@ -38,7 +38,7 @@ use crate::{
     databases::tokens::{Bearer, scope},
     domain::{SourceKind, VersionOrigin},
     error::ErrorBody,
-    extract::{Bytes, Json, Path, Query},
+    extract::{Json, Path, Query, read_body},
     orgs::invalid,
 };
 
@@ -49,8 +49,7 @@ pub const PUSH_BODY_LIMIT: usize = 16 * 1024 * 1024;
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(push))
-        .layer(DefaultBodyLimit::max(PUSH_BODY_LIMIT))
-        .merge(OpenApiRouter::new().routes(routes!(read)))
+        .routes(routes!(read))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -144,12 +143,14 @@ async fn push(
     State(state): State<AppState>,
     Query(query): Query<PushQuery>,
     headers: HeaderMap,
-    Bytes(body): Bytes,
+    body: axum::body::Body,
 ) -> ApiResult<(StatusCode, Json<PushResult>)> {
+    // Before reading up to 16 MiB of it.
     state.limits.push.check(token.token_id)?;
     let message = checked_message(query.message.as_deref())?;
+    let body = read_body(&headers, body, PUSH_BODY_LIMIT).await?;
     let format = format(&headers, &body)?;
-    let Ok(text) = String::from_utf8(body.to_vec()) else {
+    let Ok(mut text) = String::from_utf8(body.to_vec()) else {
         return Err(invalid("body", "The body is not UTF-8 text."));
     };
     if text.trim().is_empty() {
@@ -160,17 +161,28 @@ async fn push(
     }
     let (model, source_kind) = match format {
         Format::Json => {
-            let model = Schema::from_json(&text).map_err(|err| ApiError::Unprocessable {
+            // Megabytes of JSON: parsed off the async workers.
+            let (model, kept) = tokio::task::spawn_blocking(move || {
+                let model = Schema::from_json(&text).map(Schema::canonical);
+                (model, text)
+            })
+            .await
+            .map_err(ApiError::internal)?;
+            text = kept;
+            let model = model.map_err(|err| ApiError::Unprocessable {
                 code: "invalid_schema",
                 message: format!("This is not a remus schema: {err}."),
                 details: Some(json!({ "error": err.to_string() })),
             })?;
-            (model.canonical(), SourceKind::RemusJson)
+            (model, SourceKind::RemusJson)
         }
-        Format::Sql => (
-            compiled_model(&state.compiler, &text, &token.database_slug).await?,
-            SourceKind::Sql,
-        ),
+        Format::Sql => {
+            state.limits.database_compiles.check(token.database_id)?;
+            (
+                compiled_model(&state.compiler, &text, &token.database_slug).await?,
+                SourceKind::Sql,
+            )
+        }
     };
     let new = NewVersion {
         database_id: token.database_id,

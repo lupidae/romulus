@@ -254,3 +254,17 @@ test("a graph first shown after mounting hidden fits the pane", async ({ page })
   expect(node.x).toBeGreaterThanOrEqual(pane.x);
   expect(node.x + node.width).toBeLessThanOrEqual(pane.x + pane.width);
 });
+
+test("the minimap shows only when part of the graph is out of view", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const minimap = page.locator(".react-flow__minimap");
+  for (const fixture of ["multi-schema", "medium", "small"]) {
+    await open(page, `fixture=${fixture}`);
+    await page.getByRole("button", { name: "Fit to screen" }).click();
+    // At fit everything is in view: no minimap to cover a table.
+    await expect(minimap, fixture).toHaveCount(0);
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    await expect(minimap, fixture).toBeVisible();
+  }
+});

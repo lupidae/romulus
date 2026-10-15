@@ -18,7 +18,12 @@ export const Route = createFileRoute("/$org/$db/v/$number")({
     stringify: ({ number }) => ({ number: String(number) }),
   },
   loader: async ({ context: { queryClient }, params: { org, db, number } }) => {
-    const database = await queryClient.ensureQueryData(databaseQuery(org, db));
+    let database = await queryClient.ensureQueryData(databaseQuery(org, db));
+    if (number > (database.latest?.number ?? 0)) {
+      // Newer than what this page knew: maybe pushed since. Ask again before
+      // saying it does not exist.
+      database = await queryClient.fetchQuery({ ...databaseQuery(org, db), staleTime: 0 });
+    }
     if (number <= (database.latest?.number ?? 0)) {
       void queryClient.prefetchQuery(versionQuery(org, db, database.id, number));
       void queryClient.prefetchQuery(versionTextsQuery(org, db, database.id, number));

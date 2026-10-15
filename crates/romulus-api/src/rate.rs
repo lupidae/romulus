@@ -1,5 +1,5 @@
-//! Rate limits for endpoints that cost real work: pushes (per API token) and
-//! SQL compiles (per person). A token bucket per key: a burst, then one more
+//! Rate limits for endpoints that cost real work: pushes (per API token), SQL
+//! compiles (per person, and per database). A token bucket per key: a burst, then one more
 //! request per refill period. In memory, like everything per-instance in the
 //! MVP (one API instance); a restart forgets the counts, which only ever
 //! errs on the generous side.
@@ -87,6 +87,9 @@ pub struct Limits {
     pub push: Limiter<Uuid>,
     /// SQL compiles (checks and uploads) per person: the sandbox is shared.
     pub compile: Limiter<Uuid>,
+    /// SQL compiles per database, whoever asks (people, and every API token
+    /// of it, which cost nothing to create).
+    pub database_compiles: Limiter<Uuid>,
 }
 
 impl Default for Limits {
@@ -94,6 +97,7 @@ impl Default for Limits {
         Self {
             push: Limiter::new(20, Duration::from_secs(3)),
             compile: Limiter::new(30, Duration::from_secs(2)),
+            database_compiles: Limiter::new(60, Duration::from_secs(1)),
         }
     }
 }

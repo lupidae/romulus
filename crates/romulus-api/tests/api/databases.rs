@@ -290,3 +290,38 @@ async fn the_list_shows_each_latest_version_most_recent_first(db: PgPool) {
     assert_eq!(list[1]["slug"], "quiet");
     assert!(list[1]["latest"].is_null());
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn saving_nothing_new_changes_nothing(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let app = TestApp::new(db);
+    let dev = app.as_user(&team.developer);
+    let created = dev
+        .post(
+            &team.path("/databases"),
+            &json!({ "name": "Billing", "slug": "billing", "description": "Plans" }),
+        )
+        .await
+        .json();
+    let saved = dev
+        .patch(
+            &team.path("/databases/billing"),
+            &json!({ "name": "Billing", "slug": "billing", "description": "Plans" }),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK);
+    assert_eq!(saved.json()["updated_at"], created["updated_at"]);
+    assert_eq!(
+        saved.json()["last_activity_at"],
+        created["last_activity_at"]
+    );
+    // A real change does move it.
+    let renamed = dev
+        .patch(
+            &team.path("/databases/billing"),
+            &json!({ "name": "Payments" }),
+        )
+        .await
+        .json();
+    assert_ne!(renamed["updated_at"], created["updated_at"]);
+}

@@ -256,7 +256,8 @@ pub mod scope {
 /// `{database_id}` in its path (the segment must be named so) with at least
 /// scope `S`. Answers 401 `invalid_token` without a valid token, 403
 /// `wrong_database` for another database's token, and 403
-/// `insufficient_scope` below `S`. Records the token's `last_used_at`.
+/// `insufficient_scope` below `S`. Records the token's `last_used_at` (at
+/// most once a minute).
 #[derive(Debug, Clone)]
 pub struct Bearer<S: scope::Required = scope::Push> {
     pub token_id: Uuid,
@@ -325,8 +326,10 @@ impl<S: scope::Required> FromRequestParts<AppState> for Bearer<S> {
             });
         }
 
+        // At most once a minute: a token pushing in a loop writes no faster.
         sqlx::query!(
-            "UPDATE api_tokens SET last_used_at = now() WHERE id = $1",
+            "UPDATE api_tokens SET last_used_at = now()
+             WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
             token.id
         )
         .execute(&state.db)
