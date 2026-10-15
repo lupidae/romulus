@@ -5,13 +5,14 @@
 import {
   type Chunk,
   getChunks,
+  getOriginalDoc,
   MergeView,
   uncollapseUnchanged,
   unifiedMergeView,
 } from "@codemirror/merge";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension, type Text } from "@codemirror/state";
-import { drawSelection, EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { drawSelection, EditorView, keymap, lineNumbers, ViewPlugin } from "@codemirror/view";
 
 import {
   codeStyle,
@@ -211,12 +212,61 @@ export function createSqlDiff(parent: HTMLElement, options: SqlDiffOptions): Sql
     };
   }
 
+  // The old side has no editor here: its lines are drawn inside the
+  // deleted chunks. They take clicks (the cursor of side a) and highlights.
+  let oldHighlights: Highlights = { related: [] };
+  // The editor then puts its own cursor where the chunk sits in the new
+  // text: that one is not the reader's pick.
+  let oldPickAt = -Infinity;
+  const unified: SqlDiffOptions = {
+    ...options,
+    onCursor: (side, offset) => {
+      if (performance.now() - oldPickAt < 400) return;
+      options.onCursor?.(side, offset);
+    },
+  };
+  /** The deleted chunk's lines, each with its range in the old text. */
+  const deletedLines = (view: EditorView, chunkDom: Element) => {
+    const at = view.posAtDOM(chunkDom);
+    const chunk = (getChunks(view.state)?.chunks ?? []).find((c) => c.fromB === at);
+    if (!chunk) return [];
+    const original = getOriginalDoc(view.state);
+    const first = original.lineAt(chunk.fromA).number;
+    return [...chunkDom.querySelectorAll<HTMLElement>(".cm-deletedLine")].map((dom, i) => {
+      const line = original.line(Math.min(first + i, original.lines));
+      return { dom, from: line.from, to: line.to };
+    });
+  };
+  const paintOld = (view: EditorView) => {
+    const ranges = [
+      ...(oldHighlights.primary ? [{ ...oldHighlights.primary, cls: "cm-statement" }] : []),
+      ...oldHighlights.related.map((r) => ({ ...r, cls: "cm-statement-related" })),
+    ];
+    for (const chunkDom of view.contentDOM.querySelectorAll(".cm-deletedChunk")) {
+      for (const line of deletedLines(view, chunkDom)) {
+        const hit = ranges.find((r) => line.from < r.to && line.to >= r.from);
+        line.dom.classList.toggle("cm-statement", hit?.cls === "cm-statement");
+        line.dom.classList.toggle("cm-statement-related", hit?.cls === "cm-statement-related");
+      }
+    }
+  };
+  const oldSide = [
+    ViewPlugin.define((view) => {
+      view.requestMeasure({ read: () => null, write: () => paintOld(view) });
+      return {
+        // Chunks are drawn during the update: paint after it.
+        update: (update) =>
+          update.view.requestMeasure({ read: () => null, write: () => paintOld(update.view) }),
+      };
+    }),
+  ];
+
   const view = new EditorView({
     parent,
     state: EditorState.create({
       doc: options.after,
       extensions: [
-        sideExtensions(options.labels.b, "b", options),
+        sideExtensions(options.labels.b, "b", unified),
         unifiedMergeView({
           original: options.before,
           gutter: true,
@@ -225,12 +275,26 @@ export function createSqlDiff(parent: HTMLElement, options: SqlDiffOptions): Sql
           syntaxHighlightDeletions: true,
           collapseUnchanged: collapse,
         }),
+        oldSide,
         EditorView.theme({ "&": { height: "100%" } }),
         // One column in a narrow pane: long lines wrap instead of hiding.
         EditorView.lineWrapping,
       ],
     }),
   });
+  // A click in a deleted line: the cursor of side a. A native listener, as
+  // the editor leaves events inside widgets (the deleted chunks) alone.
+  const onOldSide = (event: MouseEvent) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const lineDom = target?.closest(".cm-deletedLine");
+    const chunkDom = lineDom?.closest(".cm-deletedChunk");
+    if (!lineDom || !chunkDom) return;
+    const line = deletedLines(view, chunkDom).find((l) => l.dom === lineDom);
+    if (!line) return;
+    oldPickAt = performance.now();
+    options.onCursor?.("a", line.from);
+  };
+  view.contentDOM.addEventListener("mousedown", onOldSide);
   const chunks = () => getChunks(view.state)?.chunks ?? [];
   return {
     reveal(ranges) {
@@ -244,9 +308,12 @@ export function createSqlDiff(parent: HTMLElement, options: SqlDiffOptions): Sql
       scrollTo(view, at);
     },
     setHighlights(h) {
+      oldHighlights = h.a;
       view.dispatch({ effects: highlightEffect.of(h.b) });
+      paintOld(view);
     },
     destroy() {
+      view.contentDOM.removeEventListener("mousedown", onOldSide);
       view.destroy();
     },
   };

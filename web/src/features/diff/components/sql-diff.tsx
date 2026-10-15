@@ -169,20 +169,31 @@ export function SqlDiff({
           </span>
         </h2>
         <div className="ml-auto flex items-center gap-1">
-          <ToggleGroup
-            type="single"
-            value={layout}
-            onValueChange={(v) => v && setChoice(v as DiffLayout)}
-            aria-label="Diff layout"
-            className="hidden h-7.5 sm:inline-flex"
+          <Tooltip
+            content={
+              choice === "auto"
+                ? `Auto: ${layout === "split" ? "side by side" : "unified"} at this width`
+                : "Diff layout"
+            }
           >
-            <ToggleGroupItem value="split" className="h-6.5 px-2">
-              Side by side
-            </ToggleGroupItem>
-            <ToggleGroupItem value="unified" className="h-6.5 px-2">
-              Unified
-            </ToggleGroupItem>
-          </ToggleGroup>
+            <ToggleGroup
+              type="single"
+              value={choice}
+              onValueChange={(v) => v && setChoice(v as LayoutChoice)}
+              aria-label="Diff layout"
+              className="h-7.5"
+            >
+              <ToggleGroupItem value="auto" className="h-6.5 px-2">
+                Auto
+              </ToggleGroupItem>
+              <ToggleGroupItem value="split" className="h-6.5 px-2" aria-label="Side by side">
+                Split
+              </ToggleGroupItem>
+              <ToggleGroupItem value="unified" className="h-6.5 px-2">
+                Unified
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </Tooltip>
           <Tooltip content={collapse ? "Show unchanged lines" : "Fold unchanged lines"}>
             <Button
               variant="ghost"

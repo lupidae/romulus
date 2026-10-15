@@ -119,7 +119,7 @@ test("two versions compared: from the history, a change picked, identical versio
 
   // A change picked in the list: selected in the graph, the SQL scrolled to it.
   await change(page, "orders").click();
-  await expect(change(page, "orders")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "orders")).toHaveAttribute("aria-pressed", "true");
   await expect(node(page, "orders").locator("[data-selected]")).toBeVisible();
   await expectStatementInView(page);
   await expect(page).toHaveURL(/change=table%3Apublic\.orders/);
@@ -127,7 +127,7 @@ test("two versions compared: from the history, a change picked, identical versio
 
   // j and k go through the changes, the graph following.
   await page.keyboard.press("k");
-  await expect(change(page, "invoices")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "invoices")).toHaveAttribute("aria-pressed", "true");
   await expect(node(page, "invoices").locator("[data-selected]")).toBeVisible();
   // A table clicked in the graph selects its change (the view fitted first).
   await page.getByRole("application", { name: "Schema graph" }).focus();
@@ -135,7 +135,7 @@ test("two versions compared: from the history, a change picked, identical versio
   await expect(node(page, "customers")).toBeInViewport();
   await page.waitForTimeout(400);
   await node(page, "customers").click();
-  await expect(change(page, "customers")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "customers")).toHaveAttribute("aria-pressed", "true");
 
   // The filter keeps what it shows in the address.
   await page.getByRole("radio", { name: "Added: 1" }).click();

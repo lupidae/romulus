@@ -254,7 +254,7 @@ function ChangeRow({
     <Button
       variant="ghost"
       data-change={item.id}
-      aria-current={selected || undefined}
+      aria-pressed={selected}
       // Named by the object and its status; its lines describe it.
       aria-label={`${name}, ${STATUS_LABEL[item.status].toLowerCase()}${kind ? `, ${kind}` : ""}`}
       aria-describedby={lines.length ? linesId : undefined}

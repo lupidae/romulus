@@ -278,7 +278,8 @@ function GraphCanvas({
     (key: string) => {
       const box = boxOf(key);
       const el = wrapper.current;
-      if (!box || !el) return;
+      // A hidden graph has no size to center in (React Flow would go NaN).
+      if (!box || !el || el.clientWidth === 0) return;
       autoFit.current = false;
       const { x, y, zoom } = flow.getViewport();
       const left = box.x * zoom + x;
@@ -304,7 +305,7 @@ function GraphCanvas({
     (key: string) => {
       const box = boxOf(key);
       const el = wrapper.current;
-      if (!box || !el) return;
+      if (!box || !el || el.clientWidth === 0) return;
       autoFit.current = false;
       const fit = Math.min(
         el.clientWidth / (box.width + 320),

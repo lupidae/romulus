@@ -181,11 +181,29 @@ export function SchemaDiffView({
         } as const);
   const tab = (name: Pane) => ({ id: `${uid}-tab-${name}`, "aria-controls": `${uid}-${name}` });
   const [pane, setPane] = React.useState<Pane>("changes");
+  const [hidden, setHidden] = usePreference<HiddenPane>(`${storageKey}:hidden`, "none", isHidden);
+  const showGraph = wide ? hidden !== "graph" : pane === "graph";
+  const showSql = wide ? hidden !== "text" : pane === "sql";
+
+  // A pick made while the graph is hidden (another tab on a phone, "Text
+  // only") zooms it when it is shown, not while it has no size.
+  const [zoomOnShow, setZoomOnShow] = React.useState<string | null>(null);
+  const [graphWasShown, setGraphWasShown] = React.useState(showGraph);
+  if (graphWasShown !== showGraph) {
+    setGraphWasShown(showGraph);
+    if (showGraph && zoomOnShow) {
+      setFocus({ key: zoomOnShow });
+      setZoomOnShow(null);
+    }
+  }
 
   const select = (next: Selection) => {
     setSelection(next);
     const { item, table, source } = next;
-    if (table && (source === "list" || source === "keys")) setFocus({ key: table });
+    if (table && (source === "list" || source === "keys")) {
+      if (showGraph) setFocus({ key: table });
+      else setZoomOnShow(table);
+    }
     setTarget(
       item
         ? { item, scroll: source !== "sql" }
@@ -240,7 +258,6 @@ export function SchemaDiffView({
 
   // ---- Panes ------------------------------------------------------------------
   const [ratio, setRatio] = usePreference(`${storageKey}:split`, 0.55, isRatio);
-  const [hidden, setHidden] = usePreference<HiddenPane>(`${storageKey}:hidden`, "none", isHidden);
   const [fullScreen, setFullScreen] = React.useState(false);
   React.useEffect(() => {
     if (!fullScreen) return;
@@ -262,8 +279,6 @@ export function SchemaDiffView({
       onFullScreenChange={setFullScreen}
     />
   );
-  const showGraph = wide ? hidden !== "graph" : pane === "graph";
-  const showSql = wide ? hidden !== "text" : pane === "sql";
   // React Flow cannot start in a hidden pane (no size, no first fit): on a
   // phone the graph is created the first time its tab is shown, then kept.
   const [graphWanted, setGraphWanted] = React.useState(showGraph);

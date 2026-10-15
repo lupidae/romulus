@@ -57,7 +57,7 @@ describe("ChangeList", () => {
     const posts = screen.getByRole("button", { name: /^posts,/ });
     await user.click(posts);
     expect(onSelect).toHaveBeenCalledWith("table:public.posts");
-    expect(posts).toHaveAttribute("aria-current", "true");
+    expect(posts).toHaveAttribute("aria-pressed", "true");
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("button", { name: /^profiles,/ })).toHaveFocus();
     await user.keyboard("{ArrowUp}{ArrowUp}");

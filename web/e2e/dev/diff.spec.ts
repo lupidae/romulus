@@ -51,12 +51,12 @@ test("a change picked in the list is selected in the graph and scrolled to in th
   await expect(page).toHaveURL(/change=table%3Apublic\.posts/);
 
   await page.keyboard.press("j");
-  await expect(change(page, "profiles")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "profiles")).toHaveAttribute("aria-pressed", "true");
   await expect(selectedNode(page, "profiles")).toBeVisible();
   // j and k work with the graph focused too, which has keys of its own.
   await page.getByRole("application", { name: "Schema graph" }).focus();
   await page.keyboard.press("k");
-  await expect(change(page, "posts")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "posts")).toHaveAttribute("aria-pressed", "true");
 
   // The graph's pick selects the change (fit first: users is off screen);
   // an enum has no node, only SQL.
@@ -64,7 +64,7 @@ test("a change picked in the list is selected in the graph and scrolled to in th
   await expect(page.locator('.react-flow__node[data-id="public.users"]')).toBeInViewport();
   await page.waitForTimeout(400);
   await page.locator('.react-flow__node[data-id="public.users"]').click();
-  await expect(change(page, "users")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "users")).toHaveAttribute("aria-pressed", "true");
   await change(page, "reaction_kind").click();
   await expect(page.locator(".react-flow__node [data-selected]")).toHaveCount(0);
   await expectStatementInView(page);
@@ -73,7 +73,7 @@ test("a change picked in the list is selected in the graph and scrolled to in th
 
 test("filters by status, and opens on the change in the address", async ({ page }) => {
   const errors = await open(page, "?change=table:public.comments&show=changed");
-  await expect(change(page, "comments")).toHaveAttribute("aria-current", "true");
+  await expect(change(page, "comments")).toHaveAttribute("aria-pressed", "true");
   await expect(selectedNode(page, "comments")).toBeVisible();
   const rows = page.locator("[data-change]");
   await expect(rows).toHaveCount(3);
@@ -84,9 +84,12 @@ test("filters by status, and opens on the change in the address", async ({ page 
 });
 
 test("the SQL side by side, folded, and unfolded", async ({ page }) => {
+  // Wide enough for Auto to put the sides next to each other.
+  await page.setViewportSize({ width: 1600, height: 900 });
   const errors = await open(page, "?change=table:public.users");
   await page.getByRole("button", { name: "Layout" }).click();
   await page.getByRole("menuitemradio", { name: "Text only" }).click();
+  // Auto picks side by side once the pane is wide enough; the choice can be forced.
   await page.getByRole("radio", { name: "Side by side" }).click();
   await expect(page.getByRole("radio", { name: "Side by side" })).toBeChecked();
   await expect(page.getByRole("textbox", { name: "SQL of v1" })).toBeVisible();
@@ -98,6 +101,9 @@ test("the SQL side by side, folded, and unfolded", async ({ page }) => {
   await page.getByRole("radio", { name: "Unified" }).click();
   await expect(page.getByRole("textbox", { name: "SQL of v1" })).toHaveCount(0);
   await expect(page.locator(".cm-deletedChunk").first()).toBeAttached();
+  // And back to letting the width decide: the pane is wide, so side by side.
+  await page.getByRole("radio", { name: "Auto" }).click();
+  await expect(page.getByRole("textbox", { name: "SQL of v1" })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -112,5 +118,23 @@ test("on a phone the three are tabs, and a pick goes on to the graph", async ({ 
   await expect(selectedNode(page, "posts")).toBeInViewport();
   await page.getByRole("tab", { name: "SQL" }).click();
   await expectStatementInView(page);
+
+  // The unified view keeps the old side: a removed table is picked from its
+  // deleted lines, and its lines are the ones marked when it is selected.
+  const removed = page.locator(".cm-deletedLine", { hasText: "CREATE TABLE public.profiles" });
+  await removed.click();
+  // (The list is another tab's panel, hidden: found by its row's id.)
+  await expect(page.locator('[data-change="table:public.profiles"]')).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(removed).toHaveClass(/cm-statement/);
+
+  // j on the list's tab leaves the hidden graph alone; showing it zooms there.
+  await page.getByRole("tab", { name: /Changes/ }).click();
+  await page.keyboard.press("j");
+  await expect(change(page, "subscriptions")).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("tab", { name: "Graph" }).click();
+  await expect(selectedNode(page, "subscriptions")).toBeInViewport();
   expect(errors).toEqual([]);
 });
