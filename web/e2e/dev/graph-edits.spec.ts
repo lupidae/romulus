@@ -74,9 +74,7 @@ test("columns are added, retyped, defaulted and commented from small popovers", 
   await expect(row(page, "users", "nickname")).toContainText("varchar(255)");
   await expect
     .poll(() => sqlText(page))
-    .toContain(
-      "ALTER TABLE public.users ADD COLUMN nickname varchar(255) NOT NULL DEFAULT '';",
-    );
+    .toContain("ALTER TABLE public.users ADD COLUMN nickname varchar(255) NOT NULL DEFAULT '';");
 
   // Retype: the column's menu.
   await row(page, "tags", "name").click({ button: "right" });
