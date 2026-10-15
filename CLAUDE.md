@@ -64,8 +64,8 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +4 | `ROMULUS_ZITADEL_PORT` | Zitadel, issuer `http://localhost:<port>` |
 | +5 | `ROMULUS_PREVIEW_PORT` | `vite preview`: the origin Playwright drives |
 | +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
-| +7 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel sends (sign-up codes) |
 | +7 | `ROMULUS_SITE_PORT` | the static homepage (`just site`, site/'s Playwright) |
+| +8 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel sends (sign-up codes) |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
 the worktree path>`, computed by `scripts/dev-env --project-name` and passed
