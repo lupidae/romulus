@@ -237,6 +237,77 @@ async fn a_diff_is_computed_once_per_pair_of_versions(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_cached_diff_reads_no_full_version(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "billing").await;
+    store(&db, pushed(id, &["invoices"]), false).await.unwrap();
+    store(&db, pushed(id, &["invoices", "plans"]), false)
+        .await
+        .unwrap();
+    let app = TestApp::new(db.clone());
+    let reviewer = app.as_user(&team.reviewer);
+    let path = team.path("/databases/billing/diff?from=1&to=2");
+    let first = reviewer.get(&path).await.json();
+
+    // Without the models' column, loading a full version fails: a hit
+    // still answers, from the summaries and the cache alone.
+    sqlx::query("ALTER TABLE versions RENAME COLUMN model TO model_elsewhere")
+        .execute(&db)
+        .await
+        .unwrap();
+    let again = reviewer.get(&path).await;
+    assert_eq!(again.status, StatusCode::OK);
+    assert_eq!(again.json(), first);
+    let miss = reviewer
+        .get(&team.path("/databases/billing/diff?from=2&to=1"))
+        .await;
+    assert_eq!(miss.status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_cached_diff_names_authors_as_they_are_now(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "billing").await;
+    let token = api_token(&db, id, TokenScope::Push).await;
+    let app = TestApp::compiling(db.clone());
+    app.as_user(&team.developer)
+        .post(
+            &team.path("/databases/billing/versions"),
+            &json!({ "sql": BILLING }),
+        )
+        .await;
+    app.push(
+        id,
+        &token,
+        Some("application/json"),
+        model_json(&["refunds"]),
+    )
+    .await;
+    let reviewer = app.as_user(&team.reviewer);
+    let path = team.path("/databases/billing/diff?from=1&to=2");
+    let first = reviewer.get(&path).await.json();
+    assert_eq!(first["from"]["author"]["name"], "Developer-acme");
+    assert_eq!(first["to"]["author"]["kind"], "token");
+
+    sqlx::query("UPDATE users SET name = 'Dev Renamed' WHERE id = $1")
+        .bind(team.developer.user)
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_tokens SET name = 'Deploy bot' WHERE database_id = $1")
+        .bind(id)
+        .execute(&db)
+        .await
+        .unwrap();
+    let again = reviewer.get(&path).await.json();
+    assert_eq!(app.state.diffs.len(), 1);
+    assert_eq!(again["from"]["author"]["name"], "Dev Renamed");
+    assert_eq!(again["to"]["author"]["name"], "Deploy bot");
+    assert_eq!(again["diff"], first["diff"]);
+    assert_eq!(again["sql"], first["sql"]);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn diffs_are_for_members_of_the_organization(db: PgPool) {
     let team = Team::new(&db, "acme").await;
     let other = Team::new(&db, "globex").await;

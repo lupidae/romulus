@@ -232,7 +232,9 @@ Made in the skeleton (S0):
   `compile::render_sql`, the newer version's header on both, so an upload
   and a push of one schema read the same) and the union's layout (the newer
   version's, the older one's positions for tables only it has). The
-  serialised response is cached in `AppState::diffs` by the two version ids.
+  serialised content (all but the two summaries, whose authors can be
+  renamed) is cached in `AppState::diffs` by the two version ids; a request
+  resolves numbers to summaries first and loads full versions only on a miss.
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
   compiles), 429 `rate_limited` with `Retry-After`. Handlers that must decide

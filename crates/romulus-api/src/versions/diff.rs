@@ -4,10 +4,12 @@
 //! their union), both models as SQL (the side-by-side text diff) and the
 //! layout of the union.
 //!
-//! Versions never change, so neither does a diff between two of them: the
-//! serialised response is kept in [`DiffCache`], keyed by the two version
+//! Versions never change, so neither does a diff between two of them: its
+//! serialised content (everything but the two summaries, whose authors can
+//! be renamed or deleted) is kept in [`DiffCache`], keyed by the two version
 //! ids (not their numbers: a database deleted and created again under the
-//! same slug numbers its versions from 1 again).
+//! same slug numbers its versions from 1 again). A request resolves the
+//! numbers to summaries first, and loads the full versions only on a miss.
 
 use std::{
     collections::{HashSet, VecDeque},
@@ -26,11 +28,12 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::{VersionDetail, VersionSummary, detail, layout::VersionLayout};
+use super::{SummaryRow, VersionDetail, VersionSummary, detail, layout::VersionLayout};
 use crate::{
     ApiError, ApiResult, AppState,
     auth::Member,
     compile, databases,
+    domain::{SourceKind, VersionOrigin},
     error::ErrorBody,
     extract::{Path, Query},
     orgs::invalid,
@@ -118,28 +121,77 @@ async fn diff(
         }
     }
     let database = databases::find(&state.db, member.org.id, &slug).await?;
-    let from = detail(&state.db, database.id, Some(query.from)).await?;
-    let to = if query.to == query.from {
-        from.clone()
-    } else {
-        detail(&state.db, database.id, Some(query.to)).await?
-    };
+    let (from, to) = summaries(&state.db, database.id, query.from, query.to).await?;
     let key = (from.id, to.id);
-    let body = if let Some(body) = state.diffs.get(key) {
-        body
+    let content = if let Some(content) = state.diffs.get(key) {
+        content
     } else {
+        // Only now the full versions (models, layouts): a hit needs neither.
+        let before = detail(&state.db, database.id, Some(query.from)).await?;
+        let after = if query.to == query.from {
+            before.clone()
+        } else {
+            detail(&state.db, database.id, Some(query.to)).await?
+        };
         // Two renders and a diff of a few hundred tables: milliseconds, off
         // the async workers all the same.
-        let body = tokio::task::spawn_blocking(move || compare(from, to))
+        let content = tokio::task::spawn_blocking(move || compare(before, after))
             .await
             .map_err(ApiError::internal)??;
-        state.diffs.insert(key, body.clone());
-        body
+        state.diffs.insert(key, content.clone());
+        content
     };
+    let body = with_versions(&from, &to, &content)?;
     Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }
 
-/// The response for `from` → `to`, serialised.
+/// Both versions' summaries, authors as they are now; 404 for a number
+/// the database does not have.
+async fn summaries(
+    db: &sqlx::PgPool,
+    database_id: Uuid,
+    from: i32,
+    to: i32,
+) -> ApiResult<(VersionSummary, VersionSummary)> {
+    let rows = sqlx::query_as!(
+        SummaryRow,
+        r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
+                  v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
+                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
+           FROM versions v
+           LEFT JOIN users u ON u.id = v.created_by
+           LEFT JOIN api_tokens t ON t.id = v.created_by_token
+           WHERE v.database_id = $1 AND v.number IN ($2, $3)"#,
+        database_id,
+        from,
+        to,
+    )
+    .fetch_all(db)
+    .await?;
+    let summaries: Vec<VersionSummary> = rows.into_iter().map(Into::into).collect();
+    let find = |number: i32| {
+        summaries
+            .iter()
+            .find(|s| s.number == number)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found(format!("There is no version {number} of this database."))
+            })
+    };
+    let (from, to) = (find(from)?, find(to)?);
+    Ok((from, to))
+}
+
+/// What a diff holds besides the two summaries: what is cached.
+#[derive(Serialize)]
+struct DiffContent {
+    diff: romulus_diff::SchemaDiff,
+    models: DiffModels,
+    sql: DiffSql,
+    layout: VersionLayout,
+}
+
+/// The cached content, serialised (a JSON object).
 fn compare(from: VersionDetail, to: VersionDetail) -> ApiResult<Bytes> {
     let before = Schema::deserialize(&from.model).map_err(ApiError::internal)?;
     let after = Schema::deserialize(&to.model).map_err(ApiError::internal)?;
@@ -157,9 +209,7 @@ fn compare(from: VersionDetail, to: VersionDetail) -> ApiResult<Bytes> {
     } else {
         union(to.layout.clone(), from.layout.clone(), &after, &before)
     };
-    let body = VersionDiff {
-        from: summary_of(&from),
-        to: summary_of(&to),
+    let content = DiffContent {
         diff,
         models: DiffModels {
             before: from.model,
@@ -168,21 +218,34 @@ fn compare(from: VersionDetail, to: VersionDetail) -> ApiResult<Bytes> {
         sql,
         layout,
     };
-    serde_json::to_vec(&body)
+    serde_json::to_vec(&content)
         .map(Bytes::from)
         .map_err(ApiError::internal)
 }
 
-fn summary_of(version: &VersionDetail) -> VersionSummary {
-    VersionSummary {
-        id: version.id,
-        number: version.number,
-        origin: version.origin,
-        source_kind: version.source_kind,
-        message: version.message.clone(),
-        created_at: version.created_at,
-        author: version.author.clone(),
+/// The response, a [`VersionDiff`]: `{"from": …, "to": …}` joined with the
+/// cached content's object, without parsing it again.
+fn with_versions(from: &VersionSummary, to: &VersionSummary, content: &[u8]) -> ApiResult<Bytes> {
+    #[derive(Serialize)]
+    struct Versions<'a> {
+        from: &'a VersionSummary,
+        to: &'a VersionSummary,
     }
+    let head = serde_json::to_vec(&Versions { from, to }).map_err(ApiError::internal)?;
+    let (Some((b'}', head)), Some((b'{', rest))) = (head.split_last(), content.split_first())
+    else {
+        return Err(ApiError::internal(std::io::Error::other(
+            "a diff's parts are not JSON objects",
+        )));
+    };
+    let mut body = Vec::with_capacity(head.len() + rest.len() + 1);
+    body.extend_from_slice(head);
+    // `{}` has nothing to add after the comma.
+    if rest != b"}" {
+        body.push(b',');
+    }
+    body.extend_from_slice(rest);
+    Ok(Bytes::from(body))
 }
 
 /// `schema` as SQL in canonical order (`romulus_diff::normalize`), with the
@@ -399,6 +462,45 @@ mod tests {
                     "g2": { "name": "Legacy", "color": "stone", "members": ["public.legacy"] }
                 }
             })
+        );
+    }
+
+    #[test]
+    fn the_response_is_the_summaries_joined_with_the_cached_content() {
+        let summary = |number| VersionSummary {
+            id: Uuid::from_u128(number),
+            number: i32::try_from(number).unwrap(),
+            origin: VersionOrigin::Push,
+            source_kind: SourceKind::RemusJson,
+            message: Some("From CI".into()),
+            created_at: chrono::DateTime::UNIX_EPOCH,
+            author: None,
+        };
+        let content = DiffContent {
+            diff: romulus_diff::diff(&model(&["a"]), &model(&["a", "b"])),
+            models: DiffModels {
+                before: json!({ "a": 1 }),
+                after: json!({ "b": 2 }),
+            },
+            sql: DiffSql {
+                before: "x".into(),
+                after: "y".into(),
+            },
+            layout: VersionLayout::default(),
+        };
+        let bytes = serde_json::to_vec(&content).unwrap();
+        let body = with_versions(&summary(1), &summary(2), &bytes).unwrap();
+        let whole = VersionDiff {
+            from: summary(1),
+            to: summary(2),
+            diff: content.diff.clone(),
+            models: content.models.clone(),
+            sql: content.sql.clone(),
+            layout: content.layout.clone(),
+        };
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::to_value(&whole).unwrap()
         );
     }
 
