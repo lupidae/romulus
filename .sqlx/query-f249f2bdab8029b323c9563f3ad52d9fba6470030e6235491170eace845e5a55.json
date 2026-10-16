@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status AS \"status: DraftStatus\", base_version_id, base_sql\n           FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'",
+  "query": "SELECT status AS \"status: DraftStatus\", base_version_id, base_sql,\n                  pending_base_version_id, pending_base_sql\n           FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'",
   "describe": {
     "columns": [
       {
@@ -46,6 +46,28 @@
             "name": "base_sql"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "pending_base_version_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "pending_base_version_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "pending_base_sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "pending_base_sql"
+          }
+        }
       }
     ],
     "parameters": {
@@ -57,8 +79,10 @@
     "nullable": [
       false,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "5523f9fdb2dc71b030deffbfda1c33394f737cf22ca25313b25d36526e889aae"
+  "hash": "f249f2bdab8029b323c9563f3ad52d9fba6470030e6235491170eace845e5a55"
 }

@@ -6,7 +6,8 @@
 //! sql:     Y.Text                          canonical DDL
 //! layout:  Y.Map<qualified name, {x, y}>   positions, in graph coordinates
 //! groups:  Y.Map<group id, {name, color, members: qualified names[]}>
-//! meta:    Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`)
+//! meta:    Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`),
+//!          `merged` = the version "Update draft" merged last (`Roots::note_merged`)
 //! ```
 //!
 //! Map values are plain JSON objects (Yjs `Any`), not nested Y.Maps: a move
@@ -78,6 +79,18 @@ impl Roots {
             reason: reason.to_owned(),
         };
         self.meta.insert(txn, "rewrite", to_any(&note));
+    }
+
+    /// Notes, in the transaction of "Update draft"'s rewrite, the version it
+    /// merged (`meta.merged`): an update that failed before moving the base
+    /// knows from it that the text already holds that version.
+    pub fn note_merged(&self, txn: &mut TransactionMut, version: i32) {
+        self.meta.insert(txn, "merged", to_any(&version));
+    }
+
+    /// The version the last update merged into the text, if any.
+    pub fn merged<T: ReadTxn>(&self, txn: &T) -> Option<i32> {
+        from_any(&self.meta.get(txn, "merged")?.to_json(txn))
     }
 
     /// The last rewrite noted, if any.

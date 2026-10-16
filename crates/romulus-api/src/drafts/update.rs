@@ -123,28 +123,52 @@ pub(super) async fn update(
         drop(frozen);
         return up_to_date(&state, database.id, id, draft.base_version_id).await;
     };
-    let base = match draft.base_version_id {
-        Some(base) => versions::by_id(&state.db, database.id, base).await?,
-        None => None,
+    let base_of = |version: Option<Uuid>| version_of(&state, database.id, version);
+    // Where the text stands: an update that rewrote it but failed before
+    // moving the base left that base pending, and its rewrite noted in the
+    // doc the version it merged. Then the text is relative to that base,
+    // whatever was typed since (the layout still merges from the old one).
+    let pending = base_of(draft.pending_base_version_id)
+        .await?
+        .filter(|pending| content.merged == Some(pending.number));
+    let (base, ancestor) = match pending {
+        Some(pending) => (Some(pending), draft.pending_base_sql.clone()),
+        None => (
+            base_of(draft.base_version_id).await?,
+            draft.base_sql.clone(),
+        ),
     };
+    let layout_base = base_of(draft.base_version_id).await?;
 
-    // From here, a failure leaves the draft with its merged text and its old
-    // base: updating again merges nothing twice (ours already has theirs'
-    // statements, `romulus_sandbox::merge`), and moves the base then.
-    let (plan, rewritten, latest) =
-        rewrite(&state, id, ticket, base, latest, draft.base_sql, content).await?;
+    // From here, a failure leaves the draft with its merged text, its old
+    // base and the new one pending: the next update finishes this one.
+    let (plan, rewritten, latest) = rewrite(
+        &state,
+        id,
+        ticket,
+        Bases {
+            sql: base,
+            layout: layout_base,
+            ancestor,
+        },
+        latest,
+        content,
+    )
+    .await?;
     let changed = rewritten || !(plan.layout.is_empty() && plan.groups.is_empty());
     let (conflicts, ancestor) = (plan.conflicts, plan.merged.ancestor);
     // Then the layout, and everything is written before the base moves.
     state
         .collab
-        .merge_layout(id, plan.layout, plan.groups)
+        .merge_layout(id, ticket, plan.layout, plan.groups)
         .await
-        .map_err(hub_error)?;
+        .map_err(hub_error)?
+        .map_err(ApiError::internal)?;
 
-    // The text is written: the base moves.
+    // The text is written: the base moves, nothing is pending any more.
     let moved = sqlx::query!(
-        "UPDATE drafts SET base_version_id = $2, base_sql = $3, updated_at = now()
+        "UPDATE drafts SET base_version_id = $2, base_sql = $3, updated_at = now(),
+                           pending_base_version_id = NULL, pending_base_sql = NULL
          WHERE id = $1 AND status = 'open' AND base_version_id IS NOT DISTINCT FROM $4",
         id,
         latest.id,
@@ -171,33 +195,56 @@ pub(super) async fn update(
     }))
 }
 
-/// Merges and rewrites the draft's SQL. Frozen, nobody types; another
-/// server rewrite (Tidy) can still land first: then merge again from what is
-/// there now. Answers the plan, whether the text changed, and the latest
-/// version back.
+/// What a merge starts from: the version and text the SQL is relative to,
+/// and the version the layout is.
+struct Bases {
+    sql: Option<Version>,
+    layout: Option<Version>,
+    ancestor: Option<String>,
+}
+
+/// Merges and rewrites the draft's SQL, the new base pending on the draft
+/// first (see the pending columns' comment). Frozen, nobody types; another
+/// server rewrite can still land first: then merge again from what is there
+/// now. Answers the plan, whether the text changed, and the latest version
+/// back.
 async fn rewrite(
     state: &AppState,
     id: Uuid,
     ticket: UpdateTicket,
-    base: Option<Version>,
+    bases: Bases,
     latest: Version,
-    base_sql: Option<String>,
     mut content: Content,
 ) -> ApiResult<(Plan, bool, Arc<Version>)> {
-    let (base, latest) = (Arc::new(base), Arc::new(latest));
+    let bases = Arc::new(bases);
+    let latest = Arc::new(latest);
     for attempt in 1..=ATTEMPTS {
         let plan = {
-            let (base, latest, base_sql) =
-                (Arc::clone(&base), Arc::clone(&latest), base_sql.clone());
-            tokio::task::spawn_blocking(move || {
-                Plan::new((*base).as_ref(), &latest, base_sql, content)
-            })
-            .await
-            .map_err(ApiError::internal)??
+            let (bases, latest) = (Arc::clone(&bases), Arc::clone(&latest));
+            tokio::task::spawn_blocking(move || Plan::new(&bases, &latest, content))
+                .await
+                .map_err(ApiError::internal)??
         };
+        if !plan.changes.is_empty() {
+            sqlx::query!(
+                "UPDATE drafts SET pending_base_version_id = $2, pending_base_sql = $3
+                 WHERE id = $1 AND status = 'open'",
+                id,
+                latest.id,
+                plan.merged.ancestor,
+            )
+            .execute(&state.db)
+            .await?;
+        }
         match state
             .collab
-            .rewrite_update(id, ticket, sha256_hex(&plan.sql), plan.changes.clone())
+            .rewrite_update(
+                id,
+                ticket,
+                latest.number,
+                sha256_hex(&plan.sql),
+                plan.changes.clone(),
+            )
             .await
             .map_err(hub_error)?
         {
@@ -215,15 +262,30 @@ async fn rewrite(
     })
 }
 
+/// One version of the database, when there is one.
+async fn version_of(
+    state: &AppState,
+    database_id: Uuid,
+    version: Option<Uuid>,
+) -> ApiResult<Option<Version>> {
+    match version {
+        Some(version) => versions::by_id(&state.db, database_id, version).await,
+        None => Ok(None),
+    }
+}
+
 struct Row {
     base_version_id: Option<Uuid>,
     base_sql: Option<String>,
+    pending_base_version_id: Option<Uuid>,
+    pending_base_sql: Option<String>,
 }
 
 /// The draft's base, if it is open (404 or 409 otherwise).
 async fn read(state: &AppState, database_id: Uuid, id: Uuid) -> ApiResult<Row> {
     let draft = sqlx::query!(
-        r#"SELECT status AS "status: DraftStatus", base_version_id, base_sql
+        r#"SELECT status AS "status: DraftStatus", base_version_id, base_sql,
+                  pending_base_version_id, pending_base_sql
            FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'"#,
         id,
         database_id,
@@ -237,6 +299,8 @@ async fn read(state: &AppState, database_id: Uuid, id: Uuid) -> ApiResult<Row> {
     Ok(Row {
         base_version_id: draft.base_version_id,
         base_sql: draft.base_sql,
+        pending_base_version_id: draft.pending_base_version_id,
+        pending_base_sql: draft.pending_base_sql,
     })
 }
 
@@ -275,15 +339,18 @@ struct Plan {
 }
 
 impl Plan {
-    fn new(
-        base: Option<&Version>,
-        latest: &Version,
-        base_sql: Option<String>,
-        content: Content,
-    ) -> ApiResult<Self> {
+    fn new(bases: &Bases, latest: &Version, content: Content) -> ApiResult<Self> {
         let label = format!("v{}", latest.number);
-        let merged = merge_sql(base, latest, base_sql, &content, &label)?;
-        let base_layout = base
+        let merged = merge_sql(
+            bases.sql.as_ref(),
+            latest,
+            bases.ancestor.clone(),
+            &content,
+            &label,
+        )?;
+        let base_layout = bases
+            .layout
+            .as_ref()
             .map(|b| VersionLayout::from_value(&b.layout))
             .unwrap_or_default();
         let theirs = VersionLayout::from_value(&latest.layout);

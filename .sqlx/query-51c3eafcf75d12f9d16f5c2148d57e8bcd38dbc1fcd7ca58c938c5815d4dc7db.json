@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET pending_base_version_id = base_version_id, pending_base_sql = base_sql,\n                           base_version_id = (SELECT id FROM versions WHERE database_id = $2 AND number = 1),\n                           base_sql = NULL\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "51c3eafcf75d12f9d16f5c2148d57e8bcd38dbc1fcd7ca58c938c5815d4dc7db"
+}

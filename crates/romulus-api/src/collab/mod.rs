@@ -276,6 +276,7 @@ impl Hub {
                 changes,
                 reason,
                 ticket: None,
+                merged: None,
                 reply,
             },
         )?;
@@ -283,11 +284,13 @@ impl Hub {
     }
 
     /// [`Hub::rewrite`] by the update holding `ticket`, while the draft is
-    /// frozen for it ([`Hub::freeze_to_update`]).
+    /// frozen for it ([`Hub::freeze_to_update`]); the doc notes, in the same
+    /// transaction, that it merged `version`.
     pub async fn rewrite_update(
         &self,
         draft: Uuid,
         ticket: UpdateTicket,
+        version: i32,
         from: String,
         changes: Vec<patch::Change>,
     ) -> Result<Result<bool, RewriteError>, HubError> {
@@ -299,6 +302,7 @@ impl Hub {
                 changes,
                 reason: "update",
                 ticket: Some(ticket),
+                merged: Some(version),
                 reply,
             },
         )?;
@@ -306,18 +310,21 @@ impl Hub {
     }
 
     /// Applies "Update draft"'s layout and group changes (after its
-    /// [`Hub::rewrite`] of the SQL), and answers once everything the room
-    /// changed is written: the draft's base may move then.
+    /// [`Hub::rewrite_update`] of the SQL) for the update holding `ticket`,
+    /// and answers once everything the room changed is written: the draft's
+    /// base may move then.
     pub async fn merge_layout(
         &self,
         draft: Uuid,
+        ticket: UpdateTicket,
         layout: Vec<(String, Option<crate::versions::layout::TablePosition>)>,
         groups: Vec<(String, Option<crate::versions::layout::TableGroup>)>,
-    ) -> Result<(), HubError> {
+    ) -> Result<Result<(), RewriteError>, HubError> {
         let (reply, wait) = oneshot::channel();
         self.0.send(
             draft,
             Command::MergeLayout {
+                ticket,
                 layout,
                 groups,
                 reply,

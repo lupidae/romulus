@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET pending_base_version_id =\n                               (SELECT id FROM versions WHERE database_id = $2 AND number = 2),\n                           pending_base_sql = 'CREATE TABLE stale (id int);'\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4cd0b866dfc84a7e99f176b3f51a13dc206d23244ab98f3cb23931b3e6feecee"
+}

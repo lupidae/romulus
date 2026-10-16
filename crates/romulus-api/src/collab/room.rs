@@ -260,6 +260,8 @@ pub struct Content {
     /// The model of exactly this SQL, when the last compile was of it and
     /// succeeded (publishing then needs no compile of its own).
     pub model: Option<Arc<Value>>,
+    /// The version "Update draft" last merged into the text (`meta.merged`).
+    pub merged: Option<i32>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -316,9 +318,10 @@ pub enum Command {
     /// "Update draft"'s layout and group changes; answered once everything
     /// the room changed is written (handled by the loop).
     MergeLayout {
+        ticket: UpdateTicket,
         layout: Vec<(String, Option<TablePosition>)>,
         groups: Vec<(String, Option<TableGroup>)>,
-        reply: oneshot::Sender<()>,
+        reply: oneshot::Sender<Result<(), RewriteError>>,
     },
     Unfreeze,
     Published {
@@ -348,6 +351,8 @@ pub enum Command {
         /// The update's ticket: while frozen for an update, only that
         /// update rewrites the SQL (and only while it is).
         ticket: Option<UpdateTicket>,
+        /// The version an update merges: noted in the same transaction.
+        merged: Option<i32>,
         reply: oneshot::Sender<Result<bool, RewriteError>>,
     },
     /// The draft was updated to a newer version (its base moved).
@@ -501,14 +506,17 @@ pub async fn run(
                     room.hub.remove(id, generation);
                     return;
                 }
-                Some(Command::MergeLayout { layout, groups, reply }) => {
-                    if room.status.is_frozen() || room.status == LiveStatus::Open {
+                Some(Command::MergeLayout { ticket, layout, groups, reply }) => {
+                    // Only the update that froze the room, while it is.
+                    if room.status == LiveStatus::Updating && room.update == Some(ticket) {
                         room.server_edit(|roots, txn| roots.apply_layout(txn, &layout, &groups));
+                        // Written before the draft's base moves.
+                        room.flush_pending();
+                        room.writer.flush().await;
+                        let _ = reply.send(Ok(()));
+                    } else {
+                        let _ = reply.send(Err(RewriteError::NotOpen(room.status)));
                     }
-                    // Written before the draft's base moves.
-                    room.flush_pending();
-                    room.writer.flush().await;
-                    let _ = reply.send(());
                 }
                 Some(command) => room.handle(command),
             },
@@ -717,9 +725,10 @@ impl Room {
                 changes,
                 reason,
                 ticket,
+                merged,
                 reply,
             } => {
-                let _ = reply.send(self.rewrite(&from, &changes, reason, ticket));
+                let _ = reply.send(self.rewrite(&from, &changes, reason, ticket, merged));
             }
             // Handled by the loop.
             Command::Shutdown | Command::MergeLayout { .. } => {}
@@ -998,6 +1007,7 @@ impl Room {
         changes: &[patch::Change],
         reason: &str,
         ticket: Option<UpdateTicket>,
+        merged: Option<i32>,
     ) -> Result<bool, RewriteError> {
         // Open (anyone), or frozen for the update that shows its ticket.
         let allowed = match (self.status, ticket) {
@@ -1017,6 +1027,9 @@ impl Room {
             edited = patch::apply(&roots.sql, txn, &current, changes);
             if edited {
                 roots.note_rewrite(txn, reason);
+                if let Some(version) = merged {
+                    roots.note_merged(txn, version);
+                }
             }
             edited
         });
@@ -1033,6 +1046,7 @@ impl Room {
         Content {
             layout: self.roots.layout(&txn),
             model: compiled_now.then(|| self.good_model.clone()).flatten(),
+            merged: self.roots.merged(&txn),
             sql,
         }
     }

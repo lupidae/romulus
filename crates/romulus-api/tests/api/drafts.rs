@@ -1122,7 +1122,7 @@ async fn only_the_update_rewrites_a_draft_it_froze(db: PgPool) {
     );
     // The update itself is not.
     assert!(
-        hub.rewrite_update(id, ticket, sha.clone(), edit.clone())
+        hub.rewrite_update(id, ticket, 2, sha.clone(), edit.clone())
             .await
             .unwrap()
             .unwrap()
@@ -1131,8 +1131,134 @@ async fn only_the_update_rewrites_a_draft_it_froze(db: PgPool) {
     hub.unfreeze(id);
     let text = hub.content(id).await.unwrap().sql;
     let late = hub
-        .rewrite_update(id, ticket, sha256_hex(&text), changes(&text, ""))
+        .rewrite_update(id, ticket, 2, sha256_hex(&text), changes(&text, ""))
         .await
         .unwrap();
     assert!(matches!(late, Err(RewriteError::NotOpen(_))), "{late:?}");
+}
+
+/// v2 (users gets plan) and the update to it, for the retry tests.
+async fn updated_to_v2(db: &PgPool) -> (TestApp, Team, Uuid, Value, Client) {
+    let (app, team, shop, draft, mut alice) = stale_setup(db).await;
+    alice
+        .edit(insert_after("orders (id bigint", ", total numeric"))
+        .await;
+    room_sql_with(&app, draft_id(&draft), "total").await;
+    version_of(
+        db,
+        shop,
+        2,
+        "CREATE TABLE users (id bigint, email text, plan text);\n\nCREATE TABLE orders (id bigint);\n",
+        &model_json(&[
+            ("users", &[("id", "bigint"), ("email", "text"), ("plan", "text")]),
+            ORDERS,
+        ]),
+        false,
+    )
+    .await;
+    (app, team, shop, draft, alice)
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_update_that_failed_after_its_rewrite_is_finished_whatever_was_typed_since(db: PgPool) {
+    let (app, team, shop, draft, mut alice) = updated_to_v2(&db).await;
+    let id = draft_id(&draft);
+    let path = draft_path(&team, &draft, "/update");
+    let first = app.as_user(&team.developer).post_empty(&path).await;
+    assert_eq!(first.json()["conflicts"], 0, "{}", first.json());
+    room_sql_with(&app, id, "plan text").await;
+
+    // As if the base had not moved after the rewrite: the new one pending.
+    sqlx::query!(
+        "UPDATE drafts SET pending_base_version_id = base_version_id, pending_base_sql = base_sql,
+                           base_version_id = (SELECT id FROM versions WHERE database_id = $2 AND number = 1),
+                           base_sql = NULL
+         WHERE id = $1",
+        id,
+        shop,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    // Then someone edits the statement v2 changed.
+    alice.until(|c| c.sql().contains("plan text")).await;
+    alice.edit(insert_after("plan text", ", nick text")).await;
+    let edited = room_sql_with(&app, id, "nick text").await;
+
+    let again = app.as_user(&team.developer).post_empty(&path).await;
+    assert_eq!(
+        again.json(),
+        json!({"base_version": 2, "conflicts": 0, "changed": false}),
+        "finished, not merged again"
+    );
+    assert_eq!(app.state.collab.content(id).await.unwrap().sql, edited);
+    let row = sqlx::query!(
+        r#"SELECT pending_base_version_id IS NULL AS "cleared!" FROM drafts WHERE id = $1"#,
+        id
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(row.cleared);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_pending_base_whose_rewrite_never_landed_is_merged_for_real(db: PgPool) {
+    let (app, team, shop, draft, _alice) = updated_to_v2(&db).await;
+    let id = draft_id(&draft);
+    // Pending, but the doc never noted the merge: the text has none of v2.
+    sqlx::query!(
+        "UPDATE drafts SET pending_base_version_id =
+                               (SELECT id FROM versions WHERE database_id = $2 AND number = 2),
+                           pending_base_sql = 'CREATE TABLE stale (id int);'
+         WHERE id = $1",
+        id,
+        shop,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let updated = app
+        .as_user(&team.developer)
+        .post_empty(&draft_path(&team, &draft, "/update"))
+        .await;
+    assert_eq!(
+        updated.json(),
+        json!({"base_version": 2, "conflicts": 0, "changed": true})
+    );
+    let sql = room_sql_with(&app, id, "plan text").await;
+    assert!(
+        sql.contains("total numeric") && !sql.contains("stale"),
+        "{sql}"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn only_the_update_merges_the_layout_of_a_draft_it_froze(db: PgPool) {
+    use romulus_api::{collab::room::RewriteError, versions::layout::TablePosition};
+
+    let (app, _team, _shop, draft, _alice) = stale_setup(&db).await;
+    let id = draft_id(&draft);
+    let hub = &app.state.collab;
+    let at = |x| vec![("public.users".to_owned(), Some(TablePosition { x, y: 0.0 }))];
+    let (_, ticket) = hub.freeze_to_update(id, "Carol").await.unwrap().unwrap();
+    hub.merge_layout(id, ticket, at(1.0), Vec::new())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hub.content(id).await.unwrap().layout.layout["public.users"].x,
+        1.0
+    );
+    // Once the update is over, its ticket is worth nothing.
+    hub.unfreeze(id);
+    let late = hub
+        .merge_layout(id, ticket, at(2.0), Vec::new())
+        .await
+        .unwrap();
+    assert!(matches!(late, Err(RewriteError::NotOpen(_))), "{late:?}");
+    assert_eq!(
+        hub.content(id).await.unwrap().layout.layout["public.users"].x,
+        1.0
+    );
 }
