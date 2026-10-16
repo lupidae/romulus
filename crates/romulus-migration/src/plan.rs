@@ -231,6 +231,10 @@ pub(crate) struct Planner<'a> {
     views_dropped: BTreeSet<Name>,
     /// Sequences already created by this migration.
     sequences: BTreeSet<String>,
+    /// A removed table holds a name (its key's index, an index, a
+    /// sequence) something new takes: removed tables go before anything is
+    /// created, not last.
+    early_removals: bool,
     out: Vec<Planned>,
     warnings: Vec<Warning>,
 }
@@ -256,6 +260,7 @@ impl<'a> Planner<'a> {
             rekeyed: BTreeSet::new(),
             views_dropped: BTreeSet::new(),
             sequences: BTreeSet::new(),
+            early_removals: false,
             out: Vec::new(),
             warnings: Vec::new(),
         }
@@ -386,6 +391,43 @@ impl<'a> Planner<'a> {
                 }
             }
         }
+
+        // Names a removed table holds that something new takes.
+        let taken_by = |e: &Entity| -> Vec<Name> {
+            let mut names: Vec<Name> = e
+                .constraints
+                .iter()
+                .filter(|c| c.kind != ConstraintKind::ForeignKey && c.kind != ConstraintKind::Check)
+                .map(|c| name_of(&e.schema, &c.name))
+                .chain(e.indexes.iter().map(|i| name_of(&e.schema, &i.name)))
+                .collect();
+            names.extend(
+                e.columns
+                    .iter()
+                    .filter_map(|c| c.default.as_deref().and_then(owned_sequence))
+                    .map(|seq| match seq.split_once('.') {
+                        Some((schema, name)) => name_of(schema, name),
+                        None => name_of("public", seq),
+                    }),
+            );
+            names
+        };
+        let wanted: BTreeSet<Name> = self
+            .new
+            .entities
+            .iter()
+            .flat_map(|e| {
+                let mut names = taken_by(e);
+                names.push(name_of(&e.schema, &e.name));
+                names
+            })
+            .chain(self.new.partitions.iter().map(|p| name_of(&p.child_schema, &p.child)))
+            .collect();
+        self.early_removals = self
+            .old_entities
+            .iter()
+            .filter(|(n, e)| e.kind.is_table() && !self.new_entities.contains_key(*n))
+            .any(|(_, e)| taken_by(e).iter().any(|n| wanted.contains(n)));
 
         // Keys that change: foreign keys to them must go first.
         for (name, b) in &self.old_entities {
@@ -525,7 +567,15 @@ impl<'a> Planner<'a> {
 
     fn extensions(&mut self) {
         let (old, new) = (self.old, self.new);
-        for (name, b, a) in pair(&old.extensions, &new.extensions, |x| x.name.clone()) {
+        let pairs = pair(&old.extensions, &new.extensions, |x| x.name.clone());
+        let names: Vec<&str> = pairs.iter().map(|(n, _, _)| n.as_str()).collect();
+        let order = crate::extensions::install_order(&names);
+        let mut pairs: Vec<_> = pairs.iter().collect();
+        pairs.sort_by_key(|(n, _, _)| order.iter().position(|o| o == n));
+        // Drops in the reverse order: what requires another goes first.
+        let mut drops = Vec::new();
+        for (name, b, a) in pairs {
+            let (name, b, a) = (name.clone(), *b, *a);
             let ext = quote_ident(&name).into_owned();
             match (b, a) {
                 (None, Some(a)) => {
@@ -535,14 +585,7 @@ impl<'a> Planner<'a> {
                     );
                     self.push(Phase::Extensions, Kind::CreateExtension, sql);
                 }
-                (Some(_), None) => {
-                    self.push(
-                        Phase::DropExtensions,
-                        Kind::DropExtension,
-                        format!("DROP EXTENSION {ext};"),
-                    )
-                    .noted("Fails while something still uses it.");
-                }
+                (Some(_), None) => drops.push(ext),
                 (Some(b), Some(a)) => {
                     if b.schema != a.schema {
                         let sql = format!(
@@ -563,6 +606,14 @@ impl<'a> Planner<'a> {
                 (None, None) => {}
             }
         }
+        for ext in drops.into_iter().rev() {
+            self.push(
+                Phase::DropExtensions,
+                Kind::DropExtension,
+                format!("DROP EXTENSION {ext};"),
+            )
+            .noted("Fails while something still uses it.");
+        }
     }
 
     // ---- Types ---------------------------------------------------------------
@@ -582,6 +633,7 @@ impl<'a> Planner<'a> {
                     self.push(Phase::DropEnums, Kind::DropType, format!("DROP TYPE {ty};"));
                 }
                 (Some(b), Some(a)) => {
+                    let recreated = self.aside.contains_key(&name);
                     if let Some(aside) = self.aside.get(&name).cloned() {
                         self.recreate_enum(&name, b, a, &aside);
                     } else if let Some(additions) = label_additions(&b.labels, &a.labels) {
@@ -593,7 +645,7 @@ impl<'a> Planner<'a> {
                             self.push(Phase::Types, Kind::AlterType, sql);
                         }
                     }
-                    if b.comment != a.comment {
+                    if b.comment != a.comment || (recreated && a.comment.is_some()) {
                         self.comment("TYPE", &ty, a.comment.as_deref());
                     }
                 }
@@ -688,6 +740,7 @@ impl<'a> Planner<'a> {
                     self.push(Phase::DropDomains, Kind::DropDomain, format!("DROP DOMAIN {ty};"));
                 }
                 (Some(b), Some(a)) => {
+                    let recreated = self.aside.contains_key(&name);
                     if let Some(aside) = self.aside.get(&name).cloned() {
                         self.push(
                             Phase::Domains,
@@ -716,7 +769,7 @@ impl<'a> Planner<'a> {
                     } else {
                         self.alter_domain(&name, b, a);
                     }
-                    if b.comment != a.comment {
+                    if b.comment != a.comment || (recreated && a.comment.is_some()) {
                         self.comment("DOMAIN", &ty, a.comment.as_deref());
                     }
                 }
@@ -1244,10 +1297,17 @@ impl<'a> Planner<'a> {
         let rebuild_all =
             self.converted.contains_key(&name) || self.readded.contains_key(&name);
         for (policy_name, b, a) in pair(old_policies, &after.policies, |p| p.name.clone()) {
+            // Around a recreated type or table it mentions, too.
             let rebuild = rebuild_all
                 || b.is_some_and(|b| {
                     self.mentions_aside(b.using.as_deref().unwrap_or(""))
                         || self.mentions_aside(b.check.as_deref().unwrap_or(""))
+                        || self.recreated.iter().any(|(_, t)| policy_mentions(b, t))
+                        || self
+                            .old_entities
+                            .keys()
+                            .filter(|n| !self.new_entities.contains_key(*n))
+                            .any(|(_, t)| policy_mentions(b, t))
                 });
             let drop = |planner: &mut Self| {
                 planner.push(
@@ -1875,17 +1935,48 @@ impl<'a> Planner<'a> {
             }
         }
         let old_entities = &self.old_entities;
+        // What each one must go before: the tables its foreign keys and its
+        // policies' expressions refer to.
         let targets = |n: &Name| -> Vec<Name> {
-            old_entities[n]
+            let table = old_entities[n];
+            let mut out: Vec<Name> = table
                 .foreign_keys()
                 .filter_map(|fk| Some(name_of(fk.ref_schema.as_deref()?, fk.ref_table.as_deref()?)))
-                .collect()
+                .collect();
+            out.extend(
+                removed
+                    .iter()
+                    .filter(|other| *other != n && policies_mention(table, &other.1))
+                    .cloned(),
+            );
+            out
         };
         // Referenced first, so reversed: referencing first.
         let (order, cycle) = dependency_order(&removed, targets);
         let cycle_set: BTreeSet<Name> = cycle.iter().cloned().collect();
+        let phase = if self.early_removals {
+            Phase::EarlyDrops
+        } else {
+            Phase::DropTables
+        };
         for name in &cycle {
             let table = self.old_entities[name];
+            for policy in &table.policies {
+                if cycle_set
+                    .iter()
+                    .any(|other| other != name && policy_mentions(policy, &other.1))
+                {
+                    self.push(
+                        phase,
+                        Kind::DropPolicy,
+                        format!(
+                            "DROP POLICY {} ON {};",
+                            quote_ident(&policy.name),
+                            table_name(table)
+                        ),
+                    );
+                }
+            }
             for fk in table.foreign_keys() {
                 let target = fk
                     .ref_schema
@@ -1904,12 +1995,8 @@ impl<'a> Planner<'a> {
             } else {
                 "Deletes the table and its rows."
             };
-            self.push(
-                Phase::DropTables,
-                Kind::DropTable,
-                format!("DROP TABLE {};", table_name(table)),
-            )
-            .destroys(what);
+            self.push(phase, Kind::DropTable, format!("DROP TABLE {};", table_name(table)))
+                .destroys(what);
         }
     }
 
@@ -2085,6 +2172,17 @@ impl<'a> Planner<'a> {
             warnings: self.warnings,
         }
     }
+}
+
+fn policy_mentions(policy: &Policy, name: &str) -> bool {
+    [&policy.using, &policy.check]
+        .into_iter()
+        .flatten()
+        .any(|expr| mentions(expr, name))
+}
+
+fn policies_mention(table: &Entity, name: &str) -> bool {
+    table.policies.iter().any(|p| policy_mentions(p, name))
 }
 
 /// The entity at the top of a partition's tree, following parents through

@@ -152,7 +152,15 @@ impl Case {
 
 /// Migrate `case.old` to `case.new` in the sandbox; `Err` explains how it
 /// went wrong.
-pub async fn check(compiler: &Compiler, case: &Case) -> Result<(), String> {
+/// How a pair went, when it did not fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Passed,
+    /// The sandbox cannot run something the migration rightly does.
+    Skipped,
+}
+
+pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> {
     let m = migration(&case.old, &case.new, &case.options);
     let back = migration(&case.new, &case.old, &case.options);
     if romulus_diff::diff(&case.old, &case.new).is_empty() != m.is_empty() && m.warnings.is_empty() {
@@ -163,10 +171,26 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<(), String> {
         ));
     }
     let _ = back;
+    // The sandbox's compile role does not own extensions: it cannot move
+    // one to another schema, which a real owner can.
+    if m.statements.iter().any(|s| s.sql.starts_with("ALTER EXTENSION ") && s.sql.contains(" SET SCHEMA ")) {
+        return Ok(Outcome::Skipped);
+    }
     let script = m
         .script()
         .replace(" INDEX CONCURRENTLY ", " INDEX ");
-    let sql = format!("{}\n-- ===== migration =====\n{script}", render_sql(&case.old));
+    let old_sql = render_sql(&case.old);
+    // A schema the old side uses for functions alone exists in a real
+    // database, but the sandbox creates it only when the text does not.
+    let mut prelude = String::new();
+    for s in &m.statements {
+        if let Some(schema) = s.sql.strip_prefix("CREATE SCHEMA IF NOT EXISTS ").and_then(|r| r.strip_suffix(';'))
+            && old_sql.contains(&format!("{schema}."))
+        {
+            let _ = writeln!(prelude, "CREATE SCHEMA IF NOT EXISTS {schema};");
+        }
+    }
+    let sql = format!("{prelude}{old_sql}\n-- ===== migration =====\n{script}");
     let mut result = compile(compiler, &sql).await.map_err(|errors| {
         format!(
             "{}: the migration does not run\n{errors}\n--- migration ---\n{script}",
@@ -214,7 +238,7 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<(), String> {
     }
     let diff = romulus_diff::diff(&result, &case.new);
     if diff.is_empty() {
-        return Ok(());
+        return Ok(Outcome::Passed);
     }
     let mut out = format!(
         "{}: the migrated database is not the new schema:\n",
@@ -232,6 +256,7 @@ pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) {
     let total = cases.len();
     let mut set = JoinSet::new();
     let mut failures = Vec::new();
+    let mut skipped = 0;
     let mut pending = cases.into_iter();
     let mut running = 0;
     loop {
@@ -245,11 +270,23 @@ pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) {
             break;
         };
         running -= 1;
-        if let Err(failure) = result.expect("a check task") {
-            failures.push(failure);
+        match result.expect("a check task") {
+            Ok(Outcome::Passed) => {}
+            Ok(Outcome::Skipped) => skipped += 1,
+            Err(failure) => failures.push(failure),
         }
     }
+    #[allow(clippy::print_stderr)]
+    {
+        eprintln!("{total} pairs: {} passed, {skipped} skipped (the sandbox cannot run them), {} failed", total - skipped - failures.len(), failures.len());
+    }
+    assert!(skipped * 10 <= total, "{skipped} of {total} pairs skipped: too many to call this tested");
     if !failures.is_empty() {
+        #[allow(clippy::print_stderr)]
+        for failure in &failures {
+            let mut lines = failure.lines();
+            eprintln!("FAILED {} | {}", lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+        }
         let shown = failures
             .iter()
             .take(6)

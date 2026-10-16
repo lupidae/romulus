@@ -73,3 +73,35 @@ fn every_corpus_schema_migrates_into_every_other() {
         check_all(&compiler, cases).await;
     });
 }
+
+#[test]
+fn the_extension_objects_list_matches_the_sandbox() {
+    with_compiler(|compiler| async move {
+        let mut missing = Vec::new();
+        for (name, extension) in compiler.catalog().extensions() {
+            for object in &extension.objects {
+                let known = romulus_migration::EXTENSION_OBJECTS
+                    .iter()
+                    .any(|(x, o)| *x == name && *o == object.name);
+                if !known {
+                    missing.push(format!("(\"{name}\", \"{}\")", object.name));
+                }
+            }
+        }
+        for (name, extension) in compiler.catalog().extensions() {
+            for required in &extension.requires {
+                let known = romulus_migration::EXTENSION_REQUIREMENTS
+                    .iter()
+                    .any(|(x, r)| *x == name && r == required);
+                if !known {
+                    missing.push(format!("REQUIRES (\"{name}\", \"{required}\")"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "add to romulus_migration's extensions::PROVIDED or REQUIRES: {}",
+            missing.join(", ")
+        );
+    });
+}

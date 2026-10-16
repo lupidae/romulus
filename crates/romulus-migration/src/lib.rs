@@ -51,12 +51,14 @@
 //! warning says where the new model puts them.
 
 mod cast;
+mod extensions;
 mod format;
 mod plan;
 mod sql;
 #[cfg(test)]
 mod tests;
 
+pub use extensions::{PROVIDED as EXTENSION_OBJECTS, REQUIRES as EXTENSION_REQUIREMENTS};
 pub use format::{File, FileRole, Format, Lines, Meta, files, slug};
 use remus_core::Schema;
 use serde::{Deserialize, Serialize};
@@ -271,7 +273,9 @@ pub enum WarningCode {
 /// `romulus_diff::diff(old, new)` is empty; a change it cannot make
 /// (moving a column, a foreign table) is a warning instead.
 pub fn migration(old: &Schema, new: &Schema, options: &Options) -> Migration {
-    let old = romulus_diff::normalize(old);
-    let new = romulus_diff::normalize(new);
+    let mut old = romulus_diff::normalize(old);
+    let mut new = romulus_diff::normalize(new);
+    extensions::without_provided(&mut old);
+    extensions::without_provided(&mut new);
     plan::Planner::new(&old, &new, options).plan()
 }
