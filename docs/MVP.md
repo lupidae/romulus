@@ -647,7 +647,8 @@ Two features, built in this order:
 
 **Ideas, after the round:** several Postgres majors per database (sandbox per major), then a
 **playground** (a real throwaway database per draft with generated fake data, to run SQL and
-try migrations) — design document first.
+try migrations) — design document first: [docs/playground.md](playground.md) (proposed,
+awaiting approval).
 
 ## Decided
 
