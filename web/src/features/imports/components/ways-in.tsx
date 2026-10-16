@@ -1,23 +1,62 @@
 import { Link, useParams } from "@tanstack/react-router";
 import * as React from "react";
 
-import { CloudIcon, KeyIcon, TerminalIcon } from "@/components/icons";
+import { CloudIcon, KeyIcon, NavArrowDownIcon, TerminalIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
 
 import { exporters, importCommand } from "../commands";
 
 /**
- * The other ways in: migrations written as code (Alembic, Django, Rails)
- * through an exporter script, and imports from CI.
+ * The other ways in, folded until asked for: migrations written as code
+ * (Alembic, Django, Rails) through an exporter script, and imports from CI.
  */
 export function WaysIn({ databaseId }: { databaseId: string }) {
+  const [open, setOpen] = React.useState<"code" | "ci" | null>(null);
+  const toggle = (which: "code" | "ci") => setOpen((o) => (o === which ? null : which));
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Exporters />
-      <FromCi databaseId={databaseId} />
+    <div className="grid gap-3">
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open === "code"}
+          aria-controls="import-from-code"
+          onClick={() => toggle("code")}
+        >
+          <TerminalIcon />
+          Alembic, Django or Rails?
+          <NavArrowDownIcon
+            aria-hidden
+            className={cn(
+              "transition-transform motion-reduce:transition-none",
+              open === "code" && "rotate-180",
+            )}
+          />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open === "ci"}
+          aria-controls="import-from-ci"
+          onClick={() => toggle("ci")}
+        >
+          <CloudIcon />
+          Import from CI
+          <NavArrowDownIcon
+            aria-hidden
+            className={cn(
+              "transition-transform motion-reduce:transition-none",
+              open === "ci" && "rotate-180",
+            )}
+          />
+        </Button>
+      </div>
+      {open === "code" && <Exporters />}
+      {open === "ci" && <FromCi databaseId={databaseId} />}
     </div>
   );
 }
@@ -34,10 +73,10 @@ function Exporters() {
     URL.revokeObjectURL(url);
   };
   return (
-    <Card className="flex min-w-0 flex-col gap-3 p-4">
+    <Card id="import-from-code" className="flex min-w-0 flex-col gap-3 p-4">
       <Heading icon={<TerminalIcon />} title="Migrations written in code">
-        romulus never runs your code. Run the exporter in your project: it writes the SQL each
-        migration runs, then drop that file here.
+        romulus never runs your code: run the exporter in your project, then drop the file it
+        writes.
       </Heading>
       <ToggleGroup
         type="single"
@@ -66,22 +105,24 @@ function Exporters() {
 function FromCi({ databaseId }: { databaseId: string }) {
   const { org, db } = useParams({ from: "/$org/$db" });
   return (
-    <Card className="flex min-w-0 flex-col gap-3 p-4">
+    <Card id="import-from-ci" className="flex min-w-0 flex-col gap-3 p-4">
       <Heading icon={<CloudIcon />} title="From CI">
-        Import on every deploy: migrations already imported are skipped, new ones are added.
+        Run it on every deploy: imported migrations are skipped, new ones added.
       </Heading>
       <CodeBlock code={importCommand(databaseId)} label="Import command" />
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-        <KeyIcon className="size-3.5" />
-        Set ROMULUS_TOKEN to an API token of this database.
-        <Link
-          to="/$org/$db/settings"
-          params={{ org, db }}
-          hash="tokens"
-          className="font-medium text-primary underline-offset-4 hover:underline"
-        >
-          Create a token
-        </Link>
+      <p className="flex items-start gap-2 text-sm text-muted-foreground">
+        <KeyIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+        <span>
+          Set ROMULUS_TOKEN to an API token of this database.{" "}
+          <Link
+            to="/$org/$db/settings"
+            params={{ org, db }}
+            hash="tokens"
+            className="font-medium text-primary underline-offset-4 hover:underline"
+          >
+            Create a token
+          </Link>
+        </span>
       </p>
     </Card>
   );

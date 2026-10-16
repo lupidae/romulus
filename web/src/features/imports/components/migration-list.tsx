@@ -15,6 +15,8 @@ export type RowProgress =
   | { state: "waiting" }
   | { state: "running" }
   | { state: "replayed"; changes: string }
+  /** Ran without error before the import stopped: nothing was stored. */
+  | { state: "passed" }
   | { state: "failed" };
 
 /** Lines of the file around an error, to show it where it is. */
@@ -69,24 +71,49 @@ export function MigrationList({
   // imported, the version's link says it.
   const badges = !created && migrations.some((m) => m.status !== "new");
 
+  // A long run of migrations imported already folds into one row: what is
+  // new is what this import is about.
+  const imported = migrations.findIndex((m) => m.status !== "imported");
+  const run = imported === -1 ? migrations.length : imported;
+  const [unfolded, setUnfolded] = React.useState(false);
+  const folded = run >= FOLD_FROM && !unfolded;
+
   return (
     <ol aria-label="Migrations, in order" className="divide-y divide-border">
-      {migrations.map((m, i) => (
-        <Row
-          key={`${m.path}:${m.id}`}
-          org={org}
-          db={db}
-          migration={m}
-          badge={badges || m.status !== "new"}
-          number={created?.get(i) ?? numbers.get(i)}
-          linked={created?.has(i) ?? false}
-          progress={progress?.get(i)}
-          failure={failure?.index === i ? failure : undefined}
-        />
-      ))}
+      {folded && (
+        <li className="flex min-h-12 items-center gap-3 px-4 py-2">
+          <span className="min-w-0 flex-1 text-sm text-muted-foreground">
+            <span className="font-mono font-semibold text-faint-foreground">
+              v{numbers.get(0)} to v{numbers.get(run - 1)}
+            </span>{" "}
+            {run === migrations.length ? "are" : `(${run} migrations) are`} imported already
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setUnfolded(true)}>
+            Show them
+          </Button>
+        </li>
+      )}
+      {migrations.map((m, i) =>
+        folded && i < run ? null : (
+          <Row
+            key={`${m.path}:${m.id}`}
+            org={org}
+            db={db}
+            migration={m}
+            badge={badges || m.status !== "new"}
+            number={created?.get(i) ?? numbers.get(i)}
+            linked={created?.has(i) ?? false}
+            progress={progress?.get(i)}
+            failure={failure?.index === i ? failure : undefined}
+          />
+        ),
+      )}
     </ol>
   );
 }
+
+/** Imported migrations in a row before folding them. */
+const FOLD_FROM = 4;
 
 function Row({
   org,
@@ -113,6 +140,22 @@ function Row({
   const detailsId = React.useId();
   const shown = migration.status !== "imported";
   const dim = migration.status === "imported";
+  const toggle = shown && skipped.length > 0 && (
+    <Button
+      variant="ghost"
+      size="sm"
+      aria-expanded={open}
+      aria-controls={detailsId}
+      onClick={() => setOpen((o) => !o)}
+      className="text-muted-foreground"
+    >
+      {skipped.length} skipped
+      <NavArrowDownIcon
+        aria-hidden
+        className={cn("transition-transform motion-reduce:transition-none", open && "rotate-180")}
+      />
+    </Button>
+  );
 
   return (
     <li
@@ -161,26 +204,10 @@ function Row({
               <span className="shrink-0 text-foreground/80">{sentence(progress.changes)}</span>
             )}
           </span>
+          {/* Narrow screens: under the name, which keeps the width. */}
+          {toggle && <span className="-ml-2.5 sm:hidden">{toggle}</span>}
         </span>
-        {shown && skipped.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-expanded={open}
-            aria-controls={detailsId}
-            onClick={() => setOpen((o) => !o)}
-            className="shrink-0 text-muted-foreground"
-          >
-            {skipped.length} skipped
-            <NavArrowDownIcon
-              aria-hidden
-              className={cn(
-                "transition-transform motion-reduce:transition-none",
-                open && "rotate-180",
-              )}
-            />
-          </Button>
-        )}
+        {toggle && <span className="shrink-0 max-sm:hidden">{toggle}</span>}
         {badge && <StatusBadge migration={migration} />}
       </div>
       {errors.length > 0 && <ErrorDetails errors={errors} excerpt={failure?.excerpt ?? null} />}
@@ -201,6 +228,13 @@ function ProgressIcon({ progress }: { progress: RowProgress }) {
       return <Spinner className="size-4 shrink-0" label="Replaying" />;
     case "replayed":
       return <CheckCircleIcon aria-label="Replayed" className="size-4 shrink-0 text-success" />;
+    case "passed":
+      return (
+        <CheckCircleIcon
+          aria-label="Replays, not imported"
+          className="size-4 shrink-0 text-faint-foreground"
+        />
+      );
     case "failed":
       return <XmarkCircleIcon aria-label="Failed" className="size-4 shrink-0 text-destructive" />;
   }

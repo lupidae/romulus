@@ -54,8 +54,8 @@ export function DropZone({
           {over ? "Drop to read the migrations" : "Drop a migrations folder or a .zip"}
         </p>
         <p className="text-sm text-muted-foreground">
-          sqlx, Flyway, Prisma, dbmate, golang-migrate, node-pg-migrate or numbered .sql files. The
-          format is detected; nothing is imported before you confirm.
+          sqlx, Flyway, Prisma, dbmate, golang-migrate, node-pg-migrate or numbered .sql files.
+          Nothing is imported before you confirm.
         </p>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2">

@@ -204,8 +204,7 @@ export function ImportFlow({
           Import migrations
         </h2>
         <p className="max-w-prose text-base text-muted-foreground">
-          Each migration becomes a version, replayed in order from an empty database. Nothing is
-          stored unless every one of them replays.
+          Each migration becomes a version. Nothing is stored unless all of them replay.
         </p>
       </div>
 
@@ -303,6 +302,8 @@ function Review({
         rows.set(i, { state: "replayed", changes: replayed.get(i) ?? "" });
       } else if (failedAt === i) {
         rows.set(i, { state: "failed" });
+      } else if (failedAt !== undefined && i < failedAt) {
+        rows.set(i, { state: "passed" });
       } else if (running) {
         rows.set(i, { state: "running" });
         running = false;
@@ -500,7 +501,7 @@ function SummaryBar({
           {count === 1 ? "1 migration" : `${count} migrations`}
         </span>{" "}
         in <span className="font-mono text-foreground">{picked.label}</span>
-        {preview.new > 0 && preview.new < count && ` · ${preview.new} new`}
+        {preview.new > 0 && preview.new < count && `, ${preview.new} new`}
       </p>
       {preview.ignored.length > 0 && <Ignored preview={preview} />}
       {phase.step !== "review" ? (
