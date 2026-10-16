@@ -2447,6 +2447,7 @@ dependencies = [
  "remus-mermaid",
  "remus-sql",
  "romulus-diff",
+ "romulus-migration",
  "romulus-sandbox",
  "rsa",
  "serde",

@@ -353,6 +353,23 @@ export interface paths {
     patch: operations["rename_draft"];
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/migration": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The migration publishing the draft now would call for. */
+    get: operations["draft_migration"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/drafts/{id}/publish": {
     parameters: {
       query?: never;
@@ -399,6 +416,23 @@ export interface paths {
     put?: never;
     /** Brings the latest version into the draft: see the module documentation. */
     post: operations["update_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/migration": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The migration from one version to another, as statements and files. */
+    get: operations["version_migration"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -1371,6 +1405,134 @@ export interface components {
      * @enum {string}
      */
     LiveStatus: "open" | "publishing" | "updating" | "published" | "deleted";
+    MigrationFile: {
+      content: string;
+      /**
+       * @description Where the destructive statements are (with their comments), for
+       *     highlighting.
+       */
+      destructive: components["schemas"]["MigrationLines"][];
+      /**
+       * @description Relative to the tool's migrations folder: `20261016093000_add_invoices.sql`,
+       *     `20261016093000_add_invoices/migration.sql`.
+       */
+      path: string;
+      role: components["schemas"]["MigrationFileRole"];
+    };
+    /** @enum {string} */
+    MigrationFileRole: "up" | "down" | "config";
+    /** @description A range of lines, 1-based, both ends included. */
+    MigrationLines: {
+      /** Format: int32 */
+      from: number;
+      /** Format: int32 */
+      to: number;
+    };
+    /**
+     * @description The parts of a migration, in order.
+     * @enum {string}
+     */
+    MigrationSection:
+      | "schemas"
+      | "dependents"
+      | "types"
+      | "tables"
+      | "keys"
+      | "views"
+      | "security"
+      | "comments"
+      | "removals";
+    /**
+     * @description When a statement runs relative to the migration's transaction.
+     * @enum {string}
+     */
+    MigrationStage: "commit" | "transaction" | "concurrent";
+    /** @description One SQL statement of a migration. */
+    MigrationStatement: {
+      /**
+       * @description SQL to run instead, when this statement is half of a likely rename
+       *     (a `RENAME` keeps the data a drop and an add would lose). Files show
+       *     it commented out.
+       */
+      alternative?: string | null;
+      /**
+       * @description Deletes data (a dropped table, column or partition, a conversion
+       *     that can lose or reject values), or fails when existing rows break
+       *     it (`SET NOT NULL`, a `NOT NULL` column without a default).
+       */
+      destructive: boolean;
+      kind: components["schemas"]["MigrationStatementKind"];
+      /**
+       * @description What a reviewer should know: why it is there, what it can do to
+       *     existing rows, how to do it more safely.
+       */
+      note?: string | null;
+      /** @description The part of the migration it belongs to, for headings. */
+      section: components["schemas"]["MigrationSection"];
+      /** @description One statement, ending with `;` (it may span lines). */
+      sql: string;
+      stage: components["schemas"]["MigrationStage"];
+    };
+    /**
+     * @description What a statement does, for grouping and icons.
+     * @enum {string}
+     */
+    MigrationStatementKind:
+      | "create_schema"
+      | "create_extension"
+      | "alter_extension"
+      | "drop_extension"
+      | "create_type"
+      | "alter_type"
+      | "drop_type"
+      | "create_domain"
+      | "alter_domain"
+      | "drop_domain"
+      | "create_sequence"
+      | "alter_sequence"
+      | "create_table"
+      | "alter_table"
+      | "drop_table"
+      | "add_column"
+      | "alter_column"
+      | "drop_column"
+      | "add_constraint"
+      | "drop_constraint"
+      | "create_index"
+      | "drop_index"
+      | "create_partition"
+      | "attach_partition"
+      | "detach_partition"
+      | "create_view"
+      | "drop_view"
+      | "create_policy"
+      | "alter_policy"
+      | "drop_policy"
+      | "row_level_security"
+      | "comment";
+    /** @enum {string} */
+    MigrationTool: "plain" | "sqlx" | "flyway" | "prisma" | "dbmate" | "golang_migrate";
+    /** @description Something about the migration as a whole that a reviewer must know. */
+    MigrationWarning: {
+      code: components["schemas"]["MigrationWarningCode"];
+      message: string;
+      /**
+       * @description The object it is about, schema-qualified and unquoted
+       *     (`public.users`, `public.mood`), when it is about one.
+       */
+      object?: string | null;
+    };
+    /** @enum {string} */
+    MigrationWarningCode:
+      | "column_order"
+      | "possible_rename"
+      | "type_recreated"
+      | "table_recreated"
+      | "cast"
+      | "constraint_name"
+      | "foreign_table"
+      | "unsupported"
+      | "empty_schema";
     /** @description An organization, as one of its members sees it. */
     Org: {
       /** Format: uuid */
@@ -1615,6 +1777,33 @@ export interface components {
       orphan_partitions: components["schemas"]["OrphanPartitions"];
       status: components["schemas"]["StatusMap"];
       summary: components["schemas"]["Summary"];
+    };
+    /** @description A migration, as statements and as the files of one tool. */
+    SchemaMigration: {
+      /** @description How many statements delete data or can fail on existing rows. */
+      destructive: number;
+      /** @description The files to put in the tool's migrations folder, in order. */
+      files: components["schemas"]["MigrationFile"][];
+      format: components["schemas"]["MigrationTool"];
+      /**
+       * Format: int32
+       * @description The version migrated from; `null` for nothing (a draft of a database
+       *     without versions).
+       */
+      from?: number | null;
+      /** @description In order; the same whatever the format. */
+      statements: components["schemas"]["MigrationStatement"][];
+      /**
+       * Format: int32
+       * @description The version migrated to (for a draft, the number publishing it would
+       *     give).
+       */
+      to: number;
+      /**
+       * @description What to know before running it (a column that ends up elsewhere, a
+       *     possible rename, a type recreated…).
+       */
+      warnings: components["schemas"]["MigrationWarning"][];
     };
     /** @description A message only the server sends (tag 100 on the websocket), as JSON. */
     ServerEvent:
@@ -3061,6 +3250,89 @@ export interface operations {
       };
     };
   };
+  draft_migration: {
+    parameters: {
+      query?: {
+        /**
+         * @description The migration tool: its file names, transactions and down migration.
+         *     `plain` when absent.
+         */
+        format?: components["schemas"]["MigrationTool"];
+        /**
+         * @description Build indexes on existing tables `CONCURRENTLY`, outside the
+         *     transaction (their own files where the tool needs it).
+         */
+        concurrently?: boolean;
+        /**
+         * @description The description in file names (made file-name safe); by default the
+         *     target version's message, or `v4_to_v5`.
+         */
+        name?: string;
+      };
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SchemaMigration"];
+        };
+      };
+      /** @description `bad_request`: an unknown format */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_published`: its version has the migration now */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `compile_failed`: the SQL has errors (`details.diagnostics`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The compiler is unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   preview_publish: {
     parameters: {
       query?: never;
@@ -3320,6 +3592,77 @@ export interface operations {
       };
       /** @description The draft could not be loaded */
       503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  version_migration: {
+    parameters: {
+      query: {
+        /** @description The version the database is at. */
+        from: number;
+        /** @description The version to migrate it to. May be older than `from` (a rollback). */
+        to: number;
+        /**
+         * @description The migration tool: its file names, transactions and down migration.
+         *     `plain` when absent.
+         */
+        format?: components["schemas"]["MigrationTool"];
+        /**
+         * @description Build indexes on existing tables `CONCURRENTLY`, outside the
+         *     transaction (their own files where the tool needs it).
+         */
+        concurrently?: boolean;
+        /**
+         * @description The description in file names (made file-name safe); by default the
+         *     target version's message, or `v4_to_v5`.
+         */
+        name?: string;
+      };
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SchemaMigration"];
+        };
+      };
+      /** @description `bad_request`: a number that is not one, an unknown format */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `not_found`: no such database, or no such version */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`: a number below 1 */
+      422: {
         headers: {
           [name: string]: unknown;
         };

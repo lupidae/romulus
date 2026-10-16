@@ -14,6 +14,7 @@ remus-dbml.workspace = true
 remus-mermaid.workspace = true
 remus-sql.workspace = true
 romulus-diff = { workspace = true, features = ["utoipa"] }
+romulus-migration = { workspace = true, features = ["utoipa"] }
 romulus-sandbox = { workspace = true, features = ["utoipa"] }
 
 axum = { workspace = true, features = ["ws"] }

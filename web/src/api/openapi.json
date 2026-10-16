@@ -1513,6 +1513,129 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/migration": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "The migration publishing the draft now would call for.",
+        "operationId": "draft_migration",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "The migration tool: its file names, transactions and down migration.\n`plain` when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MigrationTool"
+            }
+          },
+          {
+            "name": "concurrently",
+            "in": "query",
+            "description": "Build indexes on existing tables `CONCURRENTLY`, outside the\ntransaction (their own files where the tool needs it).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The description in file names (made file-name safe); by default the\ntarget version's message, or `v4_to_v5`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaMigration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_request`: an unknown format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_published`: its version has the migration now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`compile_failed`: the SQL has errors (`details.diagnostics`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The compiler is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/drafts/{id}/publish": {
       "get": {
         "tags": [
@@ -1890,6 +2013,123 @@
           },
           "503": {
             "description": "The draft could not be loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/migration": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "The migration from one version to another, as statements and files.",
+        "operationId": "version_migration",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The version the database is at.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The version to migrate it to. May be older than `from` (a rollback).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "The migration tool: its file names, transactions and down migration.\n`plain` when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MigrationTool"
+            }
+          },
+          {
+            "name": "concurrently",
+            "in": "query",
+            "description": "Build indexes on existing tables `CONCURRENTLY`, outside the\ntransaction (their own files where the tool needs it).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The description in file names (made file-name safe); by default the\ntarget version's message, or `v4_to_v5`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaMigration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_request`: a number that is not one, an unknown format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such database, or no such version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: a number below 1",
             "content": {
               "application/json": {
                 "schema": {
@@ -5021,6 +5261,217 @@
           "deleted"
         ]
       },
+      "MigrationFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "content",
+          "role",
+          "destructive"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "destructive": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationLines"
+            },
+            "description": "Where the destructive statements are (with their comments), for\nhighlighting."
+          },
+          "path": {
+            "type": "string",
+            "description": "Relative to the tool's migrations folder: `20261016093000_add_invoices.sql`,\n`20261016093000_add_invoices/migration.sql`."
+          },
+          "role": {
+            "$ref": "#/components/schemas/MigrationFileRole"
+          }
+        }
+      },
+      "MigrationFileRole": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "config"
+        ]
+      },
+      "MigrationLines": {
+        "type": "object",
+        "description": "A range of lines, 1-based, both ends included.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "to": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "MigrationSection": {
+        "type": "string",
+        "description": "The parts of a migration, in order.",
+        "enum": [
+          "schemas",
+          "dependents",
+          "types",
+          "tables",
+          "keys",
+          "views",
+          "security",
+          "comments",
+          "removals"
+        ]
+      },
+      "MigrationStage": {
+        "type": "string",
+        "description": "When a statement runs relative to the migration's transaction.",
+        "enum": [
+          "commit",
+          "transaction",
+          "concurrent"
+        ]
+      },
+      "MigrationStatement": {
+        "type": "object",
+        "description": "One SQL statement of a migration.",
+        "required": [
+          "sql",
+          "kind",
+          "destructive",
+          "stage",
+          "section"
+        ],
+        "properties": {
+          "alternative": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SQL to run instead, when this statement is half of a likely rename\n(a `RENAME` keeps the data a drop and an add would lose). Files show\nit commented out."
+          },
+          "destructive": {
+            "type": "boolean",
+            "description": "Deletes data (a dropped table, column or partition, a conversion\nthat can lose or reject values), or fails when existing rows break\nit (`SET NOT NULL`, a `NOT NULL` column without a default)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MigrationStatementKind"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a reviewer should know: why it is there, what it can do to\nexisting rows, how to do it more safely."
+          },
+          "section": {
+            "$ref": "#/components/schemas/MigrationSection",
+            "description": "The part of the migration it belongs to, for headings."
+          },
+          "sql": {
+            "type": "string",
+            "description": "One statement, ending with `;` (it may span lines)."
+          },
+          "stage": {
+            "$ref": "#/components/schemas/MigrationStage"
+          }
+        }
+      },
+      "MigrationStatementKind": {
+        "type": "string",
+        "description": "What a statement does, for grouping and icons.",
+        "enum": [
+          "create_schema",
+          "create_extension",
+          "alter_extension",
+          "drop_extension",
+          "create_type",
+          "alter_type",
+          "drop_type",
+          "create_domain",
+          "alter_domain",
+          "drop_domain",
+          "create_sequence",
+          "alter_sequence",
+          "create_table",
+          "alter_table",
+          "drop_table",
+          "add_column",
+          "alter_column",
+          "drop_column",
+          "add_constraint",
+          "drop_constraint",
+          "create_index",
+          "drop_index",
+          "create_partition",
+          "attach_partition",
+          "detach_partition",
+          "create_view",
+          "drop_view",
+          "create_policy",
+          "alter_policy",
+          "drop_policy",
+          "row_level_security",
+          "comment"
+        ]
+      },
+      "MigrationTool": {
+        "type": "string",
+        "enum": [
+          "plain",
+          "sqlx",
+          "flyway",
+          "prisma",
+          "dbmate",
+          "golang_migrate"
+        ]
+      },
+      "MigrationWarning": {
+        "type": "object",
+        "description": "Something about the migration as a whole that a reviewer must know.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/MigrationWarningCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "object": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The object it is about, schema-qualified and unquoted\n(`public.users`, `public.mood`), when it is about one."
+          }
+        }
+      },
+      "MigrationWarningCode": {
+        "type": "string",
+        "enum": [
+          "column_order",
+          "possible_rename",
+          "type_recreated",
+          "table_recreated",
+          "cast",
+          "constraint_name",
+          "foreign_table",
+          "unsupported",
+          "empty_schema"
+        ]
+      },
       "Org": {
         "type": "object",
         "description": "An organization, as one of its members sees it.",
@@ -5718,6 +6169,62 @@
           },
           "summary": {
             "$ref": "#/components/schemas/Summary"
+          }
+        }
+      },
+      "SchemaMigration": {
+        "type": "object",
+        "description": "A migration, as statements and as the files of one tool.",
+        "required": [
+          "to",
+          "format",
+          "statements",
+          "warnings",
+          "destructive",
+          "files"
+        ],
+        "properties": {
+          "destructive": {
+            "type": "integer",
+            "description": "How many statements delete data or can fail on existing rows.",
+            "minimum": 0
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationFile"
+            },
+            "description": "The files to put in the tool's migrations folder, in order."
+          },
+          "format": {
+            "$ref": "#/components/schemas/MigrationTool"
+          },
+          "from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version migrated from; `null` for nothing (a draft of a database\nwithout versions)."
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationStatement"
+            },
+            "description": "In order; the same whatever the format."
+          },
+          "to": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version migrated to (for a draft, the number publishing it would\ngive)."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationWarning"
+            },
+            "description": "What to know before running it (a column that ends up elsewhere, a\npossible rename, a type recreated…)."
           }
         }
       },

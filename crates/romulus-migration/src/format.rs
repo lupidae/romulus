@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Migration, Section, Stage, Statement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationTool))]
 #[serde(rename_all = "snake_case")]
 pub enum Format {
     Plain,
@@ -87,7 +87,7 @@ pub struct Meta {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationFile))]
 pub struct File {
     /// Relative to the tool's migrations folder: `20261016093000_add_invoices.sql`,
     /// `20261016093000_add_invoices/migration.sql`.
@@ -100,7 +100,7 @@ pub struct File {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationFileRole))]
 #[serde(rename_all = "snake_case")]
 pub enum FileRole {
     /// The migration (or a part of it), in the order to apply.
@@ -113,7 +113,7 @@ pub enum FileRole {
 
 /// A range of lines, 1-based, both ends included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationLines))]
 pub struct Lines {
     pub from: u32,
     pub to: u32,

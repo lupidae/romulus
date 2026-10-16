@@ -15,6 +15,9 @@
 //!   (the diff against the base), and `POST …/drafts/{id}/publish`
 //!   [developer]: freeze, compile, store as the next version ([`publish`]).
 //!
+//! - `GET …/drafts/{id}/migration?format=&concurrently=&name=` [member]:
+//!   the migration from the draft's base version to what it holds now, as
+//!   statements and as one migration tool's files ([`migration`]).
 //! - `POST …/drafts/{id}/tidy` [developer]: rewrite the SQL in remus's
 //!   canonical form, as a minimal edit ([`tidy`]).
 //! - `POST …/drafts/{id}/update` [developer]: "Update draft", when someone
@@ -24,6 +27,7 @@
 //! Tables: `drafts`, `draft_compiles` (with `collab`'s `draft_updates`,
 //! `draft_snapshots`).
 
+pub mod migration;
 pub mod publish;
 pub mod tidy;
 pub mod update;
@@ -55,6 +59,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list, create))
         .routes(routes!(get, rename, delete))
         .routes(routes!(publish::preview, publish::publish))
+        .routes(routes!(migration::draft_migration))
         .routes(routes!(tidy::tidy))
         .routes(routes!(update::update))
 }

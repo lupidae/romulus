@@ -24,11 +24,17 @@
 //!   compared (`romulus-diff`), with both models, their SQL and the layout
 //!   of their union; cached by version ids.
 //!
+//! Migrations ([`migration`]):
+//! - `GET /orgs/{org}/databases/{db}/migration?from=&to=&format=&concurrently=&name=`
+//!   [member]: the `ALTER …` statements from one version to another
+//!   (`romulus-migration`) and the files of one migration tool.
+//!
 //! Table: `versions` (immutable by trigger). Numbers are assigned under a
 //! lock on the `databases` row ([`store`]).
 
 pub mod diff;
 pub mod layout;
+pub mod migration;
 pub mod push;
 pub mod store;
 
@@ -64,6 +70,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get))
         .routes(routes!(texts))
         .merge(diff::router())
+        .merge(migration::router())
         .merge(push::router())
 }
 
@@ -261,7 +268,11 @@ async fn summary(db: &PgPool, id: Uuid) -> ApiResult<VersionSummary> {
 }
 
 /// A version by number (`None`: the latest), whole.
-async fn detail(db: &PgPool, database_id: Uuid, number: Option<i32>) -> ApiResult<VersionDetail> {
+pub(crate) async fn detail(
+    db: &PgPool,
+    database_id: Uuid,
+    number: Option<i32>,
+) -> ApiResult<VersionDetail> {
     let row = sqlx::query!(
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,

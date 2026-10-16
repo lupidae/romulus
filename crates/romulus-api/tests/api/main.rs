@@ -16,6 +16,7 @@ mod idp;
 mod invitations;
 mod live;
 mod members;
+mod migration;
 mod oidc;
 mod orgs;
 mod push;

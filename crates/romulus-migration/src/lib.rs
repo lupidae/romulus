@@ -65,7 +65,7 @@ use serde::{Deserialize, Serialize};
 
 /// Choices that change the statements, not what they do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationOptions))]
 pub struct Options {
     /// Build (and rebuild) non-unique indexes on existing tables with
     /// `CREATE INDEX CONCURRENTLY`, which does not block writes but cannot
@@ -80,7 +80,7 @@ pub struct Options {
 /// What [`migration`] returns: the statements, in order, and what a
 /// reviewer should know before running them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = Migration))]
 pub struct Migration {
     /// In the order to run them: [`Stage::Commit`] first, then
     /// [`Stage::Transaction`], then [`Stage::Concurrent`].
@@ -113,7 +113,7 @@ impl Migration {
 
 /// One SQL statement of a migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationStatement))]
 pub struct Statement {
     /// One statement, ending with `;` (it may span lines).
     pub sql: String,
@@ -136,7 +136,7 @@ pub struct Statement {
 
 /// The parts of a migration, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationSection))]
 #[serde(rename_all = "snake_case")]
 pub enum Section {
     /// Schemas and extensions the rest needs.
@@ -176,7 +176,7 @@ impl Section {
 
 /// When a statement runs relative to the migration's transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationStage))]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     /// Committed before the transaction: enum values the migration then
@@ -190,7 +190,7 @@ pub enum Stage {
 
 /// What a statement does, for grouping and icons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationStatementKind))]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     CreateSchema,
@@ -229,7 +229,7 @@ pub enum Kind {
 
 /// Something about the migration as a whole that a reviewer must know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationWarning))]
 pub struct Warning {
     pub code: WarningCode,
     pub message: String,
@@ -239,7 +239,7 @@ pub struct Warning {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationWarningCode))]
 #[serde(rename_all = "snake_case")]
 pub enum WarningCode {
     /// Columns (or composite attributes) end up in another order than the
