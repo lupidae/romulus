@@ -600,10 +600,23 @@ fn check(
     }
 
     let mut edits = Edits::default();
+    // Statements unwrapped from guarded DO blocks, where they are.
+    let guarded: Vec<Range<usize>> = analyses
+        .iter()
+        .zip(&joined.ranges)
+        .flat_map(|(a, range)| {
+            a.guarded
+                .iter()
+                .map(move |g| range.start + g.start..range.start + g.end)
+        })
+        .collect();
     let mut rewritten: HashMap<usize, NodeEnum> = HashMap::new();
     let mut installed: HashSet<String> = HashSet::new();
     for statement in &parsed.statements {
         let k = joined.migration_at(statement.span.start);
+        if guarded.iter().any(|g| g.contains(&statement.span.start)) {
+            edits.guarded.insert(statement.index);
+        }
         match statements::rewrite(statement, &parsed, &joined.text) {
             Ok(Some(Rewrite {
                 edits: ranges,

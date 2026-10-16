@@ -14,6 +14,7 @@
 mod export;
 mod files;
 mod lexer;
+mod plpgsql;
 pub mod statements;
 
 pub use files::{

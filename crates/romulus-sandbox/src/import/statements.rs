@@ -91,8 +91,12 @@ pub struct Skipped {
 /// A migration's text, ready to replay.
 #[derive(Debug, Clone)]
 pub struct Analysis {
-    /// The text with every skipped statement blanked.
+    /// The text with every skipped statement blanked (and `DO` blocks of
+    /// DDL unwrapped, see `import::plpgsql`).
     pub sql: String,
+    /// Statements unwrapped from a guarded `DO` block: the replay ignores
+    /// "already exists" and "does not exist" errors from them.
+    pub guarded: Vec<Range<usize>>,
     pub skipped: Vec<Skipped>,
     /// Syntax errors, located in the text.
     pub errors: Vec<Diagnostic>,
@@ -116,13 +120,41 @@ pub fn analyze(sql: &str) -> Analysis {
         }
         blanks.push(range.clone());
     }
+    // Django's sqlmigrate prints a comment where a migration runs Python
+    // (`RunPython`): nothing to replay, but worth telling.
+    for range in &scanned.top_level_lines {
+        if sql[range.clone()].trim() == "-- THIS OPERATION CANNOT BE WRITTEN AS SQL" {
+            skipped.push(Skipped {
+                line: lines.position(sql, range.start).line,
+                kind: "RunPython".to_owned(),
+                reason: SkipReason::Code,
+                text: "Raw Python operation (not exported as SQL)".to_owned(),
+            });
+        }
+    }
     let text = lexer::blank(sql, blanks.iter().cloned());
     let parsed = parse(&text);
+    let mut guarded = Vec::new();
     for statement in &parsed.statements {
+        let span = statement.span;
+        if let Some(unwrapped) =
+            super::plpgsql::unwrap(&statement.node, &text[span.range()], span.start)
+        {
+            // The block goes, its statements stay where they are.
+            let mut cursor = span.start;
+            for kept in &unwrapped.statements {
+                blanks.push(cursor..kept.start);
+                cursor = kept.end;
+            }
+            blanks.push(cursor..semicolon_after(&text, span.end));
+            if unwrapped.guarded {
+                guarded.extend(unwrapped.statements);
+            }
+            continue;
+        }
         let Some(reason) = skip_reason(&statement.node) else {
             continue;
         };
-        let span = statement.span;
         skipped.push(Skipped {
             line: span.from.line,
             kind: label(&text, parsed.tokens_of(statement)),
@@ -130,19 +162,25 @@ pub fn analyze(sql: &str) -> Analysis {
             text: first_line(&text[span.range()]),
         });
         // The statement and its `;`.
-        let after = &text[span.end..];
-        let semicolon = after
-            .find(|c: char| !c.is_whitespace())
-            .filter(|&k| after[k..].starts_with(';'))
-            .map_or(span.end, |k| span.end + k + 1);
-        blanks.push(span.start..semicolon);
+        blanks.push(span.start..semicolon_after(&text, span.end));
     }
     skipped.sort_by_key(|s| s.line);
     Analysis {
         sql: lexer::blank(sql, blanks),
+        guarded,
         skipped,
         errors: parsed.errors,
     }
+}
+
+/// Just past the `;` that ends a statement ending at `end` (`end` itself
+/// when none follows).
+fn semicolon_after(text: &str, end: usize) -> usize {
+    let after = &text[end..];
+    after
+        .find(|c: char| !c.is_whitespace())
+        .filter(|&k| after[k..].starts_with(';'))
+        .map_or(end, |k| end + k + 1)
 }
 
 fn first_line(text: &str) -> String {

@@ -84,6 +84,25 @@ pub(crate) struct Edits {
     pub omit: HashSet<usize>,
     /// Functions the text defines, `(schema, name)`: never stubbed.
     pub defined: HashSet<(String, String)>,
+    /// Statements that came out of a guarded `DO` block: run so that
+    /// "already exists" and "does not exist" errors are ignored.
+    pub guarded: HashSet<usize>,
+}
+
+/// SQLSTATE conditions a guarded statement may fail with and be ignored.
+const GUARDED_CONDITIONS: &str = "duplicate_object OR duplicate_table OR duplicate_column \
+    OR duplicate_schema OR duplicate_function OR undefined_object OR undefined_table \
+    OR undefined_column OR undefined_function";
+
+/// A statement run so that it is skipped when its object already exists
+/// (or no longer does): a fixed block of ours around the statement, which
+/// the allowlist checked like any other. The statement is a quoted
+/// literal, so nothing in it can end the block early.
+fn guarded(statement: &str) -> String {
+    format!(
+        "DO $romulus_guard$ BEGIN EXECUTE {}; EXCEPTION WHEN {GUARDED_CONDITIONS} THEN NULL; END $romulus_guard$",
+        quote_literal(statement.trim_end().trim_end_matches(';'))
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -221,13 +240,13 @@ pub(crate) fn prepare_with(
         }
         rewrites.sort_by_key(|(range, _)| range.start);
 
-        let mut cursor = statement.span.start;
-        for (range, text) in rewrites {
-            script.source(sql, cursor..range.start);
-            script.replace(&text, range.clone());
-            cursor = range.end;
-        }
-        script.source(sql, cursor..statement.span.end);
+        emit(
+            &mut script,
+            sql,
+            statement.span.range(),
+            &rewrites,
+            edits.guarded.contains(&i),
+        );
         script.inject(";\n", Some(i), Injection::Terminator);
 
         if let Some(written) = roles.and_then(|r| r.record)
@@ -249,6 +268,37 @@ pub(crate) fn prepare_with(
         records_policy_roles,
         statement_starts,
     }
+}
+
+/// A statement's text into the script, with its rewrites (and inside a
+/// guard when `guard`).
+fn emit(
+    script: &mut Script,
+    sql: &str,
+    span: Range<usize>,
+    rewrites: &[(Range<usize>, String)],
+    guard: bool,
+) {
+    if guard {
+        // The statement as rewritten, inside the guard: one segment.
+        let mut text = String::new();
+        let mut cursor = span.start;
+        for (range, with) in rewrites {
+            text.push_str(&sql[cursor..range.start]);
+            text.push_str(with);
+            cursor = range.end;
+        }
+        text.push_str(&sql[cursor..span.end]);
+        script.replace(&guarded(&text), span);
+        return;
+    }
+    let mut cursor = span.start;
+    for (range, text) in rewrites {
+        script.source(sql, cursor..range.start);
+        script.replace(text, range.clone());
+        cursor = range.end;
+    }
+    script.source(sql, cursor..span.end);
 }
 
 impl Prepared {

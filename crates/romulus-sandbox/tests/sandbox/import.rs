@@ -177,7 +177,7 @@ fn a_skipped_do_block_is_named_when_what_it_created_is_missing() {
         let (replay, _) = replay(
             compiler,
             &[
-                "DO $$ BEGIN\n  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'mood') THEN\n    CREATE TYPE mood AS ENUM ('happy', 'sad');\n  END IF;\nEND $$;",
+                "DO $$ BEGIN\n  EXECUTE format('CREATE TYPE %I AS ENUM (''happy'', ''sad'')', 'mood');\nEND $$;",
                 "CREATE TABLE people (id int, mood mood);",
             ],
             0,
@@ -306,6 +306,9 @@ mod hostile {
                 "CREATE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS 'SELECT 1'",
                 "CREATE TEMP TABLE t (id int)",
                 "CREATE EXTENSION dblink; CREATE EXTENSION IF NOT EXISTS dblink; CREATE TABLE t (x int DEFAULT dblink_exec('x')::int)",
+                // DDL unwrapped from a DO block is checked like any other.
+                "DO $$ BEGIN CREATE TABLE t (x int DEFAULT pg_sleep(30)::int); EXCEPTION WHEN duplicate_table THEN NULL; END $$",
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class) THEN CREATE INDEX ON pg_class ((repeat('x', 500000000))); END IF; END $$",
             ] {
                 let (replay, _) = replay(compiler, &[sql], 0).await;
                 let failure = replay.failure.unwrap_or_else(|| panic!("{sql} replayed"));
@@ -349,6 +352,23 @@ mod hostile {
     /// extension's install script calls (it runs as the bootstrap
     /// superuser): its body is a stub, so capturing the call runs nothing
     /// of the import's.
+    /// The condition of an unwrapped `DO` block never runs.
+    #[test]
+    fn do_block_conditions_never_run() {
+        with_compiler(|compiler| async move {
+            let started = Instant::now();
+            let (replay, models) = replay(
+                compiler,
+                &["DO $$ BEGIN IF NOT EXISTS (SELECT pg_sleep(30), pg_terminate_backend(1) FROM pg_class) THEN CREATE TABLE t (id int); END IF; END $$;"],
+                0,
+            )
+            .await;
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+            assert!(started.elapsed() < Duration::from_secs(10));
+            assert_eq!(super::tables(&models[0].1), ["public.t"]);
+        });
+    }
+
     #[test]
     fn functions_shadowing_extension_calls_run_nothing() {
         with_compiler(|compiler| async move {
@@ -369,4 +389,62 @@ mod hostile {
             assert!(replay.failure.is_none(), "{:?}", replay.failure);
         });
     }
+}
+
+#[test]
+fn ddl_in_do_blocks_is_unwrapped_and_guards_hold() {
+    with_compiler(|compiler| async move {
+        let rails_enum = "DO $$\nBEGIN\n    IF NOT EXISTS (\n      SELECT 1\n      FROM pg_type t\n      JOIN pg_namespace n ON t.typnamespace = n.oid\n      WHERE t.typname = 'mood'\n        AND n.nspname = ANY (current_schemas(false))\n    ) THEN\n        CREATE TYPE \"mood\" AS ENUM ('happy', 'sad');\n    END IF;\nEND\n$$;";
+        let (replay, models) = replay(
+            compiler,
+            &[
+                rails_enum,
+                "CREATE TABLE people (id int PRIMARY KEY, mood mood);\nCREATE TABLE teams (id int PRIMARY KEY);\nALTER TABLE people ADD COLUMN team_id int;",
+                // Again: the type exists now, the guard skips it.
+                rails_enum,
+                "DO $$ BEGIN\n ALTER TABLE \"people\" ADD CONSTRAINT \"people_team_fk\" FOREIGN KEY (\"team_id\") REFERENCES \"public\".\"teams\"(\"id\") ON DELETE cascade;\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$;\nDO $$ BEGIN\n ALTER TABLE \"people\" ADD CONSTRAINT \"people_team_fk\" FOREIGN KEY (\"team_id\") REFERENCES \"public\".\"teams\"(\"id\") ON DELETE cascade;\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$;",
+            ],
+            0,
+        )
+        .await;
+        assert!(replay.failure.is_none(), "{:?}", replay.failure);
+        assert!(
+            replay.skipped.iter().all(Vec::is_empty),
+            "{:?}",
+            replay.skipped
+        );
+        assert_eq!(models[0].1.enums.len(), 1);
+        let people = models[3]
+            .1
+            .entities
+            .iter()
+            .find(|e| e.name == "people")
+            .unwrap();
+        assert!(
+            people
+                .constraints
+                .iter()
+                .any(|c| c.name == "people_team_fk"),
+            "{:?}",
+            people.constraints
+        );
+    });
+}
+
+#[test]
+fn an_unguarded_unwrapped_statement_still_fails_like_postgres_would() {
+    with_compiler(|compiler| async move {
+        let (replay, _) = replay(
+            compiler,
+            &[
+                "CREATE TABLE t (id int);",
+                "DO $$ BEGIN CREATE TABLE t (id int); END $$;",
+            ],
+            0,
+        )
+        .await;
+        let failure = replay.failure.expect("t exists already");
+        assert_eq!(failure.index, 1);
+        assert_eq!(failure.diagnostics[0].sqlstate.as_deref(), Some("42P07"));
+    });
 }
