@@ -18,7 +18,7 @@ export const exporters = [
     label: "Alembic",
     file: "alembic.sh",
     script: alembic,
-    run: "sh alembic.sh > alembic.sql",
+    run: "bash alembic.sh > alembic.sql",
     note: "Next to alembic.ini, with the project's virtualenv active. Uses Alembic's offline mode: no database.",
   },
   {
@@ -26,15 +26,15 @@ export const exporters = [
     label: "Django",
     file: "django.sh",
     script: django,
-    run: "DATABASE_URL=postgres://localhost/romulus_export sh django.sh > django.sql",
-    note: "Next to manage.py, pointed at an empty scratch database: each migration is applied to it.",
+    run: "DATABASE_URL=postgres://localhost/romulus_export bash django.sh --database default > django.sql",
+    note: "Next to manage.py. --database names the settings' alias of an empty scratch database: each migration is applied to it.",
   },
   {
     tool: "rails",
     label: "Rails",
     file: "rails.sh",
     script: rails,
-    run: "DATABASE_URL=postgres://localhost/romulus_export sh rails.sh > rails.sql",
+    run: "DATABASE_URL=postgres://localhost/romulus_export bash rails.sh > rails.sql",
     note: "From the app's root, pointed at an empty scratch database: each migration is applied to it.",
   },
 ] as const;
