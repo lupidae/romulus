@@ -83,8 +83,9 @@ pub struct DraftVersion {
     pub layout: VersionLayout,
     pub message: Option<String>,
     pub created_by: Uuid,
-    /// Stored with the version: published without its approvals.
-    pub audit: Option<crate::audit::Entry>,
+    /// The approvals to check again and keep with the version (when the
+    /// organization requires some).
+    pub approvals: Option<super::approvals::Freeze>,
 }
 
 pub struct Created {
@@ -111,7 +112,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             layout: Some(new.layout),
             expected_base: Some(new.expected_base),
             publishes_draft: Some(new.draft),
-            audit: new.audit,
+            approvals: new.approvals,
         },
         false,
     )

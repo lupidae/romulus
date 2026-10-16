@@ -488,7 +488,7 @@ async fn a_version_is_stored_only_if_its_draft_is_still_open(db: PgPool) {
             layout: None,
             expected_base: None,
             publishes_draft: Some(draft_id(&draft)),
-            audit: None,
+            approvals: None,
         },
         false,
     )

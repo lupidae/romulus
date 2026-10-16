@@ -51,6 +51,9 @@ pub struct Review {
     pub editors: HashSet<Uuid>,
     pub approvals: Vec<Approval>,
     pub requested: Option<ReviewRequest>,
+    /// Open before editors were recorded (`drafts.editors_unknown`):
+    /// developers and admins cannot approve it.
+    pub editors_unknown: bool,
 }
 
 impl Review {
@@ -97,6 +100,7 @@ impl Review {
                 .collect(),
             editors,
             requested: self.requested.clone(),
+            editors_unknown: self.editors_unknown,
         }
     }
 }

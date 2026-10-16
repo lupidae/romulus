@@ -36,10 +36,10 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use crate::{
-    ApiError, ApiResult, AppState,
+    ApiError, ApiResult, AppState, audit,
     auth::{CurrentUser, Member, min},
     db,
-    domain::Role,
+    domain::{AuditAction, Role},
     error::ErrorBody,
     extract::Json,
 };
@@ -260,6 +260,13 @@ async fn update(
         })
         .transpose()?;
     let shown = slug.clone().unwrap_or_default();
+    let mut tx = db.begin().await?;
+    let before = sqlx::query_scalar!(
+        "SELECT approvals_required FROM organizations WHERE id = $1 FOR UPDATE",
+        member.org.id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     let org = sqlx::query!(
         "UPDATE organizations
          SET name = coalesce($2, name), slug = coalesce($3, slug),
@@ -270,10 +277,33 @@ async fn update(
         slug,
         approvals,
     )
-    .fetch_one(&db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(slug_taken(&shown))?;
-    if org.approvals_required != member.org.approvals_required {
+    let changed = org.approvals_required != before;
+    if changed {
+        // Who changed what publishing needs, from what: in the audit log.
+        audit::record(
+            &mut *tx,
+            &audit::Entry {
+                org_id: member.org.id,
+                database_id: None,
+                action: AuditAction::ApprovalsRequiredChanged,
+                actor_id: Some(member.user.id),
+                actor_name: Some(member.user.name.clone()),
+                version_number: None,
+                reason: None,
+                details: audit::AuditDetails {
+                    from: Some(before.into()),
+                    to: Some(org.approvals_required.into()),
+                    ..Default::default()
+                },
+            },
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    if changed {
         // Its drafts open now show the new count at once.
         collab.approvals_required(member.org.id, org.approvals_required.into());
         tracing::info!(org = %org.slug, approvals = org.approvals_required, "approvals required changed");

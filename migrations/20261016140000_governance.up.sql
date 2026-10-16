@@ -88,43 +88,28 @@ $$;
 CREATE TRIGGER versions_keep_last_number AFTER INSERT ON versions
     FOR EACH ROW EXECUTE FUNCTION versions_keep_last_number();
 
--- Imports do not see removed versions: removing what an import created and
--- importing again creates it again. So a migration id is unique among the
--- live versions only, and the flag follows the version.
-ALTER TABLE version_migrations ADD COLUMN removed boolean NOT NULL DEFAULT false;
-COMMENT ON COLUMN version_migrations.removed IS
-    'Its version is removed (versions.removed_at, kept in step by a trigger): imports ignore it.';
-ALTER TABLE version_migrations DROP CONSTRAINT version_migrations_database_id_migration_id_key;
-CREATE UNIQUE INDEX version_migrations_database_id_migration_id_key
-    ON version_migrations (database_id, migration_id) WHERE NOT removed;
-
-CREATE OR REPLACE FUNCTION version_migrations_are_immutable() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-    -- The one update allowed: `removed` following its version.
-    IF (to_jsonb(NEW) - 'removed') IS DISTINCT FROM (to_jsonb(OLD) - 'removed') THEN
-        RAISE EXCEPTION 'imported migration % is immutable', OLD.migration_id
-            USING ERRCODE = 'check_violation', CONSTRAINT = 'versions_are_immutable';
-    END IF;
-    RETURN NEW;
-END
-$$;
-
-CREATE FUNCTION versions_removal_reaches_migrations() RETURNS trigger
-LANGUAGE plpgsql AS $$
-BEGIN
-    UPDATE version_migrations SET removed = (NEW.removed_at IS NOT NULL)
-    WHERE version_id = NEW.id AND removed IS DISTINCT FROM (NEW.removed_at IS NOT NULL);
-    RETURN NULL;
-END
-$$;
-
-CREATE TRIGGER versions_removal_reaches_migrations AFTER UPDATE OF removed_at ON versions
-    FOR EACH ROW EXECUTE FUNCTION versions_removal_reaches_migrations();
+-- An imported version removed on purpose stays out of the history: a later
+-- import of the same files skips its migration ("removed in romulus")
+-- rather than creating it again or refusing the files as out of order.
+-- Once purged, its migration is remembered here, without its SQL.
+CREATE TABLE purged_migrations (
+    database_id uuid NOT NULL REFERENCES databases ON DELETE CASCADE,
+    migration_id text NOT NULL,
+    path text NOT NULL,
+    checksum bytea NOT NULL CHECK (octet_length(checksum) = 32),
+    number integer NOT NULL CHECK (number > 0),
+    purged_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (database_id, migration_id)
+);
+COMMENT ON TABLE purged_migrations IS
+    'Migrations whose imported version was removed, then purged (versions::removal): later imports skip them. Written by the purge, never changed.';
 
 -- ---- The audit log -------------------------------------------------------------
 
-CREATE TYPE audit_action AS ENUM ('version_removed', 'version_restored', 'version_purged', 'approvals_overridden');
+CREATE TYPE audit_action AS ENUM (
+    'version_removed', 'version_restored', 'version_purged',
+    'version_published', 'approvals_overridden', 'approvals_required_changed'
+);
 
 CREATE TABLE audit_events (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -132,6 +117,8 @@ CREATE TABLE audit_events (
     database_id uuid REFERENCES databases ON DELETE CASCADE,
     action audit_action NOT NULL,
     actor_id uuid REFERENCES users ON DELETE SET NULL,
+    -- Their name then: the event reads the same once they rename or leave.
+    actor_name text,
     version_number integer CHECK (version_number > 0),
     reason text CHECK (reason IS NULL OR (btrim(reason) <> '' AND char_length(reason) <= 1000)),
     details jsonb NOT NULL DEFAULT '{}',
@@ -141,9 +128,10 @@ CREATE TABLE audit_events (
 COMMENT ON TABLE audit_events IS
     'Who did what that the organization may need to account for (audit::Action): append only, gone only with the organization or the database.';
 COMMENT ON COLUMN audit_events.actor_id IS 'NULL for what romulus did itself (the purge), or once the account is gone.';
-COMMENT ON COLUMN audit_events.version_number IS 'The version concerned (removed, restored, purged, published without approvals).';
+COMMENT ON COLUMN audit_events.actor_name IS 'The actor''s name when it happened (NULL for romulus itself).';
+COMMENT ON COLUMN audit_events.version_number IS 'The version concerned (removed, restored, purged, published).';
 COMMENT ON COLUMN audit_events.details IS
-    'What the action needs to be read later, by action: the version''s message; the draft, the approvals it had and the number required.';
+    'What the action needs to be read later, by action: the version''s message; the draft, who approved it and the number required; the old and new number of approvals required.';
 
 CREATE INDEX audit_events_database_id_idx ON audit_events (database_id, created_at DESC) WHERE database_id IS NOT NULL;
 CREATE INDEX audit_events_org_id_idx ON audit_events (org_id, created_at DESC);
@@ -174,6 +162,17 @@ $$;
 
 CREATE TRIGGER audit_events_are_append_only BEFORE UPDATE OR DELETE ON audit_events
     FOR EACH ROW EXECUTE FUNCTION audit_events_are_append_only();
+
+CREATE FUNCTION audit_events_are_not_truncated() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_events cannot be truncated'
+        USING ERRCODE = 'check_violation', CONSTRAINT = 'audit_events_are_append_only';
+END
+$$;
+
+CREATE TRIGGER audit_events_are_not_truncated BEFORE TRUNCATE ON audit_events
+    FOR EACH STATEMENT EXECUTE FUNCTION audit_events_are_not_truncated();
 
 -- ---- Approvals ---------------------------------------------------------------------
 
@@ -211,3 +210,55 @@ CREATE TABLE draft_review_requests (
 COMMENT ON TABLE draft_review_requests IS 'A draft whose editors asked for a review: shown in the drafts list.';
 CREATE INDEX draft_review_requests_requested_by_idx ON draft_review_requests (requested_by)
     WHERE requested_by IS NOT NULL;
+
+-- Who approved a version, frozen when its draft was published (the
+-- draft's own approvals may go: a purge deletes published drafts). The
+-- audit log keeps the same, and outlives a purge of the version.
+CREATE TABLE version_approvals (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    version_id uuid NOT NULL,
+    database_id uuid NOT NULL,
+    user_id uuid REFERENCES users ON DELETE SET NULL,
+    name text NOT NULL,
+    approved_at timestamptz NOT NULL,
+    sql_sha256 bytea NOT NULL CHECK (octet_length(sql_sha256) = 32),
+    CONSTRAINT version_approvals_version_fkey FOREIGN KEY (database_id, version_id)
+        REFERENCES versions (database_id, id) ON DELETE CASCADE
+);
+COMMENT ON TABLE version_approvals IS
+    'The approvals a draft had when it was published as the version: name as it was, when, of which text. Immutable; gone only with the version.';
+CREATE INDEX version_approvals_version_id_idx ON version_approvals (version_id);
+CREATE INDEX version_approvals_user_id_idx ON version_approvals (user_id) WHERE user_id IS NOT NULL;
+
+CREATE FUNCTION version_approvals_are_immutable() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        -- The one update allowed: ON DELETE SET NULL on the user.
+        IF (to_jsonb(NEW) - 'user_id') IS DISTINCT FROM (to_jsonb(OLD) - 'user_id')
+           OR NEW.user_id IS NOT NULL THEN
+            RAISE EXCEPTION 'version approval % is immutable', OLD.id
+                USING ERRCODE = 'check_violation', CONSTRAINT = 'versions_are_immutable';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF EXISTS (SELECT 1 FROM versions WHERE id = OLD.version_id) THEN
+        RAISE EXCEPTION 'version approval % cannot be deleted', OLD.id
+            USING ERRCODE = 'check_violation', CONSTRAINT = 'versions_are_permanent';
+    END IF;
+    RETURN OLD;
+END
+$$;
+
+CREATE TRIGGER version_approvals_are_immutable BEFORE UPDATE OR DELETE ON version_approvals
+    FOR EACH ROW EXECUTE FUNCTION version_approvals_are_immutable();
+
+-- Drafts open before editors were recorded: romulus does not know who
+-- edited them, so only reviewers (who never could) may approve them.
+ALTER TABLE drafts ADD COLUMN editors_unknown boolean NOT NULL DEFAULT false;
+COMMENT ON COLUMN drafts.editors_unknown IS
+    'Edited before draft_editors existed: its editors are unknown, so developers and admins cannot approve it (reviewers can).';
+-- Not an edit of theirs: updated_at stays.
+ALTER TABLE drafts DISABLE TRIGGER drafts_set_updated_at;
+UPDATE drafts SET editors_unknown = true WHERE status = 'open';
+ALTER TABLE drafts ENABLE TRIGGER drafts_set_updated_at;

@@ -56,7 +56,8 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
         .await?;
     let Some(draft) = sqlx::query!(
         r#"SELECT d.database_id, d.status AS "status: DraftStatus",
-                  b.deleted_at IS NOT NULL AS "database_deleted!", b.org_id, o.approvals_required
+                  b.deleted_at IS NOT NULL AS "database_deleted!", b.org_id, o.approvals_required,
+                  d.editors_unknown
            FROM drafts d JOIN databases b ON b.id = d.database_id
            JOIN organizations o ON o.id = b.org_id
            WHERE d.id = $1"#,
@@ -90,13 +91,14 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     )
     .fetch_optional(&mut *tx)
     .await?;
-    let review = load_review(
+    let mut review = load_review(
         &mut tx,
         draft_id,
         draft.org_id,
         i32::from(draft.approvals_required),
     )
     .await?;
+    review.editors_unknown = draft.editors_unknown;
     tx.commit().await?;
 
     let last_update_id = rows.last().map_or(upto, |row| row.id);
@@ -168,6 +170,7 @@ async fn load_review(
             name: r.name,
             at: r.requested_at,
         }),
+        editors_unknown: false,
     })
 }
 

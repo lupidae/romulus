@@ -5,11 +5,14 @@
 //!
 //! Endpoint (who may call it in brackets; see `auth::member`):
 //! - `GET /orgs/{org}/databases/{db}/activity?before=&limit=` [developer]:
-//!   the database's events, newest first (its settings page).
+//!   the database's events, and the organization's own (the approvals
+//!   required), newest first (its settings page).
 //!
-//! Table: `audit_events`. Written by `versions::removal` (a version removed,
-//! restored, purged) and `drafts::approvals` (a draft published without the
-//! approvals it needed).
+//! Table: `audit_events` (no update, delete or truncate but with the
+//! organization or database). Written by `versions::removal` (a version
+//! removed, restored, purged), `drafts::approvals` (a draft published, with
+//! who approved it, or without the approvals it needed) and `orgs` (the
+//! approvals required changed). The actor's name is kept as it was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -24,7 +27,6 @@ use crate::{
     auth::{Member, min},
     databases,
     domain::AuditAction,
-    drafts::Person,
     error::ErrorBody,
     extract::{Json, Path, Query},
 };
@@ -50,6 +52,32 @@ pub struct AuditDetails {
     pub approvals: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<i32>,
+    /// Who approved the text published, when.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_by: Option<Vec<AuditApprover>>,
+    /// The approvals required before and after a change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<i32>,
+}
+
+/// One approval, as it was when the draft was published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct AuditApprover {
+    /// `null` once their account is gone.
+    pub user_id: Option<Uuid>,
+    pub name: String,
+    pub at: DateTime<Utc>,
+}
+
+/// Who did something: their name now, or as it was once their account is
+/// gone.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AuditActor {
+    /// `null` once their account is gone.
+    pub id: Option<Uuid>,
+    pub name: String,
 }
 
 /// An event about to be recorded.
@@ -60,6 +88,8 @@ pub struct Entry {
     pub action: AuditAction,
     /// `None`: romulus itself (the purge).
     pub actor_id: Option<Uuid>,
+    /// Their name now: kept with the event.
+    pub actor_name: Option<String>,
     pub version_number: Option<i32>,
     pub reason: Option<String>,
     pub details: AuditDetails,
@@ -69,12 +99,13 @@ pub struct Entry {
 pub async fn record(db: impl PgExecutor<'_>, entry: &Entry) -> Result<(), sqlx::Error> {
     let details = serde_json::to_value(&entry.details).unwrap_or_default();
     sqlx::query!(
-        "INSERT INTO audit_events (org_id, database_id, action, actor_id, version_number, reason, details)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO audit_events (org_id, database_id, action, actor_id, actor_name, version_number, reason, details)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         entry.org_id,
         entry.database_id,
         entry.action as AuditAction,
         entry.actor_id,
+        entry.actor_name,
         entry.version_number,
         entry.reason,
         details,
@@ -89,9 +120,8 @@ pub async fn record(db: impl PgExecutor<'_>, entry: &Entry) -> Result<(), sqlx::
 pub struct AuditEvent {
     pub id: Uuid,
     pub action: AuditAction,
-    /// Who did it; `null` for what romulus did itself (the purge), or once
-    /// their account is gone.
-    pub actor: Option<Person>,
+    /// Who did it; `null` for what romulus did itself (the purge).
+    pub actor: Option<AuditActor>,
     pub version_number: Option<i32>,
     /// Why, as they wrote it (removals, overrides).
     pub reason: Option<String>,
@@ -143,14 +173,16 @@ async fn activity(
     let database = databases::find(&db, member.org.id, &slug).await?;
     let rows = sqlx::query!(
         r#"SELECT e.id, e.action AS "action: AuditAction", e.version_number, e.reason, e.details,
-                  e.created_at, u.id AS "actor_id?", u.name AS "actor_name?"
+                  e.created_at, u.id AS "actor_id?", coalesce(u.name, e.actor_name) AS actor_name
            FROM audit_events e
            LEFT JOIN users u ON u.id = e.actor_id
-           WHERE e.database_id = $1 AND ($2::uuid IS NULL OR e.id < $2)
+           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.org_id = $4))
+             AND ($2::uuid IS NULL OR e.id < $2)
            ORDER BY e.id DESC LIMIT $3"#,
         database.id,
         query.before,
         limit + 1,
+        member.org.id,
     )
     .fetch_all(&db)
     .await?;
@@ -162,10 +194,10 @@ async fn activity(
         .map(|r| AuditEvent {
             id: r.id,
             action: r.action,
-            actor: r
-                .actor_id
-                .zip(r.actor_name)
-                .map(|(id, name)| Person { id, name }),
+            actor: r.actor_name.map(|name| AuditActor {
+                id: r.actor_id,
+                name,
+            }),
             version_number: r.version_number,
             reason: r.reason,
             details: serde_json::from_value(r.details).unwrap_or_default(),

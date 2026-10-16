@@ -149,8 +149,13 @@ pub enum AuditAction {
     VersionRestored,
     /// A removed version's 30 days passed: romulus deleted it.
     VersionPurged,
+    /// A draft was published with the approvals the organization requires
+    /// (who approved is kept).
+    VersionPublished,
     /// An admin published a draft without the approvals it needed.
     ApprovalsOverridden,
+    /// An admin changed how many approvals publishing needs.
+    ApprovalsRequiredChanged,
 }
 
 /// What an API token may do (`api_token_scope`).

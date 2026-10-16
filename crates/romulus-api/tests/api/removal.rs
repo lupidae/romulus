@@ -220,6 +220,48 @@ async fn the_audit_log_keeps_who_when_and_why(db: PgPool) {
             .await
             .is_err()
     );
+    assert!(
+        sqlx::raw_sql("TRUNCATE audit_events")
+            .execute(&db)
+            .await
+            .is_err()
+    );
+
+    // The actor's name is kept: renamed, then gone, they still read as they were.
+    sqlx::query!(
+        "UPDATE users SET name = 'Alice Renamed' WHERE id = $1",
+        team.admin.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let renamed = app
+        .as_user(&team.developer)
+        .get(&team.path("/databases/shop/activity"))
+        .await
+        .json();
+    assert_eq!(renamed["events"][0]["actor"]["name"], "Alice Renamed");
+    // (Someone else is admin first: an organization keeps one.)
+    sqlx::query!(
+        "UPDATE memberships SET role = 'admin' WHERE user_id = $1",
+        team.developer.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!("DELETE FROM users WHERE id = $1", team.admin.user)
+        .execute(&db)
+        .await
+        .unwrap();
+    let gone = app
+        .as_user(&team.developer)
+        .get(&team.path("/databases/shop/activity"))
+        .await
+        .json();
+    assert_eq!(
+        gone["events"][0]["actor"],
+        json!({"id": null, "name": "Admin-acme"})
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -533,6 +575,10 @@ const HISTORY: &[(&str, &str)] = &[
         "20240102000000_posts.sql",
         "CREATE TABLE posts (id bigint);\n",
     ),
+    (
+        "20240103000000_tags.sql",
+        "CREATE TABLE tags (id bigint);\n",
+    ),
 ];
 
 async fn import(
@@ -564,28 +610,70 @@ async fn import(
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn imports_do_not_see_removed_versions(db: PgPool) {
+async fn an_imported_version_removed_on_purpose_is_skipped_by_later_imports(db: PgPool) {
     let team = Team::new(&db, "acme").await;
-    database(&db, team.org, "shop").await;
+    let shop = database(&db, team.org, "shop").await;
     let app = TestApp::compiling(db.clone());
     let first = import(&app, &team, HISTORY).await;
     assert_eq!(first.status, StatusCode::CREATED, "{}", first.json());
 
-    // The second migration was a mistake: removed, it is as if never
-    // imported, so importing again brings it back, numbered after.
-    remove(&app, &team, 2, "imported by mistake").await;
-    let again = import(&app, &team, HISTORY).await;
+    // v2, in the middle of the imported history, is removed: the same files
+    // and one more import, v2's migration skipped, not out of order.
+    remove(&app, &team, 2, "the posts migration was a mistake").await;
+    let mut more = HISTORY.to_vec();
+    more.push((
+        "20240104000000_labels.sql",
+        "CREATE TABLE labels (id bigint);\n",
+    ));
+    let again = import(&app, &team, &more).await;
     assert_eq!(again.status, StatusCode::CREATED, "{}", again.json());
-    assert_eq!(again.json()["created"], 1);
-    assert_eq!(again.json()["migrations"][1]["version"], 3);
-    assert_eq!(numbers(&app, &team).await, [3, 1]);
+    let report = again.json();
+    assert_eq!(report["created"], 1);
+    let statuses: Vec<_> = report["migrations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["status"].clone(), m["version"].clone()))
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            (json!("imported"), json!(1)),
+            (json!("removed"), json!(2)),
+            (json!("imported"), json!(3)),
+            (json!("new"), json!(4)),
+        ]
+    );
+    assert_eq!(numbers(&app, &team).await, [4, 3, 1]);
 
-    // Restoring v2 now would import that migration twice.
-    let restore = app
-        .as_user(&team.admin)
-        .post_empty(&team.path("/databases/shop/versions/2/restore"))
-        .await;
-    assert_eq!(restore.code(), "migration_imported_again");
+    // Purged, it is still skipped: the files import again unchanged.
+    sqlx::query!(
+        "UPDATE versions SET removed_at = now() - interval '31 days' WHERE database_id = $1 AND number = 2",
+        shop
+    )
+    .execute(&db)
+    .await
+    .unwrap_err();
+    sqlx::query!("ALTER TABLE versions DISABLE TRIGGER versions_are_immutable")
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query!(
+        "UPDATE versions SET removed_at = now() - interval '31 days' WHERE database_id = $1 AND number = 2",
+        shop
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!("ALTER TABLE versions ENABLE TRIGGER versions_are_immutable")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(removal::purge(&db).await.unwrap(), 1);
+    let after = import(&app, &team, &more).await;
+    assert_eq!(after.status, StatusCode::OK, "{}", after.json());
+    assert_eq!(after.json()["status"], "unchanged");
+    assert_eq!(after.json()["migrations"][1]["status"], "removed");
 
     // A database whose only other version is removed imports without
     // `append`.
@@ -596,4 +684,33 @@ async fn imports_do_not_see_removed_versions(db: PgPool) {
     let fresh = import(&app, &team2, HISTORY).await;
     assert_eq!(fresh.status, StatusCode::CREATED, "{}", fresh.json());
     assert_eq!(fresh.json()["migrations"][0]["version"], 2);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_removed_import_is_restored_and_counts_again(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    database(&db, team.org, "shop").await;
+    let app = TestApp::compiling(db.clone());
+    import(&app, &team, HISTORY).await;
+    remove(&app, &team, 3, "tags later").await;
+    let restored = app
+        .as_user(&team.admin)
+        .post_empty(&team.path("/databases/shop/versions/3/restore"))
+        .await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.json());
+    let again = import(&app, &team, HISTORY).await;
+    assert_eq!(again.json()["status"], "unchanged", "{}", again.json());
+    assert_eq!(again.json()["migrations"][2]["status"], "imported");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn reverting_the_migration_is_refused_while_versions_are_removed(db: PgPool) {
+    let (team, _) = shop(&db, 2).await;
+    let app = TestApp::new(db.clone());
+    remove(&app, &team, 2, "bad").await;
+    // It would bring v2 back as a live version: refused, nothing changed.
+    let down = include_str!("../../../../migrations/20261016140000_governance.down.sql");
+    let err = sqlx::raw_sql(down).execute(&db).await.unwrap_err();
+    assert!(err.to_string().contains("1 removed and 0 purged"), "{err}");
+    assert_eq!(numbers(&app, &team).await, [1]);
 }

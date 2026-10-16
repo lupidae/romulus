@@ -278,6 +278,21 @@ async fn an_editor_stays_one_once_the_draft_is_reloaded(db: PgPool) {
     assert_eq!(own.code(), "edited_draft");
 }
 
+/// The database's audit events of `action`, newest first.
+async fn events(s: &Setup, action: &str) -> Vec<Value> {
+    s.app
+        .as_user(&s.team.developer)
+        .get(&s.team.path("/databases/shop/activity"))
+        .await
+        .json()["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["action"] == action)
+        .cloned()
+        .collect()
+}
+
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn admins_may_publish_without_the_approvals_saying_why(db: PgPool) {
     let s = setup(&db, 2).await;
@@ -308,36 +323,144 @@ async fn admins_may_publish_without_the_approvals_saying_why(db: PgPool) {
         published.json()
     );
 
-    let events = s
-        .app
-        .as_user(&s.team.developer)
-        .get(&s.team.path("/databases/shop/activity"))
-        .await
-        .json()["events"]
-        .clone();
-    assert_eq!(events.as_array().unwrap().len(), 1);
-    let event = &events[0];
-    assert_eq!(event["action"], "approvals_overridden");
+    let overridden = events(&s, "approvals_overridden").await;
+    assert_eq!(overridden.len(), 1);
+    let event = &overridden[0];
     assert_eq!(event["actor"]["name"], "Admin-acme");
     assert_eq!(event["version_number"], 2);
     assert_eq!(event["reason"], "Hotfix for the outage, reviewed on a call");
     assert_eq!(event["details"]["approvals"], 1);
     assert_eq!(event["details"]["required"], 2);
     assert_eq!(event["details"]["draft_name"], "Draft from v1");
+    assert_eq!(event["details"]["approved_by"][0]["name"], "Reviewer-acme");
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn enough_approvals_need_no_override(db: PgPool) {
+async fn publishing_keeps_who_approved_with_the_version(db: PgPool) {
     let s = setup(&db, 1).await;
     s.approve(&s.carol).await;
-    // A reason given anyway is not an override: nothing is logged.
+    // A reason given anyway is not an override.
     let published = s.publish(&s.team.admin, Some("just in case")).await;
     assert_eq!(published.status, StatusCode::CREATED);
-    let logged = sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM audit_events"#)
+    assert!(events(&s, "approvals_overridden").await.is_empty());
+    let kept = events(&s, "version_published").await;
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["version_number"], 2);
+    assert_eq!(kept[0]["reason"], Value::Null);
+    assert_eq!(kept[0]["details"]["approved_by"][0]["name"], "Carol");
+    let version = s
+        .app
+        .as_user(&s.team.reviewer)
+        .get(&s.team.path("/databases/shop/versions/2"))
+        .await
+        .json();
+    assert_eq!(version["approvals"][0]["name"], "Carol");
+
+    // The published draft's approvals are the version's now: not withdrawn.
+    let withdraw = s.app.as_user(&s.carol).delete(&s.path("/approvals")).await;
+    assert_eq!(withdraw.code(), "draft_published");
+    // Its row says what it was published with.
+    let draft = s
+        .app
+        .as_user(&s.team.reviewer)
+        .get(&s.path(""))
+        .await
+        .json();
+    assert_eq!(draft["review"]["approvals"], 1);
+    // And a stored approval cannot be deleted.
+    assert!(
+        sqlx::query!("DELETE FROM version_approvals")
+            .execute(&db)
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn approvals_are_checked_again_as_the_version_is_stored(db: PgPool) {
+    let s = setup(&db, 1).await;
+    assert_eq!(s.approve(&s.carol).await.status, StatusCode::OK);
+    // Withdrawn behind the room's back (as a withdrawal landing while the
+    // draft is being published): the store sees it and refuses.
+    sqlx::query!(
+        "DELETE FROM draft_approvals WHERE user_id = $1",
+        s.carol.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let refused = s.publish(&s.team.developer, None).await;
+    assert_eq!(refused.code(), "approvals_required", "{}", refused.json());
+    let versions = sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM versions"#)
         .fetch_one(&db)
         .await
         .unwrap();
-    assert_eq!(logged, 0);
+    assert_eq!(versions, 1);
+
+    // Someone who left the organization no longer counts, live or published.
+    assert_eq!(s.approve(&s.carol).await.status, StatusCode::OK);
+    sqlx::query!("DELETE FROM memberships WHERE user_id = $1", s.carol.user)
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(s.review().await["approvals"], 0);
+    assert_eq!(
+        s.publish(&s.team.developer, None).await.code(),
+        "approvals_required"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_whose_editors_are_unknown_is_approved_by_reviewers(db: PgPool) {
+    let s = setup(&db, 1).await;
+    sqlx::query!(
+        "UPDATE drafts SET editors_unknown = true WHERE id = $1",
+        s.draft
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let developer = s.approve(&s.carol).await;
+    assert_eq!(developer.status, StatusCode::FORBIDDEN);
+    assert_eq!(developer.code(), "editors_unknown");
+    let reviewer = s.approve(&s.team.reviewer).await;
+    assert_eq!(reviewer.status, StatusCode::OK, "{}", reviewer.json());
+    assert_eq!(reviewer.json()["approvals"], 1);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn changing_the_approvals_required_is_in_the_activity(db: PgPool) {
+    let s = setup(&db, 1).await;
+    s.app
+        .as_user(&s.team.admin)
+        .patch(&s.team.path(""), &json!({"approvals_required": 3}))
+        .await;
+    // Unchanged: nothing logged.
+    s.app
+        .as_user(&s.team.admin)
+        .patch(
+            &s.team.path(""),
+            &json!({"approvals_required": 3, "name": "Acme"}),
+        )
+        .await;
+    let changes = events(&s, "approvals_required_changed").await;
+    let steps: Vec<_> = changes
+        .iter()
+        .map(|e| {
+            (
+                e["details"]["from"].clone(),
+                e["details"]["to"].clone(),
+                e["actor"]["name"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (json!(1), json!(3), json!("Admin-acme")),
+            (json!(0), json!(1), json!("Admin-acme")),
+        ]
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::{VersionSummary, layout::VersionLayout, summary};
 use crate::{
-    ApiError, audit,
+    ApiError,
     databases::no_such_database,
     domain::{SourceKind, VersionOrigin},
 };
@@ -42,9 +42,9 @@ pub struct NewVersion {
     /// transaction, and nothing is stored unless it is still open
     /// ([`StoreError::DraftNotOpen`]).
     pub publishes_draft: Option<Uuid>,
-    /// Recorded in the same transaction, with the new version's number (a
-    /// draft published without its approvals).
-    pub audit: Option<audit::Entry>,
+    /// The approvals of the draft it publishes: checked again and kept with
+    /// it, in the same transaction (`drafts::approvals::freeze`).
+    pub approvals: Option<crate::drafts::approvals::Freeze>,
 }
 
 /// Why [`store`] stored nothing.
@@ -143,6 +143,13 @@ pub async fn store(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(no_such_database)?;
+    if let Some(draft) = new.publishes_draft {
+        // As approving and withdrawing lock it: the approvals checked below
+        // are the ones the draft has, and none changes once it is published.
+        sqlx::query_scalar!("SELECT id FROM drafts WHERE id = $1 FOR UPDATE", draft)
+            .fetch_optional(&mut *tx)
+            .await?;
+    }
     let current = sqlx::query_scalar!(
         "SELECT id FROM versions WHERE database_id = $1 AND removed_at IS NULL
          ORDER BY number DESC LIMIT 1",
@@ -204,12 +211,8 @@ pub async fn store(
             return Err(StoreError::DraftNotOpen);
         }
     }
-    if let Some(entry) = &new.audit {
-        let entry = audit::Entry {
-            version_number: Some(number),
-            ..entry.clone()
-        };
-        audit::record(&mut *tx, &entry).await?;
+    if let Some(approvals) = &new.approvals {
+        crate::drafts::approvals::freeze(&mut tx, approvals, database_id, id, number).await?;
     }
     tx.commit().await?;
     tracing::info!(database = %database_id, number, origin = ?new.origin, "version created");
@@ -311,10 +314,13 @@ pub struct NewImport {
     pub created_by_token: Option<Uuid>,
     /// Versions that were not imported may precede these.
     pub append: bool,
-    /// How many migrations the database had imported (live ones) when the
-    /// import was planned: another import storing meanwhile makes this one
-    /// stale.
+    /// How many migrations the database had imported (removed ones
+    /// included) when the import was planned: another import storing
+    /// meanwhile makes this one stale.
     pub imported_before: usize,
+    /// The latest live version then: the first version was compared with it
+    /// and inherits its layout. Removed or restored meanwhile: stale too.
+    pub latest_id: Option<Uuid>,
     /// The highest number given when the import was planned
     /// (`last_version_number`): another version created meanwhile makes it
     /// stale (the first version was compared with the latest then, and
@@ -341,6 +347,7 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
         created_by_token,
         append,
         imported_before,
+        latest_id: planned_latest,
         last_number: planned_last,
         staging,
         versions,
@@ -355,7 +362,7 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
     .await?
     .ok_or_else(no_such_database)?;
     let imported = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "count!" FROM version_migrations WHERE database_id = $1 AND NOT removed"#,
+        r#"SELECT count(*) AS "count!" FROM version_migrations WHERE database_id = $1"#,
         database_id,
     )
     .fetch_one(&mut *tx)
@@ -383,6 +390,19 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
                     .into(),
             }));
         }
+    }
+    let latest_now = sqlx::query_scalar!(
+        "SELECT id FROM versions WHERE database_id = $1 AND removed_at IS NULL ORDER BY number DESC LIMIT 1",
+        database_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if latest_now != planned_latest {
+        return Err(StoreError::Api(ApiError::Conflict {
+            code: "concurrent_import",
+            message: "A version of this database was removed or restored during the import. Import again: nothing was stored."
+                .into(),
+        }));
     }
     if last_number != planned_last {
         return Err(StoreError::Api(ApiError::Conflict {

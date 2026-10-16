@@ -146,6 +146,18 @@ pub struct VersionDetail {
     pub layout: VersionLayout,
     /// The migration file it was imported from (origin `import` only).
     pub migration: Option<VersionMigration>,
+    /// Who approved the draft it was published from, when the organization
+    /// required approvals (`drafts::approvals::freeze`); oldest first.
+    pub approvals: Vec<VersionApproval>,
+}
+
+/// An approval of the draft a version was published from, as it was then.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VersionApproval {
+    /// `null` once their account is gone.
+    pub user_id: Option<Uuid>,
+    pub name: String,
+    pub at: DateTime<Utc>,
 }
 
 /// The migration an imported version came from.
@@ -324,6 +336,14 @@ pub(crate) async fn detail(
     let Some(row) = row else {
         return Err(missing(db, database_id, number).await);
     };
+    let approvals = sqlx::query_as!(
+        VersionApproval,
+        "SELECT user_id, name, approved_at AS at FROM version_approvals
+         WHERE version_id = $1 ORDER BY approved_at",
+        row.id,
+    )
+    .fetch_all(db)
+    .await?;
     Ok(VersionDetail {
         id: row.id,
         number: row.number,
@@ -344,6 +364,7 @@ pub(crate) async fn detail(
             }),
             _ => None,
         },
+        approvals,
     })
 }
 
@@ -501,7 +522,7 @@ async fn upload(
         layout: None,
         expected_base: None,
         publishes_draft: None,
-        audit: None,
+        approvals: None,
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.

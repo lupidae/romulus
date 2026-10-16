@@ -267,7 +267,7 @@ impl Job {
             .iter()
             .map(|&k| &planned.migrations[k])
             .collect();
-        let mut texts: Vec<String> = planned.history.iter().map(|e| e.source.clone()).collect();
+        let mut texts: Vec<String> = planned.replayed_history().map(str::to_owned).collect();
         let from = texts.len();
         texts.extend(new.iter().map(|m| m.sql.clone()));
 
@@ -323,7 +323,8 @@ impl Job {
                 created_by,
                 created_by_token,
                 append: self.options.append,
-                imported_before: planned.history.len(),
+                imported_before: planned.imported,
+                latest_id: planned.latest_id(),
                 last_number: planned.last_number,
                 staging,
                 versions,

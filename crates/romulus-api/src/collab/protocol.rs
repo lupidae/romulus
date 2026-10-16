@@ -154,6 +154,9 @@ pub enum ServerEvent {
         editors: Vec<Uuid>,
         /// The review the editors asked for, if they did.
         requested: Option<ReviewRequest>,
+        /// Edited before romulus recorded editors: only reviewers (who never
+        /// could edit) may approve it.
+        editors_unknown: bool,
     },
     /// The server could not store some edits (its database failing): they
     /// live in the open tabs only.

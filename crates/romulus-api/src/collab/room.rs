@@ -405,8 +405,9 @@ pub struct Shared {
     pub database_id: std::sync::OnceLock<Uuid>,
     pub org_id: std::sync::OnceLock<Uuid>,
     pub present: std::sync::Mutex<Vec<Present>>,
-    /// How many approvals count now (`None` until the room loaded).
-    pub approvals: std::sync::Mutex<Option<usize>>,
+    /// Who approved the text as it is now, without having edited it
+    /// (`None` until the room loaded).
+    pub approvals: std::sync::Mutex<Option<Vec<Uuid>>>,
 }
 
 struct Conn {
@@ -1142,7 +1143,7 @@ impl Room {
             .shared
             .approvals
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(approved.len());
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(approved.clone());
         if !always && self.review_shown.as_ref() == Some(&approved) {
             return;
         }

@@ -32,7 +32,7 @@ use super::{
     find, latest_number, not_open, versions,
 };
 use crate::{
-    ApiError, ApiResult, AppState, audit,
+    ApiError, ApiResult, AppState,
     auth::{Member, min},
     collab::{
         Hub, HubError,
@@ -235,7 +235,7 @@ pub(super) async fn publish(
                 .into(),
         });
     }
-    let audit = approvals::gate(&state, &member, &database, id, &content, &body).await?;
+    let approvals = approvals::gate(&state, &member, id, &content, &body).await?;
     let mut model = match compiled(&state.collab, &content).await? {
         (Some(model), _) => model,
         (None, diagnostics) => {
@@ -256,7 +256,7 @@ pub(super) async fn publish(
         model,
         message,
         member.user.id,
-        audit,
+        approvals,
     )
     .await
     {
@@ -296,7 +296,7 @@ async fn store(
     model: Schema,
     message: Option<&str>,
     by: Uuid,
-    audit: Option<audit::Entry>,
+    approvals: Option<approvals::Freeze>,
 ) -> ApiResult<versions::Created> {
     let stored = versions::create_version(
         &state.db,
@@ -309,7 +309,7 @@ async fn store(
             source: content.sql.clone(),
             message: message.map(str::to_owned),
             created_by: by,
-            audit,
+            approvals,
         },
     )
     .await;

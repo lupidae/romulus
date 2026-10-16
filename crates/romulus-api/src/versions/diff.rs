@@ -28,7 +28,7 @@ use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::{VersionDetail, VersionSummary, detail, layout::VersionLayout, page};
+use super::{VersionDetail, VersionSummary, detail, layout::VersionLayout, missing, page};
 use crate::{
     ApiError, ApiResult, AppState,
     auth::Member,
@@ -158,13 +158,11 @@ async fn summaries(
             Some(below) => page(db, database_id, Some(below), 1).await?,
             None => Vec::new(),
         };
-        rows.into_iter()
-            .next()
-            .filter(|row| row.number == number)
-            .map(Into::into)
-            .ok_or_else(|| {
-                ApiError::not_found(format!("There is no version {number} of this database."))
-            })
+        match rows.into_iter().next().filter(|row| row.number == number) {
+            Some(row) => Ok(row.into()),
+            // "v3 was removed.", or that there is none.
+            None => Err(missing(db, database_id, Some(number)).await),
+        }
     };
     let from_summary = one(from).await?;
     let to_summary = if to == from {

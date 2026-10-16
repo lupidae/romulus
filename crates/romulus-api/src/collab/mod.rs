@@ -491,20 +491,21 @@ impl Hub {
         }
     }
 
-    /// How many approvals count now, for each of these drafts whose room is
-    /// loaded (the others' are the database's to say).
-    pub fn approvals(&self, drafts: &[Uuid]) -> HashMap<Uuid, usize> {
+    /// Who approved the text as it is now, for each of these drafts whose
+    /// room is loaded (the others' are the database's to say).
+    pub fn approved_by(&self, drafts: &[Uuid]) -> HashMap<Uuid, Vec<Uuid>> {
         let rooms = self.0.rooms();
         drafts
             .iter()
             .filter_map(|id| {
                 let entry = rooms.entries.get(id)?;
-                let count = *entry
+                let approved = entry
                     .shared
                     .approvals
                     .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                Some((*id, count?))
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                Some((*id, approved?))
             })
             .collect()
     }

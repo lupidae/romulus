@@ -40,6 +40,10 @@ pub enum MigrationStatus {
     /// New, but sorted before migrations already imported: the history
     /// cannot be rebuilt around it, the import is refused.
     OutOfOrder,
+    /// Imported once, its version removed in romulus since (or purged):
+    /// skipped on purpose, whatever the file says now. Restoring the version
+    /// brings it back.
+    Removed,
 }
 
 /// One migration of the files, in order.
@@ -55,7 +59,7 @@ pub struct PlannedMigration {
     /// The line of `path` where it starts (exported files hold several).
     pub line: u32,
     pub status: MigrationStatus,
-    /// The version it became, when imported already.
+    /// The version it became, when imported already (or removed since).
     pub version: Option<i32>,
     /// What will not be replayed (new migrations only).
     pub skipped: Vec<SkippedStatement>,
@@ -93,8 +97,10 @@ pub struct Existing {
     pub migration_id: String,
     pub checksum: Vec<u8>,
     pub number: i32,
-    /// Its up SQL, as replayed then.
-    pub source: String,
+    /// Its up SQL, as replayed then; `None` once purged.
+    pub source: Option<String>,
+    /// Its version was removed (or purged): the files' migration is skipped.
+    pub removed: bool,
 }
 
 /// An import, planned.
@@ -102,8 +108,13 @@ pub struct Planned {
     pub preview: ImportPreview,
     pub format: MigrationFormat,
     pub migrations: Vec<Migration>,
-    /// What the database imported, in version order: replayed first.
+    /// What the database imported, in version order: replayed first, but
+    /// for purged ones (their SQL is gone). Removed ones still replay: the
+    /// database they came from ran them.
     pub history: Vec<Existing>,
+    /// How many `version_migrations` rows the database had (removed
+    /// included): another import storing meanwhile changes it.
+    pub imported: usize,
     /// The new migrations, by index into `migrations`.
     pub new: Vec<usize>,
     /// The latest live version (any origin), which the first new one
@@ -114,11 +125,24 @@ pub struct Planned {
     pub last_number: i32,
 }
 
+impl Planned {
+    /// The SQL replayed before the new migrations.
+    pub fn replayed_history(&self) -> impl Iterator<Item = &str> {
+        self.history.iter().filter_map(|e| e.source.as_deref())
+    }
+
+    pub fn latest_id(&self) -> Option<Uuid> {
+        self.latest.as_ref().map(|l| l.id)
+    }
+}
+
 /// The latest live version when the import was planned: the first new
 /// version is compared with its model and inherits its layout. Storing
-/// refuses if a version was created meanwhile ([`Planned::last_number`]).
+/// refuses if a version was created, removed or restored meanwhile
+/// ([`Planned::last_number`], `id`).
 #[derive(Debug)]
 pub struct Latest {
+    pub id: Uuid,
     pub model: serde_json::Value,
     pub layout: serde_json::Value,
 }
@@ -216,28 +240,41 @@ pub async fn plan(
 /// do), or another version been created. Unchanged when neither happened.
 pub async fn rematch(db: &PgPool, database_id: Uuid, planned: Planned) -> ApiResult<Planned> {
     let now = sqlx::query!(
-        r#"SELECT (SELECT count(*) FROM version_migrations WHERE database_id = $1 AND NOT removed) AS "imported!",
-                  (SELECT last_version_number FROM databases WHERE id = $1) AS last_number"#,
+        r#"SELECT (SELECT count(*) FROM version_migrations WHERE database_id = $1) AS "imported!",
+                  (SELECT count(*) FROM versions WHERE database_id = $1 AND removed_at IS NOT NULL) AS "removed!",
+                  (SELECT last_version_number FROM databases WHERE id = $1) AS last_number,
+                  (SELECT id FROM versions WHERE database_id = $1 AND removed_at IS NULL
+                   ORDER BY number DESC LIMIT 1) AS latest"#,
         database_id,
     )
     .fetch_one(db)
     .await?;
     let imported = usize::try_from(now.imported).unwrap_or(usize::MAX);
-    if imported == planned.history.len() && now.last_number == Some(planned.last_number) {
+    let removed = planned.history.iter().filter(|e| e.removed).count();
+    if imported == planned.imported
+        && usize::try_from(now.removed).unwrap_or(usize::MAX) == removed
+        && now.last_number == Some(planned.last_number)
+        && now.latest == planned.latest_id()
+    {
         return Ok(planned);
     }
     matched(db, database_id, planned.into_plan()).await
 }
 
-/// The files' migrations matched with the database's imports: its live
-/// versions only. A removed version is as if never imported (removing what
-/// an import created and importing again creates it again).
+/// The files' migrations matched with the database's imports. One whose
+/// version was removed (or purged) is skipped, on purpose: removing it was
+/// a decision, importing the same files again does not undo it.
 async fn matched(db: &PgPool, database_id: Uuid, plan: Plan) -> ApiResult<Planned> {
     let history = sqlx::query_as!(
         Existing,
-        r#"SELECT m.migration_id, m.checksum, v.number, v.source
+        r#"SELECT m.migration_id AS "migration_id!", m.checksum AS "checksum!", v.number AS "number!",
+                  v.source AS "source?", v.removed_at IS NOT NULL AS "removed!"
            FROM version_migrations m JOIN versions v ON v.id = m.version_id
-           WHERE m.database_id = $1 AND NOT m.removed ORDER BY v.number"#,
+           WHERE m.database_id = $1
+           UNION ALL
+           SELECT p.migration_id, p.checksum, p.number, NULL, true
+           FROM purged_migrations p WHERE p.database_id = $1
+           ORDER BY 3"#,
         database_id,
     )
     .fetch_all(db)
@@ -252,7 +289,7 @@ async fn matched(db: &PgPool, database_id: Uuid, plan: Plan) -> ApiResult<Planne
     .await?;
     let latest = sqlx::query_as!(
         Latest,
-        "SELECT model, layout FROM versions WHERE database_id = $1 AND removed_at IS NULL
+        "SELECT id, model, layout FROM versions WHERE database_id = $1 AND removed_at IS NULL
          ORDER BY number DESC LIMIT 1",
         database_id,
     )
@@ -282,12 +319,14 @@ fn build(plan: Plan, history: Vec<Existing>, others: bool, last_number: i32) -> 
     } = plan;
     let mut planned: Vec<PlannedMigration> = Vec::with_capacity(migrations.len());
     let mut new = Vec::new();
+    // Removed migrations put no order on new ones: only the live history.
     let last_imported = migrations
         .iter()
-        .rposition(|m| history.iter().any(|e| e.migration_id == m.id));
+        .rposition(|m| history.iter().any(|e| e.migration_id == m.id && !e.removed));
     for (k, migration) in migrations.iter().enumerate() {
         let existing = history.iter().find(|e| e.migration_id == migration.id);
         let (status, version) = match existing {
+            Some(e) if e.removed => (MigrationStatus::Removed, Some(e.number)),
             Some(e) if e.checksum == checksum(&migration.sql) => {
                 (MigrationStatus::Imported, Some(e.number))
             }
@@ -353,12 +392,13 @@ fn build(plan: Plan, history: Vec<Existing>, others: bool, last_number: i32) -> 
         ignored: ignored.into_iter().map(Into::into).collect(),
         problem: None,
     };
-    let replayed = history.len() + new.len();
+    let replayed = history.iter().filter(|e| e.source.is_some()).count() + new.len();
     preview.problem = problem(&preview, replayed).map(|err| err.body());
     Planned {
         format: format.into(),
         preview,
         migrations,
+        imported: history.iter().filter(|e| e.source.is_some()).count(),
         history,
         new,
         latest: None,
@@ -489,7 +529,7 @@ pub fn failed(index: usize, migration: &PlannedMigration, errors: Vec<ImportErro
 
 /// Why `planned` cannot be imported with `options`; `None` when it can.
 pub fn refusal(planned: &Planned, options: &ImportOptions) -> Option<ApiError> {
-    if let Some(problem) = problem(&planned.preview, planned.history.len() + planned.new.len()) {
+    if let Some(problem) = problem(&planned.preview, planned.imported + planned.new.len()) {
         return Some(problem);
     }
     (planned.preview.needs_append && !options.append).then(|| ApiError::Conflict {
@@ -510,7 +550,8 @@ mod tests {
             migration_id: id.to_owned(),
             checksum: checksum(sql),
             number,
-            source: sql.to_owned(),
+            source: Some(sql.to_owned()),
+            removed: false,
         }
     }
 
@@ -586,6 +627,60 @@ mod tests {
         );
         assert_eq!(statuses(&edited), [Changed, Imported]);
         assert_eq!(edited.preview.problem.unwrap().code, "migration_changed");
+    }
+
+    #[test]
+    fn migrations_removed_in_romulus_are_skipped_and_order_nothing() {
+        use MigrationStatus::{Imported, New, Removed};
+        let removed = |id: &str, sql: &str, number, purged: bool| Existing {
+            source: (!purged).then(|| sql.to_owned()),
+            removed: true,
+            ..existing(id, sql, number)
+        };
+        let files = [
+            ("1_a.sql", "CREATE TABLE a ();"),
+            ("2_b.sql", "CREATE TABLE b (changed int);"),
+            ("3_c.sql", "CREATE TABLE c ();"),
+            ("4_d.sql", "CREATE TABLE d ();"),
+        ];
+        for purged in [false, true] {
+            // v2 removed in the middle of an imported history; v4 removed
+            // at its end.
+            let history = vec![
+                existing("1", "CREATE TABLE a ();", 1),
+                removed("2", "CREATE TABLE b ();", 2, purged),
+                existing("3", "CREATE TABLE c ();", 3),
+                removed("4", "CREATE TABLE d ();", 4, purged),
+            ];
+            let again = planned(&files, history, false);
+            assert_eq!(statuses(&again), [Imported, Removed, Imported, Removed]);
+            assert!(
+                again.preview.problem.is_none(),
+                "{:?}",
+                again.preview.problem
+            );
+            assert_eq!(again.new, [0usize; 0]);
+            assert_eq!(again.preview.migrations[1].version, Some(2));
+            // A removed one still replays while its SQL is kept.
+            assert_eq!(again.replayed_history().count(), if purged { 2 } else { 4 });
+        }
+        // A new migration after the live ones is new, even sorted before a
+        // removed one.
+        let history = vec![
+            existing("1", "CREATE TABLE a ();", 1),
+            removed("3", "CREATE TABLE c ();", 2, false),
+        ];
+        let between = planned(
+            &[
+                ("1_a.sql", "CREATE TABLE a ();"),
+                ("2_b.sql", "CREATE TABLE b ();"),
+                ("3_c.sql", "CREATE TABLE c ();"),
+            ],
+            history,
+            false,
+        );
+        assert_eq!(statuses(&between), [Imported, New, Removed]);
+        assert!(between.preview.problem.is_none());
     }
 
     #[test]
@@ -715,6 +810,7 @@ mod tests {
                 created_by_token: None,
                 append: false,
                 imported_before: 0,
+                latest_id: None,
                 last_number: 0,
                 staging,
                 versions,

@@ -2,10 +2,12 @@
 //! saying why; it can be restored for [`RESTORE_DAYS`] days, then it is
 //! purged.
 //!
-//! - A removed version is hidden from the history, diffs, migrations,
-//!   imports (as if it had never been imported) and the latest version: a
-//!   push is compared with the latest version left, a new draft starts from
-//!   it, the database page shows it.
+//! - A removed version is hidden from the history, diffs, migrations and
+//!   the latest version: a push is compared with the latest version left, a
+//!   new draft starts from it, the database page shows it. An imported one
+//!   is removed on purpose: a later import of the same files skips its
+//!   migration ("removed in romulus", `imports::plan`), even once purged
+//!   (`purged_migrations` remembers it).
 //! - Its number is never given again (`databases.last_version_number`).
 //! - Drafts based on it are stale: they show "Update draft", which merges
 //!   the latest version left into them, from the removed version's text
@@ -17,7 +19,8 @@
 //! - `POST /orgs/{org}/databases/{db}/versions/{number}/remove` [admin],
 //!   `{"reason"}`;
 //! - `POST /orgs/{org}/databases/{db}/versions/{number}/restore` [admin],
-//!   within [`RESTORE_DAYS`] days;
+//!   within [`RESTORE_DAYS`] days (409 `version_not_removed`,
+//!   `restore_expired`);
 //! - `GET /orgs/{org}/databases/{db}/versions/removed` [developer]: the
 //!   removed versions not purged yet, most recently removed first.
 //!
@@ -42,7 +45,6 @@ use crate::{
     ApiError, ApiResult, AppState, audit,
     auth::{Member, min},
     databases::{self, no_such_database},
-    db,
     domain::{AuditAction, SourceKind, VersionOrigin},
     drafts::Person,
     error::ErrorBody,
@@ -154,6 +156,7 @@ async fn remove(
             database_id: Some(database.id),
             action: AuditAction::VersionRemoved,
             actor_id: Some(member.user.id),
+            actor_name: Some(member.user.name.clone()),
             version_number: Some(number),
             reason: Some(reason.to_owned()),
             details: audit::AuditDetails {
@@ -191,7 +194,7 @@ async fn remove(
         (status = 200, body = VersionSummary),
         (status = 403, description = "Only admins restore versions", body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`version_not_removed`, `restore_expired` (removed more than 30 days ago), `migration_imported_again` (its migration was imported again since)", body = ErrorBody),
+        (status = 409, description = "`version_not_removed`, `restore_expired` (removed more than 30 days ago)", body = ErrorBody),
     )
 )]
 async fn restore(
@@ -212,19 +215,7 @@ async fn restore(
         RESTORE_DAYS,
     )
     .fetch_optional(&mut *tx)
-    .await
-    .map_err(|err| {
-        if db::is_unique_violation(&err) {
-            ApiError::Conflict {
-                code: "migration_imported_again",
-                message: format!(
-                    "v{number}'s migration was imported again since it was removed. Remove that version first to restore this one."
-                ),
-            }
-        } else {
-            err.into()
-        }
-    })?;
+    .await?;
     let Some(restored) = restored else {
         return Err(match state_of(&mut tx, database.id, number).await? {
             Some(None) => ApiError::Conflict {
@@ -247,6 +238,7 @@ async fn restore(
             database_id: Some(database.id),
             action: AuditAction::VersionRestored,
             actor_id: Some(member.user.id),
+            actor_name: Some(member.user.name.clone()),
             version_number: Some(number),
             reason: None,
             details: audit::AuditDetails {
@@ -445,6 +437,15 @@ async fn purge_one(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
     sqlx::query!("DELETE FROM drafts WHERE published_version_id = $1", id)
         .execute(&mut *tx)
         .await?;
+    // An imported one stays skipped by later imports, its SQL gone.
+    sqlx::query!(
+        "INSERT INTO purged_migrations (database_id, migration_id, path, checksum, number)
+         SELECT database_id, migration_id, path, checksum, $2 FROM version_migrations WHERE version_id = $1",
+        id,
+        version.number,
+    )
+    .execute(&mut *tx)
+    .await?;
     sqlx::query!("DELETE FROM versions WHERE id = $1", id)
         .execute(&mut *tx)
         .await?;
@@ -455,6 +456,7 @@ async fn purge_one(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
             database_id: Some(database.id),
             action: AuditAction::VersionPurged,
             actor_id: None,
+            actor_name: None,
             version_number: Some(version.number),
             reason: None,
             details: audit::AuditDetails {
