@@ -508,6 +508,31 @@ skipped). docs/MVP.md "Next: migration files" has the decisions.
   Django and Rails exports in `tests/migrations/`), `tests/api/imports.rs`
   (the fake compiler: `TestApp::compiling`), `e2e/imports.spec.ts`.
 
+## Removed versions, approvals, the audit log
+
+docs/MVP.md "Review round 1" items 3 and 4 have the decisions.
+
+- **Removed versions** (`versions::removal`): `versions.removed_at` hides a
+  version; every read of versions filters `removed_at IS NULL` ("the latest
+  version" is the latest live one), except a draft's base read by id
+  (`drafts::versions::by_id`: it may be removed). A new version's number is
+  `databases.last_version_number + 1` (a trigger keeps it), never
+  `max(number) + 1`. The web reads `Database.versions` (how many),
+  `next_number` and `missing` (numbers without a live version: `neighbours`,
+  `wasRemoved` in `features/databases/queries.ts`), never `latest.number`
+  as a count. Restorable for `RESTORE_DAYS`, purged by `removal::purger`.
+- **Audit log** (`audit`): `audit::record(tx, &Entry)` in the transaction
+  of what it records (`NewVersion::audit` for a version being stored);
+  `audit_events` refuses updates and deletes.
+- **Approvals** (`drafts::approvals`, `collab::review`): the room tracks
+  editors (first update changing `sql` → `draft_editors`) and approvals
+  (rows in `draft_approvals`, each with the SHA-256 of the text approved),
+  sends `ServerEvent::Review`, and answers `Content::approved_by` for the
+  frozen text; publishing calls `approvals::gate`. Approving checks with
+  the room first (`Hub::check_approval`), then writes, then
+  `Hub::approved`. Web: `features/draft/review.ts`, `ReviewControl` in the
+  editor bar, `useApprovalGate` in the publish dialog.
+
 ## Drafts and the collab server (`drafts`, `collab`)
 
 A draft's content is a Y.Doc (`sql` Y.Text, `layout` and `groups` Y.Maps of

@@ -29,7 +29,10 @@ export function GetStarted({
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-6 px-4 py-8 md:px-8 md:py-10">
       <div className="grid gap-1">
-        <h2 className="text-lg font-semibold text-foreground">No versions yet</h2>
+        <h2 className="text-lg font-semibold text-foreground">
+          {/* Every version removed: the settings list them for 30 days. */}
+          {database.next_number > 1 ? "No versions left" : "No versions yet"}
+        </h2>
         <p className="max-w-prose text-base text-muted-foreground">
           {writer
             ? "Bring in the first one: upload the schema's SQL, import your migrations as the history, or push it from CI."

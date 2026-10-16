@@ -385,6 +385,7 @@ export function Workspace({
         onDeleted={onDeleted}
         review={state?.review ?? null}
         role={state?.role ?? null}
+        liveOpen={status === "open"}
       />
       <Notice
         org={org}

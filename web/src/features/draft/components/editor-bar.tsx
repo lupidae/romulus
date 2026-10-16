@@ -73,6 +73,8 @@ interface EditorBarProps {
   review: Review | null;
   /** This connection's role, as the server sees it. */
   role: Role | null;
+  /** Live, the draft is open (not being published or updated). */
+  liveOpen: boolean;
 }
 
 /**
@@ -188,7 +190,7 @@ export function EditorBar(props: EditorBarProps) {
             review={props.review}
             meId={meId}
             role={props.role}
-            open={props.canEdit || props.role === "reviewer"}
+            open={props.liveOpen}
             sql={props.sql}
           />
         )}
