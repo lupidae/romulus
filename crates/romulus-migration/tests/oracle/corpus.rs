@@ -2,10 +2,15 @@
 //! from nothing and dropped to nothing, and each migrated into the others.
 
 use remus_core::{Schema, fixtures::SHOWCASE};
+use romulus_migration::{Format, Options};
 use romulus_sandbox::{Compiler, render_sql};
 use tokio::sync::OnceCell;
 
-use crate::{Case, check_all, compile, empty, with_compiler};
+use crate::{
+    Case, check_all, compile, corpus, empty,
+    tools::{ToolCase, check_tools},
+    with_compiler,
+};
 
 static MODELS: OnceCell<Vec<(String, Schema)>> = OnceCell::const_new();
 
@@ -57,7 +62,7 @@ fn every_corpus_schema_is_built_from_nothing_and_dropped_to_nothing() {
             cases.push(case.reversed());
             cases.push(case);
         }
-        check_all(&compiler, cases).await;
+        let _skipped = check_all(&compiler, cases).await;
     });
 }
 
@@ -73,7 +78,7 @@ fn every_corpus_schema_migrates_into_every_other() {
                 }
             }
         }
-        check_all(&compiler, cases).await;
+        let _skipped = check_all(&compiler, cases).await;
     });
 }
 
@@ -106,5 +111,38 @@ fn the_extension_objects_list_matches_the_sandbox() {
             "add to romulus_migration's extensions::PROVIDED or REQUIRES: {}",
             missing.join(", ")
         );
+    });
+}
+
+#[test]
+fn every_corpus_schema_is_built_and_dropped_by_each_tool() {
+    with_compiler(|compiler| async move {
+        let models = corpus::models(&compiler).await;
+        let nothing = empty();
+        let mut cases = Vec::new();
+        // Up builds it, down drops it; and one into the next.
+        for (i, (name, model)) in models.iter().enumerate() {
+            let format = Format::ALL[i % Format::ALL.len()];
+            for format in [format, Format::GolangMigrate, Format::Dbmate] {
+                cases.push(ToolCase {
+                    label: format!("nothing → {name}"),
+                    old: nothing.clone(),
+                    new: model.clone(),
+                    options: Options::default(),
+                    format,
+                });
+            }
+            let (next, next_model) = &models[(i + 1) % models.len()];
+            cases.push(ToolCase {
+                label: format!("{name} → {next}"),
+                old: model.clone(),
+                new: next_model.clone(),
+                options: Options {
+                    concurrently: i % 2 == 0,
+                },
+                format: Format::ALL[(i + 3) % Format::ALL.len()],
+            });
+        }
+        check_tools(&compiler, cases).await;
     });
 }

@@ -60,7 +60,8 @@ mod sql;
 mod tests;
 
 pub use extensions::{
-    PROVIDED as EXTENSION_OBJECTS, REQUIRES as EXTENSION_REQUIREMENTS, without_provided as without_extension_objects,
+    PROVIDED as EXTENSION_OBJECTS, REQUIRES as EXTENSION_REQUIREMENTS,
+    without_provided as without_extension_objects,
 };
 pub use format::{File, FileRole, Format, Mark, Meta, archive_name, files, slug};
 use remus_core::Schema;

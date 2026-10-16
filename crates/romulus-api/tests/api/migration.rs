@@ -118,7 +118,12 @@ async fn a_migration_between_versions_has_its_statements_and_files(db: PgPool) {
         !content.contains("BEGIN;"),
         "sqlx runs it in its own transaction"
     );
-    assert_eq!(files[0]["destructive"].as_array().map(Vec::len), Some(1));
+    assert_eq!(files[0]["marks"][0]["hazard"], "can_fail", "SET NOT NULL");
+    assert_eq!(body["statements"][1]["hazard"], "can_fail");
+    assert_eq!(
+        body["archive"],
+        format!("{timestamp}_add_invoices_require_emails.zip")
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -190,14 +195,54 @@ async fn every_tool_gets_its_layout(db: PgPool) {
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn the_file_name_and_options_can_be_chosen(db: PgPool) {
     let (app, team) = shop(&db).await;
-    let body = app
-        .as_user(&team.developer)
+    let user = app.as_user(&team.developer);
+    let body = user
         .get(&team.path(
             "/databases/shop/migration?from=1&to=2&format=flyway&name=Billing%20%26%20emails&concurrently=true",
         ))
         .await
         .json();
     assert_eq!(body["files"][0]["path"], "V2__billing_emails.sql");
+    assert_eq!(body["archive"], "V2__billing_emails.zip");
+
+    // The tool's next version, when its numbering is the user's own.
+    let flyway = user
+        .get(&team.path("/databases/shop/migration?from=1&to=2&format=flyway&version=1.4"))
+        .await
+        .json();
+    assert_eq!(
+        flyway["files"][0]["path"],
+        "V1.4__add_invoices_require_emails.sql"
+    );
+    let golang = user
+        .get(
+            &team
+                .path("/databases/shop/migration?from=1&to=2&format=golang_migrate&version=000041"),
+        )
+        .await
+        .json();
+    assert_eq!(
+        golang["files"][0]["path"],
+        "000041_add_invoices_require_emails.up.sql"
+    );
+    for (format, version) in [
+        ("flyway", "1..2"),
+        ("flyway", "v3"),
+        ("sqlx", "1.2"),
+        ("dbmate", "abc"),
+    ] {
+        let refused = user
+            .get(&team.path(&format!(
+                "/databases/shop/migration?from=1&to=2&format={format}&version={version}"
+            )))
+            .await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{format} {version}"
+        );
+        assert!(refused.json()["details"]["version"].is_string());
+    }
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -334,4 +379,59 @@ async fn a_draft_with_errors_has_no_migration(db: PgPool) {
             .as_array()
             .is_some_and(|d| !d.is_empty())
     );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_migration_is_of_the_text_reviewed(db: PgPool) {
+    let (app, team, id) = draft(&db).await;
+    type_in(&app, &id, &team, "CREATE TABLE invoices (id bigint);\n").await;
+    let preview = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!("/databases/shop/drafts/{id}/publish")))
+        .await
+        .json();
+    let sha = preview["sha256"]
+        .as_str()
+        .expect("the preview's sha256")
+        .to_owned();
+    let reviewed = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{id}/migration?sha256={sha}"
+        )))
+        .await;
+    assert_eq!(reviewed.status, StatusCode::OK, "{}", reviewed.json());
+    let moved = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{id}/migration?sha256={}",
+            "0".repeat(64)
+        )))
+        .await;
+    assert_eq!(moved.status, StatusCode::CONFLICT);
+    assert_eq!(moved.code(), "draft_changed");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_stale_draft_has_no_migration_until_updated(db: PgPool) {
+    let (app, team, id) = draft(&db).await;
+    let shop: Uuid = sqlx::query_scalar!("SELECT id FROM databases WHERE slug = 'shop'")
+        .fetch_one(&db)
+        .await
+        .expect("the database");
+    version(
+        &db,
+        shop,
+        2,
+        "CREATE TABLE users (id bigint PRIMARY KEY);\nCREATE TABLE coupons (code text);\n",
+        json!({}),
+    )
+    .await;
+    let response = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!("/databases/shop/drafts/{id}/migration")))
+        .await;
+    assert_eq!(response.status, StatusCode::CONFLICT);
+    assert_eq!(response.code(), "stale_base");
+    assert!(response.json()["message"].as_str().unwrap().contains("v2"));
 }

@@ -197,7 +197,9 @@ pub(crate) fn conversion(
             via_text: false,
             rounds,
             note: Some(if rounds {
-                format!("Converts {from} to {to}: values can come out rounded or cut, and one that does not fit fails.")
+                format!(
+                    "Converts {from} to {to}: values can come out rounded or cut, and one that does not fit fails."
+                )
             } else {
                 format!("Converts {from} to {to}: fails on a value that does not convert.")
             }),
@@ -292,10 +294,9 @@ fn rounds(a: &Ty, b: &Ty) -> bool {
         (F::Numeric | F::Float(_) | F::Money, F::Int(_))
         | (F::Float(8), F::Float(4))
         | (F::Numeric, F::Float(_) | F::Money)
-        | (F::Timestamp | F::TimestampTz, F::Date | F::Time | F::TimeTz)
-        | (F::TimestampTz, F::Timestamp)
-        | (F::TimeTz, F::Time)
-        | (F::Interval, F::Time) => true,
+        | (F::Timestamp, F::Date | F::Time | F::TimeTz)
+        | (F::TimestampTz, F::Date | F::Time | F::TimeTz | F::Timestamp)
+        | (F::TimeTz | F::Interval, F::Time) => true,
         (F::Numeric, F::Numeric) => !numeric_widens(a.modifiers.as_deref(), b.modifiers.as_deref()),
         // Fractional seconds: timestamp(6) → timestamp(0).
         _ if a.base == b.base && precision_type(a.family) => {
@@ -394,7 +395,10 @@ mod tests {
             ("date", "timestamp with time zone"),
             ("geometry(Point,4326)", "geometry"),
             ("timestamp(3) with time zone", "timestamp(6) with time zone"),
-            ("timestamp(3) without time zone", "timestamp without time zone"),
+            (
+                "timestamp(3) without time zone",
+                "timestamp without time zone",
+            ),
             ("integer[]", "bigint[]"),
         ] {
             let c = conversion("c", from, false, to, false);
@@ -416,7 +420,16 @@ mod tests {
         let to_name = conversion("c", "text", false, "name", false);
         assert!(!to_name.lossless && !to_name.rounds);
         // Fewer fractional digits round; fewer integers digits fail.
-        assert!(conversion("c", "timestamp(6) with time zone", false, "timestamp(0) with time zone", false).rounds);
+        assert!(
+            conversion(
+                "c",
+                "timestamp(6) with time zone",
+                false,
+                "timestamp(0) with time zone",
+                false
+            )
+            .rounds
+        );
         assert!(conversion("c", "numeric(10,2)", false, "integer", false).rounds);
         assert!(!conversion("c", "bigint", false, "integer", false).rounds);
     }

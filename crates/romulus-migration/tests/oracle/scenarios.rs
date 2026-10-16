@@ -65,7 +65,20 @@ fn every_scenario_migrates_both_ways() {
             cases.push(case.reversed());
             cases.push(case);
         }
-        check_all(&compiler, cases).await;
+        // The only pairs the compile cannot run move an extension (the
+        // tool runs below run them as the cluster's superuser).
+        let skipped = check_all(&compiler, cases).await;
+        for (label, why) in &skipped {
+            assert!(
+                label.starts_with("extension_moved") && *why == crate::MOVED_EXTENSION,
+                "{label} skipped: {why}"
+            );
+        }
+        assert_eq!(
+            skipped.len(),
+            3,
+            "extension_moved: forward, reversed, concurrently"
+        );
     });
 }
 
@@ -74,8 +87,12 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
     with_compiler(|compiler| async move {
         let mut cases = Vec::new();
         for (name, old, new) in scenarios() {
-            let old = compile(&compiler, &old).await.expect("the old schema compiles");
-            let new = compile(&compiler, &new).await.expect("the new schema compiles");
+            let old = compile(&compiler, &old)
+                .await
+                .expect("the old schema compiles");
+            let new = compile(&compiler, &new)
+                .await
+                .expect("the new schema compiles");
             for format in Format::ALL {
                 for concurrently in [false, true] {
                     cases.push(ToolCase {

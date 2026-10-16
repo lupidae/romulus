@@ -1408,10 +1408,10 @@ export interface components {
     MigrationFile: {
       content: string;
       /**
-       * @description Where the destructive statements are (with their comments), for
+       * @description Where the statements with a hazard are (with their comments), for
        *     highlighting.
        */
-      destructive: components["schemas"]["MigrationLines"][];
+      marks: components["schemas"]["MigrationMark"][];
       /**
        * @description Relative to the tool's migrations folder: `20261016093000_add_invoices.sql`,
        *     `20261016093000_add_invoices/migration.sql`.
@@ -1421,10 +1421,19 @@ export interface components {
     };
     /** @enum {string} */
     MigrationFileRole: "up" | "down" | "config";
-    /** @description A range of lines, 1-based, both ends included. */
-    MigrationLines: {
-      /** Format: int32 */
+    /**
+     * @description What a statement risks, beyond changing the schema.
+     * @enum {string}
+     */
+    MigrationHazard: "deletes_data" | "can_fail" | "widens_access";
+    /** @description Lines of a file holding a statement with a hazard. */
+    MigrationMark: {
+      /**
+       * Format: int32
+       * @description 1-based, both ends included.
+       */
       from: number;
+      hazard: components["schemas"]["MigrationHazard"];
       /** Format: int32 */
       to: number;
     };
@@ -1455,12 +1464,9 @@ export interface components {
        *     it commented out.
        */
       alternative?: string | null;
-      /**
-       * @description Deletes data (a dropped table, column or partition, a conversion
-       *     that can lose or reject values), or fails when existing rows break
-       *     it (`SET NOT NULL`, a `NOT NULL` column without a default).
-       */
+      /** @description `hazard` is `deletes_data` or `can_fail`: existing data is at stake. */
       destructive: boolean;
+      hazard?: components["schemas"]["MigrationHazard"] | null;
       kind: components["schemas"]["MigrationStatementKind"];
       /**
        * @description What a reviewer should know: why it is there, what it can do to
@@ -1490,6 +1496,8 @@ export interface components {
       | "drop_domain"
       | "create_sequence"
       | "alter_sequence"
+      | "drop_sequence"
+      | "set_sequence"
       | "create_table"
       | "alter_table"
       | "drop_table"
@@ -1529,7 +1537,7 @@ export interface components {
       | "type_recreated"
       | "table_recreated"
       | "cast"
-      | "constraint_name"
+      | "widens_access"
       | "foreign_table"
       | "unsupported"
       | "empty_schema";
@@ -1780,6 +1788,8 @@ export interface components {
     };
     /** @description A migration, as statements and as the files of one tool. */
     SchemaMigration: {
+      /** @description What the files download as together: `<version>_<name>.zip`. */
+      archive: string;
       /** @description How many statements delete data or can fail on existing rows. */
       destructive: number;
       /** @description The files to put in the tool's migrations folder, in order. */
@@ -3268,6 +3278,19 @@ export interface operations {
          *     target version's message, or `v4_to_v5`.
          */
         name?: string;
+        /**
+         * @description The first file's version, where the tool numbers its migrations:
+         *     Flyway's `V<version>` (digits and dots; by default the target
+         *     version's number), or the number other tools put first (digits: a
+         *     golang-migrate sequence like `000042`; by default the time,
+         *     `YYYYMMDDHHMMSS`). Files after it take the next ones.
+         */
+        version?: string;
+        /**
+         * @description SHA-256 of the SQL the person reviewed (the publish preview's): the
+         *     migration of exactly that text, or 409 `draft_changed`.
+         */
+        sha256?: string;
       };
       header?: never;
       path: {
@@ -3304,7 +3327,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `draft_published`: its version has the migration now */
+      /** @description `draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first */
       409: {
         headers: {
           [name: string]: unknown;
@@ -3623,6 +3646,14 @@ export interface operations {
          *     target version's message, or `v4_to_v5`.
          */
         name?: string;
+        /**
+         * @description The first file's version, where the tool numbers its migrations:
+         *     Flyway's `V<version>` (digits and dots; by default the target
+         *     version's number), or the number other tools put first (digits: a
+         *     golang-migrate sequence like `000042`; by default the time,
+         *     `YYYYMMDDHHMMSS`). Files after it take the next ones.
+         */
+        version?: string;
       };
       header?: never;
       path: {

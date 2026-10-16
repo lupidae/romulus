@@ -159,9 +159,17 @@ impl Case {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Passed,
-    /// The sandbox cannot run something the migration rightly does.
-    Skipped,
+    /// The sandbox's compile cannot run something the migration rightly
+    /// does; the tool runs (`tools.rs`, a real database as superuser, real
+    /// functions) cover these. One of [`MOVED_EXTENSION`], [`GUESSED_FUNCTION`].
+    Skipped(&'static str),
 }
+
+/// `ALTER EXTENSION … SET SCHEMA`: the compile role does not own extensions.
+pub const MOVED_EXTENSION: &str = "moves an extension";
+/// A function the schemas call without defining it, whose type the
+/// sandbox guesses differently for the old text and the migration.
+pub const GUESSED_FUNCTION: &str = "a guessed function signature";
 
 #[allow(clippy::too_many_lines)]
 pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> {
@@ -180,15 +188,14 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
         .iter()
         .any(|s| s.sql.starts_with("ALTER EXTENSION ") && s.sql.contains(" SET SCHEMA "))
     {
-        return Ok(Outcome::Skipped);
+        return Ok(Outcome::Skipped(MOVED_EXTENSION));
     }
     // `setval` is data (the sandbox runs DDL only); the tool runs execute it.
-    let script: String = m
-        .statements
-        .iter()
-        .filter(|s| s.kind != Kind::SetSequence)
-        .map(|s| format!("{}\n", s.sql.replace(" INDEX CONCURRENTLY ", " INDEX ")))
-        .collect();
+    let mut script = String::new();
+    for statement in m.statements.iter().filter(|s| s.kind != Kind::SetSequence) {
+        script.push_str(&statement.sql.replace(" INDEX CONCURRENTLY ", " INDEX "));
+        script.push('\n');
+    }
     let old_sql = render_sql(&case.old);
     // A schema the old side uses for functions alone exists in a real
     // database, but the sandbox creates it only when the text does not.
@@ -236,7 +243,7 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
             })
         });
         if !compilation.stubs.is_empty() && (in_old_part || statement_stubbed || stubbed(&errors)) {
-            return Ok(Outcome::Skipped);
+            return Ok(Outcome::Skipped(GUESSED_FUNCTION));
         }
         return Err(format!(
             "{}: the migration does not run\n{errors}\n--- migration ---\n{script}",
@@ -296,7 +303,7 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
         return Ok(Outcome::Passed);
     }
     if diff.lines().all(stubbed) {
-        return Ok(Outcome::Skipped);
+        return Ok(Outcome::Skipped(GUESSED_FUNCTION));
     }
     let mut out = format!(
         "{}: the migrated database is not the new schema:\n",
@@ -309,42 +316,50 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
     Err(out)
 }
 
-/// Check every case, a few at a time, and fail with every failure.
-pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) {
+/// Check every case, a few at a time, and fail with every failure. Returns
+/// the cases skipped, with why.
+pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) -> Vec<(String, &'static str)> {
     let total = cases.len();
     let mut set = JoinSet::new();
     let mut failures = Vec::new();
-    let mut skipped = 0;
+    let mut skipped: Vec<(String, &'static str)> = Vec::new();
     let mut pending = cases.into_iter();
     let mut running = 0;
     loop {
         while running < 8 {
             let Some(case) = pending.next() else { break };
             let compiler = compiler.clone();
-            set.spawn(async move { check(&compiler, &case).await });
+            set.spawn(async move { (case.label.clone(), check(&compiler, &case).await) });
             running += 1;
         }
         let Some(result) = set.join_next().await else {
             break;
         };
         running -= 1;
-        match result.expect("a check task") {
+        let (label, result) = result.expect("a check task");
+        match result {
             Ok(Outcome::Passed) => {}
-            Ok(Outcome::Skipped) => skipped += 1,
+            Ok(Outcome::Skipped(reason)) => skipped.push((label, reason)),
             Err(failure) => failures.push(failure),
         }
     }
     #[allow(clippy::print_stderr)]
     {
         eprintln!(
-            "{total} pairs: {} passed, {skipped} skipped (the sandbox cannot run them), {} failed",
-            total - skipped - failures.len(),
+            "{total} pairs: {} passed, {} skipped (the sandbox cannot run them: {:?}), {} failed",
+            total - skipped.len() - failures.len(),
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|(_, why)| *why)
+                .collect::<std::collections::BTreeSet<_>>(),
             failures.len()
         );
     }
     assert!(
-        skipped * 10 <= total,
-        "{skipped} of {total} pairs skipped: too many to call this tested"
+        skipped.len() * 10 <= total,
+        "{} of {total} pairs skipped: too many to call this tested",
+        skipped.len()
     );
     if !failures.is_empty() {
         #[allow(clippy::print_stderr)]
@@ -367,4 +382,5 @@ pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) {
             failures.len()
         );
     }
+    skipped
 }

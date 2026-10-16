@@ -32,9 +32,9 @@ use remus_core::{
 };
 
 use crate::{
-    Hazard, Kind,
-    partitions::Moves, Migration, Options, Section, Stage, Statement, Warning, WarningCode,
+    Hazard, Kind, Migration, Options, Section, Stage, Statement, Warning, WarningCode,
     cast::conversion,
+    partitions::Moves,
     sql::{
         column_definition, create_policy, create_view, identity_when, mentions, owned_sequence,
         parenthesized, policy_roles, relation_keyword, same_sql, storage, table_name,
@@ -414,8 +414,7 @@ impl<'a> Planner<'a> {
             if let (Some(b), Some(a)) = (b, a)
                 && (!same_sql(&b.base_type, &a.base_type)
                     || recreate.iter().any(|(_, e)| mentions(&b.base_type, e))
-                    || b
-                        .constraints
+                    || b.constraints
                         .iter()
                         .any(|check| !a.constraints.iter().any(|c| same_sql(c, check))))
             {
@@ -1487,6 +1486,7 @@ impl<'a> Planner<'a> {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn security(&mut self, after: &Entity, before: Option<&Entity>) {
         let table = table_name(after);
         let (rls, forced) = before.map_or((false, false), |b| (b.rls, b.rls_forced));
@@ -1501,7 +1501,10 @@ impl<'a> Planner<'a> {
             );
             if !after.rls {
                 statement.widens("Its policies stop applying: every role with privileges on the table sees and changes all its rows.");
-                self.widened(after, "row level security disabled: its policies stop applying".to_owned());
+                self.widened(
+                    after,
+                    "row level security disabled: its policies stop applying",
+                );
             }
         }
         if after.rls_forced != forced {
@@ -1510,12 +1513,19 @@ impl<'a> Planner<'a> {
                 Kind::RowLevelSecurity,
                 format!(
                     "ALTER TABLE {table} {} ROW LEVEL SECURITY;",
-                    if after.rls_forced { "FORCE" } else { "NO FORCE" }
+                    if after.rls_forced {
+                        "FORCE"
+                    } else {
+                        "NO FORCE"
+                    }
                 ),
             );
             if !after.rls_forced {
                 statement.widens("The table's owner bypasses its policies again.");
-                self.widened(after, "row level security no longer forced: its owner bypasses the policies".to_owned());
+                self.widened(
+                    after,
+                    "row level security no longer forced: its owner bypasses the policies",
+                );
             }
         }
         let old_policies = before.map_or(&[][..], |b| &b.policies[..]);
@@ -1555,7 +1565,7 @@ impl<'a> Planner<'a> {
                             "A restrictive policy goes: the rows it kept out become visible to {}.",
                             who(b)
                         ));
-                        self.widened(after, format!("restrictive policy {policy_name} dropped"));
+                        self.widened(after, &format!("restrictive policy {policy_name} dropped"));
                     }
                 }
                 (None, Some(a)) => {
@@ -1566,11 +1576,9 @@ impl<'a> Planner<'a> {
                         create_policy(&table, a),
                     );
                     if grants {
-                        statement.widens(format!(
-                            "Grants {} the rows its expressions allow.",
-                            who(a)
-                        ));
-                        self.widened(after, format!("permissive policy {policy_name} added"));
+                        statement
+                            .widens(format!("Grants {} the rows its expressions allow.", who(a)));
+                        self.widened(after, &format!("permissive policy {policy_name} added"));
                     }
                 }
                 (Some(b), Some(a)) if rebuild => {
@@ -1581,15 +1589,18 @@ impl<'a> Planner<'a> {
                         create_policy(&table, a),
                     );
                     if same_policy(b, a) {
-                        statement.noted("Dropped above and created again around a change it names.");
+                        statement
+                            .noted("Dropped above and created again around a change it names.");
                     } else {
-                        statement.widens("Changed: check its roles and expressions do not let more through.");
-                        self.widened(after, format!("policy {policy_name} changed"));
+                        statement.widens(
+                            "Changed: check its roles and expressions do not let more through.",
+                        );
+                        self.widened(after, &format!("policy {policy_name} changed"));
                     }
                 }
                 (Some(b), Some(a)) if !same_policy(b, a) => {
-                    let alter = alter_policy(&table, b, a);
-                    let statement = if let Some(sql) = alter {
+                    let altered = alter_policy(&table, b, a);
+                    let statement = if let Some(sql) = altered {
                         self.push(Phase::Security, Kind::AlterPolicy, sql)
                     } else {
                         drop(self);
@@ -1599,8 +1610,10 @@ impl<'a> Planner<'a> {
                             create_policy(&table, a),
                         )
                     };
-                    statement.widens("Changed: check its roles and expressions do not let more through.");
-                    self.widened(after, format!("policy {policy_name} changed"));
+                    statement.widens(
+                        "Changed: check its roles and expressions do not let more through.",
+                    );
+                    self.widened(after, &format!("policy {policy_name} changed"));
                 }
                 _ => {}
             }
@@ -1608,11 +1621,14 @@ impl<'a> Planner<'a> {
     }
 
     /// A warning that `table` lets more through.
-    fn widened(&mut self, table: &Entity, what: String) {
+    fn widened(&mut self, table: &Entity, what: &str) {
         self.warn(
             WarningCode::WidensAccess,
             Some(format!("{}.{}", table.schema, table.name)),
-            format!("{}.{}: {what}. Check who can now read or change which rows.", table.schema, table.name),
+            format!(
+                "{}.{}: {what}. Check who can now read or change which rows.",
+                table.schema, table.name
+            ),
         );
     }
 
@@ -1787,9 +1803,9 @@ impl<'a> Planner<'a> {
                             Phase::DropIndexes,
                             Kind::DropIndex,
                             format!(
-                            "DROP INDEX {}{qualified_index};",
-                            if self.guessing { "IF EXISTS " } else { "" }
-                        ),
+                                "DROP INDEX {}{qualified_index};",
+                                if self.guessing { "IF EXISTS " } else { "" }
+                            ),
                         );
                     }
                     let rebuilt = same_sql(&ib.definition, &ia.definition)
@@ -1808,7 +1824,11 @@ impl<'a> Planner<'a> {
                     let sql = ia
                         .definition
                         .replacen("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1)
-                        .replacen("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", 1);
+                        .replacen(
+                            "CREATE UNIQUE INDEX ",
+                            "CREATE UNIQUE INDEX IF NOT EXISTS ",
+                            1,
+                        );
                     self.push(Phase::Indexes, Kind::CreateIndex, format!("{sql};"))
                         .noted("The partition's copy of its parent's index, unless the parent's was made ON ONLY.");
                 }

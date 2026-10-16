@@ -13,7 +13,9 @@
 use axum::extract::State;
 use chrono::Utc;
 use remus_core::Schema;
-use romulus_migration::{File, Format, Meta, Options, Statement, Warning, files, migration, slug};
+use romulus_migration::{
+    File, Format, Meta, Options, Statement, Warning, archive_name, files, migration, slug,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -46,6 +48,12 @@ pub struct MigrationOptions {
     /// The description in file names (made file-name safe); by default the
     /// target version's message, or `v4_to_v5`.
     pub name: Option<String>,
+    /// The first file's version, where the tool numbers its migrations:
+    /// Flyway's `V<version>` (digits and dots; by default the target
+    /// version's number), or the number other tools put first (digits: a
+    /// golang-migrate sequence like `000042`; by default the time,
+    /// `YYYYMMDDHHMMSS`). Files after it take the next ones.
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -76,6 +84,8 @@ pub struct SchemaMigration {
     pub destructive: usize,
     /// The files to put in the tool's migrations folder, in order.
     pub files: Vec<File>,
+    /// What the files download as together: `<version>_<name>.zip`.
+    pub archive: String,
 }
 
 /// The two sides, for [`build`].
@@ -108,18 +118,25 @@ pub(crate) async fn build(
         .filter(|n| !n.is_empty())
         .map_or_else(|| slug(&sides.name), slug);
     let now = Utc::now();
+    let version = match options
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        Some(version) => checked_version(format, version)?,
+        None if format == Format::Flyway => sides.to.to_string(),
+        None => now.format("%Y%m%d%H%M%S").to_string(),
+    };
     let meta = Meta {
         database: sides.database,
         from: sides.from_label,
         to: sides.to_label,
         date: now.format("%Y-%m-%d").to_string(),
-        version: if format == Format::Flyway {
-            sides.to.to_string()
-        } else {
-            now.format("%Y%m%d%H%M%S").to_string()
-        },
+        version,
         name,
     };
+    let archive = archive_name(format, &meta);
     let (old, new) = (sides.old.clone(), sides.new.clone());
     let concurrently = options.concurrently;
     let (up, files) = tokio::task::spawn_blocking(move || {
@@ -142,7 +159,34 @@ pub(crate) async fn build(
         statements: up.statements,
         warnings: up.warnings,
         files,
+        archive,
     })
+}
+
+/// A version the tool reads as one: digits and dots for Flyway, digits
+/// for the others (at most 20).
+fn checked_version(format: Format, version: &str) -> ApiResult<String> {
+    let valid = if format == Format::Flyway {
+        version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+            && version.len() <= 40
+    } else {
+        version.len() <= 20 && version.bytes().all(|b| b.is_ascii_digit())
+    };
+    if valid {
+        Ok(version.to_owned())
+    } else if format == Format::Flyway {
+        Err(invalid(
+            "version",
+            "Flyway versions are numbers, optionally dotted: 42 or 1.2.3.",
+        ))
+    } else {
+        Err(invalid(
+            "version",
+            "Use digits only: a timestamp like 20261016093000 or a sequence like 000042.",
+        ))
+    }
 }
 
 /// The migration from one version to another, as statements and files.

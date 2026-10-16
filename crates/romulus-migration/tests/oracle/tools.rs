@@ -75,7 +75,9 @@ async fn scratch(admin: &str) -> Result<(String, PgConnection), String> {
         .execute(&mut conn)
         .await
         .map_err(|e| format!("create database: {e}"))?;
-    let (base, _) = admin.rsplit_once('/').ok_or("an admin URL with a database")?;
+    let (base, _) = admin
+        .rsplit_once('/')
+        .ok_or("an admin URL with a database")?;
     let db = PgConnection::connect(&format!("{base}/{name}"))
         .await
         .map_err(|e| format!("connect to scratch: {e}"))?;
@@ -132,16 +134,20 @@ async fn create_roles(admin: &str, roles: &BTreeSet<String>) -> Result<(), Strin
 /// Functions the schemas call without defining them, as the sandbox
 /// inferred them from each side: one definition each, or `Err` when the
 /// two sides need different return types (no real database has both).
-async fn functions(compiler: &Compiler, old_sql: &str, new_sql: &str) -> Result<String, ToolOutcome> {
+async fn functions(
+    compiler: &Compiler,
+    old_sql: &str,
+    new_sql: &str,
+) -> Result<String, ToolOutcome> {
     let mut signatures: BTreeMap<(String, String, Vec<String>), String> = BTreeMap::new();
     let mut schemas = BTreeSet::new();
     for sql in [old_sql, new_sql] {
-        let compiled = compiler
+        let compilation = compiler
             .compile(sql)
             .await
             .map_err(|_| ToolOutcome::Excluded("the sandbox is unavailable"))?;
-        schemas.extend(compiled.created_schemas.iter().cloned());
-        for stub in &compiled.stubs {
+        schemas.extend(compilation.created_schemas.iter().cloned());
+        for stub in &compilation.stubs {
             let key = (
                 stub.schema.clone(),
                 stub.name.clone(),
@@ -247,18 +253,22 @@ fn version_of(format: Format, path: &str) -> Vec<u64> {
         name
     };
     let digits = if format == Format::Flyway {
-        name.trim_start_matches('V').split("__").next().unwrap_or("")
+        name.trim_start_matches('V')
+            .split("__")
+            .next()
+            .unwrap_or("")
     } else {
         name.split('_').next().unwrap_or("")
     };
     digits.split('.').filter_map(|d| d.parse().ok()).collect()
 }
 
-fn ordered<'f>(format: Format, files: &'f [MigrationFile], role: MigrationFileRole) -> Vec<&'f MigrationFile> {
-    let mut out: Vec<&MigrationFile> = files
-        .iter()
-        .filter(|f| f.role == role || (role == MigrationFileRole::Up && format == Format::Dbmate && f.role == MigrationFileRole::Up))
-        .collect();
+fn ordered(
+    format: Format,
+    files: &[MigrationFile],
+    role: MigrationFileRole,
+) -> Vec<&MigrationFile> {
+    let mut out: Vec<&MigrationFile> = files.iter().filter(|f| f.role == role).collect();
     out.sort_by_key(|f| version_of(format, &f.path));
     out
 }
@@ -282,7 +292,12 @@ fn dbmate_section<'c>(content: &'c str, which: &str) -> (&'c str, bool) {
 }
 
 /// Applies the up (`down: false`) or down files of `format` as the tool does.
-async fn apply(db: &mut PgConnection, format: Format, all: &[MigrationFile], down: bool) -> Result<(), String> {
+async fn apply(
+    db: &mut PgConnection,
+    format: Format,
+    all: &[MigrationFile],
+    down: bool,
+) -> Result<(), String> {
     let role = if down && format == Format::GolangMigrate {
         MigrationFileRole::Down
     } else {
@@ -300,7 +315,9 @@ async fn apply(db: &mut PgConnection, format: Format, all: &[MigrationFile], dow
                 if file.content.starts_with("-- no-transaction") {
                     script(db, &file.content).await.map_err(context)?;
                 } else {
-                    in_transaction(db, &file.content, false).await.map_err(context)?;
+                    in_transaction(db, &file.content, false)
+                        .await
+                        .map_err(context)?;
                 }
             }
             Format::Flyway => {
@@ -308,7 +325,9 @@ async fn apply(db: &mut PgConnection, format: Format, all: &[MigrationFile], dow
                 if conf.is_some_and(|c| c.content.contains("executeInTransaction=false")) {
                     statements(db, &file.content).await.map_err(context)?;
                 } else {
-                    in_transaction(db, &file.content, true).await.map_err(context)?;
+                    in_transaction(db, &file.content, true)
+                        .await
+                        .map_err(context)?;
                 }
             }
             Format::Prisma | Format::GolangMigrate => {
@@ -330,9 +349,20 @@ async fn apply(db: &mut PgConnection, format: Format, all: &[MigrationFile], dow
 
 /// `actual` compared with `expected`, columns put in `expected`'s order
 /// where the migration warned that Postgres would append them.
-fn compare(label: &str, m: &Migration, mut actual: Schema, expected: &Schema) -> Result<(), String> {
-    for warning in m.warnings.iter().filter(|w| w.code == WarningCode::ColumnOrder) {
-        let Some(object) = &warning.object else { continue };
+fn compare(
+    label: &str,
+    m: &Migration,
+    mut actual: Schema,
+    expected: &Schema,
+) -> Result<(), String> {
+    for warning in m
+        .warnings
+        .iter()
+        .filter(|w| w.code == WarningCode::ColumnOrder)
+    {
+        let Some(object) = &warning.object else {
+            continue;
+        };
         let Some(wanted) = expected
             .entities
             .iter()
@@ -446,14 +476,24 @@ pub async fn run(compiler: &Compiler, admin: &str, case: &ToolCase) -> Result<To
         apply(&mut db, case.format, &laid_out, false)
             .await
             .map_err(|e| format!("up: {e}\n{}", listing(&laid_out)))?;
-        compare("after the up migration", &up, introspect(&mut db).await?, &new)
-            .map_err(|e| format!("{e}{}", listing(&laid_out)))?;
+        compare(
+            "after the up migration",
+            &up,
+            introspect(&mut db).await?,
+            &new,
+        )
+        .map_err(|e| format!("{e}{}", listing(&laid_out)))?;
         if case.format.has_down() {
             apply(&mut db, case.format, &laid_out, true)
                 .await
                 .map_err(|e| format!("down: {e}\n{}", listing(&laid_out)))?;
-            compare("after the down migration", &down, introspect(&mut db).await?, &old)
-                .map_err(|e| format!("{e}{}", listing(&laid_out)))?;
+            compare(
+                "after the down migration",
+                &down,
+                introspect(&mut db).await?,
+                &old,
+            )
+            .map_err(|e| format!("{e}{}", listing(&laid_out)))?;
         }
         Ok::<_, String>(())
     }
@@ -476,12 +516,23 @@ pub async fn check_tools(compiler: &Compiler, cases: Vec<ToolCase>) {
             let Some(case) = pending.next() else { break };
             let (compiler, admin) = (compiler.clone(), admin.clone());
             set.spawn(async move {
-                let label = format!("{} [{:?}{}]", case.label, case.format, if case.options.concurrently { ", concurrently" } else { "" });
+                let label = format!(
+                    "{} [{:?}{}]",
+                    case.label,
+                    case.format,
+                    if case.options.concurrently {
+                        ", concurrently"
+                    } else {
+                        ""
+                    }
+                );
                 (label, run(&compiler, &admin, &case).await)
             });
             running += 1;
         }
-        let Some(joined) = set.join_next().await else { break };
+        let Some(joined) = set.join_next().await else {
+            break;
+        };
         running -= 1;
         let (label, result) = joined.expect("a tool case task");
         match result {
@@ -500,7 +551,11 @@ pub async fn check_tools(compiler: &Compiler, cases: Vec<ToolCase>) {
         );
         for failure in &failures {
             let mut lines = failure.lines();
-            eprintln!("FAILED {} | {}", lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+            eprintln!(
+                "FAILED {} | {}",
+                lines.next().unwrap_or(""),
+                lines.next().unwrap_or("")
+            );
         }
     }
     assert!(
@@ -514,6 +569,9 @@ pub async fn check_tools(compiler: &Compiler, cases: Vec<ToolCase>) {
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join("\n\n=====================================\n\n");
-        panic!("{} of {total} tool runs failed. The first ones:\n\n{shown}", failures.len());
+        panic!(
+            "{} of {total} tool runs failed. The first ones:\n\n{shown}",
+            failures.len()
+        );
     }
 }

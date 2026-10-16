@@ -16,9 +16,14 @@ use remus_core::{
         PolicyCommand, RelationRef, TypeKind,
     },
 };
+use romulus_migration::{Format, Options};
 use romulus_sandbox::render_sql;
 
-use crate::{Case, check_all, compile, corpus, with_compiler};
+use crate::{
+    Case, check_all, compile, corpus,
+    tools::{ToolCase, check_tools},
+    with_compiler,
+};
 
 /// splitmix64: small, fast, and the same everywhere.
 struct Rng(u64);
@@ -792,6 +797,54 @@ fn random_edits_of_the_corpus_migrate_both_ways() {
             invalid * 2 < tried,
             "{invalid} of {tried} mutated schemas do not compile: the generator needs fixing"
         );
-        check_all(&compiler, cases).await;
+        let _skipped = check_all(&compiler, cases).await;
+    });
+}
+
+/// Seeds per schema run by the tools too (on a real database each, so
+/// fewer): `ROMULUS_ORACLE_TOOL_SEEDS`, default 3.
+fn tool_seeds() -> u64 {
+    std::env::var("ROMULUS_ORACLE_TOOL_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3)
+}
+
+#[test]
+fn random_edits_of_the_corpus_run_as_each_tool_would_run_them() {
+    with_compiler(|compiler| async move {
+        let models = corpus::models(&compiler).await;
+        let mut cases = Vec::new();
+        for (i, (name, model)) in models.iter().enumerate() {
+            for seed in 0..tool_seeds() {
+                let mut rng = Rng(seed.wrapping_mul(7_919) ^ (i as u64) << 20 ^ 0xA5A5);
+                let mut mutated = model.clone();
+                let mut edits = Vec::new();
+                let mut attempts = 0;
+                while edits.len() < 2 && attempts < 20 {
+                    attempts += 1;
+                    if let Some(edit) = mutate(&mut mutated, &mut rng, edits.len() + 1) {
+                        edits.push(edit);
+                    }
+                }
+                let Ok(new) = compile(&compiler, &render_sql(&mutated)).await else {
+                    continue;
+                };
+                if romulus_diff::diff(model, &new).is_empty() {
+                    continue;
+                }
+                let n = i + usize::try_from(seed).unwrap_or(0);
+                cases.push(ToolCase {
+                    label: format!("{name} seed {seed}: {}", edits.join("; ")),
+                    old: model.clone(),
+                    new,
+                    options: Options {
+                        concurrently: n % 3 == 0,
+                    },
+                    format: Format::ALL[n % Format::ALL.len()],
+                });
+            }
+        }
+        check_tools(&compiler, cases).await;
     });
 }

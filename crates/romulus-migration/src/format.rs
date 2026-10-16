@@ -204,10 +204,7 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
         let mut out = Writer::new();
         header(&mut out, up, meta, None);
         body(&mut out, &up.statements.iter().collect::<Vec<_>>(), true);
-        return vec![out.file(
-            format!("{}_{}.sql", meta.version, meta.name),
-            FileRole::Up,
-        )];
+        return vec![out.file(format!("{}_{}.sql", meta.version, meta.name), FileRole::Up)];
     }
     let units = split(up, down, format.has_down());
     let parts = units.len();
@@ -257,7 +254,11 @@ fn split<'m>(up: &'m Migration, down: &'m Migration, with_down: bool) -> Vec<Uni
             down: down_commit,
         });
     }
-    for s in up.statements.iter().filter(|s| s.stage == Stage::Concurrent) {
+    for s in up
+        .statements
+        .iter()
+        .filter(|s| s.stage == Stage::Concurrent)
+    {
         units.push(Unit {
             kind: UnitKind::Concurrent,
             up: vec![s],
@@ -424,9 +425,21 @@ fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usi
         out.comment("Nothing to migrate: the schemas are the same.");
     } else {
         let flagged: Vec<String> = [
-            (Hazard::DeletesData, "delete data (DESTRUCTIVE)", "deletes data (DESTRUCTIVE)"),
-            (Hazard::CanFail, "can fail on existing rows (CAN FAIL)", "can fail on existing rows (CAN FAIL)"),
-            (Hazard::WidensAccess, "widen access (WIDENS ACCESS)", "widens access (WIDENS ACCESS)"),
+            (
+                Hazard::DeletesData,
+                "delete data (DESTRUCTIVE)",
+                "deletes data (DESTRUCTIVE)",
+            ),
+            (
+                Hazard::CanFail,
+                "can fail on existing rows (CAN FAIL)",
+                "can fail on existing rows (CAN FAIL)",
+            ),
+            (
+                Hazard::WidensAccess,
+                "widen access (WIDENS ACCESS)",
+                "widens access (WIDENS ACCESS)",
+            ),
         ]
         .iter()
         .filter_map(|(hazard, many, one)| match m.count(*hazard) {
@@ -436,7 +449,10 @@ fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usi
         })
         .collect();
         let line = if flagged.is_empty() {
-            format!("{count} statement{}, none flagged.", if count == 1 { "" } else { "s" })
+            format!(
+                "{count} statement{}, none flagged.",
+                if count == 1 { "" } else { "s" }
+            )
         } else {
             format!(
                 "{count} statement{}: {}, each marked.",

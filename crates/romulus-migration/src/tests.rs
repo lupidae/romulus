@@ -12,8 +12,8 @@ use remus_core::{
 };
 
 use crate::{
-    FileRole, Format, Kind, Meta, Migration, Options, Section, Stage, Statement, WarningCode,
-    files, migration,
+    FileRole, Format, Hazard, Kind, Meta, Migration, Options, Section, Stage, Statement,
+    WarningCode, archive_name, files, migration,
 };
 
 fn schema(entities: Vec<Entity>) -> Schema {
@@ -273,15 +273,12 @@ fn nullability_identity_and_defaults_alter_in_place() {
     let m = plan(&old, &new);
     let set_not_null = find(&m, "ALTER TABLE public.t ALTER COLUMN a SET NOT NULL");
     assert!(set_not_null.destructive, "SET NOT NULL fails on NULL rows");
-    let identity = find(
-        &m,
-        "ALTER TABLE public.t ALTER COLUMN b ADD GENERATED ALWAYS AS IDENTITY",
-    );
+    // The identity's sequence moved past the rows the column holds.
     assert!(
-        identity
-            .note
-            .as_deref()
-            .is_some_and(|n| n.contains("setval"))
+        position(
+            &m,
+            "ALTER TABLE public.t ALTER COLUMN b ADD GENERATED ALWAYS AS IDENTITY"
+        ) < position(&m, "SELECT setval(pg_get_serial_sequence('public.t', 'b')")
     );
     find(&m, "ALTER TABLE public.t ALTER COLUMN c DROP DEFAULT");
 }
@@ -631,9 +628,20 @@ fn with_index_concurrently() -> (Migration, Migration) {
     )
 }
 
+fn meta_for(format: Format) -> Meta {
+    Meta {
+        version: if format == Format::Flyway {
+            "5".into()
+        } else {
+            "20261016093000".into()
+        },
+        ..meta()
+    }
+}
+
 fn paths(format: Format) -> Vec<String> {
     let (up, down) = with_index_concurrently();
-    files(&up, &down, format, &meta())
+    files(&up, &down, format, &meta_for(format))
         .into_iter()
         .map(|f| f.path)
         .collect()
@@ -704,7 +712,7 @@ fn tools_with_their_own_transaction_get_none_in_the_file_and_opt_out_for_concurr
     let sqlx = files(&up, &down, Format::Sqlx, &meta());
     assert!(!sqlx[0].content.contains("BEGIN;"));
     assert!(sqlx[1].content.starts_with("-- no-transaction\n"));
-    let flyway = files(&up, &down, Format::Flyway, &meta());
+    let flyway = files(&up, &down, Format::Flyway, &meta_for(Format::Flyway));
     assert_eq!(flyway[2].role, FileRole::Config);
     assert_eq!(flyway[2].content, "executeInTransaction=false\n");
     let dbmate = files(&up, &down, Format::Dbmate, &meta());
@@ -732,14 +740,15 @@ fn down_migrations_undo_the_up_one() {
 }
 
 #[test]
-fn destructive_lines_point_at_the_flagged_statements() {
+fn marks_point_at_the_flagged_statements() {
     let (up, down) = with_index_concurrently();
     let file = &files(&up, &down, Format::Plain, &meta())[0];
     let lines: Vec<&str> = file.content.lines().collect();
-    assert_eq!(file.destructive.len(), 1);
-    let range = file.destructive[0];
-    let flagged = &lines[range.from as usize - 1..range.to as usize];
-    assert!(flagged[0].starts_with("-- DESTRUCTIVE:"), "{flagged:?}");
+    assert_eq!(file.marks.len(), 1);
+    let mark = file.marks[0];
+    assert_eq!(mark.hazard, Hazard::CanFail);
+    let flagged = &lines[mark.from as usize - 1..mark.to as usize];
+    assert!(flagged[0].starts_with("-- CAN FAIL:"), "{flagged:?}");
     assert_eq!(
         *flagged.last().expect("lines"),
         "ALTER TABLE public.users ADD COLUMN name text NOT NULL;"
@@ -753,4 +762,399 @@ fn an_empty_migration_says_so() {
     let file = &files(&m, &m, Format::Plain, &meta())[0];
     assert!(file.content.contains("Nothing to migrate"));
     assert!(!file.content.contains("BEGIN;"));
+}
+
+// ---- Review fixes (MG-fix): each failed before its fix ----------------------
+
+fn partition(parent: &str, child: &str, bound: &str) -> remus_core::model::Partition {
+    remus_core::model::Partition {
+        parent_schema: "public".into(),
+        parent: parent.into(),
+        child_schema: "public".into(),
+        child: child.into(),
+        bound: Some(bound.into()),
+        partition_key: None,
+    }
+}
+
+fn logs() -> Entity {
+    let mut logs = table(
+        "logs",
+        vec![not_null(col("at", "date")), col("line", "text")],
+    );
+    logs.kind = EntityKind::PartitionedTable;
+    logs.partition_key = Some("RANGE (at)".into());
+    logs.indexes.push(Index {
+        name: "logs_at_idx".into(),
+        unique: false,
+        partial: false,
+        definition: "CREATE INDEX logs_at_idx ON ONLY public.logs USING btree (at)".into(),
+    });
+    logs
+}
+
+const BOUND_2025: &str = "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')";
+
+#[test]
+fn a_partition_that_becomes_a_table_is_detached_not_dropped() {
+    let mut old = schema(vec![logs()]);
+    old.partitions
+        .push(partition("logs", "logs_2025", BOUND_2025));
+    let mut kept = table(
+        "logs_2025",
+        vec![not_null(col("at", "date")), col("line", "text")],
+    );
+    kept.indexes.push(Index {
+        name: "logs_2025_at_idx".into(),
+        unique: false,
+        partial: false,
+        definition: "CREATE INDEX logs_2025_at_idx ON public.logs_2025 USING btree (at)".into(),
+    });
+    let new = schema(vec![logs(), kept]);
+    let m = plan(&old, &new);
+    assert_eq!(
+        m.statements[0].sql,
+        "ALTER TABLE public.logs DETACH PARTITION public.logs_2025;"
+    );
+    assert!(
+        m.statements
+            .iter()
+            .all(|s| !s.sql.starts_with("DROP TABLE") && !s.sql.starts_with("CREATE TABLE")),
+        "{:#?}",
+        sqls(&m)
+    );
+    assert_eq!(m.destructive(), 0, "the rows stay");
+}
+
+#[test]
+fn a_table_that_becomes_a_partition_is_aligned_then_attached() {
+    let mut archive = table(
+        "logs_2025",
+        vec![
+            col("at", "date"),
+            col("line", "text"),
+            col("source", "text"),
+        ],
+    );
+    archive.comment = Some("Imported".into());
+    let old = schema(vec![logs(), archive]);
+    let mut new = schema(vec![logs()]);
+    new.partitions
+        .push(partition("logs", "logs_2025", BOUND_2025));
+    let m = plan(&old, &new);
+    let order = [
+        "ALTER TABLE public.logs_2025 ALTER COLUMN at SET NOT NULL;",
+        "ALTER TABLE public.logs_2025 DROP COLUMN source;",
+        "ALTER TABLE public.logs ATTACH PARTITION public.logs_2025 FOR VALUES",
+    ]
+    .map(|prefix| position(&m, prefix));
+    assert!(order.is_sorted(), "{order:?}: {:#?}", sqls(&m));
+    assert_eq!(
+        find(&m, "ALTER TABLE public.logs ATTACH PARTITION").hazard,
+        Some(Hazard::CanFail)
+    );
+    assert!(
+        m.statements
+            .iter()
+            .all(|s| !s.sql.starts_with("DROP TABLE"))
+    );
+    assert!(
+        m.warnings
+            .iter()
+            .all(|w| w.code != WarningCode::ColumnOrder),
+        "a partition matches columns by name"
+    );
+}
+
+#[test]
+fn identity_to_serial_drops_the_identity_before_its_sequence_name_is_reused() {
+    let mut identity = not_null(col("id", "bigint"));
+    identity.identity = Some(Identity::ByDefault);
+    let old = schema(vec![table("a", vec![identity])]);
+    let new = schema(vec![table(
+        "a",
+        vec![not_null(defaulting(
+            col("id", "bigint"),
+            "nextval('public.a_id_seq'::regclass)",
+        ))],
+    )]);
+    let m = plan(&old, &new);
+    let order = [
+        "ALTER TABLE public.a ALTER COLUMN id DROP IDENTITY;",
+        "CREATE SEQUENCE IF NOT EXISTS public.a_id_seq;",
+        "ALTER TABLE public.a ALTER COLUMN id SET DEFAULT nextval('public.a_id_seq'::regclass);",
+        "SELECT setval('public.a_id_seq', coalesce(max(id), 0) + 1, false) FROM public.a;",
+        "ALTER SEQUENCE public.a_id_seq OWNED BY public.a.id;",
+    ]
+    .map(|sql| position(&m, sql));
+    assert!(order.is_sorted(), "{order:?}: {:#?}", sqls(&m));
+    assert_eq!(find(&m, "SELECT setval").kind, Kind::SetSequence);
+
+    // And back: the serial sequence goes, the identity catches up.
+    let back = plan(&new, &old);
+    let order = [
+        "ALTER TABLE public.a ALTER COLUMN id DROP DEFAULT;",
+        "DROP SEQUENCE public.a_id_seq;",
+        "ALTER TABLE public.a ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY;",
+        "SELECT setval(pg_get_serial_sequence('public.a', 'id')",
+    ]
+    .map(|sql| position(&back, sql));
+    assert!(order.is_sorted(), "{order:?}: {:#?}", sqls(&back));
+}
+
+#[test]
+fn a_generated_column_loses_its_expression_before_the_column_it_reads_converts() {
+    let mut g = col("g", "integer");
+    g.generated = Some(remus_core::model::Generated::Stored);
+    g.default = Some("(a * 2)".into());
+    let old = schema(vec![table("t", vec![col("a", "integer"), g])]);
+    let new = schema(vec![table(
+        "t",
+        vec![col("a", "bigint"), col("g", "integer")],
+    )]);
+    let m = plan(&old, &new);
+    assert!(
+        position(&m, "ALTER TABLE public.t ALTER COLUMN g DROP EXPRESSION;")
+            < position(&m, "ALTER TABLE public.t ALTER COLUMN a TYPE bigint;")
+    );
+}
+
+fn moods(labels: &[&str], default: &str) -> Schema {
+    let mut column = mood_column();
+    column.default = Some(format!("'{default}'::public.mood"));
+    let mut s = schema(vec![table("days", vec![column])]);
+    s.enums.push(mood(labels));
+    s
+}
+
+#[test]
+fn a_down_migration_commits_the_enum_values_it_uses_in_a_migration_of_its_own() {
+    let (old, new) = (moods(&["ok", "sad"], "sad"), moods(&["ok"], "ok"));
+    let (up, down) = (plan(&old, &new), plan(&new, &old));
+    assert_eq!(
+        find(&down, "ALTER TYPE public.mood ADD VALUE 'sad'").stage,
+        Stage::Commit
+    );
+    for format in [Format::Dbmate, Format::GolangMigrate] {
+        let laid = files(&up, &down, format, &meta());
+        let main = laid
+            .iter()
+            .position(|f| f.path.contains("add_names.") || f.path.ends_with("add_names.sql"))
+            .expect("the main file");
+        let values = laid
+            .iter()
+            .position(|f| f.path.contains("_down_enum_values"))
+            .unwrap_or_else(|| panic!("{format:?}: a migration for the down's enum values"));
+        assert!(
+            values > main,
+            "{format:?}: after the main one, so its down runs first"
+        );
+        let down_text: String = laid
+            .iter()
+            .filter(|f| f.path.contains("_down_enum_values"))
+            .map(|f| f.content.clone())
+            .collect();
+        assert!(down_text.contains("ADD VALUE 'sad'"), "{down_text}");
+        let main_down: String = laid
+            .iter()
+            .filter(|f| !f.path.contains("_down_enum_values"))
+            .map(|f| f.content.clone())
+            .collect();
+        assert!(!main_down.contains("ADD VALUE"), "{format:?}: {main_down}");
+    }
+}
+
+#[test]
+fn removing_a_domain_check_recreates_the_domain_rather_than_guess_its_name() {
+    let domain = |checks: &[&str]| remus_core::model::DomainType {
+        schema: "public".into(),
+        name: "tag".into(),
+        base_type: "text".into(),
+        not_null: false,
+        default: None,
+        constraints: checks.iter().map(|c| (*c).into()).collect(),
+        comment: None,
+    };
+    let mut old = schema(Vec::new());
+    old.domains.push(domain(&[
+        "CHECK ((VALUE <> ''::text))",
+        "CHECK ((length(VALUE) < 40))",
+    ]));
+    let mut new = schema(Vec::new());
+    new.domains.push(domain(&["CHECK ((VALUE <> ''::text))"]));
+    let m = plan(&old, &new);
+    assert!(
+        m.statements
+            .iter()
+            .all(|s| !s.sql.contains("DROP CONSTRAINT")),
+        "{:#?}",
+        sqls(&m)
+    );
+    find(&m, "ALTER DOMAIN public.tag RENAME TO tag_old;");
+    find(
+        &m,
+        "CREATE DOMAIN public.tag AS text CHECK ((VALUE <> ''::text));",
+    );
+}
+
+#[test]
+fn what_can_fail_on_existing_rows_is_flagged_apart_from_what_deletes_data() {
+    let old = schema(vec![table(
+        "t",
+        vec![
+            col("a", "integer"),
+            col("n", "numeric(10,2)"),
+            col("gone", "text"),
+        ],
+    )]);
+    let mut new = schema(vec![table(
+        "t",
+        vec![col("a", "integer"), col("n", "integer")],
+    )]);
+    new.entities[0].constraints.push(Constraint {
+        name: "t_a_check".into(),
+        kind: ConstraintKind::Check,
+        definition: "CHECK ((a > 0))".into(),
+        columns: Vec::new(),
+        ..pk("t", "a")
+    });
+    new.entities[0].indexes.push(Index {
+        name: "t_a_key".into(),
+        unique: true,
+        partial: false,
+        definition: "CREATE UNIQUE INDEX t_a_key ON public.t USING btree (a)".into(),
+    });
+    let m = plan(&old, &new);
+    assert_eq!(
+        find(&m, "ALTER TABLE public.t ADD CONSTRAINT t_a_check").hazard,
+        Some(Hazard::CanFail)
+    );
+    assert_eq!(
+        find(&m, "CREATE UNIQUE INDEX t_a_key").hazard,
+        Some(Hazard::CanFail)
+    );
+    assert_eq!(
+        find(&m, "ALTER TABLE public.t ALTER COLUMN n TYPE integer").hazard,
+        Some(Hazard::DeletesData),
+        "rounds"
+    );
+    assert_eq!(
+        find(&m, "ALTER TABLE public.t DROP COLUMN gone").hazard,
+        Some(Hazard::DeletesData)
+    );
+    assert!(
+        m.statements
+            .iter()
+            .filter(|s| s.hazard.is_some())
+            .all(|s| s.destructive)
+    );
+
+    // Created with its table: nothing to fail on.
+    let fresh = plan(&schema(Vec::new()), &new);
+    assert!(
+        fresh.statements.iter().all(|s| s.hazard.is_none()),
+        "{:#?}",
+        sqls(&fresh)
+    );
+}
+
+fn guarded(policies: Vec<Policy>, rls: bool, forced: bool) -> Schema {
+    let mut docs = table("docs", vec![col("owner", "text")]);
+    docs.rls = rls;
+    docs.rls_forced = forced;
+    docs.policies = policies;
+    schema(vec![docs])
+}
+
+fn policy(name: &str, permissive: bool) -> Policy {
+    Policy {
+        name: name.into(),
+        command: PolicyCommand::Select,
+        permissive,
+        roles: vec!["app_user".into()],
+        using: Some("(owner = CURRENT_USER)".into()),
+        check: None,
+    }
+}
+
+#[test]
+fn what_widens_access_is_flagged_and_warned() {
+    let old = guarded(
+        vec![policy("only_mine", false), policy("own", true)],
+        true,
+        true,
+    );
+    let new = guarded(
+        vec![policy("own", true), policy("everyone", true)],
+        false,
+        false,
+    );
+    let m = plan(&old, &new);
+    for sql in [
+        "ALTER TABLE public.docs DISABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE public.docs NO FORCE ROW LEVEL SECURITY;",
+        "DROP POLICY only_mine ON public.docs;",
+        "CREATE POLICY everyone ON public.docs",
+    ] {
+        assert_eq!(find(&m, sql).hazard, Some(Hazard::WidensAccess), "{sql}");
+        assert!(!find(&m, sql).destructive);
+    }
+    let warned = m
+        .warnings
+        .iter()
+        .filter(|w| w.code == WarningCode::WidensAccess)
+        .count();
+    assert_eq!(warned, 4);
+
+    // A permissive policy dropped narrows access: noted, not flagged.
+    let narrower = guarded(Vec::new(), true, true);
+    let m = plan(&guarded(vec![policy("own", true)], true, true), &narrower);
+    let drop = find(&m, "DROP POLICY own ON public.docs;");
+    assert_eq!(drop.hazard, None);
+    assert!(
+        drop.note
+            .as_deref()
+            .is_some_and(|n| n.starts_with("Narrows access"))
+    );
+}
+
+#[test]
+fn archives_and_versions_come_from_the_migration_not_its_first_file() {
+    let flyway = meta_for(Format::Flyway);
+    assert_eq!(archive_name(Format::Flyway, &flyway), "V5__add_names.zip");
+    assert_eq!(
+        archive_name(Format::Sqlx, &meta()),
+        "20261016093000_add_names.zip"
+    );
+    // golang-migrate -seq numbering goes on with its padding.
+    let seq = Meta {
+        version: "000041".into(),
+        ..meta()
+    };
+    let (up, down) = with_index_concurrently();
+    let paths: Vec<String> = files(&up, &down, Format::GolangMigrate, &seq)
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    assert_eq!(paths[0], "000041_add_names.up.sql");
+    assert_eq!(
+        paths[2],
+        "000042_add_names_create_index_users_name_idx.up.sql"
+    );
+}
+
+#[test]
+fn a_prisma_concurrent_index_stands_alone_without_claiming_a_transaction() {
+    let (up, down) = with_index_concurrently();
+    let prisma = files(&up, &down, Format::Prisma, &meta());
+    let concurrent = &prisma[1].content;
+    assert!(
+        !concurrent.contains("run this statement yourself"),
+        "{concurrent}"
+    );
+    assert_eq!(
+        concurrent.matches(';').count(),
+        1,
+        "one statement: {concurrent}"
+    );
 }

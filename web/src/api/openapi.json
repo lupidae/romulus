@@ -1572,6 +1572,24 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "The first file's version, where the tool numbers its migrations:\nFlyway's `V<version>` (digits and dots; by default the target\nversion's number), or the number other tools put first (digits: a\ngolang-migrate sequence like `000042`; by default the time,\n`YYYYMMDDHHMMSS`). Files after it take the next ones.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sha256",
+            "in": "query",
+            "description": "SHA-256 of the SQL the person reviewed (the publish preview's): the\nmigration of exactly that text, or 409 `draft_changed`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1604,7 +1622,7 @@
             }
           },
           "409": {
-            "description": "`draft_published`: its version has the migration now",
+            "description": "`draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first",
             "content": {
               "application/json": {
                 "schema": {
@@ -2092,6 +2110,15 @@
             "name": "name",
             "in": "query",
             "description": "The description in file names (made file-name safe); by default the\ntarget version's message, or `v4_to_v5`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "The first file's version, where the tool numbers its migrations:\nFlyway's `V<version>` (digits and dots; by default the target\nversion's number), or the number other tools put first (digits: a\ngolang-migrate sequence like `000042`; by default the time,\n`YYYYMMDDHHMMSS`). Files after it take the next ones.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5267,18 +5294,18 @@
           "path",
           "content",
           "role",
-          "destructive"
+          "marks"
         ],
         "properties": {
           "content": {
             "type": "string"
           },
-          "destructive": {
+          "marks": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/MigrationLines"
+              "$ref": "#/components/schemas/MigrationMark"
             },
-            "description": "Where the destructive statements are (with their comments), for\nhighlighting."
+            "description": "Where the statements with a hazard are (with their comments), for\nhighlighting."
           },
           "path": {
             "type": "string",
@@ -5297,18 +5324,32 @@
           "config"
         ]
       },
-      "MigrationLines": {
+      "MigrationHazard": {
+        "type": "string",
+        "description": "What a statement risks, beyond changing the schema.",
+        "enum": [
+          "deletes_data",
+          "can_fail",
+          "widens_access"
+        ]
+      },
+      "MigrationMark": {
         "type": "object",
-        "description": "A range of lines, 1-based, both ends included.",
+        "description": "Lines of a file holding a statement with a hazard.",
         "required": [
           "from",
-          "to"
+          "to",
+          "hazard"
         ],
         "properties": {
           "from": {
             "type": "integer",
             "format": "int32",
+            "description": "1-based, both ends included.",
             "minimum": 0
+          },
+          "hazard": {
+            "$ref": "#/components/schemas/MigrationHazard"
           },
           "to": {
             "type": "integer",
@@ -5361,7 +5402,18 @@
           },
           "destructive": {
             "type": "boolean",
-            "description": "Deletes data (a dropped table, column or partition, a conversion\nthat can lose or reject values), or fails when existing rows break\nit (`SET NOT NULL`, a `NOT NULL` column without a default)."
+            "description": "`hazard` is `deletes_data` or `can_fail`: existing data is at stake."
+          },
+          "hazard": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationHazard",
+                "description": "What running it can do beyond changing the schema; `null` when\nnothing."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "kind": {
             "$ref": "#/components/schemas/MigrationStatementKind"
@@ -5402,6 +5454,8 @@
           "drop_domain",
           "create_sequence",
           "alter_sequence",
+          "drop_sequence",
+          "set_sequence",
           "create_table",
           "alter_table",
           "drop_table",
@@ -5466,7 +5520,7 @@
           "type_recreated",
           "table_recreated",
           "cast",
-          "constraint_name",
+          "widens_access",
           "foreign_table",
           "unsupported",
           "empty_schema"
@@ -6181,9 +6235,14 @@
           "statements",
           "warnings",
           "destructive",
-          "files"
+          "files",
+          "archive"
         ],
         "properties": {
+          "archive": {
+            "type": "string",
+            "description": "What the files download as together: `<version>_<name>.zip`."
+          },
           "destructive": {
             "type": "integer",
             "description": "How many statements delete data or can fail on existing rows.",

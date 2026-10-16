@@ -42,11 +42,16 @@ fn child(p: &Partition) -> Name {
 
 /// The entity at the top of `p`'s tree in `schema`.
 fn root<'s>(schema: &'s Schema, p: &Partition) -> Option<&'s Entity> {
-    let parents: BTreeMap<Name, &Partition> = schema.partitions.iter().map(|p| (child(p), p)).collect();
+    let parents: BTreeMap<Name, &Partition> =
+        schema.partitions.iter().map(|p| (child(p), p)).collect();
     let mut at = (p.parent_schema.clone(), p.parent.clone());
     let mut seen = BTreeSet::new();
     loop {
-        if let Some(e) = schema.entities.iter().find(|e| e.schema == at.0 && e.name == at.1) {
+        if let Some(e) = schema
+            .entities
+            .iter()
+            .find(|e| e.schema == at.0 && e.name == at.1)
+        {
             return Some(e);
         }
         if !seen.insert(at.clone()) {
@@ -60,13 +65,16 @@ fn root<'s>(schema: &'s Schema, p: &Partition) -> Option<&'s Entity> {
 /// Adds the missing side of every detach and attach to `old` and `new`.
 pub(crate) fn reconcile(old: &mut Schema, new: &mut Schema) -> Moves {
     let mut moves = Moves::default();
-    let has_entity = |s: &Schema, n: &Name| s.entities.iter().any(|e| e.schema == n.0 && e.name == n.1);
+    let has_entity =
+        |s: &Schema, n: &Name| s.entities.iter().any(|e| e.schema == n.0 && e.name == n.1);
     let has_partition = |s: &Schema, n: &Name| s.partitions.iter().any(|p| child(p) == *n);
 
     let mut predicted = Vec::new();
     for p in &old.partitions {
         let name = child(p);
-        if has_entity(new, &name) && !has_partition(new, &name) && !has_entity(old, &name)
+        if has_entity(new, &name)
+            && !has_partition(new, &name)
+            && !has_entity(old, &name)
             && let Some(entity) = root(old, p).map(|r| detached(r, p))
         {
             predicted.push(entity);
@@ -171,7 +179,11 @@ fn attached(table: &Entity, root: &Entity, p: &Partition) -> Entity {
         })
         .collect();
     let mut constraints = table.constraints.clone();
-    for check in root.constraints.iter().filter(|c| c.kind == ConstraintKind::Check) {
+    for check in root
+        .constraints
+        .iter()
+        .filter(|c| c.kind == ConstraintKind::Check)
+    {
         if !constraints.iter().any(|c| c.name == check.name) {
             constraints.push(Constraint {
                 comment: None,
@@ -195,7 +207,10 @@ fn attached(table: &Entity, root: &Entity, p: &Partition) -> Entity {
 /// The column names an index definition lists (`expr` for an
 /// expression), as Postgres names a partition's copy after them.
 fn index_columns(definition: &str) -> Vec<String> {
-    let Some(open) = definition.find(" USING ").and_then(|at| definition[at..].find('(').map(|o| at + o)) else {
+    let Some(open) = definition
+        .find(" USING ")
+        .and_then(|at| definition[at..].find('(').map(|o| at + o))
+    else {
         return Vec::new();
     };
     let mut depth = 0;
@@ -225,7 +240,11 @@ fn index_columns(definition: &str) -> Vec<String> {
             let word = p.split_whitespace().next().unwrap_or("");
             let bare = word.trim_matches('"');
             let plain = bare.chars().all(|c| c.is_alphanumeric() || c == '_') && !bare.is_empty();
-            if plain { bare.to_owned() } else { "expr".to_owned() }
+            if plain {
+                bare.to_owned()
+            } else {
+                "expr".to_owned()
+            }
         })
         .collect()
 }
@@ -234,7 +253,9 @@ fn index_columns(definition: &str) -> Vec<String> {
 /// name and table.
 fn index_on(definition: &str, name: &str, table: &str) -> String {
     let unique = definition.starts_with("CREATE UNIQUE INDEX ");
-    let rest = definition.find(" USING ").map_or("", |at| &definition[at..]);
+    let rest = definition
+        .find(" USING ")
+        .map_or("", |at| &definition[at..]);
     format!(
         "CREATE {}INDEX {} ON {table}{rest}",
         if unique { "UNIQUE " } else { "" },
@@ -244,11 +265,20 @@ fn index_on(definition: &str, name: &str, table: &str) -> String {
 
 /// Postgres's `ChooseRelationName`: `<name>_<columns>_<label>`, cut to 63
 /// bytes the way `makeObjectName` cuts it, numbered when taken.
-fn relation_name(table: &str, columns: &[String], label: &str, taken: &mut BTreeSet<String>) -> String {
+fn relation_name(
+    table: &str,
+    columns: &[String],
+    label: &str,
+    taken: &mut BTreeSet<String>,
+) -> String {
     let addition = columns.join("_");
     let mut n = 0;
     loop {
-        let suffix = if n == 0 { label.to_owned() } else { format!("{label}{n}") };
+        let suffix = if n == 0 {
+            label.to_owned()
+        } else {
+            format!("{label}{n}")
+        };
         let candidate = object_name(table, &addition, &suffix);
         if taken.insert(candidate.clone()) {
             return candidate;
@@ -295,7 +325,10 @@ mod tests {
     #[test]
     fn partition_copies_are_named_like_postgres_names_them() {
         let mut taken = BTreeSet::new();
-        assert_eq!(relation_name("logs_2025", &[], "pkey", &mut taken), "logs_2025_pkey");
+        assert_eq!(
+            relation_name("logs_2025", &[], "pkey", &mut taken),
+            "logs_2025_pkey"
+        );
         assert_eq!(
             relation_name("logs_2025", &["at".into()], "idx", &mut taken),
             "logs_2025_at_idx"
