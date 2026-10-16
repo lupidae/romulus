@@ -20,6 +20,7 @@ import * as Y from "yjs";
 import { appendTo } from "@/features/schema/edits/append";
 import { applyEdit, layoutChange, type LayoutChange } from "@/features/schema/edits/apply";
 import { type GraphEdit, sqlFor } from "@/features/schema/edits/edits";
+import { type GroupsChange, nextGroupName, regroup } from "@/features/schema/graph/groups";
 import { type Group, type GroupColor, type Layout, type Position } from "@/features/schema/layout";
 import { parseSchema, type Schema } from "@/features/schema/model";
 
@@ -514,32 +515,72 @@ export class DraftSession {
     write(moved, LOCAL);
   }
 
-  /** A new group of these tables, named and colored by default; its id. */
+  /**
+   * One step of someone's, alone in the undo history: never merged with
+   * what came just before or after (a move, a rename typed a moment ago).
+   */
+  private step(write: () => void) {
+    this.undo.stopCapturing();
+    this.doc.transact(write, LOCAL);
+    this.undo.stopCapturing();
+  }
+
+  private writeGroups(change: GroupsChange) {
+    for (const [id, g] of Object.entries(change.set)) this.groups.set(id, g);
+    for (const id of change.deleted) this.groups.delete(id);
+  }
+
+  /**
+   * A new group of these tables, named and colored by default; its id. A
+   * table belongs to one group: it leaves the others (a group left empty
+   * goes).
+   */
   createGroup(members: string[]): string {
-    const used = new Set([...this.groups.values()].map((g) => g.color));
+    const groups = Object.fromEntries(this.groups.entries());
+    const used = new Set(Object.values(groups).map((g) => g.color));
     const color =
       GROUP_ORDER.find((c) => !used.has(c)) ?? GROUP_ORDER[this.groups.size % GROUP_ORDER.length]!;
     const id = crypto.randomUUID().slice(0, 8);
-    const name = `Group ${this.groups.size + 1}`;
-    // A table belongs to one group: it leaves the others.
-    this.doc.transact(() => {
-      for (const [gid, g] of this.groups.entries()) {
-        const kept = g.members.filter((m) => !members.includes(m));
-        if (kept.length !== g.members.length) this.groups.set(gid, { ...g, members: kept });
-      }
-      this.groups.set(id, { name, color, members: [...new Set(members)] });
-    }, LOCAL);
+    const group: Group = { name: nextGroupName(groups), color, members: [] };
+    this.step(() => {
+      this.writeGroups(regroup({ ...groups, [id]: group }, members, id));
+    });
     return id;
   }
 
-  updateGroup(id: string, patch: Partial<Group>) {
+  updateGroup(id: string, patch: Partial<Pick<Group, "name" | "color">>) {
     const group = this.groups.get(id);
     if (!group) return;
-    this.doc.transact(() => this.groups.set(id, { ...group, ...patch }), LOCAL);
+    this.step(() => this.groups.set(id, { ...group, ...patch }));
   }
 
+  /** The group goes; its tables stay where they are. */
   deleteGroup(id: string) {
-    this.doc.transact(() => this.groups.delete(id), LOCAL);
+    if (!this.groups.has(id)) return;
+    this.step(() => this.groups.delete(id));
+  }
+
+  /** Tables into a group (null: out of theirs), from a menu. */
+  assignGroup(tables: string[], group: string | null) {
+    const change = regroup(Object.fromEntries(this.groups.entries()), tables, group);
+    if (Object.keys(change.set).length === 0 && change.deleted.length === 0) return;
+    this.step(() => this.writeGroups(change));
+  }
+
+  /**
+   * Tables moved by hand (a table dragged, a group dragged with all its
+   * tables) and, when the drop decided it, the group they belong to now:
+   * one transaction, one undo step, seen by everyone at once.
+   */
+  placeTables(positions: Layout, membership?: { tables: string[]; group: string | null }) {
+    const change = membership
+      ? regroup(Object.fromEntries(this.groups.entries()), membership.tables, membership.group)
+      : null;
+    this.step(() => {
+      for (const [key, p] of Object.entries(positions))
+        this.layout.set(key, { x: Math.round(p.x), y: Math.round(p.y) });
+      if (change) this.writeGroups(change);
+    });
   }
 
   /**

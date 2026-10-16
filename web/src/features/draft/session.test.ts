@@ -246,3 +246,96 @@ describe("a rewrite by the server (Tidy, Update draft)", () => {
     session.destroy();
   });
 });
+
+describe("groups", () => {
+  const local = () =>
+    new DraftSession("acme", "draft", {
+      local: {
+        sql: "",
+        layout: {
+          "public.users": { x: 0, y: 0 },
+          "public.sessions": { x: 300, y: 0 },
+          "public.orders": { x: 0, y: 400 },
+        },
+        groups: {
+          g: { name: "People", color: "blue", members: ["public.users", "public.sessions"] },
+        },
+        role: "developer",
+        compile: () => ({ model: null, diagnostics: [] }),
+      },
+    });
+
+  it("move with all their tables in one transaction that one undo takes back", () => {
+    const session = local();
+    // What a collaborator's doc receives: the whole move in one update.
+    const peer = new Y.Doc();
+    Y.applyUpdate(peer, Y.encodeStateAsUpdate(session.doc));
+    const updates: Uint8Array[] = [];
+    session.doc.on("update", (update: Uint8Array) => updates.push(update));
+
+    session.placeTables({
+      "public.users": { x: 50.4, y: 80 },
+      "public.sessions": { x: 350, y: 80 },
+    });
+    expect(updates).toHaveLength(1);
+    Y.applyUpdate(peer, updates[0]!);
+    expect(peer.getMap("layout").toJSON()).toMatchObject({
+      "public.users": { x: 50, y: 80 },
+      "public.sessions": { x: 350, y: 80 },
+    });
+
+    session.undo.undo();
+    expect(session.layout.get("public.users")).toEqual({ x: 0, y: 0 });
+    expect(session.layout.get("public.sessions")).toEqual({ x: 300, y: 0 });
+    session.destroy();
+  });
+
+  it("take in a table dropped on them, with its move, as one step", () => {
+    const session = local();
+    session.placeTables(
+      { "public.orders": { x: 100, y: 20 } },
+      { tables: ["public.orders"], group: "g" },
+    );
+    expect(session.groups.get("g")?.members).toContain("public.orders");
+    session.undo.undo();
+    expect(session.groups.get("g")?.members).not.toContain("public.orders");
+    expect(session.layout.get("public.orders")).toEqual({ x: 0, y: 400 });
+    session.destroy();
+  });
+
+  it("are made, renamed, recolored and deleted one undo step at a time", () => {
+    const session = local();
+    const id = session.createGroup(["public.orders", "public.users"]);
+    expect(session.groups.get(id)).toEqual({
+      name: "Group 2",
+      color: "teal",
+      members: ["public.orders", "public.users"],
+    });
+    // A table belongs to one group.
+    expect(session.groups.get("g")?.members).toEqual(["public.sessions"]);
+    session.updateGroup(id, { name: "Shop" });
+    session.updateGroup(id, { color: "amber" });
+    session.deleteGroup(id);
+    expect(session.groups.has(id)).toBe(false);
+
+    session.undo.undo();
+    expect(session.groups.get(id)).toMatchObject({ name: "Shop", color: "amber" });
+    session.undo.undo();
+    expect(session.groups.get(id)?.color).toBe("teal");
+    session.undo.undo();
+    expect(session.groups.get(id)?.name).toBe("Group 2");
+    session.undo.undo();
+    expect(session.groups.has(id)).toBe(false);
+    expect(session.groups.get("g")?.members).toEqual(["public.users", "public.sessions"]);
+    session.destroy();
+  });
+
+  it("go when their last table leaves, and come back with an undo", () => {
+    const session = local();
+    session.assignGroup(["public.users", "public.sessions"], null);
+    expect(session.groups.has("g")).toBe(false);
+    session.undo.undo();
+    expect(session.groups.get("g")?.members).toEqual(["public.users", "public.sessions"]);
+    session.destroy();
+  });
+});
