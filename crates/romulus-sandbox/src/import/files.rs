@@ -544,9 +544,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
         }
         match format {
             Format::Tool(Tool::Prisma) => unreachable!("handled above"),
-            Format::Read(ReadOnly::Alembic)
-            | Format::Read(ReadOnly::Django)
-            | Format::Read(ReadOnly::Rails) => {
+            Format::Read(ReadOnly::Alembic | ReadOnly::Django | ReadOnly::Rails) => {
                 let split =
                     export::split(format, &file.text).map_err(|message| PlanError::Malformed {
                         path: file.path.clone(),
@@ -583,7 +581,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     sql: file.text,
                 });
             }
-            Format::Tool(Tool::Sqlx) | Format::Tool(Tool::GolangMigrate) => {
+            Format::Tool(Tool::Sqlx | Tool::GolangMigrate) => {
                 if has_suffix(&name, ".down.sql") {
                     ignored.push(ignore(IgnoreReason::Down));
                     continue;
