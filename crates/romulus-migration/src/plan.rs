@@ -245,6 +245,8 @@ pub(crate) struct Planner<'a> {
     /// The names Postgres gave the old domains' unnamed checks, guessed:
     /// (schema, domain, definition) → name.
     check_names: BTreeMap<(String, String, String), String>,
+    /// Tables on either side of a foreign key added (quoted names).
+    keys_checked: Vec<String>,
     out: Vec<Planned>,
     warnings: Vec<Warning>,
 }
@@ -277,6 +279,7 @@ impl<'a> Planner<'a> {
             sequences: BTreeSet::new(),
             early_removals: false,
             check_names,
+            keys_checked: Vec::new(),
             out: Vec::new(),
             warnings: Vec::new(),
         }
@@ -294,6 +297,7 @@ impl<'a> Planner<'a> {
         self.drop_removed_tables();
         self.partitions();
         self.create_views();
+        self.unforce_for_foreign_keys();
         self.empty_schemas();
         self.finish()
     }
@@ -1519,6 +1523,10 @@ impl<'a> Planner<'a> {
 
     fn add_constraint(&mut self, table: &str, constraint: &Constraint, note: Option<String>) {
         let phase = if constraint.kind == ConstraintKind::ForeignKey {
+            self.keys_checked.push(table.to_owned());
+            if let (Some(schema), Some(target)) = (&constraint.ref_schema, &constraint.ref_table) {
+                self.keys_checked.push(qualified(schema, target));
+            }
             Phase::ForeignKeys
         } else {
             Phase::Constraints
@@ -2220,6 +2228,48 @@ impl<'a> Planner<'a> {
                     format!("ALTER TABLE {parent} ATTACH PARTITION {child} {bound};"),
                 )
                 .noted("Scans the partition to check every row fits the bound.");
+            }
+        }
+    }
+
+    /// Adding a foreign key checks the rows on both sides as the table
+    /// owner, through the policies of a table that forces row level
+    /// security, which fail when they read a setting the migration's
+    /// session lacks. `FORCE` is lifted around the checks.
+    fn unforce_for_foreign_keys(&mut self) {
+        let forced: Vec<(Name, &Entity)> = self
+            .old_entities
+            .iter()
+            .filter(|(n, e)| {
+                e.rls
+                    && e.rls_forced
+                    && !e.policies.is_empty()
+                    && self.new_entities.contains_key(*n)
+                    && !self.recreated.contains(*n)
+                    && self.keys_checked.contains(&table_name(e))
+            })
+            .map(|(n, e)| (n.clone(), *e))
+            .collect();
+        for (name, table) in forced {
+            let table_sql = table_name(table);
+            self.push(
+                Phase::Constraints,
+                Kind::RowLevelSecurity,
+                format!("ALTER TABLE {table_sql} NO FORCE ROW LEVEL SECURITY;"),
+            )
+            .noted("Lifted while the foreign keys below check existing rows: as the table owner they would go through its policies, which can fail outside the application's session. Forced again after.");
+            let still_forced = self.new_entities[&name].rls_forced;
+            let no_force = format!("ALTER TABLE {table_sql} NO FORCE ROW LEVEL SECURITY;");
+            // Its own NO FORCE (the new schema stops forcing) is done already.
+            self.out
+                .retain(|p| !(p.phase == Phase::Security && p.statement.sql == no_force));
+            if still_forced {
+                self.push(
+                    Phase::Security,
+                    Kind::RowLevelSecurity,
+                    format!("ALTER TABLE {table_sql} FORCE ROW LEVEL SECURITY;"),
+                )
+                .noted("Forced again, now that the foreign keys are checked.");
             }
         }
     }
