@@ -11,8 +11,11 @@ use crate::{
     live::{Client, live_app, quick, serve, version},
 };
 
-/// A model whose tables have these columns (name, type, not null).
-fn model(tables: &[(&str, &[(&str, &str, bool)])]) -> Value {
+/// A column: name, type, not null.
+type ColumnSpec<'a> = (&'a str, &'a str, bool);
+
+/// A model whose tables have these columns.
+fn model(tables: &[(&str, &[ColumnSpec])]) -> Value {
     let entities: Vec<Value> = tables
         .iter()
         .map(|(name, columns)| {

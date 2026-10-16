@@ -69,21 +69,19 @@ pub(super) async fn draft_migration(
             details: Some(json!({ "diagnostics": diagnostics })),
         });
     };
-    let old = match row.base_version {
-        Some(number) => {
-            let base = detail(&state.db, database.id, Some(number)).await?;
-            Schema::deserialize(&base.model).map_err(ApiError::internal)?
-        }
-        None => {
-            let mut empty = new.clone();
-            empty.entities.clear();
-            empty.enums.clear();
-            empty.domains.clear();
-            empty.composites.clear();
-            empty.partitions.clear();
-            empty.extensions.clear();
-            empty
-        }
+    let old = if let Some(number) = row.base_version {
+        let base = detail(&state.db, database.id, Some(number)).await?;
+        Schema::deserialize(&base.model).map_err(ApiError::internal)?
+    } else {
+        // Nothing yet: everything is created.
+        let mut empty = new.clone();
+        empty.entities.clear();
+        empty.enums.clear();
+        empty.domains.clear();
+        empty.composites.clear();
+        empty.partitions.clear();
+        empty.extensions.clear();
+        empty
     };
     let sides = Sides {
         old: &old,
