@@ -440,7 +440,10 @@ Two features, built in this order:
    the tools that have them (dbmate, golang-migrate), split the same way.
    Statements are flagged by what they risk: deleting data, failing on
    existing rows, widening access (row level security). A partition that
-   becomes a table (or the reverse) is detached (attached), keeping its rows.
+   becomes a table (or the reverse) is detached (attached), keeping its rows;
+   the names of a detached partition's keys and indexes are Postgres's
+   defaults, assumed and said so (the model does not list a partition's).
+   A draft's migration is of the text the person reviewed (its hash).
 
 ## Decided
 

@@ -244,7 +244,8 @@ Made in the skeleton (S0):
   renamed) is cached in `AppState::diffs` by the two version ids; a request
   resolves numbers to summaries first and loads full versions only on a miss.
 - **Migrations** (`versions::migration`, `GET …/migration?from=&to=&format=`;
-  `drafts::migration`, `GET …/drafts/{id}/migration?format=`, base → draft):
+  `drafts::migration`, `GET …/drafts/{id}/migration?format=&sha256=`, base →
+  draft; `sha256` of the text reviewed is required, 409 `draft_changed`):
   `romulus_migration::migration(old, new)` plans the statements (phases in
   `plan.rs`: what blocks a change dropped first, types, tables, keys, views,
   security, comments, then the removals), `files(up, down, format, meta)`
@@ -253,16 +254,25 @@ Made in the skeleton (S0):
   down migration (`migration(new, old)`). Each statement carries a
   `hazard`: `deletes_data`, `can_fail` (on existing rows) or
   `widens_access` (RLS off or unforced, a restrictive policy dropped, a
-  permissive one added or changed); `destructive` = the first two. Every
+  permissive one added or changed); `destructive` = the first two. A cast
+  that cuts values (to `name`, `"char"`, numeric → integer…) deletes data;
+  shortening `varchar(n)`/`bit(n)` converts without `USING`, so Postgres
+  refuses an overlong value (can fail) instead of cutting it. Every
   change kind is proven by the oracle (`crates/romulus-migration/tests/oracle`):
   the compile (`render_sql(old)` + the migration, in the sandbox, must
-  introspect as `new`) and the tool runs (`tools.rs`: each tool's files
-  applied as the tool applies them on a scratch database, up then down);
+  introspect as `new`), the tool runs (`tools.rs`: each tool's files
+  applied as the tool applies them on a scratch database, up then down;
+  scenarios also built from their own text) and the rows (`data.rs`: each
+  hazard against seeded rows: fails, or changes them, as labelled);
   scenarios, corpus pairs, random mutations; `ROMULUS_ORACLE_SEEDS=100` and
   `ROMULUS_ORACLE_TOOL_SEEDS=20` for a deep run. Change the planner, run it.
+  Without `ROMULUS_SANDBOX_URL` it skips, except in CI (`CI` set): it fails.
   Objects an extension owns (`extensions::PROVIDED`, checked against the
   sandbox catalog) are never created or dropped; partitions becoming tables
-  (and back) are detached and attached (`partitions.rs`), never dropped.
+  (and back) are detached and attached (`partitions.rs`), never dropped; the
+  model has no names for a partition's own keys and indexes, so a detached
+  one's are Postgres's defaults, guessed (`IF EXISTS`/`IF NOT EXISTS`, a
+  `guessed_names` warning).
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
   compiles), 429 `rate_limited` with `Retry-After`. Handlers that must decide
