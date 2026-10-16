@@ -29,6 +29,7 @@ import { modKey } from "@/lib/platform";
 
 import { usePublishDraft } from "../mutations";
 import { type Diagnostic, draftKeys, type PublishPreview, publishPreviewQuery } from "../queries";
+import { useApprovalGate } from "../use-approval-gate";
 
 interface PublishDialogProps {
   org: string;
@@ -116,18 +117,26 @@ function PublishBody({
   const number = data?.number ?? next;
   const errors = data?.diagnostics.filter((d) => d.severity === "error") ?? [];
   const changes = data ? changesOf(data) : [];
-  const blocked = !data || data.stale || errors.length > 0 || !data.diff;
+  const gate = useApprovalGate(data?.approvals);
+  const unpublishable = !data || data.stale || errors.length > 0 || !data.diff;
+  const blocked = unpublishable || gate.blocked;
 
   const submit = () => {
     if (!data || blocked || publish.isPending) return;
     setNotice(null);
     publish.mutate(
-      { sha256: data.sha256, message: message.trim() || undefined },
+      {
+        sha256: data.sha256,
+        message: message.trim() || undefined,
+        override_reason: gate.overrideReason,
+      },
       {
         onSuccess: (version) => onPublished(version.number),
         onError: (error) => {
           if (!(error instanceof ApiError)) return setNotice("Could not publish. Try again.");
-          if (["draft_changed", "validation", "stale_base"].includes(error.code)) {
+          if (
+            ["draft_changed", "validation", "stale_base", "approvals_required"].includes(error.code)
+          ) {
             // Show what is true now.
             void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) });
           }
@@ -226,6 +235,7 @@ function PublishBody({
         }}
         className="grid gap-4"
       >
+        {data && !data.stale && errors.length === 0 && gate.element}
         <Field label="Message" description="Optional. What changed, in a line, for the history.">
           <Input
             value={message}
@@ -235,7 +245,7 @@ function PublishBody({
             }}
             placeholder="Add invoices and their line items"
             maxLength={1000}
-            disabled={blocked}
+            disabled={unpublishable}
           />
         </Field>
         <DialogFooter>
@@ -248,7 +258,7 @@ function PublishBody({
             aria-keyshortcuts="Meta+Enter Control+Enter"
             title={`${modKey} Enter`}
           >
-            Publish v{number}
+            {gate.overrideReason ? `Publish v${number} without approvals` : `Publish v${number}`}
           </Button>
         </DialogFooter>
       </form>

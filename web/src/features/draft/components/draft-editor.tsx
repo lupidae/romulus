@@ -20,6 +20,7 @@ import { draftExtensions, jumpTo, nextConflict, showDiagnostics } from "../colla
 import { findConflicts } from "../conflicts";
 import { useUpdateDraft } from "../mutations";
 import { type Diagnostic, type Draft, draftKeys, draftQuery } from "../queries";
+import { names, resetApprovals } from "../review";
 import { type DraftSession, mayEdit, type SessionState } from "../session";
 import { useGraphEdits } from "../use-graph-edits";
 import {
@@ -91,6 +92,34 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
     if (versionCreated)
       void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
   }, [versionCreated, queryClient, org, db, draftId]);
+  // An admin removed or restored a version: maybe this draft's base.
+  const versionsChanged = state?.versionsChanged ?? null;
+  React.useEffect(() => {
+    if (!versionsChanged) return;
+    // The base as it was when it happened (before the refetch moves it).
+    const base = queryClient.getQueryData<Draft>(draftKeys.one(org, db, draftId))?.base_version;
+    void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
+    void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) });
+    const { kind, number, by } = versionsChanged;
+    if (kind === "removed" && number === base)
+      toast.warning(`${by} removed v${number}`, {
+        description: "This draft started from it: update the draft before publishing.",
+      });
+    else toast.info(`${by} ${kind} v${number}`);
+  }, [versionsChanged, queryClient, org, db, draftId]);
+  // An edit reset approvals: everyone hears it (the editor first of all).
+  const review = state?.review ?? null;
+  const previousReview = React.useRef(review);
+  React.useEffect(() => {
+    const before = previousReview.current;
+    previousReview.current = review;
+    if (!review) return;
+    const reset = resetApprovals(before, review);
+    if (reset.length > 0)
+      toast.info(reset.length === 1 ? "An approval was reset" : "Approvals were reset", {
+        description: `${names(reset)} approved an earlier version: the SQL changed since.`,
+      });
+  }, [review]);
   // Someone updated the draft to a newer version: its base moved.
   const updated = state?.updated ?? null;
   React.useEffect(() => {
@@ -354,6 +383,8 @@ export function Workspace({
         onUpdate={runUpdate}
         updating={update.isPending}
         onDeleted={onDeleted}
+        review={state?.review ?? null}
+        role={state?.role ?? null}
       />
       <Notice
         org={org}
@@ -421,7 +452,7 @@ export function Workspace({
           databaseName={draft.database.name}
           layout={layout}
           groups={groups}
-          next={(draft.latest_version ?? 0) + 1}
+          next={draft.next_version}
           open={publishing}
           onOpenChange={setPublishing}
           onJump={(d) => requestAnimationFrame(() => jump(d))}
@@ -564,6 +595,24 @@ function Notice({
             You’re viewing as a reviewer.{" "}
             <span className="font-normal text-muted-foreground">
               Everyone sees your cursor; only developers and admins can edit.
+            </span>
+          </>
+        }
+      />
+    );
+  }
+  if (draft.stale && draft.base_removed) {
+    return (
+      <Alert
+        variant="warning"
+        className={strip}
+        title={
+          <>
+            v{draft.base_version}, which this draft started from, was removed.{" "}
+            <span className="font-normal text-muted-foreground">
+              {draft.latest_version
+                ? `Update the draft to move it onto v${draft.latest_version}, then publish.`
+                : "Update the draft to keep its SQL as the database's next first version."}
             </span>
           </>
         }

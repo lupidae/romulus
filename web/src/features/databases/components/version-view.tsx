@@ -1,10 +1,12 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import {
   CheckIcon,
   ClockIcon,
+  EyeClosedIcon,
+  MoreHorizIcon,
   NavArrowDownIcon,
   NavArrowLeftIcon,
   NavArrowRightIcon,
@@ -23,6 +25,8 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { CompareWith } from "@/features/diff/components/compare-with";
 import { MigrationButton } from "@/features/imports/components/migration-dialog";
+import { orgQuery } from "@/features/orgs/queries";
+import { canManageMembers } from "@/features/orgs/roles";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
@@ -31,12 +35,14 @@ import { useShortcut } from "@/lib/use-shortcut";
 
 import {
   type Database,
+  neighbours,
   originLabel,
   versionQuery,
   versionsQuery,
   versionTextsQuery,
   type VersionDetail,
 } from "../queries";
+import { RemoveVersionDialog } from "./remove-version-dialog";
 import { Byline, OriginBadge } from "./version-meta";
 
 interface VersionViewProps {
@@ -133,15 +139,18 @@ function VersionStrip({
   version?: VersionDetail;
 }) {
   const navigate = useNavigate();
+  const { data: orgData } = useSuspenseQuery(orgQuery(org));
+  const [removing, setRemoving] = React.useState(false);
   const db = database.slug;
   const go = (n: number) =>
     n === latest
       ? navigate({ to: "/$org/$db", params: { org, db } })
       : navigate({ to: "/$org/$db/v/$number", params: { org, db, number: n } });
-  const older = number > 1 ? number - 1 : undefined;
-  const newer = number < latest ? number + 1 : undefined;
+  // Removed versions leave gaps: older and newer skip them.
+  const { older, newer } = neighbours(database, number);
   useShortcut("[", () => older && void go(older), !!older);
   useShortcut("]", () => newer && void go(newer), !!newer);
+  const admin = canManageMembers(orgData.role);
 
   return (
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-1.5 md:px-4">
@@ -206,8 +215,35 @@ function VersionStrip({
       )}
       <div className="ml-auto flex items-center gap-1">
         {version && <MigrationButton version={version} />}
-        <CompareWith org={org} db={db} number={number} latest={latest} />
+        <CompareWith org={org} db={db} number={number} latest={latest} previous={older} />
+        {admin && version && (
+          <Menu>
+            <Tooltip content={`More on v${number}`}>
+              <MenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={`More actions on v${number}`}>
+                  <MoreHorizIcon />
+                </Button>
+              </MenuTrigger>
+            </Tooltip>
+            <MenuContent align="end">
+              <MenuItem variant="destructive" onSelect={() => setRemoving(true)}>
+                <EyeClosedIcon />
+                Remove version…
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+        )}
       </div>
+      {admin && (
+        <RemoveVersionDialog
+          org={org}
+          database={database}
+          number={number}
+          open={removing}
+          onOpenChange={setRemoving}
+          onRemoved={() => void navigate({ to: "/$org/$db", params: { org, db } })}
+        />
+      )}
     </div>
   );
 }
@@ -244,7 +280,7 @@ function VersionPicker({
       <MenuContent align="start" className="w-80">
         <MenuLabel>Recent versions</MenuLabel>
         {versions.isPending
-          ? Array.from({ length: Math.min(latest, 5) }, (_, i) => (
+          ? Array.from({ length: Math.min(database.versions, 5) }, (_, i) => (
               <div key={i} className="mx-1 h-8 animate-pulse rounded-md bg-muted/60" />
             ))
           : recent.map((v) => (
@@ -272,7 +308,7 @@ function VersionPicker({
         <MenuItem asChild>
           <Link to="/$org/$db/history" params={{ org, db }}>
             <ClockIcon />
-            All {latest} versions
+            {database.versions === 1 ? "The only version" : `All ${database.versions} versions`}
           </Link>
         </MenuItem>
       </MenuContent>

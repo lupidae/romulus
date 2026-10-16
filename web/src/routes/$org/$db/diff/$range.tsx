@@ -58,7 +58,8 @@ export const Route = createFileRoute("/$org/$db/diff/$range")({
       // Newer than what this page knew: maybe pushed since.
       database = await queryClient.fetchQuery({ ...databaseQuery(org, db), staleTime: 0 });
     }
-    if (highest <= (database.latest?.number ?? 0)) {
+    const gone = database.missing.includes(range.from) || database.missing.includes(range.to);
+    if (highest <= (database.latest?.number ?? 0) && !gone) {
       void queryClient.prefetchQuery(diffQuery(org, db, database.id, range.from, range.to));
     }
   },
@@ -78,7 +79,9 @@ function Compare() {
   const latest = database.latest?.number ?? 0;
   const [pickerOpened, setPickerOpened] = React.useState(false);
   const versions = useInfiniteQuery({ ...versionsQuery(org, db), enabled: pickerOpened });
-  const missing = Math.max(from, to) > latest;
+  // Not there (yet), or removed.
+  const missing =
+    Math.max(from, to) > latest || database.missing.includes(from) || database.missing.includes(to);
   const view: View = search.view ?? "changes";
   const diff = useQuery({
     ...diffQuery(org, db, database.id, from, to),
@@ -232,7 +235,7 @@ function Compare() {
         allVersions={
           <Link to="/$org/$db/history" params={{ org, db }}>
             <ClockIcon />
-            All {latest} versions
+            All {database.versions} versions
           </Link>
         }
         actions={
@@ -271,7 +274,7 @@ function NoSuchComparison() {
       <EmptyState
         icon={<GitCompareIcon />}
         title="Nothing to compare here"
-        description="A comparison names two versions of this database, like /diff/3...4. One of these does not exist (yet)."
+        description="A comparison names two versions of this database, like /diff/3...4. One of these does not exist (yet), or was removed."
         action={
           <Button asChild>
             <Link to="/$org/$db/history" params={{ org, db }}>

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.removed_at AS \"removed_at!\", v.removal_reason AS \"reason!\",\n                  v.removed_at + make_interval(days => $3) AS \"restorable_until!\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  r.id AS \"remover_id?\", r.name AS \"remover_name?\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN users r ON r.id = v.removed_by\n           WHERE v.database_id = $1 AND v.removed_at IS NOT NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.removed_at DESC, v.number DESC",
+  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.removed_at AS \"removed_at!\", v.removal_reason AS \"reason!\",\n                  v.removed_at + make_interval(days => $3) AS \"restorable_until!\",\n                  v.removed_at > now() - make_interval(days => $3) AS \"restorable!\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  r.id AS \"remover_id?\", r.name AS \"remover_name?\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN users r ON r.id = v.removed_by\n           WHERE v.database_id = $1 AND v.removed_at IS NOT NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.removed_at DESC, v.number DESC",
   "describe": {
     "columns": [
       {
@@ -122,6 +122,12 @@
       },
       {
         "ordinal": 9,
+        "name": "restorable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
         "name": "user_id?",
         "type_info": "Uuid",
         "origin": {
@@ -132,7 +138,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "user_name?",
         "type_info": "Text",
         "origin": {
@@ -143,7 +149,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "token_id?",
         "type_info": "Uuid",
         "origin": {
@@ -154,7 +160,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "token_name?",
         "type_info": "Text",
         "origin": {
@@ -165,7 +171,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "remover_id?",
         "type_info": "Uuid",
         "origin": {
@@ -176,7 +182,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "remover_name?",
         "type_info": "Text",
         "origin": {
@@ -204,6 +210,7 @@
       true,
       true,
       null,
+      null,
       false,
       false,
       false,
@@ -212,5 +219,5 @@
       false
     ]
   },
-  "hash": "3a102de161fd93dfa0c39bea560189b2bf165e36189706b90012a9c613eabed8"
+  "hash": "203d616ced943bc0a7d70cdbf93c7ff8c4d8985edefdf7b4c36e132631ddc3c7"
 }

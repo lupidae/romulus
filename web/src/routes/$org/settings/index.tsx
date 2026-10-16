@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { meQuery } from "@/features/auth/queries";
+import { ApprovalsCard } from "@/features/orgs/components/approvals-card";
 import { useLeaveOrg, useUpdateOrg } from "@/features/orgs/mutations";
 import { membersQuery, type Org, orgQuery } from "@/features/orgs/queries";
 import { canManageMembers } from "@/features/orgs/roles";
@@ -39,6 +40,7 @@ function General() {
       />
       {/* Remounted on save, so the form starts from what was saved. */}
       <OrgForm key={`${org.id}:${org.name}:${org.slug}`} org={org} editable={admin} />
+      <ApprovalsCard org={org} editable={admin} />
       <LeaveCard org={org} />
     </>
   );

@@ -28,6 +28,7 @@ import type { Role } from "@/features/orgs/queries";
 
 import { type EditEntry, KEPT_EDITS, touchedEntities } from "./graph-edits";
 import type { CompileState, Diagnostic, LiveStatus, ServerEvent } from "./queries";
+import type { Review } from "./review";
 
 /** The server's own messages on the socket (crates/romulus-api/src/collab/protocol.rs). */
 export const MESSAGE_EVENT = 100;
@@ -78,6 +79,15 @@ export interface SessionState {
   compile: CompileView;
   /** The database got a new version meanwhile: its number. */
   versionCreated: number | null;
+  /** An admin removed or restored a version meanwhile (`seq` tells repeats apart). */
+  versionsChanged: {
+    kind: "removed" | "restored";
+    number: number;
+    by: string;
+    seq: number;
+  } | null;
+  /** Approvals and the review request, as the server counts them (null until it says). */
+  review: Review | null;
   /** The server closed the socket for good. */
   deleted: boolean;
   /** The session ended (signed out elsewhere, expired): sign in again. */
@@ -128,6 +138,20 @@ export function eventPatch(
       return { name: event.name };
     case "version_created":
       return { versionCreated: event.number };
+    case "version_removed":
+    case "version_restored":
+      return {
+        versionsChanged: {
+          kind: event.type === "version_removed" ? "removed" : "restored",
+          number: event.number,
+          by: event.by,
+          seq: (state.versionsChanged?.seq ?? 0) + 1,
+        },
+      };
+    case "review": {
+      const { type: _type, ...review } = event;
+      return { review };
+    }
     case "save_failed":
       return { saveFailed: true };
     case "updated":
@@ -240,6 +264,8 @@ export class DraftSession {
     name: null,
     compile: { state: "waiting", stale: true, diagnostics: [], model: null },
     versionCreated: null,
+    versionsChanged: null,
+    review: null,
     deleted: false,
     signedOut: false,
     tooLarge: false,

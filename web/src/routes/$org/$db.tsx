@@ -74,7 +74,7 @@ function DatabaseLayout() {
   const onDiff =
     !!matchRoute({ to: "/$org/$db/diff", params, fuzzy: true }) ||
     !!matchRoute({ to: "/$org/$db/import", params });
-  const latest = database.latest?.number;
+  const count = database.versions;
 
   return (
     <UploadContext.Provider value={writer ? openUpload : null}>
@@ -92,8 +92,8 @@ function DatabaseLayout() {
                 </h1>
                 <p className="truncate text-sm text-muted-foreground">
                   {database.description ||
-                    (latest
-                      ? `${latest === 1 ? "1 version" : `${latest} versions`}`
+                    (count > 0
+                      ? `${count === 1 ? "1 version" : `${count} versions`}`
                       : "No versions yet")}
                 </p>
               </div>
@@ -146,9 +146,9 @@ function DatabaseLayout() {
               >
                 <ClockIcon />
                 History
-                {latest !== undefined && (
+                {count > 0 && (
                   <span className="rounded-sm bg-muted px-1 text-xs text-muted-foreground tabular-nums">
-                    {latest}
+                    {count}
                   </span>
                 )}
               </Link>
@@ -171,7 +171,7 @@ function DatabaseLayout() {
         <UploadDialog
           org={org}
           db={db}
-          next={(latest ?? 0) + 1}
+          next={database.next_number}
           open={uploading}
           onOpenChange={setUploading}
           draft={draft}

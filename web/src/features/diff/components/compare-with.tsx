@@ -21,17 +21,20 @@ interface CompareWithProps {
   /** The version shown. */
   number: number;
   latest: number;
+  /** The version before it (removed ones skipped); none for the first. */
+  previous?: number;
 }
 
 /**
  * "Compare ▾" on a version: with the one before it, the latest, or any recent
  * one. The older of the two goes on the left.
  */
-export function CompareWith({ org, db, number, latest }: CompareWithProps) {
+export function CompareWith({ org, db, number, latest, previous }: CompareWithProps) {
   const [open, setOpen] = React.useState(false);
   const versions = useInfiniteQuery({ ...versionsQuery(org, db), enabled: open });
   const recent = (versions.data?.pages[0]?.versions ?? []).filter((v) => v.number !== number);
-  if (latest < 2) return null;
+  // The only version: nothing to compare it with.
+  if (previous === undefined && number >= latest) return null;
   const range = (other: number) => ({
     from: Math.min(number, other),
     to: Math.max(number, other),
@@ -47,11 +50,11 @@ export function CompareWith({ org, db, number, latest }: CompareWithProps) {
       </MenuTrigger>
       <MenuContent align="end" className="w-80">
         <MenuLabel>Compare v{number} with</MenuLabel>
-        {number > 1 && (
+        {previous !== undefined && (
           <MenuItem asChild>
-            <Link to="/$org/$db/diff/$range" params={{ org, db, range: range(number - 1) }}>
+            <Link to="/$org/$db/diff/$range" params={{ org, db, range: range(previous) }}>
               <span className="w-9 shrink-0 font-mono text-sm font-medium tabular-nums">
-                v{number - 1}
+                v{previous}
               </span>
               <span className="text-sm text-muted-foreground">The version before</span>
             </Link>
@@ -70,7 +73,7 @@ export function CompareWith({ org, db, number, latest }: CompareWithProps) {
         <MenuSeparator />
         <MenuLabel>Recent versions</MenuLabel>
         {versions.isPending
-          ? Array.from({ length: Math.min(latest - 1, 4) }, (_, i) => (
+          ? Array.from({ length: 4 }, (_, i) => (
               <div key={i} className="mx-1 h-8 animate-pulse rounded-md bg-muted/60" />
             ))
           : recent.slice(0, 10).map((v) => (

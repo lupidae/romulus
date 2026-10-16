@@ -27,6 +27,9 @@ const database = (slug: string, latest: Database["latest"]): Database => ({
   created_at: "2026-10-15T10:00:00Z",
   updated_at: "2026-10-15T10:00:00Z",
   latest,
+  versions: latest ? latest.number : 0,
+  next_number: (latest?.number ?? 0) + 1,
+  missing: [],
   last_activity_at: "2026-10-15T10:00:00Z",
 });
 

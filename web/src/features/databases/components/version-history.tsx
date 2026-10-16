@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-import { type Database, databaseKeys, versionsQuery } from "../queries";
+import { type Database, databaseKeys, neighbours, versionsQuery } from "../queries";
 import { Byline, OriginBadge } from "./version-meta";
 
 /**
@@ -39,7 +39,7 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
     }
   }, [newest, database.latest?.number, queryClient, org, db]);
 
-  if (versions.isPending) return <HistorySkeleton rows={Math.min(latest || 3, 6)} />;
+  if (versions.isPending) return <HistorySkeleton rows={Math.min(database.versions || 3, 6)} />;
   if (versions.isError) {
     return (
       <Alert
@@ -59,7 +59,7 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
   const pair = picked.length === 2 ? ([Math.min(...picked), Math.max(...picked)] as const) : null;
   return (
     <Card>
-      {latest > 1 && (
+      {database.versions > 1 && (
         <div className="flex min-h-12 items-center gap-3 border-b border-border px-4 py-2">
           <p className="min-w-0 flex-1 text-sm text-muted-foreground" aria-live="polite">
             {picked.length === 0
@@ -92,91 +92,95 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
         </div>
       )}
       <ol aria-label="Versions" className="divide-y divide-border">
-        {rows.map((v) => (
-          <li
-            key={v.id}
-            className={cn(
-              "group relative flex items-center gap-3 px-4 py-3 hover:bg-accent/60",
-              picked.includes(v.number) && "bg-accent/40",
-            )}
-          >
-            {latest > 1 && (
-              <Checkbox
-                aria-label={`Tick v${v.number} to compare`}
-                checked={picked.includes(v.number)}
-                onCheckedChange={(on) => toggle(v.number, on === true)}
-                className="z-1"
-              />
-            )}
-            {/* The row is the link (its ::after covers it); the box and the
-                compare button sit above it. */}
-            <Link
-              to={v.number === latest ? "/$org/$db" : "/$org/$db/v/$number"}
-              params={{ org, db, number: v.number }}
+        {rows.map((v) => {
+          // The version before it: removed ones skipped.
+          const before = neighbours(database, v.number).older;
+          return (
+            <li
+              key={v.id}
               className={cn(
-                "flex min-w-0 flex-1 items-center gap-3 outline-none",
-                "after:absolute after:inset-0 after:content-['']",
-                "focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset",
+                "group relative flex items-center gap-3 px-4 py-3 hover:bg-accent/60",
+                picked.includes(v.number) && "bg-accent/40",
               )}
             >
-              <span className="w-10 shrink-0 font-mono text-base font-semibold text-foreground tabular-nums">
-                v{v.number}
-              </span>
-              <span className="hidden w-20 shrink-0 sm:block">
-                <OriginBadge origin={v.origin} />
-              </span>
-              <span className="grid min-w-0 flex-1 gap-0.5">
-                <span className="flex min-w-0 items-center gap-2">
-                  <span
-                    className={cn(
-                      "truncate text-base",
-                      v.message ? "text-foreground" : "text-muted-foreground",
-                    )}
-                  >
-                    {v.message ?? "No message"}
-                  </span>
-                  {v.number === latest && <Badge variant="success">Latest</Badge>}
-                </span>
-                <Byline author={v.author} at={v.created_at} className="text-sm sm:hidden" />
-              </span>
-              <Byline
-                author={v.author}
-                at={v.created_at}
-                className="hidden shrink-0 text-sm sm:inline-flex"
-              />
-            </Link>
-            {v.number > 1 ? (
-              <Tooltip content={`Compare v${v.number - 1} → v${v.number}`}>
-                <Button variant="ghost" size="sm" asChild className="z-1 max-sm:px-2">
-                  <Link
-                    to="/$org/$db/diff/$range"
-                    params={{ org, db, range: { from: v.number - 1, to: v.number } }}
-                    aria-label={`Compare v${v.number - 1} → v${v.number}`}
-                  >
-                    <GitCompareIcon />
-                    <span className="max-sm:hidden">Compare</span>
-                  </Link>
-                </Button>
-              </Tooltip>
-            ) : (
-              // Keeps the column at the button's exact width: v1 has nothing before it.
-              <Button
-                variant="ghost"
-                size="sm"
-                tabIndex={-1}
-                aria-hidden
-                className="invisible max-sm:px-2"
+              {database.versions > 1 && (
+                <Checkbox
+                  aria-label={`Tick v${v.number} to compare`}
+                  checked={picked.includes(v.number)}
+                  onCheckedChange={(on) => toggle(v.number, on === true)}
+                  className="z-1"
+                />
+              )}
+              {/* The row is the link (its ::after covers it); the box and the
+                compare button sit above it. */}
+              <Link
+                to={v.number === latest ? "/$org/$db" : "/$org/$db/v/$number"}
+                params={{ org, db, number: v.number }}
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-3 outline-none",
+                  "after:absolute after:inset-0 after:content-['']",
+                  "focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset",
+                )}
               >
-                <GitCompareIcon />
-                <span className="max-sm:hidden">Compare</span>
-              </Button>
-            )}
-            <NavArrowRightIcon
-              aria-hidden
-              className="size-4 shrink-0 text-faint-foreground transition-transform group-hover:translate-x-0.5"
-            />
-          </li>
-        ))}
+                <span className="w-10 shrink-0 font-mono text-base font-semibold text-foreground tabular-nums">
+                  v{v.number}
+                </span>
+                <span className="hidden w-20 shrink-0 sm:block">
+                  <OriginBadge origin={v.origin} />
+                </span>
+                <span className="grid min-w-0 flex-1 gap-0.5">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={cn(
+                        "truncate text-base",
+                        v.message ? "text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      {v.message ?? "No message"}
+                    </span>
+                    {v.number === latest && <Badge variant="success">Latest</Badge>}
+                  </span>
+                  <Byline author={v.author} at={v.created_at} className="text-sm sm:hidden" />
+                </span>
+                <Byline
+                  author={v.author}
+                  at={v.created_at}
+                  className="hidden shrink-0 text-sm sm:inline-flex"
+                />
+              </Link>
+              {before !== undefined ? (
+                <Tooltip content={`Compare v${before} → v${v.number}`}>
+                  <Button variant="ghost" size="sm" asChild className="z-1 max-sm:px-2">
+                    <Link
+                      to="/$org/$db/diff/$range"
+                      params={{ org, db, range: { from: before, to: v.number } }}
+                      aria-label={`Compare v${before} → v${v.number}`}
+                    >
+                      <GitCompareIcon />
+                      <span className="max-sm:hidden">Compare</span>
+                    </Link>
+                  </Button>
+                </Tooltip>
+              ) : (
+                // Keeps the column at the button's exact width: v1 has nothing before it.
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  tabIndex={-1}
+                  aria-hidden
+                  className="invisible max-sm:px-2"
+                >
+                  <GitCompareIcon />
+                  <span className="max-sm:hidden">Compare</span>
+                </Button>
+              )}
+              <NavArrowRightIcon
+                aria-hidden
+                className="size-4 shrink-0 text-faint-foreground transition-transform group-hover:translate-x-0.5"
+              />
+            </li>
+          );
+        })}
       </ol>
       {versions.hasNextPage && (
         <div className="border-t border-border px-4 py-3">

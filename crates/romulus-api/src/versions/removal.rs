@@ -79,6 +79,8 @@ pub struct RemovedVersion {
     pub reason: String,
     /// It can be restored until then, and is purged soon after.
     pub restorable_until: DateTime<Utc>,
+    /// It still can be (`restorable_until` is to come).
+    pub restorable: bool,
 }
 
 /// Hides a version: see the module documentation. Admins.
@@ -329,6 +331,7 @@ async fn list(
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
                   v.removed_at AS "removed_at!", v.removal_reason AS "reason!",
                   v.removed_at + make_interval(days => $3) AS "restorable_until!",
+                  v.removed_at > now() - make_interval(days => $3) AS "restorable!",
                   u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
                   r.id AS "remover_id?", r.name AS "remover_name?"
            FROM versions v
@@ -362,6 +365,7 @@ async fn list(
                 .map(|(id, name)| Person { id, name }),
             reason: r.reason,
             restorable_until: r.restorable_until,
+            restorable: r.restorable,
         })
         .collect())
 }

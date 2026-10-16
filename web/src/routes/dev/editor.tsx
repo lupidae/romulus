@@ -51,12 +51,15 @@ const draft: Draft = {
   database: { id: "dev-db", slug: "blog", name: "blog" },
   base_version: 3,
   latest_version: 3,
+  next_version: 4,
   stale: false,
+  base_removed: false,
   published_version: null,
   created_by: { id: "u-alice", name: "Alice Martin" },
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
   present: [],
+  review: { required: 0, approvals: 0, requested: null },
 };
 
 function error(from: number, to: number, message: string): Diagnostic {

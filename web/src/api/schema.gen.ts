@@ -245,7 +245,10 @@ export interface paths {
     delete?: never;
     options?: never;
     head?: never;
-    /** Renames an organization, or moves it to another slug. Admins only. */
+    /**
+     * Renames an organization, moves it to another slug, or changes how many
+     *     approvals publishing needs. Admins only.
+     */
     patch: operations["update_org"];
     trace?: never;
   };
@@ -291,6 +294,23 @@ export interface paths {
      *     description. Developers and admins.
      */
     patch: operations["update_database"];
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/activity": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The database's audit events, newest first. Developers and admins. */
+    get: operations["list_activity"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   "/api/orgs/{org}/databases/{db}/compile": {
@@ -373,6 +393,24 @@ export interface paths {
     patch: operations["rename_draft"];
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/approvals": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Approves the draft's SQL as the caller reviewed it. */
+    post: operations["approve_draft"];
+    /** Takes the caller's approval back. */
+    delete: operations["withdraw_approval"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/drafts/{id}/migration": {
     parameters: {
       query?: never;
@@ -403,6 +441,24 @@ export interface paths {
     /** Publishes the draft as the next version. */
     post: operations["publish_draft"];
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** "Request review": the drafts list shows the draft waits for one. */
+    post: operations["request_review"];
+    /** The draft no longer waits for a review. */
+    delete: operations["cancel_review_request"];
     options?: never;
     head?: never;
     patch?: never;
@@ -552,6 +608,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/versions/removed": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The database's removed versions, most recently removed first. Developers
+     *     and admins.
+     */
+    get: operations["list_removed_versions"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/versions/{number}": {
     parameters: {
       query?: never;
@@ -563,6 +639,40 @@ export interface paths {
     get: operations["get_version"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/remove": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Hides a version: see the module documentation. Admins. */
+    post: operations["remove_version"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/restore": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Brings a removed version back, within [`RESTORE_DAYS`] days. Admins. */
+    post: operations["restore_version"];
     delete?: never;
     options?: never;
     head?: never;
@@ -700,6 +810,15 @@ export interface components {
       already_member: boolean;
       org: components["schemas"]["Org"];
     };
+    /** @description A page of events, newest first. */
+    ActivityPage: {
+      events: components["schemas"]["AuditEvent"][];
+      /**
+       * Format: uuid
+       * @description Pass as `before` for the next page; `null` on the last one.
+       */
+      next_before?: string | null;
+    };
     /** @description An API token, without its secret. */
     ApiToken: {
       /** Format: date-time */
@@ -716,6 +835,13 @@ export interface components {
       /** @description What it is for: "GitHub Actions", "remus on prod". */
       name: string;
       scope: components["schemas"]["TokenScope"];
+    };
+    ApproveDraft: {
+      /**
+       * @description SHA-256 (hex) of the SQL the person reviewed: an approval is of one
+       *     text.
+       */
+      sha256: string;
     };
     /**
      * @description A change to one attribute of a composite type.
@@ -743,6 +869,46 @@ export interface components {
       name: string;
       position: components["schemas"]["Positions"];
       status: components["schemas"]["Status"];
+    };
+    /**
+     * @description What an audit event records (`audit_action`).
+     * @enum {string}
+     */
+    AuditAction: "version_removed" | "version_restored" | "version_purged" | "approvals_overridden";
+    /**
+     * @description What an event says beyond who, when and which version; the fields its
+     *     action has.
+     */
+    AuditDetails: {
+      /**
+       * Format: int32
+       * @description The approvals it had, and how many the organization required.
+       */
+      approvals?: number | null;
+      /**
+       * Format: uuid
+       * @description The draft published (approvals overridden).
+       */
+      draft_id?: string | null;
+      draft_name?: string | null;
+      /** @description The version's message (versions removed, restored, purged). */
+      message?: string | null;
+      /** Format: int32 */
+      required?: number | null;
+    };
+    /** @description One event of the log. */
+    AuditEvent: {
+      action: components["schemas"]["AuditAction"];
+      actor?: components["schemas"]["Person"] | null;
+      /** Format: date-time */
+      created_at: string;
+      details: components["schemas"]["AuditDetails"];
+      /** Format: uuid */
+      id: string;
+      /** @description Why, as they wrote it (removals, overrides). */
+      reason?: string | null;
+      /** Format: int32 */
+      version_number?: number | null;
     };
     AuthMethods: {
       /** @description The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`). */
@@ -1051,11 +1217,26 @@ export interface components {
        */
       last_activity_at: string;
       latest?: components["schemas"]["VersionSummary"] | null;
+      /**
+       * @description Numbers below `latest`'s that have no version: removed, or purged
+       *     30 days after (the history skips them).
+       */
+      missing: number[];
       name: string;
+      /**
+       * Format: int32
+       * @description The number the next version gets: numbers are never given twice.
+       */
+      next_number: number;
       /** @description Its address: `/app/<org>/<slug>`. */
       slug: string;
       /** Format: date-time */
       updated_at: string;
+      /**
+       * Format: int64
+       * @description How many versions it has (removed ones not counted).
+       */
+      versions: number;
     };
     /**
      * @description One message about the SQL, located in the text the user wrote (never in
@@ -1138,6 +1319,11 @@ export interface components {
     /** @description A draft, as the database page and the editor show it. */
     Draft: {
       /**
+       * @description Its base version was removed (it is stale: "Update draft" moves it
+       *     onto the latest version left).
+       */
+      base_removed: boolean;
+      /**
        * Format: int32
        * @description The version it started from; `null` when the database had none.
        */
@@ -1154,6 +1340,11 @@ export interface components {
        */
       latest_version?: number | null;
       name: string;
+      /**
+       * Format: int32
+       * @description The number publishing would give it (numbers are never given twice).
+       */
+      next_version: number;
       /** @description Who has it open right now. */
       present: components["schemas"]["Present"][];
       /**
@@ -1161,9 +1352,11 @@ export interface components {
        * @description The version it became, once published.
        */
       published_version?: number | null;
+      /** @description Approvals and the review request. */
+      review: components["schemas"]["DraftReview"];
       /**
-       * @description Someone published since the draft started: publishing it needs
-       *     "Update draft" first.
+       * @description Someone published since the draft started, or its base version was
+       *     removed: publishing it needs "Update draft" first.
        */
       stale: boolean;
       status: components["schemas"]["DraftStatus"];
@@ -1178,6 +1371,21 @@ export interface components {
       id: string;
       name: string;
       slug: string;
+    };
+    /** @description Where a draft's review stands, as the drafts list shows it. */
+    DraftReview: {
+      /**
+       * Format: int32
+       * @description Approvals that count now: of the SQL as it is, by members who did
+       *     not edit it.
+       */
+      approvals: number;
+      requested?: components["schemas"]["ReviewRequest"] | null;
+      /**
+       * Format: int32
+       * @description Approvals publishing needs (the organization's setting); 0: none.
+       */
+      required: number;
     };
     /**
      * @description A draft's lifecycle (`draft_status`).
@@ -1767,6 +1975,12 @@ export interface components {
       | "guessed_names";
     /** @description An organization, as one of its members sees it. */
     Org: {
+      /**
+       * Format: int32
+       * @description Approvals publishing a draft needs, from members who did not edit
+       *     it; 0: none (pushes and imports are never gated).
+       */
+      approvals_required: number;
       /** Format: uuid */
       id: string;
       name: string;
@@ -1957,14 +2171,33 @@ export interface components {
       /** Format: uuid */
       user_id: string;
     };
+    /** @description What publishing would need, for the publish dialog. */
+    PublishApprovals: {
+      /** @description Who approved the SQL previewed, without having edited it. */
+      approved_by: components["schemas"]["Person"][];
+      /** @description The caller may publish without them, saying why (admins). */
+      can_override: boolean;
+      /**
+       * Format: int32
+       * @description Approvals publishing needs; 0: none.
+       */
+      required: number;
+    };
     PublishDraft: {
       /** @description What changed, in a line (at most 1000 characters). */
       message?: string | null;
+      /**
+       * @description Publish without the approvals the organization requires, saying why
+       *     (admins; the audit log keeps it).
+       */
+      override_reason?: string | null;
       /** @description The `sha256` of the preview the person confirmed. */
       sha256: string;
     };
     /** @description What publishing the draft now would create. */
     PublishPreview: {
+      /** @description The approvals the organization requires, and who approved this SQL. */
+      approvals: components["schemas"]["PublishApprovals"];
       /** @description The base version's model, for drawing the diff. */
       base_model?: Record<string, never> | null;
       /** Format: int32 */
@@ -2005,9 +2238,50 @@ export interface components {
       name: string;
       schema: string;
     };
+    RemoveVersion: {
+      /**
+       * @description Why, for the audit log and whoever restores it (1 to 1000
+       *     characters).
+       */
+      reason: string;
+    };
+    /** @description A removed version, until it is purged. */
+    RemovedVersion: {
+      reason: string;
+      /** Format: date-time */
+      removed_at: string;
+      removed_by?: components["schemas"]["Person"] | null;
+      /** @description It still can be (`restorable_until` is to come). */
+      restorable: boolean;
+      /**
+       * Format: date-time
+       * @description It can be restored until then, and is purged soon after.
+       */
+      restorable_until: string;
+      version: components["schemas"]["VersionSummary"];
+    };
     RenameDraft: {
       /** @description 1 to 200 characters. */
       name: string;
+    };
+    /** @description One member's approval, as the people in the draft see it. */
+    ReviewApproval: {
+      /** Format: date-time */
+      at: string;
+      name: string;
+      /** Format: uuid */
+      user_id: string;
+    };
+    /** @description A draft's editors asked for a review ("Request review"). */
+    ReviewRequest: {
+      /** Format: date-time */
+      at: string;
+      name?: string | null;
+      /**
+       * Format: uuid
+       * @description `null` once their account is gone.
+       */
+      user_id?: string | null;
     };
     /**
      * @description A member's role in an organization (`member_role`).
@@ -2124,6 +2398,39 @@ export interface components {
           number: number;
           /** @enum {string} */
           type: "version_created";
+        }
+      | {
+          by: string;
+          /** Format: int32 */
+          number: number;
+          /** @enum {string} */
+          type: "version_removed";
+        }
+      | {
+          by: string;
+          /** Format: int32 */
+          number: number;
+          /** @enum {string} */
+          type: "version_restored";
+        }
+      | {
+          /**
+           * @description Approvals of the SQL as it is now, by members who did not edit
+           *     it, oldest first: these count.
+           */
+          approvals: components["schemas"]["ReviewApproval"][];
+          /** @description Who changed the SQL: they cannot approve it. */
+          editors: string[];
+          /** @description Approvals of an earlier text: an edit since reset them. */
+          outdated: components["schemas"]["ReviewApproval"][];
+          requested?: components["schemas"]["ReviewRequest"] | null;
+          /**
+           * Format: int32
+           * @description Approvals publishing needs (the organization's setting); 0: none.
+           */
+          required: number;
+          /** @enum {string} */
+          type: "review";
         }
       | {
           /** @enum {string} */
@@ -2305,6 +2612,11 @@ export interface components {
       slug?: string | null;
     };
     UpdateOrg: {
+      /**
+       * Format: int32
+       * @description 0 (none) to 10.
+       */
+      approvals_required?: number | null;
       name?: string | null;
       /** @description Changing it changes every link to the organization. */
       slug?: string | null;
@@ -2432,7 +2744,8 @@ export interface components {
       message?: string | null;
       /**
        * Format: int32
-       * @description 1, 2, 3… per database, without gaps.
+       * @description 1, 2, 3… per database, never given twice (a removed version leaves
+       *     its number unused).
        */
       number: number;
       origin: components["schemas"]["VersionOrigin"];
@@ -3353,6 +3666,51 @@ export interface operations {
       };
     };
   };
+  list_activity: {
+    parameters: {
+      query?: {
+        /** @description Events older than this one (from `next_before`). */
+        before?: string;
+        /** @description 1 to 100; 50 by default. */
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ActivityPage"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   compile_sql: {
     parameters: {
       query?: never;
@@ -3683,6 +4041,99 @@ export interface operations {
       };
     };
   };
+  approve_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ApproveDraft"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DraftReview"];
+        };
+      };
+      /** @description `edited_draft`: they edited it, someone else approves */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_changed` (review again), `approvals_off`, `draft_busy` (being published or updated), `draft_published` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The draft could not be loaded */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  withdraw_approval: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DraftReview"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   draft_migration: {
     parameters: {
       query: {
@@ -3898,6 +4349,94 @@ export interface operations {
       };
       /** @description The compiler is unavailable */
       503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  request_review: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DraftReview"];
+        };
+      };
+      /** @description Reviewers do not request reviews */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_published` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  cancel_review_request: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DraftReview"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };
@@ -4588,6 +5127,46 @@ export interface operations {
       };
     };
   };
+  list_removed_versions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RemovedVersion"][];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   get_version: {
     parameters: {
       query?: never;
@@ -4613,6 +5192,123 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  remove_version: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The version's number */
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RemoveVersion"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RemovedVersion"];
+        };
+      };
+      /** @description Only admins remove versions */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `version_removed`: it already is */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`: no reason, or too long */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  restore_version: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The version's number */
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionSummary"];
+        };
+      };
+      /** @description Only admins restore versions */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `version_not_removed`, `restore_expired` (removed more than 30 days ago), `migration_imported_again` (its migration was imported again since) */
+      409: {
         headers: {
           [name: string]: unknown;
         };

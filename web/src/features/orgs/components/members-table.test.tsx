@@ -19,7 +19,13 @@ const member = (id: string, name: string, role: OrgMember["role"]): OrgMember =>
   joined_at: "2026-10-15T12:00:00Z",
 });
 const members = [member("a", "Alice", "admin"), member("b", "Bob", "developer")];
-const org = (role: Org["role"]): Org => ({ id: "o", slug: "acme", name: "Acme", role });
+const org = (role: Org["role"]): Org => ({
+  id: "o",
+  slug: "acme",
+  name: "Acme",
+  role,
+  approvals_required: 0,
+});
 
 function renderTable(ui: React.ReactElement) {
   const client = new QueryClient();

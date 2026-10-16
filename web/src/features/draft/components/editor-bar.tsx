@@ -29,10 +29,14 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
+import type { Role } from "@/features/orgs/queries";
+
 import { useDeleteDraft, useRenameDraft, useTidyDraft } from "../mutations";
 import type { Diagnostic, Draft } from "../queries";
+import { type Review, reviewing } from "../review";
 import type { CompileView, Connection, Peer } from "../session";
 import { CompileStatus } from "./compile-status";
+import { ReviewControl } from "./review-control";
 
 interface EditorBarProps {
   org: string;
@@ -65,6 +69,10 @@ interface EditorBarProps {
   onUpdate: () => void;
   updating: boolean;
   onDeleted: () => void;
+  /** Approvals, when the organization asks for some (the server's `review`). */
+  review: Review | null;
+  /** This connection's role, as the server sees it. */
+  role: Role | null;
 }
 
 /**
@@ -171,6 +179,18 @@ export function EditorBar(props: EditorBarProps) {
               </MenuItem>
             </MenuContent>
           </Menu>
+        )}
+        {reviewing(props.review) && open && (
+          <ReviewControl
+            org={org}
+            db={db}
+            draftId={draft.id}
+            review={props.review}
+            meId={meId}
+            role={props.role}
+            open={props.canEdit || props.role === "reviewer"}
+            sql={props.sql}
+          />
         )}
         {isWriter && open && (
           <PublishButton
@@ -279,19 +299,22 @@ function PublishButton({
   onUpdate: () => void;
   onNextConflict: () => void;
 }) {
-  const next = (draft.latest_version ?? 0) + 1;
+  const next = draft.next_version;
   if (draft.stale) {
+    // Someone published, or an admin removed the version it started from.
+    const why = draft.base_removed
+      ? `v${draft.base_version} was removed`
+      : `v${draft.latest_version} is out`;
     return (
       <Button
         variant="primary"
         loading={updating}
         onClick={onUpdate}
-        aria-label={`Update draft (v${draft.latest_version} is out)`}
+        aria-label={`Update draft (${why})`}
       >
         <span className="sm:hidden">Update</span>
         <span className="max-sm:hidden">
-          Update draft{" "}
-          <span className="font-normal opacity-80">(v{draft.latest_version} is out)</span>
+          Update draft <span className="font-normal opacity-80">({why})</span>
         </span>
       </Button>
     );

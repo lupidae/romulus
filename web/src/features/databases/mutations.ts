@@ -3,6 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, succeed, unwrap } from "@/api/client";
 import type { components } from "@/api/schema.gen";
 
+import { draftKeys } from "@/features/draft/queries";
+
 import { type ApiToken, type Database, databaseKeys, type TokenScope } from "./queries";
 
 type CreateDatabase = components["schemas"]["CreateDatabase"];
@@ -114,5 +116,51 @@ export function useRevokeToken(org: string, db: string) {
     },
     onError: (_error, _id, context) => queryClient.setQueryData(key, context?.previous),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: key }),
+  });
+}
+
+/** Everything a removal or a restore changes: the latest version, the history, drafts' bases. */
+function versionsMoved(queryClient: ReturnType<typeof useQueryClient>, org: string, db: string) {
+  for (const key of [
+    databaseKeys.one(org, db),
+    databaseKeys.versions(org, db),
+    databaseKeys.removed(org, db),
+    databaseKeys.activity(org, db),
+    draftKeys.list(org, db),
+  ])
+    void queryClient.invalidateQueries({ queryKey: key });
+  void queryClient.invalidateQueries({ queryKey: databaseKeys.list(org), exact: true });
+}
+
+/** Removes a version (admins), saying why. */
+export function useRemoveVersion(org: string, db: string, databaseId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ number, reason }: { number: number; reason: string }) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/versions/{number}/remove", {
+          params: { path: { org, db, number } },
+          body: { reason },
+        }),
+      ),
+    onSuccess: (_removed, { number }) => {
+      // Cached forever while it was live; gone now.
+      queryClient.removeQueries({ queryKey: ["versions", databaseId, number] });
+      versionsMoved(queryClient, org, db);
+    },
+  });
+}
+
+/** Restores a removed version (admins, within 30 days). */
+export function useRestoreVersion(org: string, db: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (number: number) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/versions/{number}/restore", {
+          params: { path: { org, db, number } },
+        }),
+      ),
+    onSuccess: () => versionsMoved(queryClient, org, db),
   });
 }

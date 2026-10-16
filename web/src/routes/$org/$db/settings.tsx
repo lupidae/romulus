@@ -12,14 +12,17 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
+import { Activity } from "@/features/databases/components/activity";
 import { ApiTokens } from "@/features/databases/components/api-tokens";
+import { RemovedVersions } from "@/features/databases/components/removed-versions";
 import { useDeleteDatabase, useUpdateDatabase } from "@/features/databases/mutations";
 import { type Database, databaseQuery } from "@/features/databases/queries";
 import { databaseSlugProblem } from "@/features/databases/slug";
 import { orgQuery } from "@/features/orgs/queries";
-import { canWrite } from "@/features/orgs/roles";
+import { canManageMembers, canWrite } from "@/features/orgs/roles";
 
-// Name, address and description; API tokens; deleting. Developers and admins.
+// Name, address and description; API tokens; removed versions and the
+// activity; deleting. Developers and admins.
 export const Route = createFileRoute("/$org/$db/settings")({
   head: () => ({ meta: [{ title: "Database settings – romulus" }] }),
   component: Settings,
@@ -63,6 +66,8 @@ function Settings() {
         </CardContent>
       </Card>
       <ApiTokens org={org} database={database} />
+      <RemovedVersions org={org} database={database} admin={canManageMembers(orgData.role)} />
+      <Activity org={org} db={database.slug} />
       <DeleteCard org={org} database={database} />
     </div>
   );
@@ -197,7 +202,7 @@ function DeleteCard({ org, database }: { org: string; database: Database }) {
   const remove = useDeleteDatabase(org, database.slug);
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
-  const versions = database.latest?.number ?? 0;
+  const versions = database.versions;
   return (
     <Card className="border-destructive/30">
       <CardHeader>

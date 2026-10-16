@@ -837,7 +837,7 @@
         "tags": [
           "orgs"
         ],
-        "summary": "Renames an organization, or moves it to another slug. Admins only.",
+        "summary": "Renames an organization, moves it to another slug, or changes how many\napprovals publishing needs. Admins only.",
         "operationId": "update_org",
         "parameters": [
           {
@@ -1187,6 +1187,84 @@
             }
           },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/activity": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "The database's audit events, newest first. Developers and admins.",
+        "operationId": "list_activity",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Events older than this one (from `next_before`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 100; 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -1698,6 +1776,156 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/approvals": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Approves the draft's SQL as the caller reviewed it.",
+        "operationId": "approve_draft",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReview"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`edited_draft`: they edited it, someone else approves",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_changed` (review again), `approvals_off`, `draft_busy` (being published or updated), `draft_published`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The draft could not be loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Takes the caller's approval back.",
+        "operationId": "withdraw_approval",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReview"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/drafts/{id}/migration": {
       "get": {
         "tags": [
@@ -2016,6 +2244,145 @@
           },
           "503": {
             "description": "The compiler is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "\"Request review\": the drafts list shows the draft waits for one.",
+        "operationId": "request_review",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReview"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reviewers do not request reviews",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_published`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "The draft no longer waits for a review.",
+        "operationId": "cancel_review_request",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftReview"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
             "content": {
               "application/json": {
                 "schema": {
@@ -3063,6 +3430,67 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/versions/removed": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "The database's removed versions, most recently removed first. Developers\nand admins.",
+        "operationId": "list_removed_versions",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RemovedVersion"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/versions/{number}": {
       "get": {
         "tags": [
@@ -3111,6 +3539,184 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/remove": {
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Hides a version: see the module documentation. Admins.",
+        "operationId": "remove_version",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The version's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveVersion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemovedVersion"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only admins remove versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`version_removed`: it already is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: no reason, or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/restore": {
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Brings a removed version back, within [`RESTORE_DAYS`] days. Admins.",
+        "operationId": "restore_version",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The version's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionSummary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only admins restore versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`version_not_removed`, `restore_expired` (removed more than 30 days ago), `migration_imported_again` (its migration was imported again since)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3622,6 +4228,29 @@
           }
         }
       },
+      "ActivityPage": {
+        "type": "object",
+        "description": "A page of events, newest first.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEvent"
+            }
+          },
+          "next_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Pass as `before` for the next page; `null` on the last one."
+          }
+        }
+      },
       "ApiToken": {
         "type": "object",
         "description": "An API token, without its secret.",
@@ -3661,6 +4290,18 @@
           },
           "scope": {
             "$ref": "#/components/schemas/TokenScope"
+          }
+        }
+      },
+      "ApproveDraft": {
+        "type": "object",
+        "required": [
+          "sha256"
+        ],
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 (hex) of the SQL the person reviewed: an approval is of one\ntext."
           }
         }
       },
@@ -3744,6 +4385,109 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "AuditAction": {
+        "type": "string",
+        "description": "What an audit event records (`audit_action`).",
+        "enum": [
+          "version_removed",
+          "version_restored",
+          "version_purged",
+          "approvals_overridden"
+        ]
+      },
+      "AuditDetails": {
+        "type": "object",
+        "description": "What an event says beyond who, when and which version; the fields its\naction has.",
+        "properties": {
+          "approvals": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The approvals it had, and how many the organization required."
+          },
+          "draft_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The draft published (approvals overridden)."
+          },
+          "draft_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version's message (versions removed, restored, purged)."
+          },
+          "required": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "AuditEvent": {
+        "type": "object",
+        "description": "One event of the log.",
+        "required": [
+          "id",
+          "action",
+          "details",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "Who did it; `null` for what romulus did itself (the purge), or once\ntheir account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "details": {
+            "$ref": "#/components/schemas/AuditDetails"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, as they wrote it (removals, overrides)."
+          },
+          "version_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -4606,6 +5350,9 @@
           "description",
           "created_at",
           "updated_at",
+          "versions",
+          "next_number",
+          "missing",
           "last_activity_at"
         ],
         "properties": {
@@ -4630,15 +5377,28 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/VersionSummary",
-                "description": "The newest version (its `number` is also how many there are);\n`null` before the first upload or push."
+                "description": "The newest version; `null` before the first upload or push (or\nonce every version is removed)."
               },
               {
                 "type": "null"
               }
             ]
           },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Numbers below `latest`'s that have no version: removed, or purged\n30 days after (the history skips them)."
+          },
           "name": {
             "type": "string"
+          },
+          "next_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number the next version gets: numbers are never given twice."
           },
           "slug": {
             "type": "string",
@@ -4647,6 +5407,11 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "versions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many versions it has (removed ones not counted)."
           }
         }
       },
@@ -4923,12 +5688,19 @@
           "name",
           "status",
           "database",
+          "next_version",
           "stale",
+          "base_removed",
           "created_at",
           "updated_at",
-          "present"
+          "present",
+          "review"
         ],
         "properties": {
+          "base_removed": {
+            "type": "boolean",
+            "description": "Its base version was removed (it is stale: \"Update draft\" moves it\nonto the latest version left)."
+          },
           "base_version": {
             "type": [
               "integer",
@@ -4970,6 +5742,11 @@
           "name": {
             "type": "string"
           },
+          "next_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number publishing would give it (numbers are never given twice)."
+          },
           "present": {
             "type": "array",
             "items": {
@@ -4985,9 +5762,13 @@
             "format": "int32",
             "description": "The version it became, once published."
           },
+          "review": {
+            "$ref": "#/components/schemas/DraftReview",
+            "description": "Approvals and the review request."
+          },
           "stale": {
             "type": "boolean",
-            "description": "Someone published since the draft started: publishing it needs\n\"Update draft\" first."
+            "description": "Someone published since the draft started, or its base version was\nremoved: publishing it needs \"Update draft\" first."
           },
           "status": {
             "$ref": "#/components/schemas/DraftStatus"
@@ -5016,6 +5797,37 @@
           },
           "slug": {
             "type": "string"
+          }
+        }
+      },
+      "DraftReview": {
+        "type": "object",
+        "description": "Where a draft's review stands, as the drafts list shows it.",
+        "required": [
+          "required",
+          "approvals"
+        ],
+        "properties": {
+          "approvals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Approvals that count now: of the SQL as it is, by members who did\nnot edit it."
+          },
+          "requested": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewRequest",
+                "description": "The editors asked for a review."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "required": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Approvals publishing needs (the organization's setting); 0: none."
           }
         }
       },
@@ -6507,9 +7319,15 @@
           "id",
           "slug",
           "name",
-          "role"
+          "role",
+          "approvals_required"
         ],
         "properties": {
+          "approvals_required": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Approvals publishing a draft needs, from members who did not edit\nit; 0: none (pushes and imports are never gated)."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -7033,6 +7851,33 @@
           }
         }
       },
+      "PublishApprovals": {
+        "type": "object",
+        "description": "What publishing would need, for the publish dialog.",
+        "required": [
+          "required",
+          "approved_by",
+          "can_override"
+        ],
+        "properties": {
+          "approved_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            },
+            "description": "Who approved the SQL previewed, without having edited it."
+          },
+          "can_override": {
+            "type": "boolean",
+            "description": "The caller may publish without them, saying why (admins)."
+          },
+          "required": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Approvals publishing needs; 0: none."
+          }
+        }
+      },
       "PublishDraft": {
         "type": "object",
         "required": [
@@ -7045,6 +7890,13 @@
               "null"
             ],
             "description": "What changed, in a line (at most 1000 characters)."
+          },
+          "override_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Publish without the approvals the organization requires, saying why\n(admins; the audit log keeps it)."
           },
           "sha256": {
             "type": "string",
@@ -7059,9 +7911,14 @@
           "number",
           "stale",
           "sha256",
-          "diagnostics"
+          "diagnostics",
+          "approvals"
         ],
         "properties": {
+          "approvals": {
+            "$ref": "#/components/schemas/PublishApprovals",
+            "description": "The approvals the organization requires, and who approved this SQL."
+          },
           "base_model": {
             "type": [
               "object",
@@ -7180,6 +8037,61 @@
           }
         }
       },
+      "RemoveVersion": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why, for the audit log and whoever restores it (1 to 1000\ncharacters)."
+          }
+        }
+      },
+      "RemovedVersion": {
+        "type": "object",
+        "description": "A removed version, until it is purged.",
+        "required": [
+          "version",
+          "removed_at",
+          "reason",
+          "restorable_until",
+          "restorable"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "removed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "removed_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "`null` once their account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "restorable": {
+            "type": "boolean",
+            "description": "It still can be (`restorable_until` is to come)."
+          },
+          "restorable_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "It can be restored until then, and is purged soon after."
+          },
+          "version": {
+            "$ref": "#/components/schemas/VersionSummary"
+          }
+        }
+      },
       "RenameDraft": {
         "type": "object",
         "required": [
@@ -7189,6 +8101,55 @@
           "name": {
             "type": "string",
             "description": "1 to 200 characters."
+          }
+        }
+      },
+      "ReviewApproval": {
+        "type": "object",
+        "description": "One member's approval, as the people in the draft see it.",
+        "required": [
+          "user_id",
+          "name",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ReviewRequest": {
+        "type": "object",
+        "description": "A draft's editors asked for a review (\"Request review\").",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once their account is gone."
           }
         }
       },
@@ -7459,6 +8420,111 @@
                 "type": "string",
                 "enum": [
                   "version_created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An admin removed a version: if it is this draft's base, publishing\nnow needs \"Update draft\" (onto the latest version left).",
+            "required": [
+              "number",
+              "by",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "version_removed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An admin restored a removed version.",
+            "required": [
+              "number",
+              "by",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "version_restored"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Approvals and the review request (`collab::review`): sent on joining\nand whenever they change (an approval, an edit resetting them,\nsomeone becoming an editor, the organization's setting).",
+            "required": [
+              "required",
+              "approvals",
+              "outdated",
+              "editors",
+              "type"
+            ],
+            "properties": {
+              "approvals": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewApproval"
+                },
+                "description": "Approvals of the SQL as it is now, by members who did not edit\nit, oldest first: these count."
+              },
+              "editors": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Who changed the SQL: they cannot approve it."
+              },
+              "outdated": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReviewApproval"
+                },
+                "description": "Approvals of an earlier text: an edit since reset them."
+              },
+              "requested": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ReviewRequest",
+                    "description": "The review the editors asked for, if they did."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "required": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Approvals publishing needs (the organization's setting); 0: none."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "review"
                 ]
               }
             }
@@ -7885,6 +8951,14 @@
       "UpdateOrg": {
         "type": "object",
         "properties": {
+          "approvals_required": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "0 (none) to 10."
+          },
           "name": {
             "type": [
               "string",
@@ -8189,7 +9263,7 @@
           "number": {
             "type": "integer",
             "format": "int32",
-            "description": "1, 2, 3… per database, without gaps."
+            "description": "1, 2, 3… per database, never given twice (a removed version leaves\nits number unused)."
           },
           "origin": {
             "$ref": "#/components/schemas/VersionOrigin"

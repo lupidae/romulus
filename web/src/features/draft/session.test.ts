@@ -17,6 +17,8 @@ const initial: SessionState = {
   name: null,
   compile: { state: "ok", stale: false, diagnostics: [], model: null },
   versionCreated: null,
+  versionsChanged: null,
+  review: null,
   deleted: false,
   signedOut: false,
   tooLarge: false,

@@ -3,7 +3,13 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
-import { GitBranchIcon, NavArrowRightIcon, PlusIcon } from "@/components/icons";
+import {
+  CheckCircleIcon,
+  GitBranchIcon,
+  NavArrowRightIcon,
+  PlusIcon,
+  SendDiagonalIcon,
+} from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { AvatarStack } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -178,16 +184,23 @@ function DraftRow({ org, db, draft }: { org: string; db: string; draft: Draft })
         <p className="flex min-w-0 items-center gap-2">
           <span className="truncate text-base font-medium text-foreground">{draft.name}</span>
           {draft.stale ? (
-            <Badge variant="warning">v{draft.latest_version} is out</Badge>
+            <Badge variant="warning">
+              {draft.base_removed
+                ? `v${draft.base_version} removed`
+                : `v${draft.latest_version} is out`}
+            </Badge>
           ) : (
             draft.base_version && <Badge variant="outline">from v{draft.base_version}</Badge>
           )}
         </p>
-        {people.length > 0 ? (
-          <p className="truncate text-sm text-foreground">{presenceLine(draft.present)}</p>
-        ) : (
-          <p className="truncate text-sm text-muted-foreground">{edited(draft.updated_at)}</p>
-        )}
+        <p className="flex min-w-0 items-center gap-1.5 text-sm">
+          <ReviewState review={draft.review} />
+          {people.length > 0 ? (
+            <span className="truncate text-foreground">{presenceLine(draft.present)}</span>
+          ) : (
+            <span className="truncate text-muted-foreground">{edited(draft.updated_at)}</span>
+          )}
+        </p>
       </div>
       {people.length > 0 && <AvatarStack people={people} size="sm" max={4} />}
       <NavArrowRightIcon
@@ -195,6 +208,49 @@ function DraftRow({ org, db, draft }: { org: string; db: string; draft: Draft })
         className="size-4 shrink-0 text-faint-foreground transition-transform group-hover:translate-x-0.5"
       />
     </Link>
+  );
+}
+
+/** "Review requested · 1 of 2 approvals ·", ahead of the row's second line. */
+function ReviewState({ review }: { review: Draft["review"] }) {
+  const parts: React.ReactNode[] = [];
+  if (review.requested && review.approvals < review.required)
+    parts.push(
+      <span key="requested" className="flex shrink-0 items-center gap-1 font-medium text-info">
+        <SendDiagonalIcon aria-hidden className="size-3.5" />
+        Review requested
+      </span>,
+    );
+  if (review.required > 0)
+    parts.push(
+      review.approvals >= review.required ? (
+        <span key="approvals" className="flex shrink-0 items-center gap-1 font-medium text-success">
+          <CheckCircleIcon aria-hidden className="size-3.5" />
+          Approved
+        </span>
+      ) : (
+        <span key="approvals" className="shrink-0 text-muted-foreground tabular-nums">
+          {review.approvals} of {review.required} approvals
+        </span>
+      ),
+    );
+  if (parts.length === 0) return null;
+  return (
+    <>
+      {parts.map((part, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && (
+            <span aria-hidden className="text-faint-foreground">
+              ·
+            </span>
+          )}
+          {part}
+        </React.Fragment>
+      ))}
+      <span aria-hidden className="text-faint-foreground">
+        ·
+      </span>
+    </>
   );
 }
 

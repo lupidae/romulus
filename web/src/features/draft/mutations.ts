@@ -85,7 +85,7 @@ export function useUpdateDraft(org: string, db: string, id: string) {
 export function usePublishDraft(org: string, db: string, id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { sha256: string; message?: string }) =>
+    mutationFn: (body: { sha256: string; message?: string; override_reason?: string }) =>
       unwrap(
         api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/publish", {
           params: { path: { org, db, id } },
@@ -117,5 +117,58 @@ export function useTidyDraft(org: string, db: string, id: string) {
           params: { path: { org, db, id } },
         }),
       ),
+  });
+}
+
+/** What a review action changes: the draft's list row, its preview's approvals. */
+function reviewMoved(
+  queryClient: ReturnType<typeof useQueryClient>,
+  org: string,
+  db: string,
+  id: string,
+) {
+  void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
+  void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, id), exact: true });
+  void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, id) });
+}
+
+/** Approves the SQL as this person sees it (`sha256` of it). */
+export function useApproveDraft(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (sha256: string) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/approvals", {
+          params: { path: { org, db, id } },
+          body: { sha256 },
+        }),
+      ),
+    onSettled: () => reviewMoved(queryClient, org, db, id),
+  });
+}
+
+export function useWithdrawApproval(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.DELETE("/api/orgs/{org}/databases/{db}/drafts/{id}/approvals", {
+          params: { path: { org, db, id } },
+        }),
+      ),
+    onSettled: () => reviewMoved(queryClient, org, db, id),
+  });
+}
+
+/** "Request review" (on) or take the request back (off). */
+export function useReviewRequest(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (on: boolean) => {
+      const options = { params: { path: { org, db, id } } };
+      const path = "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request" as const;
+      return unwrap(on ? api.POST(path, options) : api.DELETE(path, options));
+    },
+    onSettled: () => reviewMoved(queryClient, org, db, id),
   });
 }
