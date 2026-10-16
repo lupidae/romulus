@@ -355,9 +355,10 @@ mod tests {
             kept.replace_range(range.clone(), "");
         }
         assert_eq!(kept, format!("A;\n\n{m}\nX;\nY;\nZ;\n"));
-        assert!(extra_markers(&format!("A;\n\n{m}\nX;\n")).is_empty());
+        let none: Vec<std::ops::Range<usize>> = Vec::new();
+        assert_eq!(extra_markers(&format!("A;\n\n{m}\nX;\n")), none);
         // Only whole lines count.
-        assert!(extra_markers(&format!("{m}\n-- not {m}\n")).is_empty());
+        assert_eq!(extra_markers(&format!("{m}\n-- not {m}\n")), none);
     }
 
     #[test]

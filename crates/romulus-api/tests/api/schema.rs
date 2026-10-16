@@ -334,25 +334,40 @@ async fn version_numbers_are_unique_per_database(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn remus_json_only_arrives_by_push(db: PgPool) {
+async fn version_sources_match_their_origin(db: PgPool) {
     let acme = org(&db, "acme").await;
     let shop = database(&db, acme, "shop").await;
-    let insert = |origin: &'static str| {
+    let mut number = 0;
+    let mut insert = |kind: &'static str, origin: &'static str| {
+        number += 1;
         sqlx::query(
             "INSERT INTO versions (database_id, number, model, source, source_kind, origin)
-             VALUES ($1, $2, '{}', '{}', 'remus_json', $3::version_origin)",
+             VALUES ($1, $2, '{}', '{}', $3::version_source_kind, $4::version_origin)",
         )
         .bind(shop)
-        .bind(if origin == "push" { 1 } else { 2 })
+        .bind(number)
+        .bind(kind)
         .bind(origin)
         .execute(&db)
     };
-    insert("push").await.unwrap();
-    let err = insert("upload").await.unwrap_err();
-    assert_eq!(
-        db::constraint(&err),
-        Some("versions_remus_json_only_by_push")
-    );
+    // remus JSON only arrives by push, a migration only by import, and an
+    // import only stores migrations.
+    insert("remus_json", "push").await.unwrap();
+    insert("migration", "import").await.unwrap();
+    insert("sql", "upload").await.unwrap();
+    for (kind, origin) in [
+        ("remus_json", "upload"),
+        ("migration", "push"),
+        ("migration", "draft"),
+        ("sql", "import"),
+    ] {
+        let err = insert(kind, origin).await.unwrap_err();
+        assert_eq!(
+            db::constraint(&err),
+            Some("versions_source_matches_origin"),
+            "{kind} by {origin}"
+        );
+    }
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

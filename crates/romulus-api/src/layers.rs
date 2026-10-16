@@ -32,7 +32,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Migration imports (`POST …/imports`) replay up to hundreds of migrations
 /// in the sandbox before they answer.
-const IMPORT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const IMPORT_TIMEOUT: Duration = Duration::from_mins(15);
 
 pub fn around(router: Router) -> Router {
     with_limits(router, BODY_LIMIT, REQUEST_TIMEOUT)

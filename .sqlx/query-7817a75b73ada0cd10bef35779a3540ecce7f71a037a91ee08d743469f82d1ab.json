@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_migrations (version_id, database_id, migration_id, path, format, checksum, skipped)\n             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "migration_format",
+            "kind": {
+              "Enum": [
+                "plain",
+                "sqlx",
+                "flyway",
+                "prisma",
+                "dbmate",
+                "golang_migrate",
+                "node_pg_migrate",
+                "alembic",
+                "django",
+                "rails"
+              ]
+            }
+          }
+        },
+        "Bytea",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7817a75b73ada0cd10bef35779a3540ecce7f71a037a91ee08d743469f82d1ab"
+}

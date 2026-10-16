@@ -144,6 +144,191 @@
         }
       }
     },
+    "/api/databases/{database_id}/imports": {
+      "post": {
+        "tags": [
+          "push"
+        ],
+        "summary": "Imports migration files as versions, from CI: the API token's database.\nSee the module documentation.",
+        "operationId": "push_migrations",
+        "parameters": [
+          {
+            "name": "database_id",
+            "in": "path",
+            "description": "The database's id (its settings show it)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Read the files as this tool's; detected from them when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MigrationFormat"
+            }
+          },
+          {
+            "name": "append",
+            "in": "query",
+            "description": "Import even though the database has versions that were not\nimported: the imported ones continue the numbering.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "description": "Replay without storing anything (a CI check).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "description": "The name of a single SQL text sent as the body (`alembic.sql`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The migration files: a multipart form of files (named by their path), a zip, or one SQL text",
+          "content": {
+            "application/sql": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/zip": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson`, the progress, one `ImportEvent` per line",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportEvent"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Imported: the versions were created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_token`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`wrong_database`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`, with `Retry-After`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: the sandbox is down or busy; nothing stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/databases/{database_id}/versions": {
       "post": {
         "tags": [
@@ -1513,147 +1698,6 @@
         }
       }
     },
-    "/api/orgs/{org}/databases/{db}/drafts/{id}/migration": {
-      "get": {
-        "tags": [
-          "drafts"
-        ],
-        "summary": "The migration publishing the draft now would call for.",
-        "operationId": "draft_migration",
-        "parameters": [
-          {
-            "name": "org",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "db",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "format",
-            "in": "query",
-            "description": "The migration tool: its file names, transactions and down migration.\n`plain` when absent.",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/MigrationTool"
-            }
-          },
-          {
-            "name": "concurrently",
-            "in": "query",
-            "description": "Build indexes on existing tables `CONCURRENTLY`, outside the\ntransaction (their own files where the tool needs it).",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "name": "name",
-            "in": "query",
-            "description": "The description in file names (made file-name safe); by default the\ntarget version's message, or `v4_to_v5`.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "version",
-            "in": "query",
-            "description": "The first file's version, where the tool numbers its migrations:\nFlyway's `V<version>` (digits and dots; by default the target\nversion's number), or the number other tools put first (digits: a\ngolang-migrate sequence like `000042`; by default the time,\n`YYYYMMDDHHMMSS`). Files after it take the next ones.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "sha256",
-            "in": "query",
-            "description": "SHA-256 of the SQL the person reviewed (the publish preview's, or a\nlive compile's): the migration of exactly that text, or 409\n`draft_changed`. Required: a migration is never of a text unseen.",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchemaMigration"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "`bad_request`: an unknown format, no `sha256`",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "`draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "`compile_failed`: the SQL has errors (`details.diagnostics`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The compiler is unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/orgs/{org}/databases/{db}/drafts/{id}/publish": {
       "get": {
         "tags": [
@@ -2042,13 +2086,13 @@
         }
       }
     },
-    "/api/orgs/{org}/databases/{db}/migration": {
-      "get": {
+    "/api/orgs/{org}/databases/{db}/imports": {
+      "post": {
         "tags": [
-          "versions"
+          "imports"
         ],
-        "summary": "The migration from one version to another, as statements and files.",
-        "operationId": "version_migration",
+        "summary": "Imports migration files as versions. Developers and admins. See the\nmodule documentation.",
+        "operationId": "import_migrations",
         "parameters": [
           {
             "name": "org",
@@ -2069,74 +2113,90 @@
             }
           },
           {
-            "name": "from",
-            "in": "query",
-            "description": "The version the database is at.",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
-            "name": "to",
-            "in": "query",
-            "description": "The version to migrate it to. May be older than `from` (a rollback).",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int32"
-            }
-          },
-          {
             "name": "format",
             "in": "query",
-            "description": "The migration tool: its file names, transactions and down migration.\n`plain` when absent.",
+            "description": "Read the files as this tool's; detected from them when absent.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/MigrationTool"
+              "$ref": "#/components/schemas/MigrationFormat"
             }
           },
           {
-            "name": "concurrently",
+            "name": "append",
             "in": "query",
-            "description": "Build indexes on existing tables `CONCURRENTLY`, outside the\ntransaction (their own files where the tool needs it).",
+            "description": "Import even though the database has versions that were not\nimported: the imported ones continue the numbering.",
             "required": false,
             "schema": {
               "type": "boolean"
             }
           },
           {
-            "name": "name",
+            "name": "dry_run",
             "in": "query",
-            "description": "The description in file names (made file-name safe); by default the\ntarget version's message, or `v4_to_v5`.",
+            "description": "Replay without storing anything (a CI check).",
             "required": false,
             "schema": {
-              "type": "string"
+              "type": "boolean"
             }
           },
           {
-            "name": "version",
+            "name": "filename",
             "in": "query",
-            "description": "The first file's version, where the tool numbers its migrations:\nFlyway's `V<version>` (digits and dots; by default the target\nversion's number), or the number other tools put first (digits: a\ngolang-migrate sequence like `000042`; by default the time,\n`YYYYMMDDHHMMSS`). Files after it take the next ones.",
+            "description": "The name of a single SQL text sent as the body (`alembic.sql`).",
             "required": false,
             "schema": {
               "type": "string"
             }
           }
         ],
+        "requestBody": {
+          "description": "The migration files: a multipart form of files (named by their path), a zip, or one SQL text",
+          "content": {
+            "application/sql": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/zip": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
+            "description": "Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson`, the progress, one `ImportEvent` per line",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SchemaMigration"
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              },
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportEvent"
                 }
               }
             }
           },
-          "400": {
-            "description": "`bad_request`: a number that is not one, an unknown format",
+          "201": {
+            "description": "Imported: the versions were created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            }
+          },
+          "403": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2146,7 +2206,36 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such database, or no such version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2156,7 +2245,182 @@
             }
           },
           "422": {
-            "description": "`validation`: a number below 1",
+            "description": "`import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: the sandbox is down or busy; nothing stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/imports/preview": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Reads and plans the files, runs nothing: what an import of them would\ndo. Developers and admins.",
+        "operationId": "preview_import",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Read the files as this tool's; detected from them when absent.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MigrationFormat"
+            }
+          },
+          {
+            "name": "append",
+            "in": "query",
+            "description": "Import even though the database has versions that were not\nimported: the imported ones continue the numbering.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "description": "Replay without storing anything (a CI check).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "description": "The name of a single SQL text sent as the body (`alembic.sql`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The migration files: a multipart form of files (named by their path), a zip, or one SQL text",
+          "content": {
+            "application/sql": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "application/zip": {
+              "schema": {
+                "type": "string"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreview"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_migrations` (no migration found, two with one version, a malformed file), `invalid_file`, `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
             "content": {
               "application/json": {
                 "schema": {
@@ -5093,6 +5357,374 @@
           "by_default"
         ]
       },
+      "IgnoreReason": {
+        "type": "string",
+        "description": "Why a file is not a migration.",
+        "enum": [
+          "not_sql",
+          "down",
+          "repeatable",
+          "baseline",
+          "unrecognized",
+          "tool"
+        ]
+      },
+      "IgnoredFile": {
+        "type": "object",
+        "description": "A file left out, and why.",
+        "required": [
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IgnoreReason"
+          }
+        }
+      },
+      "ImportError": {
+        "type": "object",
+        "description": "An error, located in its file.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Code"
+          },
+          "column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "end_line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Where in the file (`path`), 1-based; `null` when unlocated.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string",
+            "description": "Postgres's message, or the allowlist's."
+          },
+          "sqlstate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ImportEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The files, planned: what will be replayed.",
+            "required": [
+              "preview",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "planned"
+                ]
+              },
+              "preview": {
+                "$ref": "#/components/schemas/ImportPreview"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every migration ran once in the sandbox: they replay; versions come\nnext, one per migration.",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "checked"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A migration's model was read.",
+            "required": [
+              "index",
+              "number",
+              "changes",
+              "event"
+            ],
+            "properties": {
+              "changes": {
+                "type": "string",
+                "description": "What it changes: `\"2 tables added\"`."
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "replayed"
+                ]
+              },
+              "index": {
+                "type": "integer",
+                "description": "Its position in `preview.migrations`.",
+                "minimum": 0
+              },
+              "number": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The version number it will get."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The import finished (the last line).",
+            "required": [
+              "report",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "done"
+                ]
+              },
+              "report": {
+                "$ref": "#/components/schemas/ImportReport"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The import stopped, nothing stored (the last line): 422\n`import_failed` (`details`: `ImportFailure`), 409, 503…",
+            "required": [
+              "error",
+              "event"
+            ],
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "One line of an import's progress (`Accept: application/x-ndjson`)."
+      },
+      "ImportPreview": {
+        "type": "object",
+        "description": "What importing the files would do; nothing run yet.",
+        "required": [
+          "format",
+          "detected",
+          "migrations",
+          "ignored",
+          "new",
+          "needs_append"
+        ],
+        "properties": {
+          "detected": {
+            "$ref": "#/components/schemas/MigrationFormat",
+            "description": "The format they look like (`format` unless one was asked for)."
+          },
+          "first_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The number the first of them would get."
+          },
+          "format": {
+            "$ref": "#/components/schemas/MigrationFormat",
+            "description": "The format the files are read as."
+          },
+          "ignored": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IgnoredFile"
+            },
+            "description": "Files that are not migrations (down migrations, READMEs, the tool's\nown files)."
+          },
+          "migrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedMigration"
+            }
+          },
+          "needs_append": {
+            "type": "boolean",
+            "description": "The database has versions that were not imported: the import needs\n`append=true`, and the imported ones come after them."
+          },
+          "new": {
+            "type": "integer",
+            "description": "How many versions the import would create.",
+            "minimum": 0
+          },
+          "problem": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody",
+                "description": "Why the import would be refused as it is (`migration_changed`,\n`migration_out_of_order`, `too_many_migrations`, `import_failed`\nfor a syntax error); `null` when it can run."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ImportReport": {
+        "type": "object",
+        "description": "What an import did.",
+        "required": [
+          "status",
+          "format",
+          "migrations",
+          "ignored",
+          "created",
+          "duration_ms"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "description": "Versions created.",
+            "minimum": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "format": {
+            "$ref": "#/components/schemas/MigrationFormat"
+          },
+          "ignored": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IgnoredFile"
+            }
+          },
+          "migrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportedMigration"
+            },
+            "description": "Every migration of the files, in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportStatus"
+          }
+        }
+      },
+      "ImportStatus": {
+        "type": "string",
+        "description": "How an import ended.",
+        "enum": [
+          "created",
+          "unchanged",
+          "checked"
+        ]
+      },
+      "ImportedMigration": {
+        "type": "object",
+        "description": "One migration in the report.",
+        "required": [
+          "id",
+          "name",
+          "path",
+          "status",
+          "skipped"
+        ],
+        "properties": {
+          "changes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it changed, against the version before it: `\"2 tables added\"`."
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedStatement"
+            },
+            "description": "What was not replayed."
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationStatus",
+            "description": "`new` (created by this import, or would be in a dry run) or\n`imported` (already, untouched)."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its version number (`null` in a dry run)."
+          }
+        }
+      },
       "IndexChange": {
         "oneOf": [
           {
@@ -5288,243 +5920,30 @@
           "deleted"
         ]
       },
-      "MigrationFile": {
-        "type": "object",
-        "required": [
-          "path",
-          "content",
-          "role",
-          "marks"
-        ],
-        "properties": {
-          "content": {
-            "type": "string"
-          },
-          "marks": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MigrationMark"
-            },
-            "description": "Where the statements with a hazard are (with their comments), for\nhighlighting."
-          },
-          "path": {
-            "type": "string",
-            "description": "Relative to the tool's migrations folder: `20261016093000_add_invoices.sql`,\n`20261016093000_add_invoices/migration.sql`."
-          },
-          "role": {
-            "$ref": "#/components/schemas/MigrationFileRole"
-          }
-        }
-      },
-      "MigrationFileRole": {
+      "MigrationFormat": {
         "type": "string",
-        "enum": [
-          "up",
-          "down",
-          "config"
-        ]
-      },
-      "MigrationHazard": {
-        "type": "string",
-        "description": "What a statement risks, beyond changing the schema.",
-        "enum": [
-          "deletes_data",
-          "can_fail",
-          "widens_access"
-        ]
-      },
-      "MigrationMark": {
-        "type": "object",
-        "description": "Lines of a file holding a statement with a hazard.",
-        "required": [
-          "from",
-          "to",
-          "hazard"
-        ],
-        "properties": {
-          "from": {
-            "type": "integer",
-            "format": "int32",
-            "description": "1-based, both ends included.",
-            "minimum": 0
-          },
-          "hazard": {
-            "$ref": "#/components/schemas/MigrationHazard"
-          },
-          "to": {
-            "type": "integer",
-            "format": "int32",
-            "minimum": 0
-          }
-        }
-      },
-      "MigrationSection": {
-        "type": "string",
-        "description": "The parts of a migration, in order.",
-        "enum": [
-          "schemas",
-          "dependents",
-          "types",
-          "tables",
-          "keys",
-          "views",
-          "security",
-          "comments",
-          "removals"
-        ]
-      },
-      "MigrationStage": {
-        "type": "string",
-        "description": "When a statement runs relative to the migration's transaction.",
-        "enum": [
-          "commit",
-          "transaction",
-          "concurrent"
-        ]
-      },
-      "MigrationStatement": {
-        "type": "object",
-        "description": "One SQL statement of a migration.",
-        "required": [
-          "sql",
-          "kind",
-          "destructive",
-          "stage",
-          "section"
-        ],
-        "properties": {
-          "alternative": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "SQL to run instead, when this statement is half of a likely rename\n(a `RENAME` keeps the data a drop and an add would lose). Files show\nit commented out."
-          },
-          "destructive": {
-            "type": "boolean",
-            "description": "`hazard` is `deletes_data` or `can_fail`: existing data is at stake."
-          },
-          "hazard": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MigrationHazard",
-                "description": "What running it can do beyond changing the schema; `null` when\nnothing."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "kind": {
-            "$ref": "#/components/schemas/MigrationStatementKind"
-          },
-          "note": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What a reviewer should know: why it is there, what it can do to\nexisting rows, how to do it more safely."
-          },
-          "section": {
-            "$ref": "#/components/schemas/MigrationSection",
-            "description": "The part of the migration it belongs to, for headings."
-          },
-          "sql": {
-            "type": "string",
-            "description": "One statement, ending with `;` (it may span lines)."
-          },
-          "stage": {
-            "$ref": "#/components/schemas/MigrationStage"
-          }
-        }
-      },
-      "MigrationStatementKind": {
-        "type": "string",
-        "description": "What a statement does, for grouping and icons.",
-        "enum": [
-          "create_schema",
-          "create_extension",
-          "alter_extension",
-          "drop_extension",
-          "create_type",
-          "alter_type",
-          "drop_type",
-          "create_domain",
-          "alter_domain",
-          "drop_domain",
-          "create_sequence",
-          "alter_sequence",
-          "drop_sequence",
-          "set_sequence",
-          "create_table",
-          "alter_table",
-          "drop_table",
-          "add_column",
-          "alter_column",
-          "drop_column",
-          "add_constraint",
-          "drop_constraint",
-          "create_index",
-          "drop_index",
-          "create_partition",
-          "attach_partition",
-          "detach_partition",
-          "create_view",
-          "drop_view",
-          "create_policy",
-          "alter_policy",
-          "drop_policy",
-          "row_level_security",
-          "comment"
-        ]
-      },
-      "MigrationTool": {
-        "type": "string",
+        "description": "The migration tool an imported version came from (`migration_format`):\n`romulus_sandbox::import::Format`, under the same wire names.",
         "enum": [
           "plain",
           "sqlx",
           "flyway",
           "prisma",
           "dbmate",
-          "golang_migrate"
+          "golang_migrate",
+          "node_pg_migrate",
+          "alembic",
+          "django",
+          "rails"
         ]
       },
-      "MigrationWarning": {
-        "type": "object",
-        "description": "Something about the migration as a whole that a reviewer must know.",
-        "required": [
-          "code",
-          "message"
-        ],
-        "properties": {
-          "code": {
-            "$ref": "#/components/schemas/MigrationWarningCode"
-          },
-          "message": {
-            "type": "string"
-          },
-          "object": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The object it is about, schema-qualified and unquoted\n(`public.users`, `public.mood`), when it is about one."
-          }
-        }
-      },
-      "MigrationWarningCode": {
+      "MigrationStatus": {
         "type": "string",
+        "description": "Where a migration stands against the database's imports.",
         "enum": [
-          "column_order",
-          "possible_rename",
-          "type_recreated",
-          "table_recreated",
-          "cast",
-          "widens_access",
-          "foreign_table",
-          "unsupported",
-          "empty_schema",
-          "guessed_names"
+          "new",
+          "imported",
+          "changed",
+          "out_of_order"
         ]
       },
       "Org": {
@@ -5762,6 +6181,63 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "PlannedMigration": {
+        "type": "object",
+        "description": "One migration of the files, in order.",
+        "required": [
+          "id",
+          "name",
+          "path",
+          "line",
+          "status",
+          "skipped",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportError"
+            },
+            "description": "Syntax errors (new migrations only): the import would stop here."
+          },
+          "id": {
+            "type": "string",
+            "description": "The tool's version (`20240101120000`, `1.2`, `blog.0002_post_slug`),\nor the path for plain folders: what later imports match on."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The line of `path` where it starts (exported files hold several).",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The version's message: the file (or folder) name."
+          },
+          "path": {
+            "type": "string"
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedStatement"
+            },
+            "description": "What will not be replayed (new migrations only)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationStatus"
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it became, when imported already."
           }
         }
       },
@@ -6227,67 +6703,6 @@
           }
         }
       },
-      "SchemaMigration": {
-        "type": "object",
-        "description": "A migration, as statements and as the files of one tool.",
-        "required": [
-          "to",
-          "format",
-          "statements",
-          "warnings",
-          "destructive",
-          "files",
-          "archive"
-        ],
-        "properties": {
-          "archive": {
-            "type": "string",
-            "description": "What the files download as together: `<version>_<name>.zip`."
-          },
-          "destructive": {
-            "type": "integer",
-            "description": "How many statements delete data or can fail on existing rows.",
-            "minimum": 0
-          },
-          "files": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MigrationFile"
-            },
-            "description": "The files to put in the tool's migrations folder, in order."
-          },
-          "format": {
-            "$ref": "#/components/schemas/MigrationTool"
-          },
-          "from": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "description": "The version migrated from; `null` for nothing (a draft of a database\nwithout versions)."
-          },
-          "statements": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MigrationStatement"
-            },
-            "description": "In order; the same whatever the format."
-          },
-          "to": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The version migrated to (for a draft, the number publishing it would\ngive)."
-          },
-          "warnings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MigrationWarning"
-            },
-            "description": "What to know before running it (a column that ends up elsewhere, a\npossible rename, a type recreated…)."
-          }
-        }
-      },
       "ServerEvent": {
         "oneOf": [
           {
@@ -6522,12 +6937,57 @@
           }
         }
       },
+      "SkipReason": {
+        "type": "string",
+        "description": "Why a statement is not replayed.",
+        "enum": [
+          "data",
+          "code",
+          "transaction",
+          "settings",
+          "privileges",
+          "server",
+          "maintenance",
+          "unsupported",
+          "psql"
+        ]
+      },
+      "SkippedStatement": {
+        "type": "object",
+        "description": "A statement not replayed, located in its file.",
+        "required": [
+          "line",
+          "kind",
+          "reason",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`INSERT`, `DO`, `GRANT`, `\\connect`…"
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1-based, in the file (`path`).",
+            "minimum": 0
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SkipReason"
+          },
+          "text": {
+            "type": "string",
+            "description": "Its first line."
+          }
+        }
+      },
       "SourceKind": {
         "type": "string",
         "description": "What a version's `source` holds (`version_source_kind`).",
         "enum": [
           "sql",
-          "remus_json"
+          "remus_json",
+          "migration"
         ]
       },
       "Span": {
@@ -6913,6 +7373,17 @@
               "null"
             ]
           },
+          "migration": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VersionMigration",
+                "description": "The migration file it was imported from (origin `import` only)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "model": {
             "type": "object",
             "description": "The remus model (`remus_core::Schema` as JSON), canonical."
@@ -6926,7 +7397,7 @@
           },
           "source": {
             "type": "string",
-            "description": "What was uploaded or pushed, verbatim: SQL, or remus JSON."
+            "description": "What was uploaded or pushed, verbatim: SQL, remus JSON, or the\nmigration's up SQL for imports."
           },
           "source_kind": {
             "$ref": "#/components/schemas/SourceKind"
@@ -6999,13 +7470,44 @@
           }
         }
       },
+      "VersionMigration": {
+        "type": "object",
+        "description": "The migration an imported version came from.",
+        "required": [
+          "id",
+          "path",
+          "format",
+          "skipped"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/MigrationFormat"
+          },
+          "id": {
+            "type": "string",
+            "description": "The tool's version of it, or its path for plain folders."
+          },
+          "path": {
+            "type": "string",
+            "description": "The file, relative to the folder imported."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedStatement"
+            },
+            "description": "What was not replayed (`SkippedStatement[]`, lines in `path`)."
+          }
+        }
+      },
       "VersionOrigin": {
         "type": "string",
         "description": "How a version came to be (`version_origin`).",
         "enum": [
           "upload",
           "push",
-          "draft"
+          "draft",
+          "import"
         ]
       },
       "VersionPage": {
@@ -7103,7 +7605,7 @@
           },
           "sql": {
             "type": "string",
-            "description": "The source for SQL versions; rendered from the model for JSON ones."
+            "description": "The source for SQL versions; rendered from the model for pushed JSON\nand imported migrations."
           }
         }
       }

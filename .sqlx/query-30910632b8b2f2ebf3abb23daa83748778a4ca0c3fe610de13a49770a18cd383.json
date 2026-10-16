@@ -27,7 +27,8 @@
             "kind": {
               "Enum": [
                 "sql",
-                "remus_json"
+                "remus_json",
+                "migration"
               ]
             }
           }
@@ -39,7 +40,8 @@
               "Enum": [
                 "upload",
                 "push",
-                "draft"
+                "draft",
+                "import"
               ]
             }
           }

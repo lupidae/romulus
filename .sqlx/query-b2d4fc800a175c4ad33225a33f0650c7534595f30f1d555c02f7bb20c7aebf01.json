@@ -34,7 +34,8 @@
             "kind": {
               "Enum": [
                 "sql",
-                "remus_json"
+                "remus_json",
+                "migration"
               ]
             }
           }

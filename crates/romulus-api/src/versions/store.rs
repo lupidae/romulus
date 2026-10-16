@@ -309,6 +309,7 @@ pub struct NewImport {
 /// `concurrent_import` when another import stored migrations since this one
 /// was planned, and `has_versions` when versions that were not imported
 /// exist and `append` is false. Returns each version's (id, number).
+#[allow(clippy::too_many_lines)] // one transaction, query after query
 pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)>, StoreError> {
     let database_id = new.database_id;
     let NewImport {

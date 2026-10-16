@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE version_migrations SET path = 'elsewhere.sql' WHERE database_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2cf9af9555841f5081129d17cc19f32880ab7484cae7c70fd9c02ebb5c656ddd"
+}

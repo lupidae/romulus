@@ -1,0 +1,54 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT number, origin::text AS \"origin!\", source_kind::text AS \"kind!\", message\n           FROM versions WHERE database_id = $1 ORDER BY number",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "origin!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "message"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      true
+    ]
+  },
+  "hash": "518d02753d709941789bf69081ae9a95c887e09555c6d2492757979969826ebc"
+}

@@ -218,6 +218,64 @@ impl Job {
         let from = texts.len();
         texts.extend(new.iter().map(|m| m.sql.clone()));
 
+        let Replayed {
+            models,
+            changes,
+            skipped,
+        } = self.replay(&new, texts, from, events).await?;
+        if self.options.dry_run {
+            return Ok(self.report(ImportStatus::Checked, &[], &changes, &skipped));
+        }
+
+        let (created_by, created_by_token) = match self.author {
+            Author::User(id) => (Some(id), None),
+            Author::Token(id) => (None, Some(id)),
+        };
+        let versions = new
+            .iter()
+            .zip(models)
+            .zip(&skipped)
+            .map(|((migration, model), skipped)| ImportedVersion {
+                model,
+                source: migration.sql.clone(),
+                message: migration.name.clone(),
+                migration_id: migration.id.clone(),
+                path: migration.path.clone(),
+                checksum: plan::checksum(&migration.sql),
+                skipped: serde_json::to_value(skipped).unwrap_or_default(),
+            })
+            .collect();
+        let stored = store_import(
+            &self.state.db,
+            NewImport {
+                database_id: self.database_id,
+                format: planned.format,
+                created_by,
+                created_by_token,
+                append: self.options.append,
+                imported_before: planned.history.len(),
+                versions,
+            },
+        )
+        .await?;
+        if let Some((_, last)) = stored.last() {
+            // Open drafts of the database learn their base moved.
+            self.state.collab.version_created(self.database_id, *last);
+        }
+        let numbers: Vec<i32> = stored.iter().map(|(_, n)| *n).collect();
+        Ok(self.report(ImportStatus::Created, &numbers, &changes, &skipped))
+    }
+
+    /// The replay of the history and the new migrations: their models,
+    /// what each changes and skips, or the error naming the failing one.
+    async fn replay(
+        &self,
+        new: &[&Migration],
+        texts: Vec<String>,
+        from: usize,
+        events: Option<&Events>,
+    ) -> ApiResult<Replayed> {
+        let planned = &self.planned;
         // Models arrive as they are read; each is compared with the one
         // before it (the latest version for the first).
         let first_number = planned.preview.first_number.unwrap_or(1);
@@ -306,47 +364,11 @@ impl Job {
                 .into(),
             ));
         }
-        if self.options.dry_run {
-            return Ok(self.report(ImportStatus::Checked, &[], &changes, &skipped));
-        }
-
-        let (created_by, created_by_token) = match self.author {
-            Author::User(id) => (Some(id), None),
-            Author::Token(id) => (None, Some(id)),
-        };
-        let versions = new
-            .iter()
-            .zip(models)
-            .zip(&skipped)
-            .map(|((migration, model), skipped)| ImportedVersion {
-                model,
-                source: migration.sql.clone(),
-                message: migration.name.clone(),
-                migration_id: migration.id.clone(),
-                path: migration.path.clone(),
-                checksum: plan::checksum(&migration.sql),
-                skipped: serde_json::to_value(skipped).unwrap_or_default(),
-            })
-            .collect();
-        let stored = store_import(
-            &self.state.db,
-            NewImport {
-                database_id: self.database_id,
-                format: planned.format,
-                created_by,
-                created_by_token,
-                append: self.options.append,
-                imported_before: planned.history.len(),
-                versions,
-            },
-        )
-        .await?;
-        if let Some((_, last)) = stored.last() {
-            // Open drafts of the database learn their base moved.
-            self.state.collab.version_created(self.database_id, *last);
-        }
-        let numbers: Vec<i32> = stored.iter().map(|(_, n)| *n).collect();
-        Ok(self.report(ImportStatus::Created, &numbers, &changes, &skipped))
+        Ok(Replayed {
+            models,
+            changes,
+            skipped,
+        })
     }
 
     /// The report: every migration of the files, the new ones with what
@@ -392,6 +414,13 @@ impl Job {
     }
 }
 
+/// What a replay made of the new migrations.
+struct Replayed {
+    models: Vec<Schema>,
+    changes: Vec<String>,
+    skipped: Vec<Vec<SkippedStatement>>,
+}
+
 #[derive(Default)]
 struct Progress {
     previous: Option<Schema>,
@@ -402,13 +431,10 @@ struct Progress {
 /// `"2 tables added, 1 changed"`, against the model before (nothing for
 /// the first version).
 fn changes(previous: Option<&Schema>, model: &Schema) -> String {
-    let empty;
-    let previous = match previous {
-        Some(previous) => previous,
-        None => {
-            empty = crate::versions::empty(model);
-            &empty
-        }
-    };
-    romulus_diff::diff(previous, model).summary.text
+    if let Some(previous) = previous {
+        return romulus_diff::diff(previous, model).summary.text;
+    }
+    romulus_diff::diff(&crate::versions::empty(model), model)
+        .summary
+        .text
 }
