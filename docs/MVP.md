@@ -523,6 +523,39 @@ Two features, built in this order:
    defaults, assumed and said so (the model does not list a partition's).
    A draft's migration is of the text the person reviewed (its hash).
 
+## Review round 1 (decided 2026-10-16)
+
+1. **Sidebar** collapsible, collapsed by default (icon rail; remembered per user; keyboard shortcut).
+2. **Drafts have two modes; one source of truth at a time.**
+   - *Schema mode* (today): the schema SQL is canonical; a **Migration** tab shows the
+     generated migration (romulus-migration) live, read-only.
+   - *Migration mode*: "Edit migration" switches the draft: the migration becomes a
+     collaborative Y.Text and the canonical source; the schema/graph are derived by
+     compiling base version + migration in the sandbox. Graph edits append to the
+     migration. A draft can start in migration mode, written from scratch. Switching back
+     to schema mode is allowed only by discarding the hand-written migration (explicit
+     confirm). Publishing a migration-mode draft stores the derived schema as the version
+     plus the migration text alongside it (downloadable later).
+3. **Removing a version** (admins only): soft — hidden from history, diffs and imports;
+   numbers never reused; restorable for 30 days; audit entry (who, when, why). Drafts based
+   on it are re-based onto the previous version (they show "Update draft").
+4. **Approvals** (org setting, N = 0 disables): publishing a draft needs N approvals from
+   members other than the draft's editors (developers and reviewers may approve; reviewers
+   gain an Approve button, nothing else). Any edit after an approval resets approvals. CI
+   pushes and imports are not gated. Admins may override with a reason (logged).
+5. **Groups**: a better editing UX (create from selection, rename inline, color, add/remove
+   tables by drag or menu, delete), and dragging a group moves all its tables (one Yjs
+   transaction, one undo step).
+6. **Comments, Figma-like**: threads pinned to a table, a column or a canvas point, with
+   replies, @mentions, resolve, author and time. Stored as collaborative data, not schema;
+   the SQL pane shows them as `--- alice: …` lines above the statement they're attached to,
+   and typing a `---` line creates a comment there. They travel into the published version as
+   review history; never into `COMMENT ON` (database comments stay as they are).
+
+**Ideas, after the round:** several Postgres majors per database (sandbox per major), then a
+**playground** (a real throwaway database per draft with generated fake data, to run SQL and
+try migrations) — design document first.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).
