@@ -6273,7 +6273,7 @@
       },
       "MigrationFormat": {
         "type": "string",
-        "description": "The migration tool an imported version came from (`migration_format`):\n`romulus_sandbox::import::Format`, under the same wire names.",
+        "description": "The migration tool an imported version came from (`migration_format`):\n`romulus_sandbox::import::Format` (whose tools are\n`romulus_migration::Format`'s), under the same wire names (a test keeps\nthem in agreement).",
         "enum": [
           "plain",
           "sqlx",

@@ -1623,7 +1623,9 @@ export interface components {
     MigrationFileRole: "up" | "down" | "config";
     /**
      * @description The migration tool an imported version came from (`migration_format`):
-     *     `romulus_sandbox::import::Format`, under the same wire names.
+     *     `romulus_sandbox::import::Format` (whose tools are
+     *     `romulus_migration::Format`'s), under the same wire names (a test keeps
+     *     them in agreement).
      * @enum {string}
      */
     MigrationFormat:
