@@ -61,32 +61,20 @@ function OrgLayout() {
   const nav = (
     <SidebarNav aria-label={org.name}>
       <SidebarSection>
-        <SidebarItem asChild>
-          <Link to="/$org" params={params} activeOptions={{ exact: true }}>
-            <DatabaseIcon />
-            Databases
-          </Link>
+        <SidebarItem asChild icon={<DatabaseIcon />} label="Databases">
+          <Link to="/$org" params={params} activeOptions={{ exact: true }} />
         </SidebarItem>
       </SidebarSection>
       <SidebarSection label="Settings">
-        <SidebarItem asChild>
-          <Link to="/$org/settings" params={params} activeOptions={{ exact: true }}>
-            <SettingsIcon />
-            General
-          </Link>
+        <SidebarItem asChild icon={<SettingsIcon />} label="General" railLabel="Settings">
+          <Link to="/$org/settings" params={params} activeOptions={{ exact: true }} />
         </SidebarItem>
-        <SidebarItem asChild>
-          <Link to="/$org/settings/members" params={params}>
-            <GroupIcon />
-            Members
-          </Link>
+        <SidebarItem asChild icon={<GroupIcon />} label="Members">
+          <Link to="/$org/settings/members" params={params} />
         </SidebarItem>
         {canManageMembers(org.role) && (
-          <SidebarItem asChild>
-            <Link to="/$org/settings/invitations" params={params}>
-              <MailOutIcon />
-              Invitations
-            </Link>
+          <SidebarItem asChild icon={<MailOutIcon />} label="Invitations">
+            <Link to="/$org/settings/invitations" params={params} />
           </SidebarItem>
         )}
       </SidebarSection>

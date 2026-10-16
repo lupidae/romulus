@@ -68,17 +68,11 @@ function Frame({ children, toolbar }: { children: React.ReactNode; toolbar?: Rea
   const nav = (
     <SidebarNav aria-label="Organization">
       <SidebarSection>
-        <SidebarItem asChild>
-          <Link to="/dev/viewer" search={{ fixture: "small" }}>
-            <DatabaseIcon />
-            Databases
-          </Link>
+        <SidebarItem asChild icon={<DatabaseIcon />} label="Databases">
+          <Link to="/dev/viewer" search={{ fixture: "small" }} />
         </SidebarItem>
-        <SidebarItem asChild>
-          <Link to="/dev/viewer" search={{ fixture: "diff" }}>
-            <GitCompareIcon />
-            Diff example
-          </Link>
+        <SidebarItem asChild icon={<GitCompareIcon />} label="Diff example">
+          <Link to="/dev/viewer" search={{ fixture: "diff" }} />
         </SidebarItem>
       </SidebarSection>
     </SidebarNav>

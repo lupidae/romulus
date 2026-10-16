@@ -24,23 +24,14 @@ function ShellPreview() {
   const nav = (
     <SidebarNav aria-label="Organization">
       <SidebarSection>
-        <SidebarItem asChild>
-          <Link to="/dev/shell" activeOptions={{ exact: true }}>
-            <DatabaseIcon />
-            Databases
-          </Link>
+        <SidebarItem asChild icon={<DatabaseIcon />} label="Databases">
+          <Link to="/dev/shell" activeOptions={{ exact: true }} />
         </SidebarItem>
-        <SidebarItem asChild>
-          <Link to="/dev/shell/members">
-            <GroupIcon />
-            Members
-          </Link>
+        <SidebarItem asChild icon={<GroupIcon />} label="Members">
+          <Link to="/dev/shell/members" />
         </SidebarItem>
-        <SidebarItem asChild>
-          <Link to="/dev/shell/settings">
-            <SettingsIcon />
-            Settings
-          </Link>
+        <SidebarItem asChild icon={<SettingsIcon />} label="Settings">
+          <Link to="/dev/shell/settings" />
         </SidebarItem>
       </SidebarSection>
     </SidebarNav>

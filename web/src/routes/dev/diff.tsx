@@ -121,17 +121,11 @@ function DiffPreview() {
   const nav = (
     <SidebarNav aria-label="Organization">
       <SidebarSection>
-        <SidebarItem asChild>
-          <Link to="/dev/viewer">
-            <DatabaseIcon />
-            Schema viewer
-          </Link>
+        <SidebarItem asChild icon={<DatabaseIcon />} label="Schema viewer">
+          <Link to="/dev/viewer" />
         </SidebarItem>
-        <SidebarItem asChild>
-          <Link to="/dev/diff">
-            <GitCompareIcon />
-            Diff view
-          </Link>
+        <SidebarItem asChild icon={<GitCompareIcon />} label="Diff view">
+          <Link to="/dev/diff" />
         </SidebarItem>
       </SidebarSection>
     </SidebarNav>

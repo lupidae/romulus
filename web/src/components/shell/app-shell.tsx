@@ -2,9 +2,14 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import * as React from "react";
 
 import { LogoMark } from "@/components/brand/logo";
-import { MenuIcon } from "@/components/icons";
+import { MenuIcon, SidebarCollapseIcon, SidebarExpandIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { SidebarRail } from "@/components/ui/sidebar";
+import { Tooltip } from "@/components/ui/tooltip";
+import { modKey } from "@/lib/platform";
+import { usePreference } from "@/lib/use-preference";
+import { cn } from "@/lib/utils";
 
 import { OrgSwitcher } from "./org-switcher";
 import type { ShellOrg, ShellUser } from "./types";
@@ -24,11 +29,17 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
 /**
  * The signed-in frame: a top bar (org switcher, user menu), the left
- * navigation, and the page in a panel. Below `md` the navigation moves into
- * a drawer opened from the top bar. Pages render inside the panel and scroll
- * there, so the bars never move.
+ * navigation, and the page in a panel. Pages render inside the panel and
+ * scroll there, so the bars never move.
+ *
+ * The navigation is a rail of icons by default (the page gets the room),
+ * opened into a labelled sidebar with its button or ⌘\; each person's choice
+ * is remembered in this browser. Below `md` it moves into a drawer opened
+ * from the top bar, always labelled.
  */
 export function AppShell({
   user,
@@ -42,6 +53,23 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const [collapsed, setCollapsed] = usePreference(`romulus:sidebar:${user.id}`, true, isBoolean);
+  const toggle = React.useRef(() => setCollapsed(!collapsed));
+  React.useEffect(() => {
+    toggle.current = () => setCollapsed(!collapsed);
+  });
+  React.useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      // By code too: on some layouts (French, German) \ takes Alt or Shift.
+      const backslash = event.key === "\\" || event.code === "Backslash";
+      if (!backslash || !(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return;
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      toggle.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const href = useRouterState({ select: (s) => s.location.href });
 
   // A navigation from inside the drawer closes it (adjusting state during
@@ -80,7 +108,9 @@ export function AppShell({
                 <LogoMark />
                 <span className="truncate text-sm font-semibold text-foreground">{org.name}</span>
               </div>
-              <div className="flex-1 overflow-y-auto px-2 py-2">{nav}</div>
+              <div className="flex-1 overflow-y-auto px-2 py-2">
+                <SidebarRail rail={false}>{nav}</SidebarRail>
+              </div>
             </SheetContent>
           </Sheet>
 
@@ -108,10 +138,37 @@ export function AppShell({
 
       <div className="flex min-h-0 flex-1">
         <aside
+          id="primary-nav"
           aria-label="Primary"
-          className="hidden w-56 shrink-0 overflow-y-auto px-2 py-2 md:block"
+          data-collapsed={collapsed ? "" : undefined}
+          className={cn(
+            "hidden shrink-0 flex-col overflow-x-hidden py-2 md:flex",
+            "motion-safe:transition-[width] motion-safe:duration-(--duration-fast) motion-safe:ease-out",
+            collapsed ? "w-12 px-2" : "w-56 px-2",
+          )}
         >
-          {nav}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SidebarRail rail={collapsed}>{nav}</SidebarRail>
+          </div>
+          <div className={cn("flex pt-2", collapsed ? "justify-center" : "justify-start")}>
+            <Tooltip
+              content={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              shortcut={[modKey, "\\"]}
+              side="right"
+            >
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-controls="primary-nav"
+                aria-expanded={!collapsed}
+                onClick={() => setCollapsed(!collapsed)}
+                className="text-muted-foreground"
+              >
+                {collapsed ? <SidebarExpandIcon /> : <SidebarCollapseIcon />}
+              </Button>
+            </Tooltip>
+          </div>
         </aside>
         <main
           id="main"
