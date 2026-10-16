@@ -792,23 +792,7 @@ impl Room {
         };
         room.share_review(false);
         if let Some(saved) = loaded.compile {
-            room.good_model = saved.good_model.map(Arc::new);
-            room.good_tables = saved
-                .good_tables
-                .and_then(|tables| serde_json::from_value(tables).ok())
-                .unwrap_or_default();
-            if hex(&saved.source_hash) == input {
-                room.last_compile = Some(LastCompile {
-                    state: if saved.model.is_some() {
-                        CompileState::Ok
-                    } else {
-                        CompileState::Failed
-                    },
-                    sha256: Some(sha256),
-                    input: Some(input),
-                    diagnostics: saved.errors.unwrap_or_else(|| Value::Array(Vec::new())),
-                });
-            }
+            room.restore_compile(saved, sha256, input);
         }
         if room.last_compile.is_none() && room.status == LiveStatus::Open {
             let now = Instant::now();
@@ -827,6 +811,28 @@ impl Room {
             room.compact();
         }
         Ok(room)
+    }
+
+    /// The last compile as stored: the model the graph shows, and the result
+    /// itself when it is of the source as loaded (`input`).
+    fn restore_compile(&mut self, saved: store::SavedCompile, sha256: String, input: String) {
+        self.good_model = saved.good_model.map(Arc::new);
+        self.good_tables = saved
+            .good_tables
+            .and_then(|tables| serde_json::from_value(tables).ok())
+            .unwrap_or_default();
+        if hex(&saved.source_hash) == input {
+            self.last_compile = Some(LastCompile {
+                state: if saved.model.is_some() {
+                    CompileState::Ok
+                } else {
+                    CompileState::Failed
+                },
+                sha256: Some(sha256),
+                input: Some(input),
+                diagnostics: saved.errors.unwrap_or_else(|| Value::Array(Vec::new())),
+            });
+        }
     }
 
     /// `drafts.mode` said `column` but the doc says otherwise: a write of
@@ -925,14 +931,12 @@ impl Room {
                 if let Some((id, sql)) = base {
                     self.rebase(id, sql);
                 }
-                self.broadcast_event(
-                    &ServerEvent::Updated {
-                        version,
-                        by,
-                        conflicts,
-                    },
-                    None,
-                );
+                let updated = ServerEvent::Updated {
+                    version,
+                    by,
+                    conflicts,
+                };
+                self.broadcast_event(&updated, None);
             }
             Command::VersionCreated { number } => {
                 self.broadcast_event(&ServerEvent::VersionCreated { number }, None);

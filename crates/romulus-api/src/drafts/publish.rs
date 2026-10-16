@@ -224,20 +224,7 @@ pub(super) async fn publish(
         return Err(versions::stale_base(latest.map(|v| v.number)));
     }
 
-    let content = match state
-        .collab
-        .freeze(id, &member.user.name)
-        .await
-        .map_err(hub_error)?
-    {
-        Ok(content) => content,
-        Err(FreezeError::NotOpen(_)) => {
-            return Err(ApiError::Conflict {
-                code: "draft_busy",
-                message: "Someone else is publishing this draft right now.".into(),
-            });
-        }
-    };
+    let content = freeze(&state, id, &member.user.name).await?;
     let frozen = Frozen {
         hub: &state.collab,
         draft: id,
@@ -252,16 +239,7 @@ pub(super) async fn publish(
         });
     }
     let approvals = approvals::gate(&state, &member, id, &content, &body).await?;
-    let mut model = match compiled(&state.collab, &content).await? {
-        (Some(model), _) => model,
-        (None, diagnostics) => {
-            return Err(ApiError::Unprocessable {
-                code: "compile_failed",
-                message: "The SQL has errors. Fix them before publishing.".into(),
-                details: Some(json!({ "diagnostics": diagnostics })),
-            });
-        }
-    };
+    let mut model = frozen_model(&state.collab, &content).await?;
     let checks = source::Checks {
         hub: &state.collab,
         limits: &state.limits,
@@ -300,6 +278,30 @@ pub(super) async fn publish(
             number: created.number,
         }),
     ))
+}
+
+/// Freezes the draft for publishing (409 `draft_busy` while someone else
+/// publishes or updates it): its content.
+async fn freeze(state: &AppState, id: Uuid, by: &str) -> ApiResult<Content> {
+    match state.collab.freeze(id, by).await.map_err(hub_error)? {
+        Ok(content) => Ok(content),
+        Err(FreezeError::NotOpen(_)) => Err(ApiError::Conflict {
+            code: "draft_busy",
+            message: "Someone else is publishing this draft right now.".into(),
+        }),
+    }
+}
+
+/// The model of the frozen content, or 422 `compile_failed`.
+async fn frozen_model(hub: &Hub, content: &Content) -> ApiResult<Schema> {
+    match compiled(hub, content).await? {
+        (Some(model), _) => Ok(model),
+        (None, diagnostics) => Err(ApiError::Unprocessable {
+            code: "compile_failed",
+            message: "The SQL has errors. Fix them before publishing.".into(),
+            details: Some(json!({ "diagnostics": diagnostics })),
+        }),
+    }
 }
 
 /// Stores the frozen content as the next version and marks the draft
