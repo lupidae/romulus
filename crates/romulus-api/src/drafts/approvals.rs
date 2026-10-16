@@ -114,8 +114,8 @@ pub(super) async fn approve(
     Json(body): Json<ApproveDraft>,
 ) -> ApiResult<Json<DraftReview>> {
     let sha256 = body.sha256.trim().to_ascii_lowercase();
-    let digest = unhex(&sha256)
-        .ok_or_else(|| invalid("sha256", "The SHA-256 of the SQL, in hex."))?;
+    let digest =
+        unhex(&sha256).ok_or_else(|| invalid("sha256", "The SHA-256 of the SQL, in hex."))?;
     if required(&state.db, member.org.id).await? == 0 {
         return Err(ApiError::Conflict {
             code: "approvals_off",
@@ -143,8 +143,9 @@ pub(super) async fn approve(
         Err(ApprovalError::Changed) => {
             return Err(ApiError::Conflict {
                 code: "draft_changed",
-                message: "The draft changed while you were reviewing it. Look at it again, then approve."
-                    .into(),
+                message:
+                    "The draft changed while you were reviewing it. Look at it again, then approve."
+                        .into(),
             });
         }
         Err(ApprovalError::NotOpen) => {
@@ -393,8 +394,8 @@ pub(super) async fn gate(
     if required == 0 {
         return Ok(None);
     }
-    let approvals = i32::try_from(approvers(db, member.org.id, content).await?.len())
-        .unwrap_or(i32::MAX);
+    let approvals =
+        i32::try_from(approvers(db, member.org.id, content).await?.len()).unwrap_or(i32::MAX);
     if approvals >= required {
         return Ok(None);
     }

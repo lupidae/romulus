@@ -1,0 +1,260 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.id, d.slug, d.name, d.description, d.created_at, d.updated_at,\n                  v.id AS \"v_id?\", v.number AS \"v_number?\",\n                  v.origin AS \"v_origin?: VersionOrigin\",\n                  v.source_kind AS \"v_source_kind?: SourceKind\",\n                  v.message AS \"v_message?\", v.created_at AS \"v_created_at?\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\",\n                  t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  greatest(d.updated_at, v.created_at) AS \"last_activity_at!\",\n                  d.last_version_number + 1 AS \"next_number!\", n.live AS \"versions!\",\n                  CASE WHEN n.live < coalesce(v.number, 0) THEN ARRAY(\n                      SELECT g FROM generate_series(1, v.number) g\n                      WHERE NOT EXISTS (\n                          SELECT 1 FROM versions o WHERE o.database_id = d.id AND o.number = g AND o.removed_at IS NULL\n                      )\n                      ORDER BY g\n                  ) ELSE '{}' END AS \"missing!\"\n           FROM databases d\n           LEFT JOIN LATERAL (\n               SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token\n               FROM versions WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1\n           ) v ON true\n           CROSS JOIN LATERAL (\n               SELECT count(*) AS live FROM versions WHERE database_id = d.id AND removed_at IS NULL\n           ) n\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE d.org_id = $1 AND d.deleted_at IS NULL AND ($2::text IS NULL OR d.slug = $2)\n           ORDER BY greatest(d.updated_at, v.created_at) DESC, lower(d.name), d.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "v_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "v_number?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "v_origin?: VersionOrigin",
+        "type_info": {
+          "Custom": {
+            "name": "version_origin",
+            "kind": {
+              "Enum": [
+                "upload",
+                "push",
+                "draft",
+                "import"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "origin"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "v_source_kind?: SourceKind",
+        "type_info": {
+          "Custom": {
+            "name": "version_source_kind",
+            "kind": {
+              "Enum": [
+                "sql",
+                "remus_json",
+                "migration"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "v_message?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "v_created_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "user_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "user_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "token_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "api_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "token_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "api_tokens",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "last_activity_at!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "next_number!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "versions!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 19,
+        "name": "missing!",
+        "type_info": "Int4Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ea479b518fbd1f595059c6cd26baf27f1cc9881888de3f1b48f16c5b9678139f"
+}

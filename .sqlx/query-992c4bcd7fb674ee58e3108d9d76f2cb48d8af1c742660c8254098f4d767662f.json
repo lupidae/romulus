@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO draft_approvals (draft_id, user_id, sql_sha256) VALUES ($1, $2, $3)\n         ON CONFLICT (draft_id, user_id) DO UPDATE SET sql_sha256 = EXCLUDED.sql_sha256, approved_at = now()\n         RETURNING approved_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "draft_approvals",
+            "name": "approved_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "992c4bcd7fb674ee58e3108d9d76f2cb48d8af1c742660c8254098f4d767662f"
+}

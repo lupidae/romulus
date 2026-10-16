@@ -147,7 +147,13 @@ struct Line {
 }
 
 impl Row {
-    fn into_draft(self, database: &DatabaseRef, line: Line, hub: &Hub, review: DraftReview) -> Draft {
+    fn into_draft(
+        self,
+        database: &DatabaseRef,
+        line: Line,
+        hub: &Hub,
+        review: DraftReview,
+    ) -> Draft {
         let present = hub.present(&[self.id]).remove(&self.id).unwrap_or_default();
         let latest = line.latest;
         Draft {

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM drafts WHERE published_version_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d13663cfb22eb23c8a49f126c9e0f51f1dd8f7fd60d34a421e7f4f83d9f7841f"
+}

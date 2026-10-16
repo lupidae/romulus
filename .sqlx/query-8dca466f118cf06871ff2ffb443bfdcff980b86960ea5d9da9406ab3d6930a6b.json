@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT number, message FROM versions v\n         WHERE v.id = $1 AND v.removed_at < now() - make_interval(days => $2)\n           AND NOT EXISTS (\n               SELECT 1 FROM drafts d WHERE d.status = 'open'\n                 AND (d.base_version_id = v.id OR d.pending_base_version_id = v.id)\n           )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "message"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "8dca466f118cf06871ff2ffb443bfdcff980b86960ea5d9da9406ab3d6930a6b"
+}

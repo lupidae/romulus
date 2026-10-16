@@ -387,7 +387,9 @@ pub async fn purge(db: &PgPool) -> Result<u64, sqlx::Error> {
         match purge_one(db, id).await {
             Ok(true) => purged += 1,
             Ok(false) => {}
-            Err(err) => tracing::warn!(version = %id, error = %err, "purging a removed version failed"),
+            Err(err) => {
+                tracing::warn!(version = %id, error = %err, "purging a removed version failed")
+            }
         }
     }
     Ok(purged)

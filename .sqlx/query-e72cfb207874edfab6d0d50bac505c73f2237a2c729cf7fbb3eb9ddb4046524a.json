@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT last_version_number FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_version_number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "last_version_number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e72cfb207874edfab6d0d50bac505c73f2237a2c729cf7fbb3eb9ddb4046524a"
+}

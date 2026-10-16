@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE versions SET removed_at = now() - make_interval(days => $3), removal_reason = 'old'\n         WHERE database_id = $1 AND number = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7af2c00f7bf7419c77709cbf1613784f094bb0b3f24955d9d82b097a304d8b87"
+}

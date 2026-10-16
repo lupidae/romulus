@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET base_version_id = NULL, base_sql = NULL,\n                               pending_base_version_id = NULL, pending_base_sql = NULL\n             WHERE id = $1 AND status = 'open' AND base_version_id IS NOT DISTINCT FROM $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a70020d7e7cf7cd82d98893ecb278fb9cc936acea64d8b9d1a13bb367a576328"
+}

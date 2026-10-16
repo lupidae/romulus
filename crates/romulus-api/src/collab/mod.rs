@@ -411,18 +411,26 @@ impl Hub {
     /// A version was removed: the drafts of that database open now hear it
     /// (those based on it now need "Update draft").
     pub fn version_removed(&self, database_id: Uuid, number: i32, by: &str) {
-        self.each_of_database(database_id, |by| Command::VersionRemoved {
-            number,
-            by: by.to_owned(),
-        }, by);
+        self.each_of_database(
+            database_id,
+            |by| Command::VersionRemoved {
+                number,
+                by: by.to_owned(),
+            },
+            by,
+        );
     }
 
     /// A removed version was restored.
     pub fn version_restored(&self, database_id: Uuid, number: i32, by: &str) {
-        self.each_of_database(database_id, |by| Command::VersionRestored {
-            number,
-            by: by.to_owned(),
-        }, by);
+        self.each_of_database(
+            database_id,
+            |by| Command::VersionRestored {
+                number,
+                by: by.to_owned(),
+            },
+            by,
+        );
     }
 
     fn each_of_database(&self, database_id: Uuid, command: impl Fn(&str) -> Command, by: &str) {

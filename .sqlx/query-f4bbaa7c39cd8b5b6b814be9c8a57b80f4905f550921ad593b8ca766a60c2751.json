@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM audit_events",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "f4bbaa7c39cd8b5b6b814be9c8a57b80f4905f550921ad593b8ca766a60c2751"
+}

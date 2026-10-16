@@ -838,7 +838,9 @@ impl Room {
         if let Some(compile) = self.compile_for_joiner() {
             first.push(compile);
         }
-        first.push(protocol::event(&self.review.event(&self.sha256_for_review())));
+        first.push(protocol::event(
+            &self.review.event(&self.sha256_for_review()),
+        ));
         if self.save_failed {
             first.push(protocol::event(&ServerEvent::SaveFailed));
         }

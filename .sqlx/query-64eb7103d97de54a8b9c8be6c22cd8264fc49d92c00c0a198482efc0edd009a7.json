@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO draft_review_requests (draft_id, requested_by) VALUES ($1, $2)\n         ON CONFLICT (draft_id) DO UPDATE SET requested_by = EXCLUDED.requested_by, requested_at = now()\n         RETURNING requested_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "requested_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "draft_review_requests",
+            "name": "requested_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "64eb7103d97de54a8b9c8be6c22cd8264fc49d92c00c0a198482efc0edd009a7"
+}

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.requested_at, u.id AS \"user_id?\", u.name AS \"name?\"\n           FROM draft_review_requests r LEFT JOIN users u ON u.id = r.requested_by\n           WHERE r.draft_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "requested_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "draft_review_requests",
+            "name": "requested_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "bee6308b25ab5280fb35f69763e9f11eead147c53ec28390846cf33b4941e095"
+}

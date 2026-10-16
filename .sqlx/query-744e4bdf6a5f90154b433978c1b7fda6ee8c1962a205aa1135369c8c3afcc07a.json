@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.database_id, d.status AS \"status: DraftStatus\",\n                  b.deleted_at IS NOT NULL AS \"database_deleted!\", b.org_id, o.approvals_required\n           FROM drafts d JOIN databases b ON b.id = d.database_id\n           JOIN organizations o ON o.id = b.org_id\n           WHERE d.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "database_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "database_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status: DraftStatus",
+        "type_info": {
+          "Custom": {
+            "name": "draft_status",
+            "kind": {
+              "Enum": [
+                "open",
+                "published",
+                "deleted"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "database_deleted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "approvals_required",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "approvals_required"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "744e4bdf6a5f90154b433978c1b7fda6ee8c1962a205aa1135369c8c3afcc07a"
+}

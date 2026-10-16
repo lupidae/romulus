@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT last_version_number FROM databases WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_version_number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "last_version_number"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2eea3141df097945da8824adca6ffdcaf0a724f3d2ec0ffffa4f54202c932bb9"
+}

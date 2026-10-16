@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations\n         SET name = coalesce($2, name), slug = coalesce($3, slug),\n             approvals_required = coalesce($4, approvals_required)\n         WHERE id = $1 RETURNING slug, name, approvals_required",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "approvals_required",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "approvals_required"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "21d07f00e31ccd09447ee0ed3c748812e28116a65afeb09fc036ae5199d25064"
+}

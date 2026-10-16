@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.id FROM versions v\n         WHERE v.removed_at < now() - make_interval(days => $1)\n           AND NOT EXISTS (\n               SELECT 1 FROM drafts d WHERE d.status = 'open'\n                 AND (d.base_version_id = v.id OR d.pending_base_version_id = v.id)\n           )\n         ORDER BY v.removed_at LIMIT 100",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "79f28bd8ca28885d4c9b53f88e4d2c1b85cecc39030240b726db051d2517228b"
+}

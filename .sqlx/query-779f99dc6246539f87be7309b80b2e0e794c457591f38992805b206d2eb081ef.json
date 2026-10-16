@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE audit_events SET reason = 'nothing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "779f99dc6246539f87be7309b80b2e0e794c457591f38992805b206d2eb081ef"
+}

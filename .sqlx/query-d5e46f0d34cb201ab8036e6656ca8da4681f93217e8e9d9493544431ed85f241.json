@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT model, source, source_kind AS \"source_kind: SourceKind\"\n           FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "source_kind: SourceKind",
+        "type_info": {
+          "Custom": {
+            "name": "version_source_kind",
+            "kind": {
+              "Enum": [
+                "sql",
+                "remus_json",
+                "migration"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source_kind"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d5e46f0d34cb201ab8036e6656ca8da4681f93217e8e9d9493544431ed85f241"
+}

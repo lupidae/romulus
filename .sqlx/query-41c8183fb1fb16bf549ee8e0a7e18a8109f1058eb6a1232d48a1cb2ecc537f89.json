@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT max(number) FROM versions WHERE database_id = $1 AND removed_at IS NULL) AS latest,\n                  last_version_number + 1 AS \"next!\"\n           FROM databases WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "latest",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "next!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "41c8183fb1fb16bf549ee8e0a7e18a8109f1058eb6a1232d48a1cb2ecc537f89"
+}
