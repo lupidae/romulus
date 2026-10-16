@@ -17,7 +17,9 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { NetworkRightIcon, PageIcon } from "@/components/icons";
+import { DatabaseScriptIcon, NetworkRightIcon, PageIcon } from "@/components/icons";
+import { MigrationView } from "@/features/migration/components/migration-view";
+import { draftMigrationQuery } from "@/features/migration/queries";
 import { type ChangeStatus, changeOf, parseStatusMap } from "@/features/schema/diff";
 import { SchemaGraph } from "@/features/schema/graph/schema-graph";
 import type { Groups, Layout } from "@/features/schema/layout";
@@ -203,7 +205,13 @@ function PublishBody({
           </ul>
         </Alert>
       ) : (
-        <Changes preview={data!} changes={changes} layout={layout} groups={groups} />
+        <Changes
+          preview={data!}
+          changes={changes}
+          layout={layout}
+          groups={groups}
+          migration={(choice) => draftMigrationQuery(org, db, draftId, data!.sha256, choice)}
+        />
       )}
 
       <form
@@ -248,11 +256,14 @@ function Changes({
   changes,
   layout,
   groups,
+  migration,
 }: {
   preview: PublishPreview;
   changes: Change[];
   layout: Layout;
   groups: Groups;
+  /** The draft's migration, for a tool. */
+  migration: React.ComponentProps<typeof MigrationView>["query"];
 }) {
   const { model: rawModel, base_model: rawBase, diff } = preview;
   const graph = React.useMemo(() => {
@@ -303,6 +314,10 @@ function Changes({
             <NetworkRightIcon />
             Graph
           </TabsTrigger>
+          <TabsTrigger value="migration">
+            <DatabaseScriptIcon />
+            Migration
+          </TabsTrigger>
         </TabsList>
       </div>
       <TabsContent
@@ -345,6 +360,12 @@ function Changes({
             shortcuts={false}
           />
         )}
+      </TabsContent>
+      <TabsContent
+        value="migration"
+        className="mt-0 h-[50dvh] min-h-80 overflow-hidden rounded-lg border border-border"
+      >
+        <MigrationView query={migration} />
       </TabsContent>
     </Tabs>
   );

@@ -3,10 +3,11 @@ import { createFileRoute, Link, notFound, useParams } from "@tanstack/react-rout
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
-import { ClockIcon, GitCompareIcon } from "@/components/icons";
+import { ClockIcon, DatabaseScriptIcon, GitCompareIcon, ListIcon } from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { databaseQuery, versionsQuery } from "@/features/databases/queries";
 import type { ChangeFilter } from "@/features/diff/changes";
 import { CompareBar } from "@/features/diff/components/compare-bar";
@@ -14,14 +15,21 @@ import { DiffSkeleton } from "@/features/diff/components/diff-skeleton";
 import { Identical } from "@/features/diff/components/identical";
 import { SchemaDiffView } from "@/features/diff/components/schema-diff-view";
 import { diffQuery, parseRange, rangeParam } from "@/features/diff/queries";
+import { MigrationView } from "@/features/migration/components/migration-view";
+import { versionMigrationQuery } from "@/features/migration/queries";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { useDebounced } from "@/lib/use-debounced";
 
 // Two versions compared, at /app/<org>/<db>/diff/<from>...<to>, shareable
-// with what is selected (?change=) and the filter (?show=).
+// with what is selected (?change=), the filter (?show=) and the view
+// (?view=migration: the statements that migrate a database from one to the
+// other).
+type View = "changes" | "migration";
+
 interface Search {
   change?: string;
   show?: ChangeFilter;
+  view?: View;
 }
 
 const FILTERS = new Set<string>(["added", "removed", "changed"]);
@@ -41,6 +49,7 @@ export const Route = createFileRoute("/$org/$db/diff/$range")({
       typeof search.show === "string" && FILTERS.has(search.show)
         ? (search.show as ChangeFilter)
         : undefined,
+    view: search.view === "migration" ? "migration" : undefined,
   }),
   loader: async ({ context: { queryClient }, params: { org, db, range } }) => {
     let database = await queryClient.ensureQueryData(databaseQuery(org, db));
@@ -70,7 +79,17 @@ function Compare() {
   const [pickerOpened, setPickerOpened] = React.useState(false);
   const versions = useInfiniteQuery({ ...versionsQuery(org, db), enabled: pickerOpened });
   const missing = Math.max(from, to) > latest;
-  const diff = useQuery({ ...diffQuery(org, db, database.id, from, to), enabled: !missing });
+  const view: View = search.view ?? "changes";
+  const diff = useQuery({
+    ...diffQuery(org, db, database.id, from, to),
+    enabled: !missing && view === "changes",
+  });
+  const setView = (next: View) =>
+    void navigate({
+      search: (s) => ({ ...s, view: next === "migration" ? "migration" : undefined }),
+      replace: true,
+      resetScroll: false,
+    });
 
   // The address follows the selection, once the reader pauses: j held down
   // would otherwise match the routes again on every step.
@@ -119,6 +138,12 @@ function Compare() {
   let body: React.ReactNode;
   if (missing) {
     body = <NoSuchComparison />;
+  } else if (view === "migration") {
+    body = (
+      <MigrationView
+        query={(choice) => versionMigrationQuery(org, db, database.id, from, to, choice)}
+      />
+    );
   } else if (diff.error) {
     body =
       diff.error instanceof ApiError && diff.error.status === 404 ? (
@@ -208,7 +233,28 @@ function Compare() {
             All {latest} versions
           </Link>
         }
-        actions={!missing && open}
+        actions={
+          !missing && (
+            <>
+              <ToggleGroup
+                type="single"
+                value={view}
+                onValueChange={(next) => next && setView(next as View)}
+                aria-label="Show"
+              >
+                <ToggleGroupItem value="changes">
+                  <ListIcon />
+                  Changes
+                </ToggleGroupItem>
+                <ToggleGroupItem value="migration">
+                  <DatabaseScriptIcon />
+                  Migration
+                </ToggleGroupItem>
+              </ToggleGroup>
+              {open}
+            </>
+          )
+        }
       />
       <div className="relative min-h-0 flex-1">{body}</div>
     </div>

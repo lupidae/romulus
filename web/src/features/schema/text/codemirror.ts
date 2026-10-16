@@ -50,6 +50,8 @@ export interface Highlights {
   primary?: Range;
   /** Its other statements (foreign keys, indexes, comments). */
   related: Range[];
+  /** Statements that delete data (a migration's destructive ones). */
+  danger?: Range[];
 }
 
 // ---- Theme ------------------------------------------------------------------
@@ -108,6 +110,11 @@ const theme = EditorView.theme({
   ".cm-statement-related": {
     backgroundColor: "color-mix(in oklab, var(--color-primary) 3.5%, transparent)",
     boxShadow: "inset 0.125rem 0 0 color-mix(in oklab, var(--color-primary) 45%, transparent)",
+  },
+  // A statement that deletes data.
+  ".cm-statement-danger": {
+    backgroundColor: "color-mix(in oklab, var(--color-destructive) 7%, transparent)",
+    boxShadow: "inset 0.125rem 0 0 var(--color-destructive)",
   },
   // The search panel, in the kit's terms.
   ".cm-panels": {
@@ -290,13 +297,15 @@ const setHighlights = StateEffect.define<Highlights>();
 
 function lineDecorations(state: EditorState, h: Highlights): DecorationSet {
   const lines = new Map<number, string>();
+  // The selected statement wins over a destructive one, which wins over a related one.
   const mark = (r: Range, cls: string) => {
     const first = state.doc.lineAt(Math.min(r.from, state.doc.length)).number;
     const last = state.doc.lineAt(Math.min(Math.max(r.from, r.to - 1), state.doc.length)).number;
     for (let n = first; n <= last; n++)
-      if (!lines.has(n) || cls === "cm-statement") lines.set(n, cls);
+      if (!lines.has(n) || cls !== "cm-statement-related") lines.set(n, cls);
   };
   for (const r of h.related) mark(r, "cm-statement-related");
+  for (const r of h.danger ?? []) mark(r, "cm-statement-danger");
   if (h.primary) mark(h.primary, "cm-statement");
   const builder = new RangeSetBuilder<Decoration>();
   for (const n of [...lines.keys()].sort((a, b) => a - b)) {

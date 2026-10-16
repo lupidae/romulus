@@ -19,6 +19,8 @@ export { CopyIcon } from "./copy";
 export { CursorPointerIcon } from "./cursor-pointer";
 export { DataTransferBothIcon } from "./data-transfer-both";
 export { DatabaseIcon } from "./database";
+export { DatabaseScriptIcon } from "./database-script";
+export { DownloadIcon } from "./download";
 export { EditPencilIcon } from "./edit-pencil";
 export { ExpandIcon } from "./expand";
 export { EyeIcon } from "./eye";
