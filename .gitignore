@@ -16,6 +16,7 @@ node_modules/
 *.tsbuildinfo
 
 # Homepage
+/site/.wrangler/
 /site/test-results/
 /site/playwright-report/
 /site/lighthouse/

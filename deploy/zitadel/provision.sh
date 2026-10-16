@@ -6,8 +6,8 @@
 # Then writes the contract other tools read:
 #   $OUT/oidc.env      ROMULUS_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET
 #   $OUT/users.json    [{email, password, name}]: the test users (dev)
-#   $OUT/accounts.txt  "email password" of each account it created from
-#                      $ACCOUNTS (deployments), mode 600
+#   $OUT/accounts.txt  "email password" of each account it created
+#                      ($ACCOUNTS, add-account: deployments), mode 600
 #
 # The dev stack (docker-compose.yml) runs it on every `up`; the preview
 # (deploy/preview) on every deploy. Every step finds what exists before
@@ -15,8 +15,9 @@
 # exists but oidc.env is gone (or names another client), the secret is
 # regenerated rather than guessed.
 #
-#   provision.sh                       provision (the default)
-#   provision.sh verify-email ADDRESS  mark that user's email verified (no SMTP: README)
+#   provision.sh                                provision (the default)
+#   provision.sh add-account EMAIL GIVEN FAMILY an operator-made account (no SMTP: deploy/preview/README.md)
+#   provision.sh unlock EMAIL                   unlock an account locked by failed attempts
 set -euo pipefail
 
 : "${ZITADEL_URL:?}"          # http://zitadel:8080, inside the compose network
@@ -28,6 +29,7 @@ ISSUER=${ZITADEL_ISSUER:-http://$ZITADEL_HOST} # https://<external domain> behin
 OIDC_DEV_MODE=${OIDC_DEV_MODE:-true}           # Zitadel's dev mode allows http redirect URIs
 TEST_USERS=${TEST_USERS:-true}                 # alice and bob, password $DEV_PASSWORD
 ACCOUNTS=${ACCOUNTS:-}                         # "email|Given|Family …": created once, verified, random password
+LOCKOUT_ATTEMPTS=${LOCKOUT_ATTEMPTS:-}         # failed password/OTP attempts before an account locks; empty: never
 OUT=${OUT:-/out}
 PAT_FILE=${PAT_FILE:-/bootstrap/admin.pat}
 OWNER=${OWNER:-}
@@ -80,28 +82,58 @@ users_with_email() {
         | jq -c '.result // []'
 }
 
-# Without SMTP an account cannot verify its address by itself: an operator
-# who knows the person vouches for it (deploy/preview/README.md).
-if [ "${1:-}" = verify-email ]; then
-    address=${2:?usage: provision.sh verify-email ADDRESS}
-    found=$(users_with_email "$address")
-    if [ "$(jq length <<<"$found")" != 1 ]; then
-        log "verify-email: expected one user with the email $address, found $(jq length <<<"$found")"
-        exit 1
+# ensure_account EMAIL GIVEN FAMILY: an account the operator vouches for.
+# Without SMTP nobody can prove they own an address, so a verified account is
+# only ever one made here: created with the email verified and a random
+# password the person must change at first sign-in, written only to
+# $OUT/accounts.txt (mode 600) for the operator to hand over. An address that
+# already has a verified account is left alone. Unverified accounts with the
+# address are deleted first: anyone can sign up with any address, and
+# verifying such an account would hand that address (and the invitations
+# sent to it) to whoever created it.
+ensure_account() {
+    local email=$1 given=$2 family=$3 found stale password body user_id
+    found=$(users_with_email "$email")
+    if jq -e 'map(select(.human.email.isVerified == true)) | length > 0' <<<"$found" >/dev/null; then
+        log "$email already has a verified account; left alone"
+        return 0
     fi
-    user_id=$(jq -r '.[0].userId' <<<"$found")
-    email=$(jq -r '.[0].human.email.email' <<<"$found")
-    if [ "$(jq -r '.[0].human.email.isVerified // false' <<<"$found")" = true ]; then
-        log "$email is already verified"
-        exit 0
-    fi
-    # A fresh code, handed to us instead of mailed, then used: Zitadel
-    # refuses to "change" an address to itself with isVerified.
-    code=$(api POST "/v2/users/$user_id/email/resend" '{"returnCode": {}}' | jq -r .verificationCode)
-    api POST "/v2/users/$user_id/email/verify" "$(jq -cn --arg c "$code" '{verificationCode: $c}')" >/dev/null
-    log "verified $email ($user_id, $(jq -r '.[0].preferredLoginName' <<<"$found"))"
+    for stale in $(jq -r '.[].userId' <<<"$found"); do
+        api DELETE "/v2/users/$stale" >/dev/null
+        log "deleted the unverified account $(jq -r --arg id "$stale" '.[] | select(.userId == $id) | .preferredLoginName' <<<"$found") ($stale): anyone could have made it"
+    done
+    password="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')Aa1!" # every character class the policy asks for
+    body=$(jq -cn --arg u "$email" --arg g "$given" --arg f "$family" --arg p "$password" '{
+        username: $u,
+        profile: {givenName: $g, familyName: $f, displayName: ($g + " " + $f)},
+        email: {email: $u, isVerified: true},
+        password: {password: $p, changeRequired: true}
+    }')
+    user_id=$(api POST /v2/users/human "$body" | jq -r .userId)
+    mkdir -p "$OUT"
+    (umask 077; printf '%s %s\n' "$email" "$password" >> "$OUT/accounts.txt")
+    if [ -n "$OWNER" ]; then chown "$OWNER" "$OUT" "$OUT/accounts.txt"; fi
+    log "created account $email ($user_id); its initial password is in accounts.txt"
+}
+
+case "${1:-}" in
+add-account)
+    ensure_account "${2:?usage: provision.sh add-account EMAIL GIVEN FAMILY}" "${3:?given name}" "${4:?family name}"
     exit 0
-fi
+    ;;
+unlock)
+    found=$(users_with_email "${2:?usage: provision.sh unlock EMAIL}")
+    [ "$(jq length <<<"$found")" -gt 0 ] || { log "no account has the email $2"; exit 1; }
+    for id in $(jq -r '.[].userId' <<<"$found"); do
+        # COMMAND-olb9vb0oca is "not locked".
+        TOLERATE=COMMAND-olb9vb0oca api POST "/v2/users/$id/unlock" '{}' >/dev/null
+        log "$(jq -r --arg id "$id" '.[] | select(.userId == $id) | .preferredLoginName' <<<"$found") is unlocked"
+    done
+    exit 0
+    ;;
+"") ;;
+*) log "unknown command $1"; exit 2 ;;
+esac
 mkdir -p "$OUT"
 
 # Project
@@ -183,29 +215,23 @@ if [ "$TEST_USERS" = true ]; then
     ensure_user bob@romulus.test Bob Durand
 fi
 
-# A deployment's first accounts: created once, email verified (there may be
-# no SMTP to verify it), with a random password the person must change at
-# first sign-in. It is only ever written to $OUT/accounts.txt (mode 600);
-# an address that already has an account is left alone.
+# A deployment's first accounts (ensure_account, above).
 for account in $ACCOUNTS; do
     IFS='|' read -r email given family <<<"$account"
     if [ -z "$email" ] || [ -z "$given" ] || [ -z "$family" ]; then
         log "ACCOUNTS: expected email|Given|Family, got \"$account\""
         exit 1
     fi
-    [ "$(users_with_email "$email" | jq length)" = 0 ] || continue
-    password="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')Aa1!" # every character class the policy asks for
-    body=$(jq -cn --arg u "$email" --arg g "$given" --arg f "$family" --arg p "$password" '{
-        username: $u,
-        profile: {givenName: $g, familyName: $f, displayName: ($g + " " + $f)},
-        email: {email: $u, isVerified: true},
-        password: {password: $p, changeRequired: true}
-    }')
-    user_id=$(api POST /v2/users/human "$body" | jq -r .userId)
-    (umask 077; printf '%s %s\n' "$email" "$password" >> "$OUT/accounts.txt")
-    if [ -n "$OWNER" ]; then chown "$OWNER" "$OUT/accounts.txt"; fi
-    log "created account $email ($user_id); its initial password is in accounts.txt"
+    ensure_account "$email" "$given" "$family"
 done
+
+# Accounts lock after $LOCKOUT_ATTEMPTS failed attempts (password or OTP);
+# `provision.sh unlock` (or the console) unlocks them.
+if [ -n "$LOCKOUT_ATTEMPTS" ]; then
+    # INSTANCE-0Rf4s is "has not been changed".
+    TOLERATE=INSTANCE-0Rf4s api PUT /admin/v1/policies/lockout "$(jq -cn --argjson n "$LOCKOUT_ATTEMPTS" \
+        '{maxPasswordAttempts: $n, maxOtpAttempts: $n}')" >/dev/null
+fi
 
 # The hosted login looks like romulus: Zitadel's label policy (colors from the
 # app's tokens via brand.json, the logo per theme, Inter, no watermark) on the
