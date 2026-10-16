@@ -141,6 +141,8 @@ function Compare() {
   } else if (view === "migration") {
     body = (
       <MigrationView
+        // A new pair is a new view: its own file tab and scroll.
+        key={rangeParam(from, to)}
         query={(choice) => versionMigrationQuery(org, db, database.id, from, to, choice)}
       />
     );
