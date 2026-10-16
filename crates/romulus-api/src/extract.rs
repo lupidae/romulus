@@ -35,7 +35,9 @@ use crate::ApiError;
 pub struct Json<T>(pub T);
 
 /// An optional JSON body (`Option<Json<T>>`): `None` without a
-/// `Content-Type`, the same rejections as [`Json`] otherwise.
+/// `Content-Type` or with an empty body (a bare `POST`, even one that says
+/// `application/json`), the same rejections as [`Json`] otherwise. The body is
+/// read through the router's body limit.
 impl<T, S> OptionalFromRequest<S> for Json<T>
 where
     T: serde::de::DeserializeOwned,
@@ -44,7 +46,17 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
-        let json = <axum::Json<T> as OptionalFromRequest<S>>::from_request(req, state).await?;
+        let (parts, body) = req.into_parts();
+        let headers = parts.headers.clone();
+        let bytes = axum::body::Bytes::from_request(Request::from_parts(parts, body), state)
+            .await
+            .map_err(ApiError::from)?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        let mut again = Request::new(axum::body::Body::from(bytes));
+        *again.headers_mut() = headers;
+        let json = <axum::Json<T> as OptionalFromRequest<S>>::from_request(again, state).await?;
         Ok(json.map(|axum::Json(value)| Self(value)))
     }
 }
@@ -148,5 +160,70 @@ impl From<QueryRejection> for ApiError {
 impl From<BytesRejection> for ApiError {
     fn from(rejection: BytesRejection) -> Self {
         rejected(rejection.status(), rejection.body_text())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{Router, body::Body, http, routing::post};
+    use tower::ServiceExt;
+
+    use super::Json;
+
+    #[derive(serde::Deserialize)]
+    struct Options {
+        mode: Option<String>,
+    }
+
+    async fn handler(body: Option<Json<Options>>) -> String {
+        match body {
+            None => "none".to_owned(),
+            Some(Json(options)) => options.mode.unwrap_or_else(|| "default".to_owned()),
+        }
+    }
+
+    async fn call(content_type: Option<&str>, body: &'static str) -> (http::StatusCode, String) {
+        let mut request = http::Request::post("/").body(Body::from(body)).unwrap();
+        if let Some(content_type) = content_type {
+            request
+                .headers_mut()
+                .insert(http::header::CONTENT_TYPE, content_type.parse().unwrap());
+        }
+        let response = Router::new()
+            .route("/", post(handler))
+            .oneshot(request)
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn an_empty_body_is_no_body_even_when_it_says_json() {
+        assert_eq!(
+            call(Some("application/json"), "").await,
+            (http::StatusCode::OK, "none".into())
+        );
+        assert_eq!(call(None, "").await, (http::StatusCode::OK, "none".into()));
+    }
+
+    #[tokio::test]
+    async fn a_json_body_is_read_and_a_malformed_one_refused() {
+        assert_eq!(
+            call(Some("application/json"), r#"{"mode":"migration"}"#).await,
+            (http::StatusCode::OK, "migration".into())
+        );
+        assert_eq!(
+            call(Some("application/json"), "{}").await,
+            (http::StatusCode::OK, "default".into())
+        );
+        assert_eq!(
+            call(Some("application/json"), "{").await.0,
+            http::StatusCode::BAD_REQUEST
+        );
     }
 }
