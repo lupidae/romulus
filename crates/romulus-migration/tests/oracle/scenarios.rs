@@ -5,7 +5,11 @@
 
 use romulus_migration::{Format, Meta, Options, files, migration};
 
-use crate::{Case, check_all, compile, with_compiler};
+use crate::{
+    Case, check_all, compile,
+    tools::{ToolCase, check_tools},
+    with_compiler,
+};
 
 fn scenarios() -> Vec<(String, String, String)> {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/scenarios");
@@ -50,8 +54,8 @@ fn every_scenario_migrates_both_ways() {
                 database: "acme/app".to_owned(),
                 from: "v1".to_owned(),
                 to: "v2".to_owned(),
-                timestamp: "20261016093000".to_owned(),
-                version: 2,
+                date: "2026-10-16".to_owned(),
+                version: "20261016093000".to_owned(),
                 name: name.clone(),
             };
             let back = migration(&new, &old, &Options::default());
@@ -62,5 +66,37 @@ fn every_scenario_migrates_both_ways() {
             cases.push(case);
         }
         check_all(&compiler, cases).await;
+    });
+}
+
+#[test]
+fn every_scenario_runs_as_each_tool_would_run_it() {
+    with_compiler(|compiler| async move {
+        let mut cases = Vec::new();
+        for (name, old, new) in scenarios() {
+            let old = compile(&compiler, &old).await.expect("the old schema compiles");
+            let new = compile(&compiler, &new).await.expect("the new schema compiles");
+            for format in Format::ALL {
+                for concurrently in [false, true] {
+                    cases.push(ToolCase {
+                        label: name.clone(),
+                        old: old.clone(),
+                        new: new.clone(),
+                        options: Options { concurrently },
+                        format,
+                    });
+                }
+            }
+            for format in [Format::Plain, Format::GolangMigrate] {
+                cases.push(ToolCase {
+                    label: format!("{name} (reversed)"),
+                    old: new.clone(),
+                    new: old.clone(),
+                    options: Options::default(),
+                    format,
+                });
+            }
+        }
+        check_tools(&compiler, cases).await;
     });
 }

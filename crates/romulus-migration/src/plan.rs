@@ -32,7 +32,8 @@ use remus_core::{
 };
 
 use crate::{
-    Kind, Migration, Options, Section, Stage, Statement, Warning, WarningCode,
+    Hazard, Kind,
+    partitions::Moves, Migration, Options, Section, Stage, Statement, Warning, WarningCode,
     cast::conversion,
     sql::{
         column_definition, create_policy, create_view, identity_when, mentions, owned_sequence,
@@ -47,6 +48,9 @@ type Name = (String, String);
 pub(crate) enum Phase {
     Schemas,
     Extensions,
+    /// Partitions that become tables of their own: detached before they
+    /// (or their parent) change, their inherited objects first of all.
+    EarlyDetach,
     DropPolicies,
     DropViews,
     DropForeignKeys,
@@ -58,6 +62,9 @@ pub(crate) enum Phase {
     Composites,
     Sequences,
     Tables,
+    /// Identities and generation expressions removed, before the
+    /// conversions they would block and the sequences that take their name.
+    UnsetColumns,
     /// Columns dropped to be added again (below), before the conversions
     /// they would block.
     ReaddDrops,
@@ -92,10 +99,12 @@ impl Phase {
             | P::DropForeignKeys
             | P::DropIndexes
             | P::DropConstraints
+            | P::EarlyDetach
             | P::EarlyDrops => Section::Dependents,
             P::Types | P::Domains | P::Composites => Section::Types,
             P::Sequences
             | P::Tables
+            | P::UnsetColumns
             | P::ReaddDrops
             | P::Columns
             | P::ReaddAdds
@@ -123,8 +132,23 @@ struct Planned {
 }
 
 impl Statement {
+    /// Deletes or changes data.
     fn destroys(&mut self, note: impl Into<String>) -> &mut Self {
-        self.destructive = true;
+        self.flag(Hazard::DeletesData, note)
+    }
+
+    /// Fails when existing rows break it.
+    fn can_fail(&mut self, note: impl Into<String>) -> &mut Self {
+        self.flag(Hazard::CanFail, note)
+    }
+
+    /// Lets more rows through to more roles.
+    fn widens(&mut self, note: impl Into<String>) -> &mut Self {
+        self.flag(Hazard::WidensAccess, note)
+    }
+
+    fn flag(&mut self, hazard: Hazard, note: impl Into<String>) -> &mut Self {
+        self.hazard = Some(hazard);
         self.note = Some(note.into());
         self
     }
@@ -242,11 +266,16 @@ pub(crate) struct Planner<'a> {
     /// sequence) something new takes: removed tables go before anything is
     /// created, not last.
     early_removals: bool,
-    /// The names Postgres gave the old domains' unnamed checks, guessed:
-    /// (schema, domain, definition) → name.
-    check_names: BTreeMap<(String, String, String), String>,
     /// Tables on either side of a foreign key added (quoted names).
     keys_checked: Vec<String>,
+    /// Partitions detached as tables and tables attached as partitions.
+    moves: Moves,
+    /// Planning a detached partition, whose old objects are predicted:
+    /// they are dropped `IF EXISTS`.
+    guessing: bool,
+    /// Planning a table about to be attached: its constraints (the parent's
+    /// CHECKs among them) go in before the attach.
+    attaching: bool,
     out: Vec<Planned>,
     warnings: Vec<Warning>,
 }
@@ -256,7 +285,7 @@ impl<'a> Planner<'a> {
         old: &'a Schema,
         new: &'a Schema,
         options: &'a Options,
-        check_names: BTreeMap<(String, String, String), String>,
+        moves: Moves,
     ) -> Self {
         let index = |s: &'a Schema| {
             s.entities
@@ -278,8 +307,10 @@ impl<'a> Planner<'a> {
             views_dropped: BTreeSet::new(),
             sequences: BTreeSet::new(),
             early_removals: false,
-            check_names,
             keys_checked: Vec::new(),
+            moves,
+            guessing: false,
+            attaching: false,
             out: Vec::new(),
             warnings: Vec::new(),
         }
@@ -309,6 +340,7 @@ impl<'a> Planner<'a> {
             statement: Statement {
                 sql: sql.into(),
                 kind,
+                hazard: None,
                 destructive: false,
                 note: None,
                 alternative: None,
@@ -377,9 +409,15 @@ impl<'a> Planner<'a> {
         for (name, b, a) in pair(&self.old.domains, &self.new.domains, |d| {
             name_of(&d.schema, &d.name)
         }) {
+            // A check dropped needs its name, which the model does not
+            // record: the domain is created again rather than guessed at.
             if let (Some(b), Some(a)) = (b, a)
                 && (!same_sql(&b.base_type, &a.base_type)
-                    || recreate.iter().any(|(_, e)| mentions(&b.base_type, e)))
+                    || recreate.iter().any(|(_, e)| mentions(&b.base_type, e))
+                    || b
+                        .constraints
+                        .iter()
+                        .any(|check| !a.constraints.iter().any(|c| same_sql(c, check))))
             {
                 recreate.push(name);
             }
@@ -868,16 +906,20 @@ impl<'a> Planner<'a> {
                 (Some(b), Some(a)) => {
                     let recreated = self.aside.contains_key(&name);
                     if let Some(aside) = self.aside.get(&name).cloned() {
+                        let over_recreated =
+                            self.aside.keys().any(|(_, t)| mentions(&a.base_type, t));
                         self.push(
                             Phase::Domains,
                             Kind::AlterDomain,
                             format!("ALTER DOMAIN {ty} RENAME TO {};", quote_ident(&aside)),
                         )
-                        .noted(if same_sql(&b.base_type, &a.base_type) {
+                        .noted(if same_sql(&b.base_type, &a.base_type) && over_recreated {
                             format!(
                                 "Its type {} is created again, so it is too, and every column using it converted.",
                                 a.base_type
                             )
+                        } else if same_sql(&b.base_type, &a.base_type) {
+                            "A check goes, and dropping one needs its name, which the schema does not record: the domain is created again and every column using it converted.".to_owned()
                         } else {
                             format!(
                                 "Postgres cannot change a domain's type ({} → {}): it is created again and every column using it converted.",
@@ -920,34 +962,6 @@ impl<'a> Planner<'a> {
             };
             self.push(Phase::Domains, Kind::AlterDomain, sql);
         }
-        // The model lists checks by definition, without their names.
-        for check in &b.constraints {
-            if a.constraints.iter().any(|c| same_sql(c, check)) {
-                continue;
-            }
-            let guessed = self
-                .check_names
-                .get(&(name.0.clone(), name.1.clone(), check.clone()))
-                .cloned()
-                .unwrap_or_else(|| format!("{}_check", name.1));
-            self.push(
-                Phase::Domains,
-                Kind::AlterDomain,
-                format!("ALTER DOMAIN {ty} DROP CONSTRAINT {};", quote_ident(&guessed)),
-            )
-            .noted(format!(
-                "Drops {check}, by the name Postgres gives an unnamed check: if yours has another name, use it."
-            ));
-            self.warn(
-                WarningCode::ConstraintName,
-                Some(dotted(name)),
-                format!(
-                    "Domain {} drops a check by a guessed name ({guessed}): the model does not record domain check names. Check yours with \\dD+ {}.",
-                    dotted(name),
-                    dotted(name)
-                ),
-            );
-        }
         if b.not_null != a.not_null {
             if a.not_null {
                 self.push(
@@ -955,7 +969,7 @@ impl<'a> Planner<'a> {
                     Kind::AlterDomain,
                     format!("ALTER DOMAIN {ty} SET NOT NULL;"),
                 )
-                .destroys("Fails if a column of this domain holds a NULL.");
+                .can_fail("Fails if a column of this domain holds a NULL.");
             } else {
                 self.push(
                     Phase::Domains,
@@ -971,7 +985,7 @@ impl<'a> Planner<'a> {
                     Kind::AlterDomain,
                     format!("ALTER DOMAIN {ty} ADD {check};"),
                 )
-                .noted("Fails if a value of this domain already breaks it.");
+                .can_fail("Fails if a value of this domain already breaks it.");
             }
         }
     }
@@ -1056,8 +1070,8 @@ impl<'a> Planner<'a> {
                             attribute.r#type
                         ),
                     )
-                    .destroys(format!(
-                        "Converts {} to {}: values that do not convert are lost.",
+                    .can_fail(format!(
+                        "Converts {} to {}: fails on a value that does not convert.",
                         before.r#type, attribute.r#type
                     ));
                 }
@@ -1338,7 +1352,7 @@ impl<'a> Planner<'a> {
         let name = table_name(table);
         // Serial columns draw from a sequence that must exist first.
         for column in &table.columns {
-            self.sequence_for(column);
+            self.sequence_for(Phase::Sequences, column);
         }
         let mut lines: Vec<String> = table.columns.iter().map(column_definition).collect();
         lines.extend(
@@ -1373,7 +1387,7 @@ impl<'a> Planner<'a> {
             self.own_sequence(Phase::Tables, &name, column);
         }
         for fk in table.foreign_keys() {
-            self.add_constraint(&name, fk, None);
+            self.add_constraint(&name, fk, None, None);
         }
         for index in &table.indexes {
             self.push(
@@ -1391,8 +1405,11 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// `CREATE SEQUENCE` for a serial column's sequence, once.
-    fn sequence_for(&mut self, column: &Column) {
+    /// `CREATE SEQUENCE` for a serial column's sequence, once: before the
+    /// tables for a new one (`Phase::Sequences`), where the column changes
+    /// for an existing one (`Phase::Columns`: after an identity that held
+    /// the name is gone).
+    fn sequence_for(&mut self, phase: Phase, column: &Column) {
         let Some(sequence) = column.default.as_deref().and_then(owned_sequence) else {
             return;
         };
@@ -1401,10 +1418,30 @@ impl<'a> Planner<'a> {
         }
         if self.sequences.insert(sequence.to_owned()) {
             self.push(
-                Phase::Sequences,
+                phase,
                 Kind::CreateSequence,
                 format!("CREATE SEQUENCE IF NOT EXISTS {sequence};"),
             );
+        }
+    }
+
+    /// `setval` past the values an existing column holds, for a sequence
+    /// this migration created for it: `nextval` would collide with them.
+    fn catch_up(&mut self, table: &str, column: &Column) {
+        let Some(sequence) = column.default.as_deref().and_then(owned_sequence) else {
+            return;
+        };
+        if self.sequences.contains(sequence) {
+            let col = quote_ident(&column.name);
+            self.push(
+                Phase::Columns,
+                Kind::SetSequence,
+                format!(
+                    "SELECT setval({}, coalesce(max({col}), 0) + 1, false) FROM {table};",
+                    quote_literal(sequence)
+                ),
+            )
+            .noted("Moves the new sequence past the values the column already holds.");
         }
     }
 
@@ -1423,6 +1460,13 @@ impl<'a> Planner<'a> {
                 ),
             );
         }
+    }
+
+    /// A column of the new schema draws from it.
+    fn sequence_in_use(&self, sequence: &str) -> bool {
+        self.new.entities.iter().flat_map(|e| &e.columns).any(|c| {
+            c.generated.is_none() && c.default.as_deref().and_then(owned_sequence) == Some(sequence)
+        })
     }
 
     /// A column kept from the old schema draws from it, and so keeps
@@ -1447,24 +1491,32 @@ impl<'a> Planner<'a> {
         let table = table_name(after);
         let (rls, forced) = before.map_or((false, false), |b| (b.rls, b.rls_forced));
         if after.rls != rls {
-            let verb = if after.rls { "ENABLE" } else { "DISABLE" };
-            self.push(
+            let statement = self.push(
                 Phase::Security,
                 Kind::RowLevelSecurity,
-                format!("ALTER TABLE {table} {verb} ROW LEVEL SECURITY;"),
+                format!(
+                    "ALTER TABLE {table} {} ROW LEVEL SECURITY;",
+                    if after.rls { "ENABLE" } else { "DISABLE" }
+                ),
             );
+            if !after.rls {
+                statement.widens("Its policies stop applying: every role with privileges on the table sees and changes all its rows.");
+                self.widened(after, "row level security disabled: its policies stop applying".to_owned());
+            }
         }
         if after.rls_forced != forced {
-            let verb = if after.rls_forced {
-                "FORCE"
-            } else {
-                "NO FORCE"
-            };
-            self.push(
+            let statement = self.push(
                 Phase::Security,
                 Kind::RowLevelSecurity,
-                format!("ALTER TABLE {table} {verb} ROW LEVEL SECURITY;"),
+                format!(
+                    "ALTER TABLE {table} {} ROW LEVEL SECURITY;",
+                    if after.rls_forced { "FORCE" } else { "NO FORCE" }
+                ),
             );
+            if !after.rls_forced {
+                statement.widens("The table's owner bypasses its policies again.");
+                self.widened(after, "row level security no longer forced: its owner bypasses the policies".to_owned());
+            }
         }
         let old_policies = before.map_or(&[][..], |b| &b.policies[..]);
         let name = name_of(&after.schema, &after.name);
@@ -1490,38 +1542,78 @@ impl<'a> Planner<'a> {
                 );
             };
             match (b, a) {
-                (Some(_), None) => drop(self),
+                (Some(b), None) => {
+                    drop(self);
+                    let statement = &mut self.out.last_mut().expect("just pushed").statement;
+                    if b.permissive {
+                        statement.noted(format!(
+                            "Narrows access: rows only this policy let through become invisible to {}.",
+                            who(b)
+                        ));
+                    } else {
+                        statement.widens(format!(
+                            "A restrictive policy goes: the rows it kept out become visible to {}.",
+                            who(b)
+                        ));
+                        self.widened(after, format!("restrictive policy {policy_name} dropped"));
+                    }
+                }
                 (None, Some(a)) => {
-                    self.push(
+                    let grants = before.is_some() && a.permissive;
+                    let statement = self.push(
                         Phase::Security,
                         Kind::CreatePolicy,
                         create_policy(&table, a),
                     );
+                    if grants {
+                        statement.widens(format!(
+                            "Grants {} the rows its expressions allow.",
+                            who(a)
+                        ));
+                        self.widened(after, format!("permissive policy {policy_name} added"));
+                    }
                 }
-                (Some(_), Some(a)) if rebuild => {
+                (Some(b), Some(a)) if rebuild => {
                     drop(self);
-                    self.push(
+                    let statement = self.push(
                         Phase::Security,
                         Kind::CreatePolicy,
                         create_policy(&table, a),
-                    )
-                    .noted("Dropped above and created again around a column's type change.");
+                    );
+                    if same_policy(b, a) {
+                        statement.noted("Dropped above and created again around a change it names.");
+                    } else {
+                        statement.widens("Changed: check its roles and expressions do not let more through.");
+                        self.widened(after, format!("policy {policy_name} changed"));
+                    }
                 }
                 (Some(b), Some(a)) if !same_policy(b, a) => {
-                    if let Some(sql) = alter_policy(&table, b, a) {
-                        self.push(Phase::Security, Kind::AlterPolicy, sql);
+                    let alter = alter_policy(&table, b, a);
+                    let statement = if let Some(sql) = alter {
+                        self.push(Phase::Security, Kind::AlterPolicy, sql)
                     } else {
                         drop(self);
                         self.push(
                             Phase::Security,
                             Kind::CreatePolicy,
                             create_policy(&table, a),
-                        );
-                    }
+                        )
+                    };
+                    statement.widens("Changed: check its roles and expressions do not let more through.");
+                    self.widened(after, format!("policy {policy_name} changed"));
                 }
                 _ => {}
             }
         }
+    }
+
+    /// A warning that `table` lets more through.
+    fn widened(&mut self, table: &Entity, what: String) {
+        self.warn(
+            WarningCode::WidensAccess,
+            Some(format!("{}.{}", table.schema, table.name)),
+            format!("{}.{}: {what}. Check who can now read or change which rows.", table.schema, table.name),
+        );
     }
 
     fn alter_view(&mut self, b: &Entity, a: &Entity) {
@@ -1536,13 +1628,15 @@ impl<'a> Planner<'a> {
 
     fn alter_table(&mut self, name: &Name, b: &Entity, a: &Entity) {
         let table = table_name(a);
+        self.guessing = self.moves.detached.contains(name);
+        self.attaching = self.moves.attached.contains(name);
         // Constraints.
         for (_, cb, ca) in pair(&b.constraints, &a.constraints, |c| c.name.clone()) {
             match (cb, ca) {
                 (Some(cb), None) => self.drop_constraint(&table, cb),
                 (None, Some(ca)) => {
                     let note = adding_note(ca);
-                    self.add_constraint(&table, ca, Some(note));
+                    self.add_constraint(&table, ca, Some(note), Some(Hazard::CanFail));
                     if let Some(comment) = &ca.comment {
                         self.constraint_comment(&table, ca, Some(comment));
                     }
@@ -1554,14 +1648,14 @@ impl<'a> Planner<'a> {
                         None
                     };
                     if self.constraint_changed(name, cb, ca) {
-                        let note = if cb.kind == ca.kind && same_sql(&cb.definition, &ca.definition)
-                        {
-                            self.rebuild_reason(name, &cb.definition)
-                        } else {
-                            Some(adding_note(ca))
-                        };
+                        let (note, hazard) =
+                            if cb.kind == ca.kind && same_sql(&cb.definition, &ca.definition) {
+                                (self.rebuild_reason(name, &cb.definition), None)
+                            } else {
+                                (Some(adding_note(ca)), Some(Hazard::CanFail))
+                            };
                         self.drop_constraint(&table, cb);
-                        self.add_constraint(&table, ca, note);
+                        self.add_constraint(&table, ca, note, hazard);
                         if let Some(comment) = &ca.comment {
                             self.constraint_comment(&table, ca, Some(comment));
                         }
@@ -1571,6 +1665,7 @@ impl<'a> Planner<'a> {
                             &table,
                             ca,
                             Some(format!("Dropped above and added back: {reason}.")),
+                            None,
                         );
                         if let Some(comment) = &ca.comment {
                             self.constraint_comment(&table, ca, Some(comment));
@@ -1595,6 +1690,8 @@ impl<'a> Planner<'a> {
         }
         self.security(a, Some(b));
         self.entity_comments(a, Some(b));
+        self.guessing = false;
+        self.attaching = false;
     }
 
     fn drop_constraint(&mut self, table: &str, constraint: &Constraint) {
@@ -1603,23 +1700,35 @@ impl<'a> Planner<'a> {
         } else {
             Phase::DropConstraints
         };
+        let if_exists = if self.guessing { "IF EXISTS " } else { "" };
         self.push(
             phase,
             Kind::DropConstraint,
             format!(
-                "ALTER TABLE {table} DROP CONSTRAINT {};",
+                "ALTER TABLE {table} DROP CONSTRAINT {if_exists}{};",
                 quote_ident(&constraint.name)
             ),
         );
     }
 
-    fn add_constraint(&mut self, table: &str, constraint: &Constraint, note: Option<String>) {
+    /// `hazard`: `can_fail` for a constraint new to a table that has rows
+    /// (or changed), nothing for one created with its table or built again
+    /// as it was.
+    fn add_constraint(
+        &mut self,
+        table: &str,
+        constraint: &Constraint,
+        note: Option<String>,
+        hazard: Option<Hazard>,
+    ) {
         let phase = if constraint.kind == ConstraintKind::ForeignKey {
             self.keys_checked.push(table.to_owned());
             if let (Some(schema), Some(target)) = (&constraint.ref_schema, &constraint.ref_table) {
                 self.keys_checked.push(qualified(schema, target));
             }
             Phase::ForeignKeys
+        } else if self.attaching {
+            Phase::Columns
         } else {
             Phase::Constraints
         };
@@ -1633,6 +1742,7 @@ impl<'a> Planner<'a> {
             ),
         );
         statement.note = note;
+        statement.hazard = hazard;
     }
 
     fn constraint_comment(&mut self, table: &str, constraint: &Constraint, comment: Option<&str>) {
@@ -1657,7 +1767,10 @@ impl<'a> Planner<'a> {
                     self.push(
                         Phase::DropIndexes,
                         Kind::DropIndex,
-                        format!("DROP INDEX {qualified_index};"),
+                        format!(
+                            "DROP INDEX {}{qualified_index};",
+                            if self.guessing { "IF EXISTS " } else { "" }
+                        ),
                     );
                 }
                 (None, Some(ia)) => self.create_index(ia, concurrently, true),
@@ -1673,7 +1786,10 @@ impl<'a> Planner<'a> {
                         self.push(
                             Phase::DropIndexes,
                             Kind::DropIndex,
-                            format!("DROP INDEX {qualified_index};"),
+                            format!(
+                            "DROP INDEX {}{qualified_index};",
+                            if self.guessing { "IF EXISTS " } else { "" }
+                        ),
                         );
                     }
                     let rebuilt = same_sql(&ib.definition, &ia.definition)
@@ -1681,8 +1797,20 @@ impl<'a> Planner<'a> {
                         .flatten();
                     self.create_index(ia, concurrently, true);
                     if let (Some(reason), false) = (rebuilt, concurrently) {
-                        self.out.last_mut().expect("just pushed").statement.note = Some(reason);
+                        let statement = &mut self.out.last_mut().expect("just pushed").statement;
+                        statement.note = Some(reason);
+                        statement.hazard = None;
                     }
+                }
+                // A detached partition's copy of its parent's index exists,
+                // unless the parent's was created ON ONLY: make sure.
+                (Some(_), Some(ia)) if self.guessing => {
+                    let sql = ia
+                        .definition
+                        .replacen("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1)
+                        .replacen("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ", 1);
+                    self.push(Phase::Indexes, Kind::CreateIndex, format!("{sql};"))
+                        .noted("The partition's copy of its parent's index, unless the parent's was made ON ONLY.");
                 }
                 _ => {}
             }
@@ -1704,7 +1832,7 @@ impl<'a> Planner<'a> {
                 format!("{};", index.definition),
             );
             if existing_table && index.unique {
-                statement.noted("Fails if existing rows hold duplicates.");
+                statement.can_fail("Fails if existing rows hold duplicates.");
             }
         }
     }
@@ -1738,7 +1866,7 @@ impl<'a> Planner<'a> {
         for column in &a.columns {
             let Some(before) = b.column(&column.name) else {
                 // Added.
-                self.sequence_for(column);
+                self.sequence_for(Phase::Columns, column);
                 let rename_from = renames
                     .iter()
                     .find(|(_, to)| **to == column.name)
@@ -1769,9 +1897,11 @@ impl<'a> Planner<'a> {
                             ""
                         }
                     ));
-                    statement.destructive = fails;
+                    if fails {
+                        statement.hazard = Some(Hazard::CanFail);
+                    }
                 } else if fails {
-                    statement.destroys("Fails if the table has rows: give it a DEFAULT, or add it nullable, fill it, then SET NOT NULL.");
+                    statement.can_fail("Fails if the table has rows: give it a DEFAULT, or add it nullable, fill it, then SET NOT NULL.");
                 }
                 self.own_sequence(Phase::Columns, &table, column);
                 continue;
@@ -1806,17 +1936,20 @@ impl<'a> Planner<'a> {
                 continue;
             }
 
-            // 1. Identity and generation removed.
+            // 1. Identity and generation removed, before any conversion
+            //    (a generated column blocks the columns it reads) and any
+            //    sequence taking the identity's name.
             if before.identity.is_some() && column.identity.is_none() {
                 self.push(
-                    Phase::Columns,
+                    Phase::UnsetColumns,
                     Kind::AlterColumn,
                     format!("{alter} DROP IDENTITY;"),
-                );
+                )
+                .noted("Drops the identity's sequence too.");
             }
             if before.generated.is_some() && column.generated.is_none() {
                 self.push(
-                    Phase::Columns,
+                    Phase::UnsetColumns,
                     Kind::AlterColumn,
                     format!("{alter} DROP EXPRESSION;"),
                 )
@@ -1882,7 +2015,7 @@ impl<'a> Planner<'a> {
                 } else {
                     format!("ALTER TABLE {table}\n    {};", parts.join(",\n    "))
                 };
-                self.sequence_for(column);
+                self.sequence_for(Phase::Columns, column);
                 let loses_labels = column.type_kind == TypeKind::Enum
                     && self.enum_loses_labels(&column.type_schema, &column.type_name);
                 let statement = self.push(Phase::Columns, Kind::AlterColumn, sql);
@@ -1893,7 +2026,7 @@ impl<'a> Planner<'a> {
                         "enum"
                     };
                     if loses_labels {
-                        statement.destroys(format!(
+                        statement.can_fail(format!(
                             "Converts to the recreated {what} {}: fails on a row holding a label it lost.",
                             column.r#type.trim_end_matches("[]")
                         ));
@@ -1905,8 +2038,10 @@ impl<'a> Planner<'a> {
                     }
                 } else if conversion.lossless {
                     statement.note.clone_from(&conversion.note);
-                } else {
+                } else if conversion.rounds {
                     statement.destroys(conversion.note.clone().unwrap_or_default());
+                } else {
+                    statement.can_fail(conversion.note.clone().unwrap_or_default());
                 }
                 let via_text = conversion.via_text && !recreated;
                 if via_text {
@@ -1932,6 +2067,9 @@ impl<'a> Planner<'a> {
                         ),
                     );
                 }
+                if default_done {
+                    self.catch_up(&table, column);
+                }
                 self.own_sequence(Phase::Columns, &table, column);
             }
             // 3. Default.
@@ -1941,12 +2079,13 @@ impl<'a> Planner<'a> {
             {
                 match &column.default {
                     Some(default) => {
-                        self.sequence_for(column);
+                        self.sequence_for(Phase::Columns, column);
                         self.push(
                             Phase::Columns,
                             Kind::AlterColumn,
                             format!("{alter} SET DEFAULT {default};"),
                         );
+                        self.catch_up(&table, column);
                         self.own_sequence(Phase::Columns, &table, column);
                     }
                     None if before.default.is_some()
@@ -1969,7 +2108,7 @@ impl<'a> Planner<'a> {
                         Kind::AlterColumn,
                         format!("{alter} SET NOT NULL;"),
                     )
-                    .destroys("Fails if a row holds NULL here: fill those first.");
+                    .can_fail("Fails if a row holds NULL here: fill those first.");
                 } else {
                     self.push(
                         Phase::Columns,
@@ -1981,6 +2120,18 @@ impl<'a> Planner<'a> {
             // 5. Identity and generation set.
             match (&before.identity, &column.identity) {
                 (None, Some(identity)) => {
+                    // A serial column's sequence goes: the identity makes
+                    // its own, under the same name.
+                    if let Some(sequence) = before.default.as_deref().and_then(owned_sequence)
+                        && !self.sequence_in_use(sequence)
+                    {
+                        self.push(
+                            Phase::Columns,
+                            Kind::DropSequence,
+                            format!("DROP SEQUENCE {sequence};"),
+                        )
+                        .noted("The serial sequence goes: the identity below makes its own, under the same name.");
+                    }
                     self.push(
                         Phase::Columns,
                         Kind::AlterColumn,
@@ -1988,12 +2139,17 @@ impl<'a> Planner<'a> {
                             "{alter} ADD GENERATED {} AS IDENTITY;",
                             identity_when(identity)
                         ),
+                    );
+                    self.push(
+                        Phase::Columns,
+                        Kind::SetSequence,
+                        format!(
+                            "SELECT setval(pg_get_serial_sequence({}, {}), coalesce(max({col}), 0) + 1, false) FROM {table};",
+                            quote_literal(&table),
+                            quote_literal(&column.name)
+                        ),
                     )
-                    .noted(format!(
-                        "Its sequence starts at 1: if the table has rows, move it past them (SELECT setval(pg_get_serial_sequence('{}', '{}'), max({col})) FROM {table}).",
-                        table.replace('\'', "''"),
-                        column.name.replace('\'', "''")
-                    ));
+                    .noted("The identity's sequence starts at 1: moved past the values the column already holds.");
                 }
                 (Some(x), Some(y)) if x != y => {
                     self.push(
@@ -2020,11 +2176,17 @@ impl<'a> Planner<'a> {
             }
         }
 
-        // Dropped: last, with the other removals.
+        // Dropped: last, with the other removals; before the attach for a
+        // table becoming a partition (it may have no column its parent lacks).
+        let drop_phase = if self.moves.attached.contains(name) {
+            Phase::Columns
+        } else {
+            Phase::DropColumns
+        };
         for column in &removed {
             let col = quote_ident(&column.name);
             let statement = self.push(
-                Phase::DropColumns,
+                drop_phase,
                 Kind::DropColumn,
                 format!("ALTER TABLE {table} DROP COLUMN {col};"),
             );
@@ -2067,7 +2229,8 @@ impl<'a> Planner<'a> {
             }
         }
         let wanted: Vec<&str> = a.columns.iter().map(|c| c.name.as_str()).collect();
-        if order != wanted {
+        // A partition's columns match its parent's by name, in any order.
+        if order != wanted && !self.moves.attached.contains(name) {
             self.warn(
                 WarningCode::ColumnOrder,
                 Some(dotted(name)),
@@ -2289,6 +2452,21 @@ impl<'a> Planner<'a> {
         for name in old_order {
             let o = old_parts[name];
             let parent = name_of(&o.parent_schema, &o.parent);
+            if self.moves.detached.contains(name) {
+                // A table of its own from now on, rows and all; whatever
+                // differs is planned as for any table.
+                self.push(
+                    Phase::EarlyDetach,
+                    Kind::DetachPartition,
+                    format!(
+                        "ALTER TABLE {} DETACH PARTITION {};",
+                        qualified(&o.parent_schema, &o.parent),
+                        qualified(&o.child_schema, &o.child)
+                    ),
+                )
+                .noted("Kept, rows and all, as a table of its own.");
+                continue;
+            }
             if root_gone.contains(name) || gone.contains(&parent) {
                 gone.insert(name.clone());
                 continue;
@@ -2347,6 +2525,15 @@ impl<'a> Planner<'a> {
             let child = qualified(&n.child_schema, &n.child);
             let parent = qualified(&n.parent_schema, &n.parent);
             let bound = n.bound.as_deref().unwrap_or("DEFAULT");
+            if self.moves.attached.contains(name) {
+                self.push(
+                    Phase::AttachPartitions,
+                    Kind::AttachPartition,
+                    format!("ALTER TABLE {parent} ATTACH PARTITION {child} {bound};"),
+                )
+                .can_fail("Attached with its rows: fails if one does not fit the bound (or a DEFAULT partition holds rows that belong here). Its columns were aligned with the parent's above.");
+                continue;
+            }
             let exists = old_parts.contains_key(name) && !gone.contains(name);
             if !exists {
                 let mut sql = format!("CREATE TABLE {child} PARTITION OF {parent} {bound}");
@@ -2364,7 +2551,7 @@ impl<'a> Planner<'a> {
                 });
                 let statement = self.push(Phase::CreatePartitions, Kind::CreatePartition, sql);
                 if has_default && !root_fresh.contains(name) {
-                    statement.noted("Fails if the DEFAULT partition holds rows that belong here: move them out first.");
+                    statement.can_fail("Fails if the DEFAULT partition holds rows that belong here: move them out first.");
                 }
             } else if detach
                 .iter()
@@ -2375,7 +2562,7 @@ impl<'a> Planner<'a> {
                     Kind::AttachPartition,
                     format!("ALTER TABLE {parent} ATTACH PARTITION {child} {bound};"),
                 )
-                .noted("Scans the partition to check every row fits the bound.");
+                .can_fail("Scans the partition: fails if a row does not fit the new bound.");
             }
         }
     }
@@ -2408,9 +2595,24 @@ impl<'a> Planner<'a> {
             .noted("Lifted while the foreign keys below check existing rows: as the table owner they would go through its policies, which can fail outside the application's session. Forced again after.");
             let still_forced = self.new_entities[&name].rls_forced;
             let no_force = format!("ALTER TABLE {table_sql} NO FORCE ROW LEVEL SECURITY;");
-            // Its own NO FORCE (the new schema stops forcing) is done already.
-            self.out
-                .retain(|p| !(p.phase == Phase::Security && p.statement.sql == no_force));
+            // Its own NO FORCE (the new schema stops forcing) is done already:
+            // this one carries its flag.
+            let own = self
+                .out
+                .iter()
+                .position(|p| p.phase == Phase::Security && p.statement.sql == no_force);
+            if let Some(own) = own {
+                let own = self.out.remove(own).statement;
+                let lifted = &mut self
+                    .out
+                    .iter_mut()
+                    .rev()
+                    .find(|p| p.phase == Phase::Constraints && p.statement.sql == no_force)
+                    .expect("pushed above")
+                    .statement;
+                lifted.hazard = own.hazard;
+                lifted.note = own.note;
+            }
             if still_forced {
                 self.push(
                     Phase::Security,
@@ -2454,6 +2656,10 @@ impl<'a> Planner<'a> {
                 s.stage = Stage::Commit;
                 s.note = Some("Committed before the rest: Postgres refuses a value added in the same transaction (\"unsafe use of new value\"), and the migration uses it.".to_owned());
             }
+        }
+        for planned in &mut self.out {
+            let s = &mut planned.statement;
+            s.destructive = matches!(s.hazard, Some(Hazard::DeletesData | Hazard::CanFail));
         }
         self.out.sort_by_key(|p| (p.statement.stage, p.phase));
         Migration {
@@ -2656,6 +2862,15 @@ fn same_policy(a: &Policy, b: &Policy) -> bool {
         && ra == rb
         && same_opt_sql(a.using.as_ref(), b.using.as_ref())
         && same_opt_sql(a.check.as_ref(), b.check.as_ref())
+}
+
+/// Who a policy applies to, in a sentence.
+fn who(policy: &Policy) -> String {
+    if policy.roles.is_empty() {
+        "every role".to_owned()
+    } else {
+        policy.roles.join(", ")
+    }
 }
 
 /// `ALTER POLICY` when it can express the change: not the command, not

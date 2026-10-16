@@ -18,11 +18,12 @@
 mod corpus;
 mod mutate;
 mod scenarios;
+mod tools;
 
 use std::{fmt::Write, future::Future, sync::LazyLock, time::Duration};
 
 use remus_core::Schema;
-use romulus_migration::{Options, WarningCode, migration};
+use romulus_migration::{Kind, Options, WarningCode, migration};
 use romulus_sandbox::{Compilation, Compiler, SandboxConfig, render_sql};
 use tokio::{runtime::Runtime, sync::OnceCell, task::JoinSet};
 
@@ -36,7 +37,7 @@ static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 
 static COMPILER: OnceCell<Compiler> = OnceCell::const_new();
 
-fn admin_url() -> Option<String> {
+pub fn admin_url() -> Option<String> {
     let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env"));
     std::env::var("ROMULUS_SANDBOX_URL").ok()
 }
@@ -181,7 +182,13 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
     {
         return Ok(Outcome::Skipped);
     }
-    let script = m.script().replace(" INDEX CONCURRENTLY ", " INDEX ");
+    // `setval` is data (the sandbox runs DDL only); the tool runs execute it.
+    let script: String = m
+        .statements
+        .iter()
+        .filter(|s| s.kind != Kind::SetSequence)
+        .map(|s| format!("{}\n", s.sql.replace(" INDEX CONCURRENTLY ", " INDEX ")))
+        .collect();
     let old_sql = render_sql(&case.old);
     // A schema the old side uses for functions alone exists in a real
     // database, but the sandbox creates it only when the text does not.

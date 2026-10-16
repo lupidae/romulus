@@ -53,13 +53,16 @@
 mod cast;
 mod extensions;
 mod format;
+mod partitions;
 mod plan;
 mod sql;
 #[cfg(test)]
 mod tests;
 
-pub use extensions::{PROVIDED as EXTENSION_OBJECTS, REQUIRES as EXTENSION_REQUIREMENTS};
-pub use format::{File, FileRole, Format, Lines, Meta, files, slug};
+pub use extensions::{
+    PROVIDED as EXTENSION_OBJECTS, REQUIRES as EXTENSION_REQUIREMENTS, without_provided as without_extension_objects,
+};
+pub use format::{File, FileRole, Format, Mark, Meta, archive_name, files, slug};
 use remus_core::Schema;
 use serde::{Deserialize, Serialize};
 
@@ -99,8 +102,16 @@ impl Migration {
         self.statements.iter().filter(|s| s.destructive).count()
     }
 
+    /// How many statements carry `hazard`.
+    pub fn count(&self, hazard: Hazard) -> usize {
+        self.statements
+            .iter()
+            .filter(|s| s.hazard == Some(hazard))
+            .count()
+    }
+
     /// Every statement as one script, in order, without the transaction
-    /// control the tools add (the sandbox oracle runs exactly this).
+    /// control the tools add.
     pub fn script(&self) -> String {
         let mut out = String::new();
         for statement in &self.statements {
@@ -118,9 +129,10 @@ pub struct Statement {
     /// One statement, ending with `;` (it may span lines).
     pub sql: String,
     pub kind: Kind,
-    /// Deletes data (a dropped table, column or partition, a conversion
-    /// that can lose or reject values), or fails when existing rows break
-    /// it (`SET NOT NULL`, a `NOT NULL` column without a default).
+    /// What running it can do beyond changing the schema; `null` when
+    /// nothing.
+    pub hazard: Option<Hazard>,
+    /// `hazard` is `deletes_data` or `can_fail`: existing data is at stake.
     pub destructive: bool,
     /// What a reviewer should know: why it is there, what it can do to
     /// existing rows, how to do it more safely.
@@ -174,6 +186,25 @@ impl Section {
     }
 }
 
+/// What a statement risks, beyond changing the schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationHazard))]
+#[serde(rename_all = "snake_case")]
+pub enum Hazard {
+    /// Deletes data, or changes it: a table, column or partition dropped, a
+    /// conversion that rounds or cuts values, a column that becomes
+    /// generated.
+    DeletesData,
+    /// Fails when existing rows break it: `SET NOT NULL`, a constraint or a
+    /// unique index added to a table that has rows, a conversion that
+    /// rejects values, a partition attached.
+    CanFail,
+    /// Lets more rows through to more roles: row level security disabled
+    /// or no longer forced, a restrictive policy dropped, a permissive
+    /// policy added or changed.
+    WidensAccess,
+}
+
 /// When a statement runs relative to the migration's transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationStage))]
@@ -205,6 +236,10 @@ pub enum Kind {
     DropDomain,
     CreateSequence,
     AlterSequence,
+    DropSequence,
+    /// `SELECT setval(…)`: moves a sequence past the rows a table already
+    /// has (data, not schema: the only statement that is not DDL).
+    SetSequence,
     CreateTable,
     AlterTable,
     DropTable,
@@ -256,9 +291,8 @@ pub enum WarningCode {
     /// A column converted to a type with no cast from its old one: through
     /// text, which fails unless the values read as the new type.
     Cast,
-    /// A domain's CHECK is dropped by the name Postgres gives an unnamed
-    /// one; the model does not know the real name.
-    ConstraintName,
+    /// Statements that widen who can read or write which rows.
+    WidensAccess,
     /// Foreign tables are not migrated (foreign servers are not modelled).
     ForeignTable,
     /// Something Postgres cannot change in place and the migration does not
@@ -273,26 +307,10 @@ pub enum WarningCode {
 /// `romulus_diff::diff(old, new)` is empty; a change it cannot make
 /// (moving a column, a foreign table) is a warning instead.
 pub fn migration(old: &Schema, new: &Schema, options: &Options) -> Migration {
-    // The catalog lists a domain's checks by name, which for unnamed ones
-    // (`<domain>_check`, `<domain>_check1`…) is the order they were added:
-    // the names are guessed from it, before normalizing sorts them.
-    let check_names = old
-        .domains
-        .iter()
-        .flat_map(|d| {
-            d.constraints.iter().enumerate().map(move |(i, check)| {
-                let name = if i == 0 {
-                    format!("{}_check", d.name)
-                } else {
-                    format!("{}_check{i}", d.name)
-                };
-                ((d.schema.clone(), d.name.clone(), check.clone()), name)
-            })
-        })
-        .collect();
     let mut old = romulus_diff::normalize(old);
     let mut new = romulus_diff::normalize(new);
     extensions::without_provided(&mut old);
     extensions::without_provided(&mut new);
-    plan::Planner::new(&old, &new, options, check_names).plan()
+    let moves = partitions::reconcile(&mut old, &mut new);
+    plan::Planner::new(&old, &new, options, moves).plan()
 }

@@ -139,6 +139,9 @@ pub(crate) struct Conversion {
     pub lossless: bool,
     /// No cast between the two: through text.
     pub via_text: bool,
+    /// Values can come out different (rounded, cut, their time zone
+    /// dropped), not just be rejected.
+    pub rounds: bool,
     pub note: Option<String>,
 }
 
@@ -159,6 +162,7 @@ pub(crate) fn conversion(
             using: None,
             lossless: true,
             via_text: false,
+            rounds: false,
             note: None,
         };
     }
@@ -167,6 +171,7 @@ pub(crate) fn conversion(
             using: Some(format!("{col}::text::{to}")),
             lossless: false,
             via_text: true,
+            rounds: false,
             note: Some(format!(
                 "Converts {from} to {to} through text: fails unless every value reads as {to}. Convert it yourself if it holds data."
             )),
@@ -177,6 +182,7 @@ pub(crate) fn conversion(
             using: None,
             lossless: true,
             via_text: false,
+            rounds: false,
             note: Some(
                 "Reads the existing values in the session's TimeZone: set it to the one they were written in."
                     .to_owned(),
@@ -184,13 +190,17 @@ pub(crate) fn conversion(
         };
     }
     if cast_exists(&a, &b) {
+        let rounds = rounds(&a, &b);
         return Conversion {
             using: Some(format!("{col}::{to}")),
             lossless: false,
             via_text: false,
-            note: Some(format!(
-                "Converts {from} to {to}: fails on a value that does not convert, and can round or cut values."
-            )),
+            rounds,
+            note: Some(if rounds {
+                format!("Converts {from} to {to}: values can come out rounded or cut, and one that does not fit fails.")
+            } else {
+                format!("Converts {from} to {to}: fails on a value that does not convert.")
+            }),
         };
     }
     let text = if a.arrays > 0 {
@@ -202,6 +212,7 @@ pub(crate) fn conversion(
         using: Some(format!("{col}::{text}::{to}")),
         lossless: false,
         via_text: true,
+        rounds: false,
         note: Some(format!(
             "No cast from {from} to {to}: converted through text, which fails unless every value reads as {to}."
         )),
@@ -211,8 +222,10 @@ pub(crate) fn conversion(
 /// Every value of `a` is a value of `b`, and an assignment cast does it.
 fn widening(a: &Ty, b: &Ty) -> bool {
     use Family as F;
-    let unbounded_text =
-        b.family == F::Text && !b.bounded_text() && b.base != "character" && b.base != "\"char\"";
+    // `name` keeps 63 bytes, `character` pads, `"char"` keeps one byte.
+    let unbounded_text = b.family == F::Text
+        && !b.bounded_text()
+        && !matches!(b.base.as_str(), "character" | "\"char\"" | "name");
     match (a.family, b.family) {
         (F::Int(x), F::Int(y)) => x <= y,
         (F::Int(_), F::Numeric) => b.modifiers.is_none(),
@@ -237,6 +250,10 @@ fn widening(a: &Ty, b: &Ty) -> bool {
                 )
                 // Same type, its modifier dropped (`geometry(Point,4326)` → `geometry`).
                 || (a.base == b.base && b.modifiers.is_none() && a.family != F::Enum)
+                // More fractional digits: `timestamp(3)` → `timestamp(6)`.
+                || (a.base == b.base
+                    && precision_type(a.family)
+                    && precision_widens(a.modifiers.as_deref(), b.modifiers.as_deref()))
         }
     }
 }
@@ -263,6 +280,44 @@ fn length_widens(from: Option<&str>, to: Option<&str>) -> bool {
     let Some(from) = from else { return false };
     match (from.trim().parse::<u64>(), to.trim().parse::<u64>()) {
         (Ok(n), Ok(m)) => m >= n,
+        _ => false,
+    }
+}
+
+/// The cast can change a value rather than reject it: fractions dropped,
+/// precision or scale reduced, a time cut to a date, a time zone dropped.
+fn rounds(a: &Ty, b: &Ty) -> bool {
+    use Family as F;
+    match (a.family, b.family) {
+        (F::Numeric | F::Float(_) | F::Money, F::Int(_))
+        | (F::Float(8), F::Float(4))
+        | (F::Numeric, F::Float(_) | F::Money)
+        | (F::Timestamp | F::TimestampTz, F::Date | F::Time | F::TimeTz)
+        | (F::TimestampTz, F::Timestamp)
+        | (F::TimeTz, F::Time)
+        | (F::Interval, F::Time) => true,
+        (F::Numeric, F::Numeric) => !numeric_widens(a.modifiers.as_deref(), b.modifiers.as_deref()),
+        // Fractional seconds: timestamp(6) → timestamp(0).
+        _ if a.base == b.base && precision_type(a.family) => {
+            !precision_widens(a.modifiers.as_deref(), b.modifiers.as_deref())
+        }
+        _ => false,
+    }
+}
+
+/// Times whose modifier is a precision of fractional seconds.
+fn precision_type(family: Family) -> bool {
+    matches!(
+        family,
+        Family::Timestamp | Family::TimestampTz | Family::Time | Family::TimeTz | Family::Interval
+    )
+}
+
+/// `timestamp(3)` → `timestamp(6)` or `timestamp` (6, the default).
+fn precision_widens(from: Option<&str>, to: Option<&str>) -> bool {
+    let precision = |m: Option<&str>| m.map_or(Some(6), |m| m.trim().parse::<u32>().ok());
+    match (precision(from), precision(to)) {
+        (Some(p), Some(q)) => q >= p,
         _ => false,
     }
 }
@@ -338,6 +393,8 @@ mod tests {
             ("uuid", "text"),
             ("date", "timestamp with time zone"),
             ("geometry(Point,4326)", "geometry"),
+            ("timestamp(3) with time zone", "timestamp(6) with time zone"),
+            ("timestamp(3) without time zone", "timestamp without time zone"),
             ("integer[]", "bigint[]"),
         ] {
             let c = conversion("c", from, false, to, false);
@@ -355,6 +412,13 @@ mod tests {
         );
         assert_eq!(using("json", "jsonb").as_deref(), Some("c::jsonb"));
         assert!(!conversion("c", "bigint", false, "integer", false).lossless);
+        // name keeps 63 bytes: not every text fits.
+        let to_name = conversion("c", "text", false, "name", false);
+        assert!(!to_name.lossless && !to_name.rounds);
+        // Fewer fractional digits round; fewer integers digits fail.
+        assert!(conversion("c", "timestamp(6) with time zone", false, "timestamp(0) with time zone", false).rounds);
+        assert!(conversion("c", "numeric(10,2)", false, "integer", false).rounds);
+        assert!(!conversion("c", "bigint", false, "integer", false).rounds);
     }
 
     #[test]

@@ -57,8 +57,9 @@ pub(crate) fn install_order<'n>(names: &[&'n str]) -> Vec<&'n str> {
     done
 }
 
-/// `schema` without the objects its extensions provide.
-pub(crate) fn without_provided(schema: &mut Schema) {
+/// `schema` without the objects its extensions provide (what a migration
+/// leaves to `CREATE EXTENSION` and `DROP EXTENSION`).
+pub fn without_provided(schema: &mut Schema) {
     let provided = |object_schema: &str, name: &str| {
         schema.extensions.iter().any(|x| {
             x.schema == object_schema

@@ -608,8 +608,8 @@ fn meta() -> Meta {
         database: "acme/app".into(),
         from: "v4".into(),
         to: "v5".into(),
-        timestamp: "20261016093000".into(),
-        version: 5,
+        date: "2026-10-16".into(),
+        version: "20261016093000".into(),
         name: "add_names".into(),
     }
 }

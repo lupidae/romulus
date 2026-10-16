@@ -16,18 +16,18 @@
 //! is split where the tool runs each file in its own transaction: the
 //! enum values first, the main file, then one file per concurrent index
 //! (several statements in one file run as one implicit transaction, which
-//! `CONCURRENTLY` refuses). Their versions follow each other (a second
-//! apart, or `V<n>.1`, `V<n>.2`…).
+//! `CONCURRENTLY` refuses). Enum values the *down* migration uses get a
+//! migration of their own right after the main one: going down, it runs
+//! (and commits) before the main one's down. Versions follow each other
+//! (a second apart, the next number, or `V<n>.1`, `V<n>.2`…).
 //!
 //! The down migration is the migration from the new schema back to the old
 //! one, in the main file: best effort, since what the up migration deleted
 //! does not come back.
 
-use std::fmt::Write as _;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{Migration, Section, Stage, Statement};
+use crate::{Hazard, Migration, Section, Stage, Statement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationTool))]
@@ -77,11 +77,13 @@ pub struct Meta {
     /// The two sides: `v4` and `v5`, or `v12` and `draft "Billing"`.
     pub from: String,
     pub to: String,
-    /// UTC, `YYYYMMDDHHMMSS`: the version of timestamped tools, and the
-    /// header's date.
-    pub timestamp: String,
-    /// Flyway's version for the main file (`V<version>__…`).
-    pub version: u32,
+    /// The header's date, `YYYY-MM-DD`.
+    pub date: String,
+    /// The first file's version: Flyway's `V<version>__…` (digits and
+    /// dots), the number other tools put first (a `YYYYMMDDHHMMSS`
+    /// timestamp, or a sequence like golang-migrate's `000042`). The files
+    /// after it get the next ones ([`next_version`]).
+    pub version: String,
     /// The description in file names, as [`slug`] makes it.
     pub name: String,
 }
@@ -94,9 +96,19 @@ pub struct File {
     pub path: String,
     pub content: String,
     pub role: FileRole,
-    /// Where the destructive statements are (with their comments), for
+    /// Where the statements with a hazard are (with their comments), for
     /// highlighting.
-    pub destructive: Vec<Lines>,
+    pub marks: Vec<Mark>,
+}
+
+/// Lines of a file holding a statement with a hazard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationMark))]
+pub struct Mark {
+    /// 1-based, both ends included.
+    pub from: u32,
+    pub to: u32,
+    pub hazard: Hazard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -109,14 +121,6 @@ pub enum FileRole {
     Down,
     /// The tool's settings for the file before it (Flyway's `.sql.conf`).
     Config,
-}
-
-/// A range of lines, 1-based, both ends included.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationLines))]
-pub struct Lines {
-    pub from: u32,
-    pub to: u32,
 }
 
 /// `text` as a file name's description: lowercase ASCII letters and digits,
@@ -163,19 +167,34 @@ fn fold(c: char) -> char {
     }
 }
 
-/// One file's worth of statements.
+/// One file's (or migration's) worth of statements: what runs up, and
+/// what runs down.
 struct Unit<'m> {
     kind: UnitKind,
-    statements: Vec<&'m Statement>,
+    up: Vec<&'m Statement>,
+    down: Vec<&'m Statement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnitKind {
-    /// Enum values committed before the rest.
-    Commit,
+    /// Enum values the up migration uses, committed before it.
+    UpCommit,
     Main,
+    /// Enum values the down migration uses: its own migration after the
+    /// main one, so that its down runs (and commits) first.
+    DownCommit,
     /// One `CONCURRENTLY` statement.
     Concurrent,
+}
+
+/// What the files of a migration download as together: `<version>_<name>.zip`
+/// (`V<version>__<name>.zip` for Flyway).
+pub fn archive_name(format: Format, meta: &Meta) -> String {
+    if format == Format::Flyway {
+        format!("V{}__{}.zip", meta.version, meta.name)
+    } else {
+        format!("{}_{}.zip", meta.version, meta.name)
+    }
 }
 
 /// The files of `up` (and of `down`, the migration back, where the tool has
@@ -186,53 +205,63 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
         header(&mut out, up, meta, None);
         body(&mut out, &up.statements.iter().collect::<Vec<_>>(), true);
         return vec![out.file(
-            format!("{}_{}.sql", meta.timestamp, meta.name),
+            format!("{}_{}.sql", meta.version, meta.name),
             FileRole::Up,
         )];
     }
-    let units = split(up);
+    let units = split(up, down, format.has_down());
     let parts = units.len();
     let mut files = Vec::new();
     for (i, unit) in units.iter().enumerate() {
-        let (version, name) = match unit.kind {
-            UnitKind::Main => (i, meta.name.clone()),
-            UnitKind::Commit => (i, format!("{}_enum_values", meta.name)),
-            UnitKind::Concurrent => (i, format!("{}_{}", meta.name, concurrent_name(unit))),
+        let name = match unit.kind {
+            UnitKind::Main => meta.name.clone(),
+            UnitKind::UpCommit => format!("{}_enum_values", meta.name),
+            UnitKind::DownCommit => format!("{}_down_enum_values", meta.name),
+            UnitKind::Concurrent => format!("{}_{}", meta.name, concurrent_name(unit)),
         };
         let part = (parts > 1).then_some((i + 1, parts));
-        files.extend(unit_files(
-            format, unit, up, down, meta, version, &name, part,
-        ));
+        files.extend(unit_files(format, unit, up, down, meta, i, &name, part));
     }
     files
 }
 
-/// The statements split into the files a per-file-transaction tool needs.
-fn split(m: &Migration) -> Vec<Unit<'_>> {
+/// The statements split into the migrations a per-file-transaction tool
+/// needs, in the order they run up (down runs them backwards).
+fn split<'m>(up: &'m Migration, down: &'m Migration, with_down: bool) -> Vec<Unit<'m>> {
+    let stage = |m: &'m Migration, stage: Stage| -> Vec<&'m Statement> {
+        m.statements.iter().filter(|s| s.stage == stage).collect()
+    };
     let mut units = Vec::new();
-    let commit: Vec<&Statement> = m
-        .statements
-        .iter()
-        .filter(|s| s.stage == Stage::Commit)
-        .collect();
-    if !commit.is_empty() {
+    let up_commit = stage(up, Stage::Commit);
+    if !up_commit.is_empty() {
         units.push(Unit {
-            kind: UnitKind::Commit,
-            statements: commit,
+            kind: UnitKind::UpCommit,
+            up: up_commit,
+            down: Vec::new(),
         });
     }
+    // The down migration has no concurrent statements (it is planned
+    // without the option); its enum values get a migration of their own.
+    let mut main_down = stage(down, Stage::Transaction);
+    main_down.extend(stage(down, Stage::Concurrent));
     units.push(Unit {
         kind: UnitKind::Main,
-        statements: m
-            .statements
-            .iter()
-            .filter(|s| s.stage == Stage::Transaction)
-            .collect(),
+        up: stage(up, Stage::Transaction),
+        down: if with_down { main_down } else { Vec::new() },
     });
-    for s in m.statements.iter().filter(|s| s.stage == Stage::Concurrent) {
+    let down_commit = stage(down, Stage::Commit);
+    if with_down && !down_commit.is_empty() {
+        units.push(Unit {
+            kind: UnitKind::DownCommit,
+            up: Vec::new(),
+            down: down_commit,
+        });
+    }
+    for s in up.statements.iter().filter(|s| s.stage == Stage::Concurrent) {
         units.push(Unit {
             kind: UnitKind::Concurrent,
-            statements: vec![s],
+            up: vec![s],
+            down: Vec::new(),
         });
     }
     units
@@ -240,7 +269,7 @@ fn split(m: &Migration) -> Vec<Unit<'_>> {
 
 /// `create_index_users_email_idx`, from the statement itself.
 fn concurrent_name(unit: &Unit) -> String {
-    let sql = unit.statements.first().map_or("", |s| s.sql.as_str());
+    let sql = unit.up.first().map_or("", |s| s.sql.as_str());
     let verb = if sql.starts_with("DROP") {
         "drop"
     } else {
@@ -270,7 +299,15 @@ fn unit_files(
     name: &str,
     part: Option<(usize, usize)>,
 ) -> Vec<File> {
-    let ts = add_seconds(&meta.timestamp, index as u64);
+    let version = if format == Format::Flyway {
+        if index == 0 {
+            meta.version.clone()
+        } else {
+            format!("{}.{index}", meta.version)
+        }
+    } else {
+        next_version(&meta.version, index)
+    };
     let concurrent = unit.kind == UnitKind::Concurrent;
     let main = unit.kind == UnitKind::Main;
     let mut out = Writer::new();
@@ -281,25 +318,20 @@ fn unit_files(
                 out.line("-- no-transaction");
             }
             header(&mut out, up, meta, part);
-            body(&mut out, &unit.statements, false);
-            vec![out.file(format!("{ts}_{name}.sql"), FileRole::Up)]
+            up_body(&mut out, unit, false);
+            vec![out.file(format!("{version}_{name}.sql"), FileRole::Up)]
         }
         Format::Flyway => {
-            let version = if index == 0 {
-                meta.version.to_string()
-            } else {
-                format!("{}.{index}", meta.version)
-            };
             let path = format!("V{version}__{name}.sql");
             header(&mut out, up, meta, part);
-            body(&mut out, &unit.statements, false);
+            up_body(&mut out, unit, false);
             let mut files = vec![out.file(path.clone(), FileRole::Up)];
             if concurrent {
                 files.push(File {
                     path: format!("{path}.conf"),
                     content: "executeInTransaction=false\n".to_owned(),
                     role: FileRole::Config,
-                    destructive: Vec::new(),
+                    marks: Vec::new(),
                 });
             }
             files
@@ -307,11 +339,11 @@ fn unit_files(
         Format::Prisma => {
             header(&mut out, up, meta, part);
             if concurrent {
-                out.comment("Prisma runs a migration in a transaction, which CONCURRENTLY refuses: run this statement yourself, then mark it applied with prisma migrate resolve --applied <this folder>.");
+                out.comment("Alone in its migration: Prisma sends a migration.sql as one query, which Postgres runs as one transaction when it holds several statements, and CONCURRENTLY refuses that.");
                 out.blank();
             }
-            body(&mut out, &unit.statements, false);
-            vec![out.file(format!("{ts}_{name}/migration.sql"), FileRole::Up)]
+            up_body(&mut out, unit, false);
+            vec![out.file(format!("{version}_{name}/migration.sql"), FileRole::Up)]
         }
         Format::Dbmate => {
             header(&mut out, up, meta, part);
@@ -320,24 +352,34 @@ fn unit_files(
             } else {
                 "-- migrate:up"
             });
-            body(&mut out, &unit.statements, false);
+            up_body(&mut out, unit, false);
             out.blank();
             out.line("-- migrate:down");
-            down_body(&mut out, unit.kind, down, false);
-            vec![out.file(format!("{ts}_{name}.sql"), FileRole::Up)]
+            down_body(&mut out, unit, down, false);
+            vec![out.file(format!("{version}_{name}.sql"), FileRole::Up)]
         }
         Format::GolangMigrate => {
             header(&mut out, up, meta, part);
-            body(&mut out, &unit.statements, main);
-            let up_file = out.file(format!("{ts}_{name}.up.sql"), FileRole::Up);
+            up_body(&mut out, unit, main);
+            let up_file = out.file(format!("{version}_{name}.up.sql"), FileRole::Up);
             let mut back = Writer::new();
             down_header(&mut back, down, meta);
-            down_body(&mut back, unit.kind, down, true);
+            down_body(&mut back, unit, down, main);
             vec![
                 up_file,
-                back.file(format!("{ts}_{name}.down.sql"), FileRole::Down),
+                back.file(format!("{version}_{name}.down.sql"), FileRole::Down),
             ]
         }
+    }
+}
+
+fn up_body(out: &mut Writer, unit: &Unit, transaction: bool) {
+    match unit.kind {
+        UnitKind::DownCommit => out.comment(
+            "Nothing to do going up: this migration holds the enum values its down migration commits before the main one's down uses them.",
+        ),
+        _ if unit.up.is_empty() => out.comment("Nothing to do."),
+        _ => body(out, &unit.up, transaction),
     }
 }
 
@@ -350,39 +392,26 @@ fn down_header(out: &mut Writer, down: &Migration, meta: &Meta) {
     out.blank();
 }
 
-fn down_body(out: &mut Writer, kind: UnitKind, down: &Migration, transaction: bool) {
-    match kind {
-        UnitKind::Main => {
-            if down.is_empty() {
-                out.comment("Nothing to undo.");
-            } else {
-                // Concurrent statements of the down migration run with it.
-                body(
-                    out,
-                    &down.statements.iter().collect::<Vec<_>>(),
-                    transaction,
-                );
+fn down_body(out: &mut Writer, unit: &Unit, down: &Migration, transaction: bool) {
+    match unit.kind {
+        UnitKind::Main if down.is_empty() => out.comment("Nothing to undo."),
+        UnitKind::Main | UnitKind::DownCommit => {
+            if unit.kind == UnitKind::DownCommit {
+                out.comment("Enum values the main migration's down uses, committed first (it runs before that one goes down).");
             }
+            body(out, &unit.down, transaction);
         }
-        UnitKind::Commit => {
-            out.comment("Postgres cannot remove an enum value: undone, if at all, by the main migration's down.");
+        UnitKind::UpCommit => {
+            out.comment("Postgres cannot remove an enum value: the main migration's down recreates the type if it must.");
         }
-        UnitKind::Concurrent => {
-            out.comment("Undone by the main migration's down.");
-        }
+        UnitKind::Concurrent => out.comment("Undone by the main migration's down."),
     }
 }
 
 fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usize)>) {
-    let date = format!(
-        "{}-{}-{}",
-        meta.timestamp.get(0..4).unwrap_or("????"),
-        meta.timestamp.get(4..6).unwrap_or("??"),
-        meta.timestamp.get(6..8).unwrap_or("??")
-    );
     out.comment(&format!(
-        "Migration of {} from {} to {}, generated by romulus on {date}.",
-        meta.database, meta.from, meta.to
+        "Migration of {} from {} to {}, generated by romulus on {}.",
+        meta.database, meta.from, meta.to, meta.date
     ));
     out.comment("Review it before applying: romulus compares the schemas, not your data.");
     if let Some((n, of)) = part {
@@ -391,19 +420,30 @@ fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usi
         ));
     }
     let count = m.statements.len();
-    let destructive = m.destructive();
     if count == 0 {
         out.comment("Nothing to migrate: the schemas are the same.");
     } else {
-        let mut line = format!("{count} statement{}", if count == 1 { "" } else { "s" });
-        if destructive > 0 {
-            let _ = write!(
-                line,
-                ", {destructive} destructive (marked DESTRUCTIVE: they delete data or can fail on existing rows)."
-            );
+        let flagged: Vec<String> = [
+            (Hazard::DeletesData, "delete data (DESTRUCTIVE)", "deletes data (DESTRUCTIVE)"),
+            (Hazard::CanFail, "can fail on existing rows (CAN FAIL)", "can fail on existing rows (CAN FAIL)"),
+            (Hazard::WidensAccess, "widen access (WIDENS ACCESS)", "widens access (WIDENS ACCESS)"),
+        ]
+        .iter()
+        .filter_map(|(hazard, many, one)| match m.count(*hazard) {
+            0 => None,
+            1 => Some(format!("1 {one}")),
+            n => Some(format!("{n} {many}")),
+        })
+        .collect();
+        let line = if flagged.is_empty() {
+            format!("{count} statement{}, none flagged.", if count == 1 { "" } else { "s" })
         } else {
-            line.push_str(", none destructive.");
-        }
+            format!(
+                "{count} statement{}: {}, each marked.",
+                if count == 1 { "" } else { "s" },
+                flagged.join(", ")
+            )
+        };
         out.comment(&line);
     }
     warnings(out, m);
@@ -449,7 +489,7 @@ fn body(out: &mut Writer, statements: &[&Statement], transaction: bool) {
     let mut section = None;
     let removals_destroy = main
         .iter()
-        .any(|s| s.section == Section::Removals && s.destructive);
+        .any(|s| s.section == Section::Removals && s.hazard == Some(Hazard::DeletesData));
     for s in &main {
         if section != Some(s.section) && s.stage != Stage::Concurrent {
             section = Some(s.section);
@@ -487,13 +527,22 @@ fn heading(out: &mut Writer, section: Section, destroys: bool) {
     out.blank();
 }
 
+/// The word a statement's comment starts with, for its hazard.
+fn label(hazard: Hazard) -> &'static str {
+    match hazard {
+        Hazard::DeletesData => "DESTRUCTIVE",
+        Hazard::CanFail => "CAN FAIL",
+        Hazard::WidensAccess => "WIDENS ACCESS",
+    }
+}
+
 fn statement(out: &mut Writer, s: &Statement) {
     let start = out.line_number();
-    match (&s.note, s.destructive) {
-        (Some(note), true) => out.comment(&format!("DESTRUCTIVE: {note}")),
-        (None, true) => out.comment("DESTRUCTIVE."),
-        (Some(note), false) => out.comment(note),
-        (None, false) => {}
+    match (&s.note, s.hazard) {
+        (Some(note), Some(hazard)) => out.comment(&format!("{}: {note}", label(hazard))),
+        (None, Some(hazard)) => out.comment(&format!("{}.", label(hazard))),
+        (Some(note), None) => out.comment(note),
+        (None, None) => {}
     }
     if let Some(alternative) = &s.alternative {
         out.comment("To keep the data instead:");
@@ -504,10 +553,11 @@ fn statement(out: &mut Writer, s: &Statement) {
     for line in s.sql.lines() {
         out.line(line);
     }
-    if s.destructive {
-        out.destructive.push(Lines {
+    if let Some(hazard) = s.hazard {
+        out.marks.push(Mark {
             from: start,
             to: out.line_number() - 1,
+            hazard,
         });
     }
     out.blank();
@@ -517,7 +567,7 @@ fn statement(out: &mut Writer, s: &Statement) {
 struct Writer {
     text: String,
     lines: u32,
-    destructive: Vec<Lines>,
+    marks: Vec<Mark>,
 }
 
 impl Writer {
@@ -525,7 +575,7 @@ impl Writer {
         Self {
             text: String::new(),
             lines: 0,
-            destructive: Vec::new(),
+            marks: Vec::new(),
         }
     }
 
@@ -569,7 +619,7 @@ impl Writer {
             path,
             content: self.text,
             role,
-            destructive: self.destructive,
+            marks: self.marks,
         }
     }
 }
@@ -591,6 +641,24 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+/// The version `steps` after `version`: a `YYYYMMDDHHMMSS` timestamp a
+/// second per step later, another number plus `steps` (its zero padding
+/// kept), anything else with `.<steps>` appended.
+pub(crate) fn next_version(version: &str, steps: usize) -> String {
+    if steps == 0 {
+        return version.to_owned();
+    }
+    if version.len() == 14 && version.bytes().all(|b| b.is_ascii_digit()) {
+        return add_seconds(version, steps as u64);
+    }
+    match version.parse::<u128>() {
+        Ok(n) if version.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("{:0width$}", n + steps as u128, width = version.len())
+        }
+        _ => format!("{version}.{steps}"),
+    }
 }
 
 /// `YYYYMMDDHHMMSS` plus `seconds`, calendar included; unchanged when it

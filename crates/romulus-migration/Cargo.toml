@@ -26,6 +26,8 @@ dotenvy.workspace = true
 insta = "1.49.0"
 romulus-sandbox.workspace = true
 serde_json.workspace = true
+# The tool-run oracle connects to the sandbox cluster directly.
+sqlx.workspace = true
 tokio.workspace = true
 
 [lints]

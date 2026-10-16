@@ -2494,6 +2494,7 @@ dependencies = [
  "romulus-sandbox",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "utoipa",
 ]

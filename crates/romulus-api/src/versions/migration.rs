@@ -107,12 +107,17 @@ pub(crate) async fn build(
         .map(str::trim)
         .filter(|n| !n.is_empty())
         .map_or_else(|| slug(&sides.name), slug);
+    let now = Utc::now();
     let meta = Meta {
         database: sides.database,
         from: sides.from_label,
         to: sides.to_label,
-        timestamp: Utc::now().format("%Y%m%d%H%M%S").to_string(),
-        version: u32::try_from(sides.to).unwrap_or(1),
+        date: now.format("%Y-%m-%d").to_string(),
+        version: if format == Format::Flyway {
+            sides.to.to_string()
+        } else {
+            now.format("%Y%m%d%H%M%S").to_string()
+        },
         name,
     };
     let (old, new) = (sides.old.clone(), sides.new.clone());
