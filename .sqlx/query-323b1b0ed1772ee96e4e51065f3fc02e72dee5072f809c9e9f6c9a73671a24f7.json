@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT import_id FROM import_staging ORDER BY created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "import_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "import_staging",
+            "name": "import_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "323b1b0ed1772ee96e4e51065f3fc02e72dee5072f809c9e9f6c9a73671a24f7"
+}

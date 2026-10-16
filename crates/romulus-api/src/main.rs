@@ -138,6 +138,13 @@ async fn serve() -> Result<(), MainError> {
     }
     let state = AppState::new(pool, config).with_compiler(compiler.clone());
     let collab = state.collab.clone();
+    // Models imports left behind (a process stopped mid-import): now, and
+    // from time to time.
+    let sweeper = romulus_api::imports::staging::sweeper(
+        state.db.clone(),
+        state.imports.clone(),
+        romulus_api::imports::staging::SWEEP_EVERY,
+    );
     // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
     let app = app(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
@@ -148,6 +155,7 @@ async fn serve() -> Result<(), MainError> {
             collab.shutdown().await;
         })
         .await?;
+    sweeper.abort();
     compiler.close().await;
     tracing::info!("shut down cleanly");
     Ok(())

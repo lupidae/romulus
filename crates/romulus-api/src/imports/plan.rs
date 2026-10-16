@@ -135,6 +135,26 @@ pub fn fingerprint(planned: &Planned, dry_run: bool) -> [u8; 32] {
     hash.finalize().into()
 }
 
+impl Planned {
+    /// The files' plan again, to match it anew.
+    fn into_plan(self) -> Plan {
+        Plan {
+            format: self.format.into(),
+            detected: self.preview.detected.into(),
+            migrations: self.migrations,
+            ignored: self
+                .preview
+                .ignored
+                .into_iter()
+                .map(|i| import::Ignored {
+                    path: i.path,
+                    reason: i.reason,
+                })
+                .collect(),
+        }
+    }
+}
+
 pub fn checksum(sql: &str) -> Vec<u8> {
     Sha256::digest(sql.as_bytes()).to_vec()
 }
@@ -173,7 +193,7 @@ pub async fn plan(
     options: &ImportOptions,
 ) -> ApiResult<Planned> {
     let format = options.format.map(Into::into);
-    let planned = tokio::task::spawn_blocking(move || import::plan(files, format))
+    let plan = tokio::task::spawn_blocking(move || import::plan(files, format))
         .await
         .map_err(ApiError::internal)?
         .map_err(|err| ApiError::Unprocessable {
@@ -184,7 +204,31 @@ pub async fn plan(
             },
             details: Some(json!({ "error": err.to_string() })),
         })?;
+    matched(db, database_id, plan).await
+}
 
+/// Matches again a plan made before this import's turn to run (the
+/// database's import guard): another import may have stored migrations
+/// meanwhile, maybe these very ones (the import then has nothing left to
+/// do), or another version been created. Unchanged when neither happened.
+pub async fn rematch(db: &PgPool, database_id: Uuid, planned: Planned) -> ApiResult<Planned> {
+    let now = sqlx::query!(
+        r#"SELECT (SELECT count(*) FROM version_migrations WHERE database_id = $1) AS "imported!",
+                  (SELECT max(number) FROM versions WHERE database_id = $1) AS latest"#,
+        database_id,
+    )
+    .fetch_one(db)
+    .await?;
+    let imported = usize::try_from(now.imported).unwrap_or(usize::MAX);
+    if imported == planned.history.len() && now.latest == planned.latest.as_ref().map(|l| l.number)
+    {
+        return Ok(planned);
+    }
+    matched(db, database_id, planned.into_plan()).await
+}
+
+/// The files' migrations matched with the database's imports.
+async fn matched(db: &PgPool, database_id: Uuid, plan: Plan) -> ApiResult<Planned> {
     let history = sqlx::query_as!(
         Existing,
         r#"SELECT m.migration_id, m.checksum, v.number, v.source
@@ -210,10 +254,9 @@ pub async fn plan(
 
     // Analysing hundreds of migrations: off the async workers.
     let latest_number = latest.as_ref().map(|l| l.number);
-    let planned =
-        tokio::task::spawn_blocking(move || build(planned, history, others, latest_number))
-            .await
-            .map_err(ApiError::internal)?;
+    let planned = tokio::task::spawn_blocking(move || build(plan, history, others, latest_number))
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Planned { latest, ..planned })
 }
 
@@ -584,5 +627,95 @@ mod tests {
             problem.message
         );
         assert_eq!(problem.details.unwrap()["index"], 1);
+    }
+
+    /// A plan made before another import of the same files stored them
+    /// (the import's turn came after): matched again, nothing is left.
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn a_plan_overtaken_by_the_same_import_has_nothing_left(db: PgPool) {
+        let org = sqlx::query_scalar!(
+            "INSERT INTO organizations (name, slug) VALUES ('acme', 'acme') RETURNING id"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let database = sqlx::query_scalar!(
+            "INSERT INTO databases (org_id, name, slug) VALUES ($1, 'app', 'app') RETURNING id",
+            org
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let sql = [
+            "CREATE TABLE users (id int);",
+            "CREATE TABLE posts (id int);",
+        ];
+        let files = || {
+            vec![
+                SourceFile::new("20240101000000_users.sql", sql[0]),
+                SourceFile::new("20240102000000_posts.sql", sql[1]),
+            ]
+        };
+        let options = ImportOptions::default();
+        let planned = super::plan(&db, database, files(), &options).await.unwrap();
+        // Nothing moved: the same plan.
+        let planned = rematch(&db, database, planned).await.unwrap();
+        assert_eq!(planned.new, [0, 1]);
+
+        // The same files, imported by another request meanwhile.
+        let staging = crate::imports::staging::new_id();
+        let model = serde_json::json!({
+            "remus_version": "0.1", "database": "app", "server_version": "17", "entities": []
+        });
+        for ordinal in 0..2 {
+            sqlx::query!(
+                "INSERT INTO import_staging (import_id, ordinal, database_id, model, layout)
+                 VALUES ($1, $2, $3, $4, '{}')",
+                staging,
+                ordinal,
+                database,
+                model,
+            )
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+        let versions = planned
+            .migrations
+            .iter()
+            .map(|m| crate::versions::store::ImportedVersion {
+                source: m.sql.clone(),
+                message: m.name.clone(),
+                migration_id: m.id.clone(),
+                path: m.path.clone(),
+                checksum: checksum(&m.sql),
+                skipped: serde_json::json!([]),
+            })
+            .collect();
+        crate::versions::store::store_import(
+            &db,
+            crate::versions::store::NewImport {
+                database_id: database,
+                format: MigrationFormat::Sqlx,
+                created_by: None,
+                created_by_token: None,
+                append: false,
+                imported_before: 0,
+                latest: None,
+                staging,
+                versions,
+            },
+        )
+        .await
+        .map_err(|_| "stored")
+        .unwrap();
+
+        let planned = rematch(&db, database, planned).await.unwrap();
+        assert_eq!(planned.new, [0usize; 0]);
+        assert_eq!(
+            statuses(&planned),
+            [MigrationStatus::Imported, MigrationStatus::Imported]
+        );
+        assert!(refusal(&planned, &options).is_none());
     }
 }

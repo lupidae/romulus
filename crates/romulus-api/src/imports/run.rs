@@ -20,7 +20,6 @@ use axum::{
 use remus_core::Schema;
 use romulus_sandbox::{ReplayEvent, import::Migration};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use tokio::sync::mpsc;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -28,7 +27,8 @@ use uuid::Uuid;
 use super::{
     IgnoredFile, ImportOptions, SkippedStatement,
     plan::{self, ImportPreview, MigrationStatus, Planned},
-    turns::Place,
+    staging,
+    turns::{Place, Running},
 };
 use crate::{
     ApiError, ApiResult, AppState,
@@ -141,7 +141,21 @@ pub async fn start(
     stream: bool,
 ) -> ApiResult<Response> {
     let started = Instant::now();
-    let planned = plan::plan(&state.db, target.database_id, files, &options).await?;
+    let mut planned = plan::plan(&state.db, target.database_id, files, &options).await?;
+    // One import of a database at a time, settled before any answer goes
+    // out: a retry of this one (a proxy stopped waiting for the answer)
+    // gets a real 409, streamed or not. Once it is this import's turn, the
+    // history may have moved since it was planned: match again.
+    let running = if planned.new.is_empty() {
+        None
+    } else {
+        let running = state.imports.running(
+            target.database_id,
+            plan::fingerprint(&planned, options.dry_run),
+        )?;
+        planned = plan::rematch(&state.db, target.database_id, planned).await?;
+        Some(running)
+    };
     if let Some(refusal) = plan::refusal(&planned, &options) {
         return Err(refusal);
     }
@@ -152,6 +166,7 @@ pub async fn start(
         options,
         planned,
         started,
+        running,
     };
     if stream {
         let (events, received) = mpsc::unbounded_channel();
@@ -210,6 +225,9 @@ struct Job {
     options: ImportOptions,
     planned: Planned,
     started: Instant,
+    /// The database's import guard (for as long as the job runs), when it
+    /// has migrations to replay.
+    running: Option<Running>,
 }
 
 type Events = mpsc::UnboundedSender<ImportEvent>;
@@ -239,15 +257,11 @@ impl Job {
 
     async fn import(&self, events: Option<&Events>) -> ApiResult<ImportReport> {
         let planned = &self.planned;
-        if planned.new.is_empty() {
+        let Some(running) = &self.running else {
+            // Nothing new (maybe stored meanwhile by the same import, sent
+            // twice): nothing left to import.
             return Ok(self.report(ImportStatus::Unchanged, &[], &[], &[]));
-        }
-        // One import of a database at a time: a retry of this one (after a
-        // proxy stopped waiting for the answer) is told it still runs.
-        let _running = self.state.imports.running(
-            self.target.database_id,
-            plan::fingerprint(planned, self.options.dry_run),
-        )?;
+        };
         let new: Vec<&Migration> = planned
             .new
             .iter()
@@ -259,16 +273,13 @@ impl Job {
 
         // Models go to the staging table as they are read (a dry run keeps
         // none): the job holds one at a time.
-        let staging = (!self.options.dry_run).then(staging_id);
-        if staging.is_some() {
-            discard_stale(&self.state.db).await;
-        }
+        let staging = (!self.options.dry_run).then(|| running.staging());
         let replayed = self.replay(&new, texts, from, events, staging).await;
         let Replayed { changes, skipped } = match replayed {
             Ok(replayed) => replayed,
             Err(err) => {
                 if let Some(staging) = staging {
-                    discard(&self.state.db, staging).await;
+                    staging::discard(&self.state.db, staging).await;
                 }
                 return Err(err);
             }
@@ -322,7 +333,7 @@ impl Job {
         let stored = match stored {
             Ok(stored) => stored,
             Err(err) => {
-                discard(&self.state.db, staging).await;
+                staging::discard(&self.state.db, staging).await;
                 return Err(err.into());
             }
         };
@@ -556,36 +567,6 @@ fn too_large(budget: usize) -> ApiError {
             budget >> 20
         ),
         details: None,
-    }
-}
-
-/// A new import's id in the staging table.
-fn staging_id() -> Uuid {
-    let mut bytes = [0u8; 16];
-    // The OS random source failing leaves no safe way to continue.
-    getrandom::fill(&mut bytes).expect("the OS random number generator is available");
-    uuid::Builder::from_random_bytes(bytes).into_uuid()
-}
-
-/// Removes an import's staged models.
-async fn discard(db: &PgPool, staging: Uuid) {
-    let deleted = sqlx::query!("DELETE FROM import_staging WHERE import_id = $1", staging)
-        .execute(db)
-        .await;
-    if let Err(err) = deleted {
-        tracing::warn!(error = %err, %staging, "staged models left behind");
-    }
-}
-
-/// Removes models staged by imports that never ended (a stopped process):
-/// no import runs for an hour.
-async fn discard_stale(db: &PgPool) {
-    let deleted =
-        sqlx::query!("DELETE FROM import_staging WHERE created_at < now() - interval '1 hour'")
-            .execute(db)
-            .await;
-    if let Err(err) = deleted {
-        tracing::warn!(error = %err, "stale staged models left behind");
     }
 }
 

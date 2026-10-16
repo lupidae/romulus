@@ -1181,3 +1181,111 @@ async fn migrations_generated_from_imported_versions_are_named_by_description(db
         }
     }
 }
+
+/// The retry of an import still running is refused before anything is
+/// streamed: a real 409, NDJSON asked for or not.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_streamed_retry_while_the_import_runs_is_a_real_409(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    database(&db, team.org, "app").await;
+    let app = TestApp::compiling(db.clone());
+    let path = team.path("/databases/app/imports");
+    let held = app.state.imports.take(Uuid::from_u128(7)).ok();
+    let first = web(
+        &app,
+        &team.developer,
+        &path,
+        HISTORY,
+        Some("application/x-ndjson"),
+    );
+    let retry = async {
+        while app.state.imports.waiting() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let retried = web(
+            &app,
+            &team.developer,
+            &path,
+            HISTORY,
+            Some("application/x-ndjson"),
+        )
+        .await;
+        drop(held);
+        retried
+    };
+    let (first, retried) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::join!(first, retry)
+    })
+    .await
+    .expect("both answered");
+    assert_eq!(retried.status, StatusCode::CONFLICT);
+    assert_eq!(retried.headers[header::CONTENT_TYPE], "application/json");
+    assert_eq!(retried.code(), "concurrent_import");
+    assert_eq!(first.status, StatusCode::OK);
+    let last = std::str::from_utf8(&first.body)
+        .unwrap()
+        .lines()
+        .rfind(|line| !line.is_empty())
+        .unwrap()
+        .to_owned();
+    assert!(last.contains(r#""event":"done""#), "{last}");
+}
+
+/// Models an import left behind (a process stopped mid-import) are swept
+/// at startup and from time to time, once older than any import runs, and
+/// never those of an import in flight.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn staged_models_left_behind_are_swept(db: PgPool) {
+    use romulus_api::imports::staging;
+
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let app = TestApp::new(db.clone());
+    let in_flight = app.state.imports.running(id, [0; 32]).unwrap();
+    let (left, fresh) = (staging::new_id(), staging::new_id());
+    for (import, age) in [
+        (left, "2 hours"),
+        (fresh, "1 minute"),
+        (in_flight.staging(), "2 hours"),
+    ] {
+        sqlx::query!(
+            "INSERT INTO import_staging (import_id, ordinal, database_id, model, layout, created_at)
+             VALUES ($1, 0, $2, '{}', '{}', now() - $3::text::interval)",
+            import,
+            id,
+            age,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    let staged = || async {
+        sqlx::query_scalar!("SELECT import_id FROM import_staging ORDER BY created_at")
+            .fetch_all(&db)
+            .await
+            .unwrap()
+    };
+
+    // At startup (the sweeper's first pass), not waiting for the period.
+    let sweeper = staging::sweeper(
+        db.clone(),
+        app.state.imports.clone(),
+        std::time::Duration::from_secs(3600),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while staged().await.contains(&left) {
+        assert!(std::time::Instant::now() < deadline, "swept at startup");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    sweeper.abort();
+    let mut kept = staged().await;
+    kept.sort();
+    let mut expected = vec![fresh, in_flight.staging()];
+    expected.sort();
+    assert_eq!(kept, expected);
+
+    // Once its import ended, a row left behind goes on a later pass.
+    drop(in_flight);
+    assert_eq!(staging::sweep(&db, &app.state.imports).await.unwrap(), 1);
+    assert_eq!(staged().await, [fresh]);
+}

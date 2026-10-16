@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM import_staging\n         WHERE created_at < now() - interval '1 hour' AND import_id <> ALL($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c874a87804712a3add06fca82ab95134b49b8187416d88d1c920155cb969c312"
+}

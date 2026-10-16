@@ -458,8 +458,10 @@ Two features, built in this order:
      per organization, one once half of the 16 places are taken, 10 minutes
      at most; the progress says "queued"; a queued import keeps its place
      when the page is left, like a running one finishes). One import per
-     database at a time: a retry while it runs answers 409
-     `concurrent_import`, "still being imported". Requests to `…/imports`
+     database at a time, decided before the answer starts: a retry while it
+     runs answers 409 `concurrent_import`, "still being imported", streamed
+     or not; one whose turn comes after the first stored the same
+     migrations answers that nothing is left to import. Requests to `…/imports`
      get 15 minutes.
    - Progress streams as NDJSON (`Accept: application/x-ndjson`), the web's
      and CI's documented way: headers at once, a line (or a blank
@@ -469,7 +471,10 @@ Two features, built in this order:
    - Models are staged as the replay reads them (`import_staging`) and moved
      into `versions` when the import is stored: the API holds a few models,
      never the history. An import stores at most 256 MiB of models (422
-     `models_too_large`).
+     `models_too_large`). Rows a stopped process left are swept at startup
+     and every 10 minutes (older than an hour, never an import's in flight).
+     The replay's 5-minute deadline counts the sandbox's work, not the wait
+     for its models to be stored (capped at three deadlines, wall clock).
    - Flyway placeholders (`${name}`) are not substituted: a migration using
      one fails where it is used, with a hint saying so.
    - A migration generated from an imported version is named by what the

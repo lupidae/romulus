@@ -15,9 +15,11 @@
 //! timed out) stops counting; a turn handed to it passes on.
 //!
 //! [`Turns::running`] also keeps one import per database, waiting or
-//! replaying: another one (a CI retry after its proxy gave up waiting, say)
-//! is told it is still running, and [`Turns::model_budget`] is how many
-//! bytes of models one import may store.
+//! replaying, taken by `run::start` before any answer goes out: another
+//! one (a CI retry after its proxy gave up waiting, say) gets a 409 saying
+//! it still runs. It names the import's rows in the staging table, which
+//! the sweeper leaves alone. [`Turns::model_budget`] is how many bytes of
+//! models one import may store.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -52,16 +54,28 @@ pub struct Turns(Arc<Inner>);
 #[derive(Default)]
 struct Inner {
     state: Mutex<State>,
-    /// Imports in flight, by database: when they started, what they do.
-    running: Mutex<HashMap<Uuid, (Instant, [u8; 32])>>,
+    /// Imports in flight, by database.
+    running: Mutex<HashMap<Uuid, InFlight>>,
     /// [`MODEL_BUDGET`] unless set (0).
     model_budget: AtomicUsize,
 }
+
+/// An import in flight: when it started, its fingerprint
+/// (`plan::fingerprint`), its id in the staging table.
+type InFlight = (Instant, [u8; 32], Uuid);
 
 /// An import of a database in flight; it ends when this is dropped.
 pub struct Running {
     inner: Arc<Inner>,
     database: Uuid,
+    staging: Uuid,
+}
+
+impl Running {
+    /// The import's id in the staging table (`staging`).
+    pub fn staging(&self) -> Uuid {
+        self.staging
+    }
 }
 
 impl Drop for Running {
@@ -140,7 +154,7 @@ impl Turns {
     /// one already is, saying whether it is this very import (a retry).
     pub fn running(&self, database: Uuid, fingerprint: [u8; 32]) -> Result<Running, ApiError> {
         let mut running = lock(&self.0.running);
-        if let Some((started, theirs)) = running.get(&database) {
+        if let Some((started, theirs, _)) = running.get(&database) {
             let ago = ago(started.elapsed());
             return Err(ApiError::Conflict {
                 code: "concurrent_import",
@@ -155,11 +169,21 @@ impl Turns {
                 },
             });
         }
-        running.insert(database, (Instant::now(), fingerprint));
+        let staging = super::staging::new_id();
+        running.insert(database, (Instant::now(), fingerprint, staging));
         Ok(Running {
             inner: Arc::clone(&self.0),
             database,
+            staging,
         })
+    }
+
+    /// The staging ids of the imports in flight: never swept.
+    pub fn in_flight(&self) -> Vec<Uuid> {
+        lock(&self.0.running)
+            .values()
+            .map(|(_, _, staging)| *staging)
+            .collect()
     }
 
     /// How many bytes of models one import may store ([`MODEL_BUDGET`]).

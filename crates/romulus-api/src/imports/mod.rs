@@ -56,6 +56,7 @@
 
 mod plan;
 mod run;
+pub mod staging;
 mod turns;
 pub mod upload;
 
