@@ -231,8 +231,17 @@ async fn version_migration(
     let new = Schema::deserialize(&to.model).map_err(ApiError::internal)?;
     let name = to
         .message
-        .clone()
+        .as_deref()
         .filter(|m| !m.trim().is_empty() && versions.from < versions.to)
+        .and_then(|message| match &to.migration {
+            // An imported version's message is its migration's file name:
+            // its description only, or file names would carry the old
+            // tool's version and extension (`…_v3_1_add_x_sql.sql`).
+            Some(migration) => {
+                romulus_sandbox::import::description(migration.format.into(), message)
+            }
+            None => Some(message.to_owned()),
+        })
         .unwrap_or_else(|| format!("v{}_to_v{}", versions.from, versions.to));
     let sides = Sides {
         old: &old,

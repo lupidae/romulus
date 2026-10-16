@@ -379,7 +379,59 @@ pub fn detect(files: &[SourceFile]) -> Format {
 }
 
 fn has_suffix(name: &str, suffix: &str) -> bool {
-    name.len() >= suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+    name.len()
+        .checked_sub(suffix.len())
+        .and_then(|at| name.get(at..))
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
+/// What a migration's name (its version's message) says it does, without
+/// the tool's version and extensions: `20240101000000_users.sql` → `users`,
+/// `V3.1__add_x.sql` → `add_x`, `blog.0002_post_slug` → `blog_post_slug`;
+/// `None` when the name is only a version. Migrations generated from an
+/// imported version are named after it.
+pub fn description(format: Format, name: &str) -> Option<String> {
+    let stem = |name: &str| -> String {
+        let mut name = name.trim();
+        for suffix in [".up.sql", ".sql", ".rb"] {
+            if has_suffix(name, suffix) {
+                name = &name[..name.len() - suffix.len()];
+                break;
+            }
+        }
+        name.to_owned()
+    };
+    let after_version = |name: &str, separators: &[char]| -> Option<String> {
+        version_prefix(name, separators).map(|(_, rest)| rest.to_owned())
+    };
+    let text = match format {
+        Format::Tool(Tool::Flyway) => name
+            .get(1..)
+            .and_then(|rest| rest.split_once("__"))
+            .map(|(_, description)| stem(description)),
+        Format::Tool(Tool::Prisma) => after_version(name, &['_']),
+        Format::Tool(Tool::Sqlx | Tool::GolangMigrate | Tool::Dbmate)
+        | Format::Read(ReadOnly::Rails) => after_version(&stem(name), &['_']),
+        Format::Read(ReadOnly::NodePgMigrate) => after_version(&stem(name), &['_', '-']),
+        // Any name: a leading number is an order, not a description.
+        Format::Tool(Tool::Plain) => {
+            let stem = stem(name);
+            after_version(&stem, &['_', '-', '.'])
+                .or_else(|| (!stem.bytes().all(|b| b.is_ascii_digit())).then_some(stem))
+        }
+        // `<revision> <message>`.
+        Format::Read(ReadOnly::Alembic) => {
+            name.split_once(' ').map(|(_, message)| message.to_owned())
+        }
+        // `<app>.<number>_<name>`: the app says what it is about.
+        Format::Read(ReadOnly::Django) => name.split_once('.').map(|(app, migration)| {
+            let migration =
+                after_version(migration, &['_']).unwrap_or_else(|| migration.to_owned());
+            format!("{app}_{migration}")
+        }),
+    };
+    text.map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
 }
 
 pub(crate) fn is_dbmate_marker(line: &str) -> Option<Section> {
@@ -766,6 +818,79 @@ mod tests {
             assert_eq!(serde_json::from_value::<Format>(json).unwrap(), format);
             assert_eq!(Format::parse(format.as_str()), Some(format));
         }
+    }
+
+    #[test]
+    fn descriptions_leave_out_versions_and_extensions() {
+        let cases = [
+            (Format::Tool(Tool::Plain), "001_init.sql", Some("init")),
+            (Format::Tool(Tool::Plain), "schema.sql", Some("schema")),
+            (Format::Tool(Tool::Plain), "002.sql", None),
+            (
+                Format::Tool(Tool::Sqlx),
+                "20240101000000_users.sql",
+                Some("users"),
+            ),
+            (
+                Format::Tool(Tool::Sqlx),
+                "20240101000000_users.up.sql",
+                Some("users"),
+            ),
+            (
+                Format::Tool(Tool::Flyway),
+                "V3.1__add_issue_numbers.sql",
+                Some("add_issue_numbers"),
+            ),
+            (Format::Tool(Tool::Flyway), "V3.1__.sql", None),
+            (
+                Format::Tool(Tool::Prisma),
+                "20240101000000_init",
+                Some("init"),
+            ),
+            (
+                Format::Tool(Tool::Dbmate),
+                "20240101000000_create_users.sql",
+                Some("create_users"),
+            ),
+            (
+                Format::Tool(Tool::GolangMigrate),
+                "000042_add_index.up.sql",
+                Some("add_index"),
+            ),
+            (
+                Format::Read(ReadOnly::NodePgMigrate),
+                "1700000000000_create-users.sql",
+                Some("create-users"),
+            ),
+            (
+                Format::Read(ReadOnly::Alembic),
+                "1975ea83b712 add issue numbers",
+                Some("add issue numbers"),
+            ),
+            (Format::Read(ReadOnly::Alembic), "1975ea83b712", None),
+            (
+                Format::Read(ReadOnly::Django),
+                "blog.0002_post_slug",
+                Some("blog_post_slug"),
+            ),
+            (
+                Format::Read(ReadOnly::Rails),
+                "20240105093000_create_users.rb",
+                Some("create_users"),
+            ),
+        ];
+        for (format, name, expected) in cases {
+            assert_eq!(
+                description(format, name).as_deref(),
+                expected,
+                "{format:?} {name}"
+            );
+        }
+        // Names that are not ASCII are cut at character boundaries.
+        assert_eq!(
+            description(Format::Tool(Tool::Plain), "01_é.sqlé").as_deref(),
+            Some("é.sqlé")
+        );
     }
 
     #[test]

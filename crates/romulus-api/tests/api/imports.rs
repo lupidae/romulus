@@ -1029,3 +1029,155 @@ async fn a_retry_while_the_import_runs_is_told_it_still_runs(db: PgPool) {
     assert_eq!(again.status, StatusCode::OK);
     assert_eq!(again.json()["status"], "unchanged");
 }
+
+/// A history to import: format, files, and the description files
+/// generated from its second version carry.
+type Folder<'a> = (&'a str, Vec<(String, String)>, &'a str);
+
+/// A migration generated from an imported version is named after what the
+/// imported migration says it does, never after its file: no old version,
+/// no `.sql` folded into the name, whatever the tools on both sides.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn migrations_generated_from_imported_versions_are_named_by_description(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let app = TestApp::compiling(db.clone());
+    let users = "CREATE TABLE users (id bigint);\n";
+    let posts = "CREATE TABLE posts (id bigint);\n";
+    let dbmate = |sql: &str| format!("-- migrate:up\n{sql}-- migrate:down\n");
+    let folders: Vec<Folder> = vec![
+        (
+            "sqlx",
+            vec![
+                ("20240101000000_users.sql".into(), users.into()),
+                ("20240102000000_add_posts.sql".into(), posts.into()),
+            ],
+            "add_posts",
+        ),
+        (
+            "flyway",
+            vec![
+                ("V3__users.sql".into(), users.into()),
+                ("V3.1__add_posts.sql".into(), posts.into()),
+            ],
+            "add_posts",
+        ),
+        (
+            "prisma",
+            vec![
+                ("20240101000000_users/migration.sql".into(), users.into()),
+                (
+                    "20240102000000_add_posts/migration.sql".into(),
+                    posts.into(),
+                ),
+            ],
+            "add_posts",
+        ),
+        (
+            "golang_migrate",
+            vec![
+                ("000001_users.up.sql".into(), users.into()),
+                ("000002_add_posts.up.sql".into(), posts.into()),
+            ],
+            "add_posts",
+        ),
+        (
+            "dbmate",
+            vec![
+                ("20240101000000_users.sql".into(), dbmate(users)),
+                ("20240102000000_add_posts.sql".into(), dbmate(posts)),
+            ],
+            "add_posts",
+        ),
+        (
+            "plain",
+            vec![
+                ("01_users.sql".into(), users.into()),
+                ("02_add_posts.sql".into(), posts.into()),
+            ],
+            "add_posts",
+        ),
+    ];
+    let mut imported = Vec::new();
+    for (format, files, expected) in &folders {
+        let slug = format!("from-{}", format.replace('_', "-"));
+        database(&db, team.org, &slug).await;
+        let files: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, t)| (p.as_str(), t.as_str()))
+            .collect();
+        let response = web(
+            &app,
+            &team.developer,
+            &team.path(&format!("/databases/{slug}/imports?format={format}")),
+            &files,
+            None,
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::CREATED,
+            "{format}: {}",
+            response.json()
+        );
+        imported.push((slug, *expected));
+    }
+    for (format, text, expected) in [
+        (
+            "django",
+            "-- blog.0001_users\nCREATE TABLE users (id bigint);\n-- blog.0002_add_posts\nCREATE TABLE posts (id bigint);\n",
+            "blog_add_posts",
+        ),
+        (
+            "rails",
+            "-- 20240101000000_create_users.rb\nCREATE TABLE users (id bigint);\n-- 20240102000000_add_posts.rb\nCREATE TABLE posts (id bigint);\n",
+            "add_posts",
+        ),
+    ] {
+        let slug = format!("from-{format}");
+        let id = database(&db, team.org, &slug).await;
+        let token = api_token(&db, id, TokenScope::Push).await;
+        let response = ci(
+            &app,
+            id,
+            &token,
+            &format!("?format={format}&filename={format}.sql"),
+            "application/sql",
+            text.as_bytes().to_vec(),
+        )
+        .await;
+        assert_eq!(
+            response.status,
+            StatusCode::CREATED,
+            "{format}: {}",
+            response.json()
+        );
+        imported.push((slug, expected));
+    }
+
+    let user = app.as_user(&team.developer);
+    for (slug, expected) in &imported {
+        for (tool, ending) in [
+            ("plain", format!("_{expected}.sql")),
+            ("sqlx", format!("_{expected}.sql")),
+            ("flyway", format!("V2__{expected}.sql")),
+            ("prisma", format!("_{expected}/migration.sql")),
+            ("dbmate", format!("_{expected}.sql")),
+            ("golang_migrate", format!("_{expected}.up.sql")),
+        ] {
+            let body = user
+                .get(&team.path(&format!(
+                    "/databases/{slug}/migration?from=1&to=2&format={tool}"
+                )))
+                .await
+                .json();
+            let first = body["files"][0]["path"].as_str().unwrap_or_default();
+            assert!(first.ends_with(&ending), "{slug} as {tool}: {first}");
+            for file in body["files"].as_array().unwrap() {
+                let path = file["path"].as_str().unwrap();
+                for leftover in ["_sql", ".sql.", "v3_1", "_rb", "2024010", "000002"] {
+                    assert!(!path.contains(leftover), "{slug} as {tool}: {path}");
+                }
+            }
+        }
+    }
+}
