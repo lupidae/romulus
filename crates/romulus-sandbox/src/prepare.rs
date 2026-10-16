@@ -84,24 +84,29 @@ pub(crate) struct Edits {
     pub omit: HashSet<usize>,
     /// Functions the text defines, `(schema, name)`: never stubbed.
     pub defined: HashSet<(String, String)>,
-    /// Statements that came out of a guarded `DO` block: run so that
-    /// "already exists" and "does not exist" errors are ignored.
-    pub guarded: HashSet<usize>,
+    /// Statements that came out of a guarded `DO` block, with the conditions
+    /// it ignored (as they go after `WHEN`): run so that those errors, and
+    /// only those, are ignored.
+    pub guarded: HashMap<usize, Vec<String>>,
 }
 
-/// SQLSTATE conditions a guarded statement may fail with and be ignored.
-const GUARDED_CONDITIONS: &str = "duplicate_object OR duplicate_table OR duplicate_column \
-    OR duplicate_schema OR duplicate_function OR undefined_object OR undefined_table \
-    OR undefined_column OR undefined_function";
-
-/// A statement run so that it is skipped when its object already exists
-/// (or no longer does): a fixed block of ours around the statement, which
-/// the allowlist checked like any other. The statement is a quoted
-/// literal, so nothing in it can end the block early.
-fn guarded(statement: &str) -> String {
+/// A statement run so that the errors its block ignored are ignored: a
+/// fixed block of ours around the statement, which the allowlist checked
+/// like any other. The statement is a quoted literal inside the block's
+/// dollar quote, whose tag is one the statement does not contain, so
+/// nothing in it can end the literal or the block early. `conditions` come
+/// from `import::plpgsql` (condition names or `SQLSTATE '…'`, validated).
+fn guarded(statement: &str, conditions: &[String]) -> String {
+    let literal = quote_literal(statement.trim_end().trim_end_matches(';'));
+    // Each tag the literal contains takes 16 of its bytes: one of the
+    // first `len + 1` is absent.
+    let tag = (0..=literal.len())
+        .map(|k| format!("$romulus_guard{k}$"))
+        .find(|tag| !literal.contains(tag.as_str()))
+        .unwrap_or_default();
     format!(
-        "DO $romulus_guard$ BEGIN EXECUTE {}; EXCEPTION WHEN {GUARDED_CONDITIONS} THEN NULL; END $romulus_guard$",
-        quote_literal(statement.trim_end().trim_end_matches(';'))
+        "DO {tag} BEGIN EXECUTE {literal}; EXCEPTION WHEN {} THEN NULL; END {tag}",
+        conditions.join(" OR ")
     )
 }
 
@@ -245,7 +250,7 @@ pub(crate) fn prepare_with(
             sql,
             statement.span.range(),
             &rewrites,
-            edits.guarded.contains(&i),
+            edits.guarded.get(&i),
         );
         script.inject(";\n", Some(i), Injection::Terminator);
 
@@ -277,9 +282,9 @@ fn emit(
     sql: &str,
     span: Range<usize>,
     rewrites: &[(Range<usize>, String)],
-    guard: bool,
+    guard: Option<&Vec<String>>,
 ) {
-    if guard {
+    if let Some(conditions) = guard {
         // The statement as rewritten, inside the guard: one segment.
         let mut text = String::new();
         let mut cursor = span.start;
@@ -289,7 +294,7 @@ fn emit(
             cursor = range.end;
         }
         text.push_str(&sql[cursor..span.end]);
-        script.replace(&guarded(&text), span);
+        script.replace(&guarded(&text, conditions), span);
         return;
     }
     let mut cursor = span.start;

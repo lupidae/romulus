@@ -629,14 +629,15 @@ fn check(
     }
 
     let mut edits = Edits::default();
-    // Statements unwrapped from guarded DO blocks, where they are.
-    let guarded: Vec<Range<usize>> = analyses
+    // Statements unwrapped from guarded DO blocks, where they are, with
+    // what their block ignored.
+    let guarded: Vec<(Range<usize>, &Vec<String>)> = analyses
         .iter()
         .zip(&joined.ranges)
         .flat_map(|(a, range)| {
-            a.guarded
-                .iter()
-                .map(move |g| range.start + g.start..range.start + g.end)
+            a.guarded.iter().map(move |(g, conditions)| {
+                (range.start + g.start..range.start + g.end, conditions)
+            })
         })
         .collect();
     let mut rewritten: HashMap<usize, NodeEnum> = HashMap::new();
@@ -644,8 +645,11 @@ fn check(
     let mut installs: HashMap<String, usize> = HashMap::new();
     for statement in &parsed.statements {
         let k = joined.migration_at(statement.span.start);
-        if guarded.iter().any(|g| g.contains(&statement.span.start)) {
-            edits.guarded.insert(statement.index);
+        if let Some((_, conditions)) = guarded
+            .iter()
+            .find(|(g, _)| g.contains(&statement.span.start))
+        {
+            edits.guarded.insert(statement.index, (*conditions).clone());
         }
         match statements::rewrite(statement, &parsed, &joined.text) {
             Ok(Some(Rewrite {
@@ -799,5 +803,112 @@ mod tests {
         assert_eq!(joined.migration_at(joined.ranges[2].start), 2);
         // The separator after migration 0 belongs to it.
         assert_eq!(joined.migration_at(joined.ranges[0].end + 2), 0);
+    }
+
+    fn refused(migrations: &[&str]) -> Vec<String> {
+        let catalog = Catalog::new(["now", "lower", "repeat"].map(str::to_owned), []);
+        let failed = check(
+            migrations.iter().map(|m| (*m).to_owned()).collect(),
+            &catalog,
+            1000,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{migrations:?} passed"));
+        failed
+            .failure
+            .expect("a failure")
+            .diagnostics
+            .into_iter()
+            .map(|d| d.message)
+            .collect()
+    }
+
+    /// The guard's dollar quote cannot be ended by the statement it wraps,
+    /// whatever tags the statement spells.
+    #[test]
+    fn a_guarded_statement_cannot_end_its_guard() {
+        let script = script(&[
+            "DO $$ BEGIN CREATE TABLE t (a text DEFAULT '$romulus_guard$ $romulus_guard0$; SELECT 1; --'); EXCEPTION WHEN duplicate_table THEN NULL; END $$;",
+        ]);
+        let guard = script
+            .lines()
+            .find(|l| l.starts_with("DO "))
+            .expect("the guarded statement");
+        assert_eq!(
+            guard,
+            "DO $romulus_guard1$ BEGIN EXECUTE 'CREATE TABLE t (a text DEFAULT ''$romulus_guard$ $romulus_guard0$; SELECT 1; --'')'; EXCEPTION WHEN duplicate_table THEN NULL; END $romulus_guard1$;"
+        );
+    }
+
+    /// What a migration may not do to the sandbox, stripped where a stub
+    /// keeps the schema and skipped where nothing does (the security
+    /// review's probes).
+    #[test]
+    fn what_could_escape_a_stub_is_stripped_or_skipped() {
+        let script = script(&[
+            "CREATE FUNCTION f(a int DEFAULT 1) RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = public AS 'SELECT 1';\n\
+             CREATE FUNCTION w() RETURNS int LANGUAGE plpgsql WINDOW AS $$ BEGIN RETURN 1; END $$;\n\
+             CREATE FUNCTION i() RETURNS int LANGUAGE internal AS 'pg_sleep';\n\
+             CREATE FUNCTION c(int) RETURNS int AS 'MODULE', 'sym' LANGUAGE C STRICT;\n\
+             CREATE PROCEDURE p() LANGUAGE plpgsql SET work_mem = '1GB' AS $$ BEGIN END $$;\n\
+             CREATE OR REPLACE FUNCTION s() RETURNS SETOF record LANGUAGE sql AS 'select 1';",
+            "ALTER FUNCTION f(int) SECURITY DEFINER;\nALTER FUNCTION f(int) RESET ALL;\nALTER ROUTINE f(int) SET search_path = x;",
+            "CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();\n\
+             CREATE TABLE t (a int);\n\
+             CREATE RULE r AS ON SELECT TO t DO INSTEAD SELECT 1;\n\
+             CREATE TEXT SEARCH DICTIONARY d (TEMPLATE = simple);\n\
+             CREATE TEXT SEARCH CONFIGURATION kept (PARSER = default);\n\
+             CREATE CAST (text AS int) WITH FUNCTION f(text);",
+            "CREATE TABLE u AS SELECT 1 AS a /* x */ WITH DATA;\nCREATE TABLE v AS SELECT 1 AS a -- c\n;",
+            "DO $$ BEGIN /* CREATE TABLE a (x int) */ CREATE TABLE a (x int); EXCEPTION WHEN others THEN NULL; END $$;",
+        ]);
+        let functions: Vec<&str> = script
+            .lines()
+            .filter(|l| {
+                l.starts_with("CREATE FUNCTION")
+                    || l.starts_with("CREATE OR REPLACE")
+                    || l.starts_with("CREATE PROCEDURE")
+            })
+            .collect();
+        assert_eq!(
+            functions,
+            [
+                "CREATE FUNCTION f(a int = 1) RETURNS int LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;",
+                "CREATE FUNCTION w() RETURNS int LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;",
+                "CREATE FUNCTION i() RETURNS int LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;",
+                "CREATE FUNCTION c(int) RETURNS int RETURNS NULL ON NULL INPUT LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;",
+                "CREATE PROCEDURE p() LANGUAGE plpgsql AS $$BEGIN RETURN; END$$;",
+                "CREATE OR REPLACE FUNCTION s() RETURNS SETOF record LANGUAGE plpgsql AS $$BEGIN RETURN; END$$;",
+            ]
+        );
+        for gone in [
+            "ALTER",
+            "EVENT",
+            "RULE",
+            "DICTIONARY",
+            "CAST",
+            "SECURITY",
+            "search_path = x",
+        ] {
+            assert!(!script.contains(gone), "{gone} in\n{script}");
+        }
+        assert!(script.contains("CREATE TEXT SEARCH CONFIGURATION kept"));
+        assert!(script.contains("CREATE TABLE u AS SELECT 1 AS a /* x */ WITH NO DATA;"));
+        assert!(script.contains("CREATE TABLE v AS SELECT 1 AS a WITH NO DATA"));
+        // The commented-out statement in the DO block is not unwrapped.
+        assert_eq!(script.matches("CREATE TABLE a").count(), 1, "{script}");
+        assert!(script.contains("EXCEPTION WHEN others THEN NULL"));
+    }
+
+    #[test]
+    fn statements_that_run_queries_from_elsewhere_are_refused() {
+        assert_eq!(
+            refused(&["CREATE TABLE t (a int); CREATE TABLE u AS EXECUTE p;"]),
+            ["CREATE TABLE … AS EXECUTE is not allowed"]
+        );
+        assert_eq!(
+            refused(&["CREATE TABLE t (a int); SELECT a INTO TEMP x FROM t;"]),
+            ["temporary objects are not allowed"]
+        );
     }
 }

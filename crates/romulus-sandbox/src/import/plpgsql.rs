@@ -15,19 +15,26 @@
 //! schema they create, so a block made only of such DDL is unwrapped: its
 //! statements are replayed as if written at the top level, each checked by
 //! the allowlist like any other, and none of the block's own code runs (the
-//! condition is not evaluated). When the block was guarded (an `IF [NOT]
-//! EXISTS` on the catalogs, or an `EXCEPTION WHEN duplicate_…/undefined_…`
-//! handler), the replay runs each statement in a fixed wrapper of its own
-//! that ignores "already exists" and "does not exist" errors, which is what
-//! the guard meant. Any other block (loops, variables, data, conditions on
-//! anything but the catalogs) is skipped and reported.
+//! condition is not evaluated).
+//!
+//! A guarded block keeps its guard, and only its own: the replay runs each
+//! statement in a fixed wrapper that ignores exactly the errors the block
+//! did. `IF NOT EXISTS (…catalogs…)` ignores "already exists" (the
+//! `duplicate_*` conditions), `IF EXISTS (…catalogs…)` ignores "does not
+//! exist" (`undefined_*`), and an `EXCEPTION WHEN …` handler ignores the
+//! conditions it names (a `duplicate_*`/`undefined_*` name, their SQLSTATE,
+//! or `others`, as the migration did on the real database). Any other block
+//! (loops, variables, data, a `RETURN` before its end, a condition on
+//! anything but the catalogs, a handler for other errors) is skipped and
+//! reported.
 
 use std::ops::Range;
 
-use pg_query::NodeEnum;
+use pg_query::{NodeEnum, protobuf::Token as TokenKind};
 use serde_json::Value;
 
 use super::statements::skip_reason;
+use crate::walk;
 
 /// The statements of a `DO` block that is only DDL, located in the text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,14 +42,47 @@ pub(crate) struct Unwrapped {
     /// Each statement's range in the text, its `;` included when the body
     /// has one right after it.
     pub statements: Vec<Range<usize>>,
-    /// The block ran them only if they did not exist yet (or still did).
-    pub guarded: bool,
+    /// The conditions the block ignored, as they go after `WHEN` (names, or
+    /// `SQLSTATE '42P07'`); empty when it was not guarded.
+    pub guard: Vec<String>,
 }
 
-/// Conditions an exception handler may catch for the block to count as a
-/// guard: the object was already there, or was not.
-fn guard_condition(name: &str) -> bool {
-    name == "others" || name.starts_with("duplicate_") || name.starts_with("undefined_")
+/// What `IF NOT EXISTS (…)` guards against: the object is there already.
+const DUPLICATES: &[&str] = &[
+    "duplicate_object",
+    "duplicate_table",
+    "duplicate_column",
+    "duplicate_schema",
+    "duplicate_function",
+    "duplicate_alias",
+];
+
+/// What `IF EXISTS (…)` guards against: the object is not there.
+const UNDEFINED: &[&str] = &[
+    "undefined_object",
+    "undefined_table",
+    "undefined_column",
+    "undefined_function",
+];
+
+/// SQLSTATEs of those conditions, for handlers written `WHEN SQLSTATE '…'`.
+const GUARD_SQLSTATES: &[&str] = &[
+    "42710", "42P07", "42701", "42P06", "42723", "42712", // duplicate_*
+    "42704", "42P01", "42703", "42883", // undefined_*
+];
+
+/// A handler's condition, as it goes after `WHEN` in the replay's wrapper;
+/// `None` when the block handled other errors.
+fn guard_condition(name: &str) -> Option<String> {
+    let identifier = !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    if identifier
+        && (name == "others" || name.starts_with("duplicate_") || name.starts_with("undefined_"))
+    {
+        return Some(name.to_owned());
+    }
+    GUARD_SQLSTATES
+        .contains(&name)
+        .then(|| format!("SQLSTATE '{name}'"))
 }
 
 /// The block's DDL, if it is only DDL. `statement` is the `DO` statement's
@@ -73,9 +113,7 @@ pub(crate) fn unwrap(node: &NodeEnum, statement: &str, at: usize) -> Option<Unwr
     }
 
     // The body is parsed as a function's: the only way libpg_query parses
-    // PL/pgSQL. The tag cannot occur in a dollar-quoted body that ended at
-    // its own closing tag… unless the body used this very tag, which the
-    // parse would then reject.
+    // PL/pgSQL. A body using this very tag is not unwrapped.
     let tag = "$romulus_do$";
     if body.contains(tag) {
         return None;
@@ -100,18 +138,61 @@ pub(crate) fn unwrap(node: &NodeEnum, statement: &str, at: usize) -> Option<Unwr
     if datums != builtin {
         return None;
     }
+    // The block's statements, without the RETURNs that end it (the
+    // wrapper's own, and one the body may end with): a RETURN anywhere else
+    // would stop what follows it.
+    let action = &function["action"]["PLpgSQL_stmt_block"];
+    let mut top: Vec<Value> = action["body"].as_array()?.clone();
+    while top.last().is_some_and(|s| {
+        s.get("PLpgSQL_stmt_return")
+            .is_some_and(|r| r.get("expr").is_none())
+    }) {
+        top.pop();
+    }
+    if action.get("exceptions").is_some() {
+        return None;
+    }
     let mut queries = Vec::new();
-    let mut guarded = false;
-    collect(&function["action"], &mut queries, &mut guarded)?;
+    let mut guard = Vec::new();
+    collect(&Value::Array(top), &mut queries, &mut guard)?;
     if queries.is_empty() {
         return None;
     }
 
-    // Locate each statement in the body, in order.
-    let mut statements = Vec::with_capacity(queries.len());
+    let statements = locate(body, &queries)?
+        .into_iter()
+        .map(|r| at + body_at + r.start..at + body_at + r.end)
+        .collect();
+    guard.sort();
+    guard.dedup();
+    Some(Unwrapped { statements, guard })
+}
+
+/// Where each query is in the body, in order, outside its comments and
+/// strings (a statement's text may also appear in a comment above it).
+fn locate(body: &str, queries: &[String]) -> Option<Vec<Range<usize>>> {
+    let tokens = pg_query::scan(body).ok()?.tokens;
+    let opaque: Vec<Range<usize>> = tokens
+        .iter()
+        .filter(|t| {
+            matches!(
+                t.token(),
+                TokenKind::SqlComment
+                    | TokenKind::CComment
+                    | TokenKind::Sconst
+                    | TokenKind::Usconst
+            )
+        })
+        .filter_map(|t| Some(usize::try_from(t.start).ok()?..usize::try_from(t.end).ok()?))
+        .collect();
+    let inside = |at: usize| opaque.iter().any(|r| r.start <= at && at < r.end);
+    let mut out = Vec::with_capacity(queries.len());
     let mut from = 0;
-    for query in &queries {
-        let found = body[from..].find(query.as_str())? + from;
+    for query in queries {
+        let found = body[from..]
+            .match_indices(query.as_str())
+            .map(|(k, _)| from + k)
+            .find(|&k| !inside(k))?;
         let mut end = found + query.len();
         let rest = &body[end..];
         if let Some(k) = rest.find(|c: char| !c.is_whitespace())
@@ -119,21 +200,18 @@ pub(crate) fn unwrap(node: &NodeEnum, statement: &str, at: usize) -> Option<Unwr
         {
             end += k + 1;
         }
-        statements.push(at + body_at + found..at + body_at + end);
+        out.push(found..end);
         from = end;
     }
-    Some(Unwrapped {
-        statements,
-        guarded,
-    })
+    Some(out)
 }
 
-/// Walk a PL/pgSQL statement (or a list of them), collecting DDL; `None`
-/// as soon as anything else turns up.
-fn collect(value: &Value, out: &mut Vec<String>, guarded: &mut bool) -> Option<()> {
+/// Walk PL/pgSQL statements, collecting DDL and the conditions guarding
+/// it; `None` as soon as anything else turns up.
+fn collect(value: &Value, out: &mut Vec<String>, guard: &mut Vec<String>) -> Option<()> {
     if let Some(list) = value.as_array() {
         for item in list {
-            collect(item, out, guarded)?;
+            collect(item, out, guard)?;
         }
         return Some(());
     }
@@ -144,22 +222,17 @@ fn collect(value: &Value, out: &mut Vec<String>, guarded: &mut bool) -> Option<(
                 let handlers = exceptions["PLpgSQL_exception_block"]["exc_list"].as_array()?;
                 for handler in handlers {
                     let handler = &handler["PLpgSQL_exception"];
-                    let conditions = handler["conditions"].as_array()?;
-                    if !conditions.iter().all(|c| {
-                        c["PLpgSQL_condition"]["condname"]
-                            .as_str()
-                            .is_some_and(guard_condition)
-                    }) {
-                        return None;
+                    for condition in handler["conditions"].as_array()? {
+                        let name = condition["PLpgSQL_condition"]["condname"].as_str()?;
+                        guard.push(guard_condition(name)?);
                     }
                     // `THEN NULL` (no statements) or a notice.
                     for action in handler["action"].as_array().into_iter().flatten() {
                         quiet(action)?;
                     }
                 }
-                *guarded = true;
             }
-            collect(fields.get("body").unwrap_or(&Value::Null), out, guarded)
+            collect(fields.get("body").unwrap_or(&Value::Null), out, guard)
         }
         "PLpgSQL_stmt_if" => {
             let condition = fields["cond"]["PLpgSQL_expr"]["query"].as_str()?;
@@ -168,15 +241,15 @@ fn collect(value: &Value, out: &mut Vec<String>, guarded: &mut bool) -> Option<(
                     .get("else_body")
                     .and_then(Value::as_array)
                     .is_some_and(|e| !e.is_empty());
-            if has_else || !catalog_check(condition) {
+            if has_else {
                 return None;
             }
-            *guarded = true;
-            collect(
-                fields.get("then_body").unwrap_or(&Value::Null),
-                out,
-                guarded,
-            )
+            let guards = match catalog_check(condition)? {
+                Exists::Absent => DUPLICATES,
+                Exists::Present => UNDEFINED,
+            };
+            guard.extend(guards.iter().map(|g| (*g).to_owned()));
+            collect(fields.get("then_body").unwrap_or(&Value::Null), out, guard)
         }
         "PLpgSQL_stmt_execsql" => {
             if fields.get("into").is_some() || fields.get("target").is_some() {
@@ -195,8 +268,6 @@ fn collect(value: &Value, out: &mut Vec<String>, guarded: &mut bool) -> Option<(
             out.push(query.to_owned());
             Some(())
         }
-        // The `RETURN` the function wrapper ends with.
-        "PLpgSQL_stmt_return" if fields.get("expr").is_none() => Some(()),
         "PLpgSQL_stmt_raise" | "PLpgSQL_stmt_null" => quiet(value),
         _ => None,
     }
@@ -215,12 +286,67 @@ fn quiet(value: &Value) -> Option<()> {
     }
 }
 
-/// `[NOT] EXISTS (SELECT … FROM pg_… / information_schema…)`: whether an
-/// object is there, nothing else.
-fn catalog_check(condition: &str) -> bool {
-    let lower = condition.trim().to_ascii_lowercase();
-    let exists = lower.starts_with("not exists") || lower.starts_with("exists");
-    exists && (lower.contains("pg_") || lower.contains("information_schema"))
+/// What a catalog check tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exists {
+    /// `NOT EXISTS (…)`: run when the object is absent.
+    Absent,
+    /// `EXISTS (…)`: run when it is there.
+    Present,
+}
+
+/// `[NOT] EXISTS (SELECT … FROM <catalogs>)`: whether an object is there,
+/// read only from `pg_catalog` relations or `information_schema`. `None`
+/// for any other condition.
+fn catalog_check(condition: &str) -> Option<Exists> {
+    let parsed = pg_query::parse(&format!("SELECT {condition}")).ok()?;
+    let [raw] = parsed.protobuf.stmts.as_slice() else {
+        return None;
+    };
+    let Some(NodeEnum::SelectStmt(select)) = raw.stmt.as_ref()?.node.as_ref() else {
+        return None;
+    };
+    let [target] = select.target_list.as_slice() else {
+        return None;
+    };
+    let Some(NodeEnum::ResTarget(target)) = target.node.as_ref() else {
+        return None;
+    };
+    let value = serde_json::to_value(target.val.as_deref()?).ok()?;
+    let (sublink, exists) = match value["node"].as_object()?.iter().next()? {
+        (kind, fields) if kind == "BoolExpr" => {
+            // NOT_EXPR around one EXISTS sublink.
+            if fields["boolop"].as_i64() != Some(3) {
+                return None;
+            }
+            let [arg] = fields["args"].as_array()?.as_slice() else {
+                return None;
+            };
+            (arg["node"]["SubLink"].clone(), Exists::Absent)
+        }
+        (kind, fields) if kind == "SubLink" => (fields.clone(), Exists::Present),
+        _ => return None,
+    };
+    // EXISTS_SUBLINK.
+    if sublink["sub_link_type"].as_i64() != Some(1) {
+        return None;
+    }
+    let mut catalogs_only = true;
+    let mut relations = 0;
+    walk::visit(&sublink["subselect"], &mut |kind, fields| match kind {
+        "RangeVar" => {
+            relations += 1;
+            let schema = fields["schemaname"].as_str().unwrap_or_default();
+            let name = fields["relname"].as_str().unwrap_or_default();
+            let catalog = (schema.is_empty() || schema == "pg_catalog") && name.starts_with("pg_");
+            if !catalog && schema != "information_schema" {
+                catalogs_only = false;
+            }
+        }
+        "RangeFunction" | "RangeTableFunc" => catalogs_only = false,
+        _ => {}
+    });
+    (catalogs_only && relations > 0).then_some(exists)
 }
 
 #[cfg(test)]
@@ -228,47 +354,63 @@ mod tests {
     use super::*;
     use crate::parse::parse;
 
-    fn unwrapped(sql: &str) -> Option<(Vec<&str>, bool)> {
+    fn unwrapped(sql: &str) -> Option<(Vec<&str>, Vec<String>)> {
         let parsed = parse(sql);
         let statement = &parsed.statements[0];
         let at = statement.span.start;
         unwrap(statement.node(), &sql[statement.span.range()], at).map(|u| {
             (
                 u.statements.iter().map(|r| &sql[r.clone()]).collect(),
-                u.guarded,
+                u.guard,
             )
         })
     }
 
     #[test]
-    fn rails_create_enum_is_unwrapped_and_guarded() {
+    fn rails_create_enum_is_unwrapped_and_guarded_against_duplicates() {
         let sql = "DO $$\nBEGIN\n    IF NOT EXISTS (\n      SELECT 1\n      FROM pg_type t\n      JOIN pg_namespace n ON t.typnamespace = n.oid\n      WHERE t.typname = 'user_role'\n        AND n.nspname = ANY (current_schemas(false))\n    ) THEN\n        CREATE TYPE \"user_role\" AS ENUM ('owner', 'admin', 'member');\n    END IF;\nEND\n$$;";
+        let (statements, guard) = unwrapped(sql).unwrap();
         assert_eq!(
-            unwrapped(sql),
+            statements,
+            ["CREATE TYPE \"user_role\" AS ENUM ('owner', 'admin', 'member');"]
+        );
+        assert!(
+            guard.iter().all(|g| g.starts_with("duplicate_")),
+            "{guard:?}"
+        );
+    }
+
+    #[test]
+    fn exception_handlers_guard_with_exactly_their_conditions() {
+        let drizzle = "DO $$ BEGIN\n ALTER TABLE \"posts\" ADD CONSTRAINT \"posts_author_fk\" FOREIGN KEY (\"author_id\") REFERENCES \"public\".\"users\"(\"id\") ON DELETE cascade ON UPDATE no action;\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$;";
+        let (statements, guard) = unwrapped(drizzle).unwrap();
+        assert_eq!(guard, ["duplicate_object"]);
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].ends_with("no action;"));
+
+        let codes = "DO $$ BEGIN CREATE TABLE a (); EXCEPTION WHEN SQLSTATE '42P07' OR others THEN NULL; END $$";
+        assert_eq!(unwrapped(codes).unwrap().1, ["SQLSTATE '42P07'", "others"]);
+
+        let plain =
+            "DO $body$ BEGIN CREATE TABLE a (id int); CREATE INDEX ON a (id); RETURN; END $body$";
+        assert_eq!(
+            unwrapped(plain),
             Some((
-                vec!["CREATE TYPE \"user_role\" AS ENUM ('owner', 'admin', 'member');"],
-                true
+                vec!["CREATE TABLE a (id int);", "CREATE INDEX ON a (id);"],
+                vec![]
             ))
         );
     }
 
     #[test]
-    fn exception_guards_and_plain_blocks_are_unwrapped() {
-        let drizzle = "DO $$ BEGIN\n ALTER TABLE \"posts\" ADD CONSTRAINT \"posts_author_fk\" FOREIGN KEY (\"author_id\") REFERENCES \"public\".\"users\"(\"id\") ON DELETE cascade ON UPDATE no action;\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$;";
-        let (statements, guarded) = unwrapped(drizzle).unwrap();
-        assert!(guarded);
-        assert_eq!(statements.len(), 1);
-        assert!(statements[0].starts_with("ALTER TABLE \"posts\""));
-        assert!(statements[0].ends_with("no action;"));
-
-        let plain = "DO $body$ BEGIN CREATE TABLE a (id int); CREATE INDEX ON a (id); END $body$";
-        assert_eq!(
-            unwrapped(plain),
-            Some((
-                vec!["CREATE TABLE a (id int);", "CREATE INDEX ON a (id);"],
-                false
-            ))
-        );
+    fn statements_are_found_outside_comments_and_strings() {
+        let sql = "DO $$ BEGIN /* CREATE TABLE a (x int); */ RAISE NOTICE 'CREATE TABLE a (x int)'; CREATE TABLE a (x int); END $$";
+        let (statements, _) = unwrapped(sql).unwrap();
+        let start = sql.find("; CREATE TABLE a").unwrap() + 2;
+        assert_eq!(statements, ["CREATE TABLE a (x int);"]);
+        let parsed = parse(sql);
+        let found = unwrap(parsed.statements[0].node(), sql, 0).unwrap();
+        assert_eq!(found.statements[0].start, start);
     }
 
     #[test]
@@ -278,15 +420,66 @@ mod tests {
             "DO $$ BEGIN PERFORM pg_sleep(1); END $$",
             "DO $$ DECLARE r record; BEGIN FOR r IN SELECT * FROM t LOOP EXECUTE 'DROP TABLE ' || r.name; END LOOP; END $$",
             "DO $$ BEGIN IF current_setting('app.env') = 'prod' THEN CREATE INDEX ON t (x); END IF; END $$",
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM my_pg_tables) THEN CREATE TABLE t (); END IF; END $$",
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM public.pg_lookalike) THEN CREATE TABLE t (); END IF; END $$",
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class, generate_series(1, 10)) THEN CREATE TABLE t (); END IF; END $$",
             "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'm') THEN CREATE TYPE m AS ENUM ('a'); ELSE DROP TYPE m; END IF; END $$",
             "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN division_by_zero THEN NULL; END $$",
+            "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN SQLSTATE '22012' THEN NULL; END $$",
             "DO $$ BEGIN CREATE TABLE t (id int); RAISE EXCEPTION 'no'; END $$",
+            "DO $$ BEGIN RETURN; CREATE TABLE t (id int); END $$",
             "DO 'BEGIN CREATE TABLE t (id int); END'",
             "DO LANGUAGE plpython3u $$ import os $$",
             "DO $$ BEGIN EXECUTE 'CREATE TABLE t (id int)'; END $$",
             "DO $$ BEGIN END $$",
         ] {
             assert_eq!(unwrapped(sql), None, "{sql}");
+        }
+    }
+
+    /// Bodies the PL/pgSQL parser reads in many shapes: anything but plain
+    /// DDL stays skipped, and nothing panics.
+    #[test]
+    fn odd_bodies_are_skipped_without_panicking() {
+        for body in [
+            "DECLARE x t.c%TYPE; BEGIN CREATE TABLE a(); END",
+            "DECLARE r t%ROWTYPE; BEGIN CREATE TABLE a(); END",
+            "BEGIN FOREACH x IN ARRAY y LOOP END LOOP; END",
+            "BEGIN RETURN QUERY SELECT 1; END",
+            "DECLARE c CURSOR FOR SELECT 1; BEGIN OPEN c; END",
+            "BEGIN GET DIAGNOSTICS x = ROW_COUNT; END",
+            "DECLARE x int := 1/0; BEGIN END",
+            "BEGIN ASSERT false; END",
+            "BEGIN COMMIT; END",
+            "BEGIN CALL p(); END",
+            "BEGIN IF EXISTS (SELECT pg_sleep(10) FROM pg_class) THEN CREATE TABLE a(); END IF; END",
+            "DECLARE x record; BEGIN SELECT 1 INTO x; END",
+            "BEGIN PERFORM 1; END",
+            "BEGIN CASE WHEN true THEN NULL; END CASE; END",
+            "BEGIN EXIT; END",
+            "BEGIN RAISE EXCEPTION USING MESSAGE = 'x'; END",
+            "BEGIN RAISE; END",
+            "DECLARE x int[]; BEGIN x[1] := 1; END",
+        ] {
+            let sql = format!("DO $$ {body} $$;");
+            let parsed = parse(&sql);
+            let statement = &parsed.statements[0];
+            let found = unwrap(statement.node(), &sql[statement.span.range()], 0);
+            let ddl_only = body.contains("pg_sleep(10)");
+            assert_eq!(found.is_some(), ddl_only, "{body}");
+        }
+        // Statements labelled or with compiler options still unwrap.
+        for body in [
+            "<<l>> BEGIN CREATE TABLE a(); END l",
+            "#variable_conflict use_column\nBEGIN CREATE TABLE a(); END",
+        ] {
+            let sql = format!("DO $$ {body} $$;");
+            let parsed = parse(&sql);
+            let statement = &parsed.statements[0];
+            assert!(
+                unwrap(statement.node(), &sql[statement.span.range()], 0).is_some(),
+                "{body}"
+            );
         }
     }
 }

@@ -349,10 +349,6 @@ mod hostile {
         });
     }
 
-    /// A function the import defines may share a name with one an
-    /// extension's install script calls (it runs as the bootstrap
-    /// superuser): its body is a stub, so capturing the call runs nothing
-    /// of the import's.
     /// The condition of an unwrapped `DO` block never runs.
     #[test]
     fn do_block_conditions_never_run() {
@@ -370,6 +366,32 @@ mod hostile {
         });
     }
 
+    /// A guarded statement's text cannot end the block that guards it.
+    #[test]
+    fn a_guarded_statement_runs_as_written() {
+        with_compiler(|compiler| async move {
+            let (replay, models) = replay(
+                compiler,
+                &["DO $$ BEGIN CREATE TABLE t (a text DEFAULT '$romulus_guard$; $romulus_guard0$; CREATE TABLE injected (id int); --'); EXCEPTION WHEN duplicate_table THEN NULL; END $$;"],
+                0,
+            )
+            .await;
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+            assert_eq!(super::tables(&models[0].1), ["public.t"]);
+            let default = models[0].1.entities[0].columns[0].default.clone();
+            assert_eq!(
+                default.as_deref(),
+                Some(
+                    "'$romulus_guard$; $romulus_guard0$; CREATE TABLE injected (id int); --'::text"
+                )
+            );
+        });
+    }
+
+    /// A function the import defines may share a name with one an
+    /// extension's install script calls (it runs as the bootstrap
+    /// superuser): its body is a stub, so capturing the call runs nothing
+    /// of the import's.
     #[test]
     fn functions_shadowing_extension_calls_run_nothing() {
         with_compiler(|compiler| async move {
@@ -429,6 +451,27 @@ fn ddl_in_do_blocks_is_unwrapped_and_guards_hold() {
             "{:?}",
             people.constraints
         );
+    });
+}
+
+/// A block ignoring `duplicate_object` ignores only that: a foreign key
+/// to a table that is not there fails the import, as it would have failed
+/// the migration, instead of vanishing from the model.
+#[test]
+fn a_guard_ignores_only_what_its_block_did() {
+    with_compiler(|compiler| async move {
+        let (replay, _) = replay(
+            compiler,
+            &[
+                "CREATE TABLE people (id int PRIMARY KEY, team_id int);",
+                "DO $$ BEGIN\n ALTER TABLE \"people\" ADD CONSTRAINT \"people_team_fk\" FOREIGN KEY (\"team_id\") REFERENCES \"public\".\"teams\"(\"id\");\nEXCEPTION\n WHEN duplicate_object THEN null;\nEND $$;",
+            ],
+            0,
+        )
+        .await;
+        let failure = replay.failure.expect("teams does not exist");
+        assert_eq!(failure.index, 1);
+        assert_eq!(failure.diagnostics[0].sqlstate.as_deref(), Some("42P01"));
     });
 }
 

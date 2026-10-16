@@ -95,9 +95,10 @@ pub struct Analysis {
     /// The text with every skipped statement blanked (and `DO` blocks of
     /// DDL unwrapped, see `import::plpgsql`).
     pub sql: String,
-    /// Statements unwrapped from a guarded `DO` block: the replay ignores
-    /// "already exists" and "does not exist" errors from them.
-    pub guarded: Vec<Range<usize>>,
+    /// Statements unwrapped from a guarded `DO` block, with the conditions
+    /// the block ignored (as they go after `WHEN`): the replay ignores
+    /// those errors, and only those, from them.
+    pub guarded: Vec<(Range<usize>, Vec<String>)>,
     pub skipped: Vec<Skipped>,
     /// Syntax errors, located in the text.
     pub errors: Vec<Diagnostic>,
@@ -148,8 +149,13 @@ pub fn analyze(sql: &str) -> Analysis {
                 cursor = kept.end;
             }
             blanks.push(cursor..semicolon_after(&text, span.end));
-            if unwrapped.guarded {
-                guarded.extend(unwrapped.statements);
+            if !unwrapped.guard.is_empty() {
+                guarded.extend(
+                    unwrapped
+                        .statements
+                        .into_iter()
+                        .map(|r| (r, unwrapped.guard.clone())),
+                );
             }
             continue;
         }
@@ -547,29 +553,50 @@ impl Rewrite {
         let text = node
             .deparse()
             .map_err(|e| format!("could not rewrite the statement for the replay: {e}"))?;
-        // What runs must be what was checked: parse the rewrite back.
-        let reparsed = pg_query::parse(&text)
-            .ok()
-            .and_then(|p| p.protobuf.stmts.into_iter().next())
-            .and_then(|s| s.stmt)
-            .and_then(|s| s.node)
-            .ok_or_else(|| "the statement's rewrite for the replay does not parse".to_owned())?;
-        if std::mem::discriminant(&reparsed) != std::mem::discriminant(node) {
-            return Err("the statement's rewrite for the replay is another statement".to_owned());
-        }
         Ok(Self {
+            node: Some(reparse(&text, node)?),
             edits: vec![(statement.span.range(), text)],
-            node: Some(reparsed),
         })
     }
 
-    /// A token-level edit; `node` is the statement as edited.
-    fn token(range: Range<usize>, text: &str, node: NodeEnum) -> Self {
-        Self {
+    /// A token-level edit of the statement in `sql`.
+    fn token(
+        statement: &Statement,
+        sql: &str,
+        range: Range<usize>,
+        text: &str,
+    ) -> Result<Self, String> {
+        let span = statement.span.range();
+        let edited = format!(
+            "{}{text}{}",
+            &sql[span.start..range.start],
+            &sql[range.end..span.end]
+        );
+        Ok(Self {
+            node: Some(reparse(&edited, &statement.node)?),
             edits: vec![(range, text.to_owned())],
-            node: Some(node),
-        }
+        })
     }
+}
+
+/// What runs must be what was checked: the rewrite parsed back, which the
+/// allowlist checks instead of the original statement. It must still be
+/// one statement of the same kind.
+fn reparse(text: &str, like: &NodeEnum) -> Result<NodeEnum, String> {
+    let parsed = pg_query::parse(text)
+        .map_err(|_| "the statement's rewrite for the replay does not parse".to_owned())?;
+    let [statement] = parsed.protobuf.stmts.as_slice() else {
+        return Err("the statement's rewrite for the replay is not one statement".to_owned());
+    };
+    let node = statement
+        .stmt
+        .as_ref()
+        .and_then(|s| s.node.clone())
+        .ok_or_else(|| "the statement's rewrite for the replay does not parse".to_owned())?;
+    if std::mem::discriminant(&node) != std::mem::discriminant(like) {
+        return Err("the statement's rewrite for the replay is another statement".to_owned());
+    }
+    Ok(node)
 }
 
 /// The keyword token spelled `word` in a statement.
@@ -628,45 +655,16 @@ pub(crate) fn rewrite(
             }
             Some(Rewrite::whole(statement, &N::CreateSchemaStmt(kept))?)
         }
-        N::IndexStmt(s) if s.concurrent => {
-            let mut edited = s.clone();
-            edited.concurrent = false;
-            keyword(parsed, statement, sql, "concurrently")
-                .map(|r| Rewrite::token(r, "", N::IndexStmt(edited)))
-        }
-        N::DropStmt(s) if s.concurrent => {
-            let mut edited = s.clone();
-            edited.concurrent = false;
-            keyword(parsed, statement, sql, "concurrently")
-                .map(|r| Rewrite::token(r, "", N::DropStmt(edited)))
-        }
+        N::IndexStmt(s) if s.concurrent => concurrently(statement, parsed, sql)?,
+        N::DropStmt(s) if s.concurrent => concurrently(statement, parsed, sql)?,
         N::AlterTableStmt(s) if detaches_concurrently(&s.cmds) => {
-            let mut edited = s.clone();
-            for cmd in &mut edited.cmds {
-                if let Some(NodeEnum::AlterTableCmd(cmd)) = cmd.node.as_mut()
-                    && let Some(NodeEnum::PartitionCmd(p)) =
-                        cmd.def.as_mut().and_then(|d| d.node.as_mut())
-                {
-                    p.concurrent = false;
-                }
-            }
-            keyword(parsed, statement, sql, "concurrently")
-                .map(|r| Rewrite::token(r, "", N::AlterTableStmt(edited)))
+            concurrently(statement, parsed, sql)?
         }
         N::CreateTableAsStmt(s)
             if s.objtype() == ObjectType::ObjectTable
                 && !s.into.as_ref().is_some_and(|i| i.skip_data) =>
         {
-            let mut edited = s.clone();
-            if let Some(into) = edited.into.as_mut() {
-                into.skip_data = true;
-            }
-            Some(without_data(
-                statement,
-                parsed,
-                sql,
-                N::CreateTableAsStmt(edited),
-            ))
+            Some(without_data(statement, parsed, sql)?)
         }
         N::SelectStmt(s) if s.into_clause.is_some() => {
             let mut query = s.clone();
@@ -703,9 +701,20 @@ fn detaches_concurrently(cmds: &[Node]) -> bool {
     })
 }
 
+/// `CONCURRENTLY` dropped: the replay runs in one transaction.
+fn concurrently(
+    statement: &Statement,
+    parsed: &ParsedSql,
+    sql: &str,
+) -> Result<Option<Rewrite>, String> {
+    keyword(parsed, statement, sql, "concurrently")
+        .map(|r| Rewrite::token(statement, sql, r, ""))
+        .transpose()
+}
+
 /// `CREATE TABLE … AS … [WITH DATA]` → `… WITH NO DATA`: the table gets
 /// its columns, the query never runs.
-fn without_data(statement: &Statement, parsed: &ParsedSql, sql: &str, edited: NodeEnum) -> Rewrite {
+fn without_data(statement: &Statement, parsed: &ParsedSql, sql: &str) -> Result<Rewrite, String> {
     let code: Vec<_> = parsed
         .tokens_of(statement)
         .iter()
@@ -715,10 +724,10 @@ fn without_data(statement: &Statement, parsed: &ParsedSql, sql: &str, edited: No
         && sql[with.start..with.end].eq_ignore_ascii_case("with")
         && sql[data.start..data.end].eq_ignore_ascii_case("data")
     {
-        return Rewrite::token(data.start..data.end, "NO DATA", edited);
+        return Rewrite::token(statement, sql, data.start..data.end, "NO DATA");
     }
     let end = statement.span.end;
-    Rewrite::token(end..end, " WITH NO DATA", edited)
+    Rewrite::token(statement, sql, end..end, " WITH NO DATA")
 }
 
 #[cfg(test)]

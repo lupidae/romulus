@@ -787,6 +787,20 @@ fn check_import_statement(node: &NodeEnum, out: &mut Vec<Problem>) -> bool {
         N::AlterTsconfigurationStmt(_) => true,
         N::CreateTableAsStmt(s) => {
             let table = s.objtype() == ObjectType::ObjectTable && !s.is_select_into;
+            // `AS EXECUTE` plans a statement prepared elsewhere, out of
+            // sight of this check (the session's own, even).
+            if table
+                && matches!(
+                    s.query.as_ref().and_then(|q| q.node.as_ref()),
+                    Some(N::ExecuteStmt(_))
+                )
+            {
+                out.push(Problem::not_allowed(
+                    "CREATE TABLE … AS EXECUTE is not allowed",
+                    "Create the table with its columns instead: a prepared statement cannot run in the sandbox.",
+                ));
+                return true;
+            }
             table && s.into.as_ref().is_some_and(|i| i.skip_data)
         }
         _ => false,
