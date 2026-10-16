@@ -136,7 +136,8 @@ pub struct VersionDetail {
 /// A version's model in every format the viewer shows.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VersionTexts {
-    /// The source for SQL versions; rendered from the model for JSON ones.
+    /// The source for SQL versions; rendered from the model for pushed JSON
+    /// and imported migrations.
     pub sql: String,
     /// Pretty-printed remus JSON.
     pub json: String,
@@ -580,7 +581,7 @@ async fn texts(
     let texts = tokio::task::spawn_blocking(move || VersionTexts {
         sql: match row.source_kind {
             SourceKind::Sql => row.source,
-            SourceKind::RemusJson => compile::render_sql(&model),
+            SourceKind::RemusJson | SourceKind::Migration => compile::render_sql(&model),
         },
         json: compile::render::json(&model),
         dbml: compile::render::dbml(&model),

@@ -56,6 +56,9 @@ pub enum SourceKind {
     Sql,
     /// Only ever from the push endpoint (a database CHECK enforces it).
     RemusJson,
+    /// A migration's up SQL: what changed, not the whole schema. Only ever
+    /// from an import (a database CHECK enforces it).
+    Migration,
 }
 
 /// How a version came to be (`version_origin`).
@@ -66,6 +69,62 @@ pub enum VersionOrigin {
     Upload,
     Push,
     Draft,
+    /// One migration of an imported history (`imports`).
+    Import,
+}
+
+/// The migration tool an imported version came from (`migration_format`):
+/// `romulus_sandbox::import::Format`, under the same wire names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "migration_format", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationFormat {
+    Plain,
+    Sqlx,
+    Flyway,
+    Prisma,
+    Dbmate,
+    GolangMigrate,
+    NodePgMigrate,
+    Alembic,
+    Django,
+    Rails,
+}
+
+impl From<romulus_sandbox::import::Format> for MigrationFormat {
+    fn from(format: romulus_sandbox::import::Format) -> Self {
+        use romulus_sandbox::import::Format as F;
+        match format {
+            F::Plain => Self::Plain,
+            F::Sqlx => Self::Sqlx,
+            F::Flyway => Self::Flyway,
+            F::Prisma => Self::Prisma,
+            F::Dbmate => Self::Dbmate,
+            F::GolangMigrate => Self::GolangMigrate,
+            F::NodePgMigrate => Self::NodePgMigrate,
+            F::Alembic => Self::Alembic,
+            F::Django => Self::Django,
+            F::Rails => Self::Rails,
+        }
+    }
+}
+
+impl From<MigrationFormat> for romulus_sandbox::import::Format {
+    fn from(format: MigrationFormat) -> Self {
+        use romulus_sandbox::import::Format as F;
+        match format {
+            MigrationFormat::Plain => F::Plain,
+            MigrationFormat::Sqlx => F::Sqlx,
+            MigrationFormat::Flyway => F::Flyway,
+            MigrationFormat::Prisma => F::Prisma,
+            MigrationFormat::Dbmate => F::Dbmate,
+            MigrationFormat::GolangMigrate => F::GolangMigrate,
+            MigrationFormat::NodePgMigrate => F::NodePgMigrate,
+            MigrationFormat::Alembic => F::Alembic,
+            MigrationFormat::Django => F::Django,
+            MigrationFormat::Rails => F::Rails,
+        }
+    }
 }
 
 /// A draft's lifecycle (`draft_status`).

@@ -5,16 +5,15 @@ use std::{any::Any, time::Duration};
 use axum::{
     Router,
     body::to_bytes,
-    extract::DefaultBodyLimit,
-    http::{HeaderName, Request, StatusCode, header},
-    middleware::map_response,
+    extract::{DefaultBodyLimit, State},
+    http::{HeaderName, Method, Request, header},
+    middleware::{Next, from_fn_with_state, map_response},
     response::{IntoResponse, Response},
 };
 use tower::ServiceBuilder;
 use tower_http::{
     catch_panic::CatchPanicLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-    timeout::TimeoutLayer,
     trace::{DefaultOnResponse, TraceLayer},
 };
 use tracing::{Level, Span};
@@ -27,8 +26,13 @@ const REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 /// `DefaultBodyLimit::max` (the remus push endpoint will).
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
 
-/// Covers producing the response, not the life of a websocket after its 101.
+/// Covers producing the response, not the life of a websocket after its 101
+/// (nor a body streamed after its headers).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Migration imports (`POST …/imports`) replay up to hundreds of migrations
+/// in the sandbox before they answer.
+const IMPORT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 pub fn around(router: Router) -> Router {
     with_limits(router, BODY_LIMIT, REQUEST_TIMEOUT)
@@ -51,11 +55,23 @@ pub(crate) fn with_limits(router: Router, body_limit: usize, timeout: Duration) 
             }))
             // Outside the timeout, so its 503 is rewritten too.
             .layer(map_response(errors_as_json))
-            .layer(TimeoutLayer::with_status_code(
-                StatusCode::SERVICE_UNAVAILABLE,
-                timeout,
-            )),
+            .layer(from_fn_with_state(timeout, deadline)),
     )
+}
+
+/// The request timeout: a 503 `timeout` past it. Imports get
+/// [`IMPORT_TIMEOUT`].
+async fn deadline(State(timeout): State<Duration>, request: Request<axum::body::Body>, next: Next) -> Response {
+    let import = request.method() == Method::POST && request.uri().path().ends_with("/imports");
+    let limit = if import {
+        timeout.max(IMPORT_TIMEOUT)
+    } else {
+        timeout
+    };
+    match tokio::time::timeout(limit, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => ApiError::Timeout.into_response(),
+    }
 }
 
 /// Every error leaves in the API's JSON format, whoever produced it: our

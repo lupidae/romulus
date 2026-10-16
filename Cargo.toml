@@ -29,6 +29,8 @@ dotenvy = "0.15.7"
 futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
 getrandom = "0.4.3"
 http-body-util = "0.1.5"
+# multipart/form-data bodies: migration folders uploaded from the browser.
+multer = "3.1.0"
 openidconnect = "4.0.1"
 # Tests only: the fake IdP signs ID tokens with a key made at test time.
 rand = "0.8.5"
@@ -63,6 +65,8 @@ utoipa-axum = "0.3.0"
 uuid = { version = "1.28.0", features = ["serde"] }
 # Yjs in Rust: the collab server's documents and the y-sync protocol.
 yrs = { version = "0.28.0", features = ["sync"] }
+# Zipped migration folders (imports). Deflate only, in pure Rust.
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

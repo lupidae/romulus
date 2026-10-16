@@ -26,6 +26,7 @@ dotenvy.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
 http-body-util.workspace = true
+multer.workspace = true
 openidconnect.workspace = true
 # `rc`: compile results are shared, not copied, between the people in a draft.
 serde = { workspace = true, features = ["rc"] }
@@ -45,6 +46,7 @@ utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true
 yrs.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 remus-core = { workspace = true, features = ["fixtures"] }
@@ -52,6 +54,7 @@ http-body-util.workspace = true
 rand.workspace = true
 rsa.workspace = true
 tokio-tungstenite.workspace = true
+zip = { workspace = true, features = ["deflate"] }
 
 [lints]
 workspace = true

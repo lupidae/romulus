@@ -32,11 +32,14 @@ impl Version {
     }
 
     /// Its SQL as a draft has it: the source, or `render_sql` of a pushed
-    /// model.
+    /// model (or of an imported one: a migration is a change, not the
+    /// schema).
     pub fn sql(&self) -> ApiResult<String> {
         Ok(match self.source_kind {
             SourceKind::Sql => self.source.clone(),
-            SourceKind::RemusJson => romulus_sandbox::render_sql(&self.schema()?),
+            SourceKind::RemusJson | SourceKind::Migration => {
+                romulus_sandbox::render_sql(&self.schema()?)
+            }
         })
     }
 }
