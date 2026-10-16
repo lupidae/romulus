@@ -437,7 +437,10 @@ Two features, built in this order:
    a closing "Removals" section unless something new needs their names.
    `CREATE INDEX CONCURRENTLY` is an option (its own files where the tool runs
    one transaction per file). Down migrations are the reverse migration, for
-   the tools that have them (dbmate, golang-migrate).
+   the tools that have them (dbmate, golang-migrate), split the same way.
+   Statements are flagged by what they risk: deleting data, failing on
+   existing rows, widening access (row level security). A partition that
+   becomes a table (or the reverse) is detached (attached), keeping its rows.
 
 ## Decided
 

@@ -12,6 +12,13 @@
 //! change (`scenarios/*.sql`); the sandbox corpus and remus's showcase, from
 //! and to nothing and into one another; and random mutations of those.
 //!
+//! The compile checks the order of the statements, in one transaction. The
+//! tool runs (`tools.rs`) check the files: each tool's layout applied as the
+//! tool applies it (its transactions, `CONCURRENTLY` for real, down
+//! migrations), on a scratch database as the cluster's superuser, with real
+//! roles and functions. What the compile cannot run is skipped with a
+//! named reason ([`Outcome::Skipped`]) and covered there.
+//!
 //! Needs `ROMULUS_SANDBOX_URL` (`.env`, `just sandbox`); skipped, loudly,
 //! without it, like romulus-sandbox's own tests.
 

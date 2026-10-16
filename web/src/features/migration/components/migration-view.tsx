@@ -7,6 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -23,17 +24,20 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useMediaQuery, usePreference } from "@/features/schema/viewer/use-preference";
 import { CodeView } from "@/features/schema/text/code-view";
 import type { Highlights, Range } from "@/features/schema/text/codemirror";
+import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 
 import {
   basename,
-  downloadName,
+  isArchive,
   isTool,
   lineRanges,
   type MigrationChoice,
   type MigrationFile,
+  type MigrationHazard,
   type MigrationQuery,
   type MigrationWarning,
+  NUMBERED,
   TOOLS,
 } from "../queries";
 import { save, zip } from "../zip";
@@ -65,8 +69,22 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
     false,
     isBoolean,
   );
+  // The first file's version, for tools that number their migrations: sent
+  // once it reads as one, after a pause in typing.
+  const numbered = NUMBERED[format];
+  const [versionText, setVersionText] = React.useState("");
+  const [version, setVersion] = React.useState<string | undefined>(undefined);
+  const commitVersion = useDebounced((text: string) => {
+    const trimmed = text.trim();
+    if (trimmed === "") setVersion(undefined);
+    else if (numbered?.pattern.test(trimmed)) setVersion(trimmed);
+  }, 400);
+  const versionInvalid =
+    numbered !== undefined &&
+    versionText.trim() !== "" &&
+    !numbered.pattern.test(versionText.trim());
   const migration = useQuery({
-    ...query({ format, concurrently }),
+    ...query({ format, concurrently, version: numbered ? version : undefined }),
     // Another tool keeps the last files on screen while the new ones load.
     placeholderData: keepPreviousData,
   });
@@ -77,16 +95,43 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
   const files = data?.files ?? [];
   const file: MigrationFile | undefined = files[Math.min(fileIndex, files.length - 1)];
 
-  const danger = React.useMemo<Range[]>(
-    () => (file ? lineRanges(file.content, file.destructive) : []),
-    [file],
+  // Where the flagged statements are: deletes data (red), can fail on
+  // existing rows (amber), widens access (blue).
+  const ranges = React.useMemo(() => {
+    const of = (...hazards: MigrationHazard[]) =>
+      file
+        ? lineRanges(
+            file.content,
+            file.marks.filter((m) => hazards.includes(m.hazard)),
+          )
+        : [];
+    return {
+      danger: of("deletes_data"),
+      caution: of("can_fail"),
+      access: of("widens_access"),
+      destructive: of("deletes_data", "can_fail"),
+    };
+  }, [file]);
+  const highlights = React.useMemo<Highlights>(
+    () => ({
+      related: [],
+      danger: ranges.danger,
+      caution: ranges.caution,
+      notice: ranges.access,
+    }),
+    [ranges],
   );
-  const highlights = React.useMemo<Highlights>(() => ({ related: [], danger }), [danger]);
-  const [reveal, setReveal] = React.useState<{ range: Range; n: number } | null>(null);
-  const nextDestructive = () => {
-    if (danger.length === 0) return;
-    const n = reveal ? (reveal.n + 1) % danger.length : 0;
-    setReveal({ range: danger[n]!, n });
+  // The walkers: through the destructive statements, through what widens access.
+  const [reveal, setReveal] = React.useState<{
+    kind: "destructive" | "access";
+    range: Range;
+    n: number;
+  } | null>(null);
+  const walk = (kind: "destructive" | "access") => {
+    const list = ranges[kind];
+    if (list.length === 0) return;
+    const n = reveal?.kind === kind ? (reveal.n + 1) % list.length : 0;
+    setReveal({ kind, range: list[n]!, n });
   };
 
   const [copied, setCopied] = React.useState(false);
@@ -105,12 +150,11 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
     }
   };
 
-  const archive = files.length > 1 || files.some((f) => f.path.includes("/"));
+  const archive = isArchive(files);
   const download = () => {
-    if (files.length === 0) return;
-    const name = downloadName(files);
-    if (archive) save(name, zip(files));
-    else save(name, files[0]!.content);
+    if (!data || files.length === 0) return;
+    if (archive) save(data.archive, zip(files));
+    else save(files[0]!.path, files[0]!.content);
   };
 
   const statements = data?.statements.length ?? 0;
@@ -133,6 +177,9 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
               setFormat(value);
               setFileIndex(0);
               setReveal(null);
+              // Each tool numbers its own way.
+              setVersionText("");
+              setVersion(undefined);
             }}
           >
             <SelectTrigger id={`${uid}-tool`} className="w-auto min-w-36">
@@ -163,6 +210,35 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
             </Label>
           </Tooltip>
         </div>
+        {numbered && (
+          <div className="flex items-center gap-2">
+            <Label htmlFor={`${uid}-version`} className="text-muted-foreground">
+              Version
+            </Label>
+            <Tooltip
+              content={`The first file's version, if yours are numbered: ${numbered.hint}. Empty: ${format === "flyway" ? "the version's number" : "the time"}.`}
+            >
+              <Input
+                id={`${uid}-version`}
+                value={versionText}
+                onChange={(event) => {
+                  setVersionText(event.target.value);
+                  commitVersion(event.target.value);
+                }}
+                placeholder={format === "flyway" ? String(data?.to ?? "") : "timestamp"}
+                inputMode="numeric"
+                aria-invalid={versionInvalid || undefined}
+                aria-describedby={versionInvalid ? `${uid}-version-error` : undefined}
+                className="h-9 w-28 font-mono sm:h-8"
+              />
+            </Tooltip>
+            {versionInvalid && (
+              <span id={`${uid}-version-error`} role="alert" className="text-sm text-destructive">
+                {numbered.hint}
+              </span>
+            )}
+          </div>
+        )}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {switching && <Spinner className="size-3.5 text-muted-foreground" label="Updating" />}
           {data && (
@@ -172,19 +248,40 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
                 : `${statements} statement${statements === 1 ? "" : "s"}`}
             </span>
           )}
-          {danger.length > 0 && (
-            <Tooltip content="Scroll to the next statement in this file that deletes data or can fail on existing rows">
+          {ranges.destructive.length > 0 && (
+            <Tooltip content="Scroll to the next statement in this file that deletes data (red) or can fail on existing rows (amber)">
               <Button
                 size="sm"
                 variant="ghost"
                 className="text-destructive hover:text-destructive"
-                onClick={nextDestructive}
-                aria-label={`${danger.length} destructive: scroll to the next one`}
+                onClick={() => walk("destructive")}
+                aria-label={`${ranges.destructive.length} destructive: scroll to the next one`}
               >
                 <Badge variant="destructive" className="tabular-nums">
-                  {reveal ? `${reveal.n + 1}/${danger.length}` : danger.length}
+                  {reveal?.kind === "destructive"
+                    ? `${reveal.n + 1}/${ranges.destructive.length}`
+                    : ranges.destructive.length}
                 </Badge>
                 destructive
+                <NavArrowDownIcon />
+              </Button>
+            </Tooltip>
+          )}
+          {ranges.access.length > 0 && (
+            <Tooltip content="Scroll to the next statement in this file that lets more rows through to more roles">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-info hover:text-info"
+                onClick={() => walk("access")}
+                aria-label={`${ranges.access.length} widen access: scroll to the next one`}
+              >
+                <Badge variant="info" className="tabular-nums">
+                  {reveal?.kind === "access"
+                    ? `${reveal.n + 1}/${ranges.access.length}`
+                    : ranges.access.length}
+                </Badge>
+                widen access
                 <NavArrowDownIcon />
               </Button>
             </Tooltip>

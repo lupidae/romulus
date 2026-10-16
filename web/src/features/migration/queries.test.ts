@@ -1,19 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { downloadName, lineRanges } from "./queries";
+import { isArchive, lineRanges, NUMBERED } from "./queries";
 
-const file = (path: string) => ({ path, content: "", role: "up" as const, destructive: [] });
+const file = (path: string) => ({ path, content: "", role: "up" as const, marks: [] });
 
-describe("downloadName", () => {
+describe("isArchive", () => {
   it("downloads a single top-level file as itself", () => {
-    expect(downloadName([file("V5__add.sql")])).toBe("V5__add.sql");
+    expect(isArchive([file("V5__add.sql")])).toBe(false);
   });
 
-  it("zips a folder or several files, named after the first", () => {
-    expect(downloadName([file("20261016093000_add/migration.sql")])).toBe("20261016093000_add.zip");
-    expect(
-      downloadName([file("20261016093000_add.up.sql"), file("20261016093000_add.down.sql")]),
-    ).toBe("20261016093000_add.zip");
+  it("zips a folder or several files", () => {
+    expect(isArchive([file("20261016093000_add/migration.sql")])).toBe(true);
+    expect(isArchive([file("1_add.up.sql"), file("1_add.down.sql")])).toBe(true);
+  });
+});
+
+describe("NUMBERED", () => {
+  it("accepts the versions each tool reads", () => {
+    expect(NUMBERED.flyway!.pattern.test("1.2.3")).toBe(true);
+    expect(NUMBERED.flyway!.pattern.test("1..2")).toBe(false);
+    expect(NUMBERED.golang_migrate!.pattern.test("000042")).toBe(true);
+    expect(NUMBERED.golang_migrate!.pattern.test("4.2")).toBe(false);
   });
 });
 

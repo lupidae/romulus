@@ -210,7 +210,12 @@ function PublishBody({
           changes={changes}
           layout={layout}
           groups={groups}
-          migration={(choice) => draftMigrationQuery(org, db, draftId, data!.sha256, choice)}
+          migration={(choice) =>
+            draftMigrationQuery(org, db, draftId, data!.sha256, choice, () => {
+              // The draft moved since the preview: show what is true now.
+              void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) });
+            })
+          }
         />
       )}
 

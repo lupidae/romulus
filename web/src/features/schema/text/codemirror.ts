@@ -52,6 +52,10 @@ export interface Highlights {
   related: Range[];
   /** Statements that delete data (a migration's destructive ones). */
   danger?: Range[];
+  /** Statements that can fail on existing rows. */
+  caution?: Range[];
+  /** Statements worth a second look (a migration's access widening). */
+  notice?: Range[];
 }
 
 // ---- Theme ------------------------------------------------------------------
@@ -111,10 +115,18 @@ const theme = EditorView.theme({
     backgroundColor: "color-mix(in oklab, var(--color-primary) 3.5%, transparent)",
     boxShadow: "inset 0.125rem 0 0 color-mix(in oklab, var(--color-primary) 45%, transparent)",
   },
-  // A statement that deletes data.
+  // A statement that deletes data, can fail, or widens access.
   ".cm-statement-danger": {
     backgroundColor: "color-mix(in oklab, var(--color-destructive) 7%, transparent)",
     boxShadow: "inset 0.125rem 0 0 var(--color-destructive)",
+  },
+  ".cm-statement-caution": {
+    backgroundColor: "color-mix(in oklab, var(--color-warning) 8%, transparent)",
+    boxShadow: "inset 0.125rem 0 0 var(--color-warning)",
+  },
+  ".cm-statement-notice": {
+    backgroundColor: "color-mix(in oklab, var(--color-info) 7%, transparent)",
+    boxShadow: "inset 0.125rem 0 0 var(--color-info)",
   },
   // The search panel, in the kit's terms.
   ".cm-panels": {
@@ -305,6 +317,8 @@ function lineDecorations(state: EditorState, h: Highlights): DecorationSet {
       if (!lines.has(n) || cls !== "cm-statement-related") lines.set(n, cls);
   };
   for (const r of h.related) mark(r, "cm-statement-related");
+  for (const r of h.notice ?? []) mark(r, "cm-statement-notice");
+  for (const r of h.caution ?? []) mark(r, "cm-statement-caution");
   for (const r of h.danger ?? []) mark(r, "cm-statement-danger");
   if (h.primary) mark(h.primary, "cm-statement");
   const builder = new RangeSetBuilder<Decoration>();

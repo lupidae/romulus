@@ -78,9 +78,14 @@ test("a migration between two versions: reviewed, laid out for a tool, copied an
   );
   await expect(sql(page)).toContainText("BEGIN;");
   // Destructive statements are tinted, and the button goes through them.
-  await expect(page.locator(".cm-statement-danger").first()).toBeAttached();
+  // What can fail on existing rows is amber, what deletes data red; the
+  // button goes through both.
+  await expect(page.locator(".cm-statement-caution").first()).toBeAttached();
   await page.getByRole("button", { name: /^2 destructive/ }).click();
   await expect(page.getByRole("button", { name: /^2 destructive/ })).toContainText("1/2");
+  await page.getByRole("button", { name: /^2 destructive/ }).click();
+  await expect(page.getByRole("button", { name: /^2 destructive/ })).toContainText("2/2");
+  await expect(page.locator(".cm-statement-danger").first()).toBeAttached();
   await test.info().attach("migration, plain SQL", {
     body: await page.screenshot(),
     contentType: "image/png",
@@ -103,6 +108,14 @@ test("a migration between two versions: reviewed, laid out for a tool, copied an
   const content = readFileSync(await file.path(), "utf8");
   expect(content).toContain("DESTRUCTIVE");
   expect(content).toContain("COMMIT;");
+
+  // Flyway takes the next version of the user's own numbering.
+  await page.getByRole("combobox", { name: "Tool" }).click();
+  await page.getByRole("option", { name: /^Flyway/ }).click();
+  await page.getByLabel("Version", { exact: true }).fill("7");
+  await expect(page.getByText("V7__add_invoices.sql")).toBeVisible();
+  await page.getByLabel("Version", { exact: true }).fill("7..1");
+  await expect(page.getByRole("alert").filter({ hasText: "optionally dotted" })).toBeVisible();
 
   // golang-migrate: an up and a down file, downloaded together.
   await page.getByRole("combobox", { name: "Tool" }).click();
