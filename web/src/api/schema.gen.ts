@@ -2594,7 +2594,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson`, the progress, one `ImportEvent` per line */
+      /** @description Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson` (recommended for CI: no proxy times out), the progress, one `ImportEvent` per line, blank lines keeping the connection alive, the last one `done` or `failed` */
       200: {
         headers: {
           [name: string]: unknown;
@@ -2631,7 +2631,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` */
+      /** @description `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` (another import of the database runs, or this one still does) */
       409: {
         headers: {
           [name: string]: unknown;
@@ -2658,7 +2658,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `validation` */
+      /** @description `import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `models_too_large`, `validation` */
       422: {
         headers: {
           [name: string]: unknown;
@@ -4080,7 +4080,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson`, the progress, one `ImportEvent` per line */
+      /** @description Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson` (recommended for CI: no proxy times out), the progress, one `ImportEvent` per line, blank lines keeping the connection alive, the last one `done` or `failed` */
       200: {
         headers: {
           [name: string]: unknown;
@@ -4115,7 +4115,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` */
+      /** @description `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` (another import of the database runs, or this one still does) */
       409: {
         headers: {
           [name: string]: unknown;
@@ -4142,7 +4142,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `validation` */
+      /** @description `import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `models_too_large`, `validation` */
       422: {
         headers: {
           [name: string]: unknown;

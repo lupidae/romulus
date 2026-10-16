@@ -457,8 +457,19 @@ Two features, built in this order:
      one import replays at a time, organizations taking turns (two waiting
      per organization, one once half of the 16 places are taken, 10 minutes
      at most; the progress says "queued"; a queued import keeps its place
-     when the page is left, like a running one finishes). The web streams progress (NDJSON); the CI endpoint answers
-     the report (requests to `…/imports` get 15 minutes).
+     when the page is left, like a running one finishes). One import per
+     database at a time: a retry while it runs answers 409
+     `concurrent_import`, "still being imported". Requests to `…/imports`
+     get 15 minutes.
+   - Progress streams as NDJSON (`Accept: application/x-ndjson`), the web's
+     and CI's documented way: headers at once, a line (or a blank
+     keep-alive) at least every 15 s, the last one `done` or `failed`. The
+     plain JSON report comes only at the end, and a proxy may give up before
+     it (Cloudflare: 524 after about 100 s) though the import lands.
+   - Models are staged as the replay reads them (`import_staging`) and moved
+     into `versions` when the import is stored: the API holds a few models,
+     never the history. An import stores at most 256 MiB of models (422
+     `models_too_large`).
    - Flyway placeholders (`${name}`) are not substituted: a migration using
      one fails where it is used, with a hint saying so.
    - A push-scope token learns what it sent, read back (the plan, what is

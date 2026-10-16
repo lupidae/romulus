@@ -4,7 +4,11 @@
 //! The job runs in a task of its own: a client that goes away (a closed
 //! tab, a CI runner cancelled) does not leave it half done, it finishes and
 //! stores (importing again then creates nothing). Its progress goes to the
-//! client as NDJSON when asked for (`Accept: application/x-ndjson`).
+//! client as NDJSON when asked for (`Accept: application/x-ndjson`): the
+//! headers at once, an event per line, and a blank line after
+//! [`KEEP_ALIVE`] without one, so that no proxy gives up on a long import
+//! (the plain JSON answer comes only at the end: Cloudflare answers 524
+//! after about 100 s without a byte, though the import still lands).
 
 use std::{convert::Infallible, time::Instant};
 
@@ -123,6 +127,9 @@ pub struct Target {
     pub slug: String,
 }
 
+/// Silence after which the NDJSON stream sends a blank line.
+pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Plan, refuse what cannot be imported, then run (see the module
 /// documentation).
 pub async fn start(
@@ -151,12 +158,7 @@ pub async fn start(
         tokio::spawn(async move {
             let _ = job.run(Some(events)).await;
         });
-        let body = futures_util::stream::unfold(received, |mut received| async move {
-            let event = received.recv().await?;
-            let mut line = serde_json::to_vec(&event).unwrap_or_default();
-            line.push(b'\n');
-            Some((Ok::<_, Infallible>(Bytes::from(line)), received))
-        });
+        let body = ndjson(received, KEEP_ALIVE);
         return Ok((
             StatusCode::OK,
             [
@@ -178,6 +180,27 @@ pub async fn start(
         StatusCode::OK
     };
     Ok((status, Json(report)).into_response())
+}
+
+/// The events as NDJSON lines, a blank line after `keep_alive` without
+/// one; ends when the job drops its sender.
+fn ndjson(
+    received: mpsc::UnboundedReceiver<ImportEvent>,
+    keep_alive: std::time::Duration,
+) -> impl futures_util::Stream<Item = Result<Bytes, Infallible>> {
+    futures_util::stream::unfold(received, move |mut received| async move {
+        let line = match tokio::time::timeout(keep_alive, received.recv()).await {
+            Ok(Some(event)) => {
+                let mut line = serde_json::to_vec(&event).unwrap_or_default();
+                line.push(b'\n');
+                line
+            }
+            Ok(None) => return None,
+            // Nothing to say yet: a blank line keeps proxies waiting.
+            Err(_) => b"\n".to_vec(),
+        };
+        Some((Ok(Bytes::from(line)), received))
+    })
 }
 
 struct Job {
@@ -575,4 +598,31 @@ fn changes_between(previous: Option<&Schema>, model: &Schema) -> String {
     romulus_diff::diff(&crate::versions::empty(model), model)
         .summary
         .text
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use futures_util::StreamExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_silent_stream_sends_blank_lines_until_an_event_comes() {
+        let (sender, received) = mpsc::unbounded_channel();
+        let mut stream = Box::pin(ndjson(received, Duration::from_millis(10)));
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(&first[..], b"\n");
+        sender.send(ImportEvent::Queued).unwrap();
+        let mut line = stream.next().await.unwrap().unwrap();
+        while &line[..] == b"\n" {
+            line = stream.next().await.unwrap().unwrap();
+        }
+        assert_eq!(&line[..], b"{\"event\":\"queued\"}\n");
+        drop(sender);
+        while let Some(chunk) = stream.next().await {
+            assert_eq!(&chunk.unwrap()[..], b"\n");
+        }
+    }
 }

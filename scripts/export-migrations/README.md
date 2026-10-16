@@ -26,10 +26,21 @@ From CI:
 
 ```bash
 scripts/export-migrations/alembic.sh > alembic.sql
-curl -fsS -H "Authorization: Bearer $ROMULUS_TOKEN" \
-  -H "Content-Type: application/sql" --data-binary @alembic.sql \
-  "$ROMULUS_URL/api/databases/<id>/imports?format=alembic"
+curl -sSN --fail-with-body -H "Authorization: Bearer $ROMULUS_TOKEN" \
+  -H "Content-Type: application/sql" -H "Accept: application/x-ndjson" \
+  --data-binary @alembic.sql "$ROMULUS_URL/api/databases/<id>/imports?format=alembic" \
+  | tee /dev/stderr | tail -n 1 | grep -q '"event":"done"'
 ```
+
+Ask for the progress (`Accept: application/x-ndjson`): it streams one event
+per line as the import goes (blank lines keep the connection alive), so no
+proxy times out on a long import, and the last line says how it ended
+(`done`, or `failed` with the error), which the `grep` turns into the
+step's exit status. Without it, the answer comes only at the end: a proxy
+may give up first (Cloudflare answers 524 after about 100 s) while the
+import still finishes on the server. Sending the same request again while
+it runs answers 409 `concurrent_import`, "still being imported"; once it is
+done, it answers that nothing is left to import.
 
 Migration folders (sqlx, Flyway, Prisma, dbmate, golang-migrate,
 node-pg-migrate, plain `.sql` files) need no exporter: zip the folder and send

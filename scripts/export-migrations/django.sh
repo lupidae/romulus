@@ -18,9 +18,13 @@
 # not need it. Import the file in romulus (database page, "Import
 # migrations"), or from CI:
 #
-#     curl -fsS -H "Authorization: Bearer $ROMULUS_TOKEN" \
-#       -H "Content-Type: application/sql" --data-binary @django.sql \
-#       "$ROMULUS_URL/api/databases/<id>/imports?format=django"
+#     curl -sSN --fail-with-body -H "Authorization: Bearer $ROMULUS_TOKEN" \
+#       -H "Content-Type: application/sql" -H "Accept: application/x-ndjson" \
+#       --data-binary @django.sql "$ROMULUS_URL/api/databases/<id>/imports?format=django" \
+#       | tee /dev/stderr | tail -n 1 | grep -q '"event":"done"'
+#
+# (The progress streams, one event per line, so no proxy times out on a
+# long import; the last line is `done`, or `failed` with the error.)
 #
 # Point the project's settings at the scratch database however it reads
 # them (DATABASE_URL above is only an example). Options:

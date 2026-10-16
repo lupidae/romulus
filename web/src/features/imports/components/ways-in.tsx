@@ -107,7 +107,8 @@ function FromCi({ databaseId }: { databaseId: string }) {
   return (
     <Card id="import-from-ci" className="flex min-w-0 flex-col gap-3 p-4">
       <Heading icon={<CloudIcon />} title="From CI">
-        Run it on every deploy: imported migrations are skipped, new ones added.
+        Run it on every deploy: imported migrations are skipped, new ones added. It shows the
+        progress and fails the step if a migration does not replay.
       </Heading>
       <CodeBlock code={importCommand(databaseId)} label="Import command" />
       <p className="flex items-start gap-2 text-sm text-muted-foreground">

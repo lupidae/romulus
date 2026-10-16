@@ -611,6 +611,7 @@ async fn the_progress_streams_one_event_per_line(db: PgPool) {
     let events: Vec<Value> = std::str::from_utf8(&streamed.body)
         .unwrap()
         .lines()
+        .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     let kinds: Vec<&str> = events
@@ -644,7 +645,7 @@ async fn the_progress_streams_one_event_per_line(db: PgPool) {
         std::str::from_utf8(&failed.body)
             .unwrap()
             .lines()
-            .last()
+            .rfind(|line| !line.is_empty())
             .unwrap(),
     )
     .unwrap();
@@ -932,6 +933,7 @@ async fn an_import_waits_for_its_turn_and_says_so(db: PgPool) {
     let kinds: Vec<String> = std::str::from_utf8(&streamed.body)
         .unwrap()
         .lines()
+        .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_str::<Value>(line).unwrap()["event"].to_string())
         .collect();
     assert_eq!(

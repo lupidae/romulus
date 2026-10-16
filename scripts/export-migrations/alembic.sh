@@ -14,9 +14,13 @@
 # in the version's message. Import the file in romulus (database page, "Import
 # migrations"), or from CI:
 #
-#     curl -fsS -H "Authorization: Bearer $ROMULUS_TOKEN" \
-#       -H "Content-Type: application/sql" --data-binary @alembic.sql \
-#       "$ROMULUS_URL/api/databases/<id>/imports?format=alembic"
+#     curl -sSN --fail-with-body -H "Authorization: Bearer $ROMULUS_TOKEN" \
+#       -H "Content-Type: application/sql" -H "Accept: application/x-ndjson" \
+#       --data-binary @alembic.sql "$ROMULUS_URL/api/databases/<id>/imports?format=alembic" \
+#       | tee /dev/stderr | tail -n 1 | grep -q '"event":"done"'
+#
+# (The progress streams, one event per line, so no proxy times out on a
+# long import; the last line is `done`, or `failed` with the error.)
 #
 # Your env.py must support offline mode (`run_migrations_offline`, which the
 # default template has). Revisions that branch and merge are printed in the

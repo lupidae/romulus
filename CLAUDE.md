@@ -491,9 +491,12 @@ skipped). docs/MVP.md "Next: migration files" has the decisions.
   `migration_changed`, `migration_out_of_order`, `too_many_migrations`,
   `import_failed` for a syntax error); a replay failure is 422 `import_failed`
   (`details: ImportFailure`, lines in the file) or the stream's `failed`
-  event. Versions are stored by `versions::store::store_import`, all or none,
+  event. Models are staged as the replay reads them (`import_staging`; the
+  replay waits on a bounded channel, so the job holds one at a time) and
+  `versions::store::store_import` moves them into versions, all or none,
   numbered under the databases row lock. The job runs in its own task: a
-  client leaving does not stop it. Before the sandbox it waits for its turn
+  client leaving does not stop it. CI uses the NDJSON progress (blank
+  keep-alive lines; the plain report can be cut by a proxy). Before the sandbox it waits for its turn
   (`state.imports`, `imports::Turns`: organizations round-robin, a
   `queued` event); ids, paths and names over what the tables store are
   refused before the replay (`invalid_migrations`). Guarded statements

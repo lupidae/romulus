@@ -17,7 +17,14 @@
 //!   `Accept: application/x-ndjson` the answer streams its progress, one
 //!   [`ImportEvent`] per line; otherwise it is the [`ImportReport`].
 //! - `POST /databases/{database_id}/imports` [API token, `push` scope]: the
-//!   same for CI.
+//!   same for CI. CI should ask for the progress (NDJSON): its headers come
+//!   at once and a line (or a blank keep-alive) at least every 15 s, where
+//!   the plain answer comes only at the end, after a proxy may have given
+//!   up (Cloudflare: 524 after about 100 s; the import still lands). The
+//!   last line is `done` or `failed`; the page's CI command and
+//!   `scripts/export-migrations/README.md` turn it into an exit status. A
+//!   retry while it runs answers 409 `concurrent_import` ("still being
+//!   imported").
 //!
 //! Bodies: `multipart/form-data` (files named by their path in the folder,
 //! or a zip), `application/zip`, or one SQL text (`application/sql`, what an
@@ -226,16 +233,16 @@ async fn preview(
     ),
     responses(
         (status = 201, description = "Imported: the versions were created", body = ImportReport),
-        (status = 200, description = "Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson`, the progress, one `ImportEvent` per line", content(
+        (status = 200, description = "Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson` (recommended for CI: no proxy times out), the progress, one `ImportEvent` per line, blank lines keeping the connection alive, the last one `done` or `failed`", content(
             (ImportReport = "application/json"),
             (ImportEvent = "application/x-ndjson"),
         )),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import`", body = ErrorBody),
+        (status = 409, description = "`has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` (another import of the database runs, or this one still does)", body = ErrorBody),
         (status = 413, description = "`payload_too_large`", body = ErrorBody),
         (status = 415, description = "`unsupported_media_type`", body = ErrorBody),
-        (status = 422, description = "`import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `validation`", body = ErrorBody),
+        (status = 422, description = "`import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `models_too_large`, `validation`", body = ErrorBody),
         (status = 429, description = "`rate_limited`", body = ErrorBody),
         (status = 503, description = "`unavailable`: the sandbox is down or busy; nothing stored", body = ErrorBody),
     )
@@ -282,16 +289,16 @@ async fn import(
     ),
     responses(
         (status = 201, description = "Imported: the versions were created", body = ImportReport),
-        (status = 200, description = "Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson`, the progress, one `ImportEvent` per line", content(
+        (status = 200, description = "Nothing new (`unchanged`), or a dry run that replayed (`checked`); with `Accept: application/x-ndjson` (recommended for CI: no proxy times out), the progress, one `ImportEvent` per line, blank lines keeping the connection alive, the last one `done` or `failed`", content(
             (ImportReport = "application/json"),
             (ImportEvent = "application/x-ndjson"),
         )),
         (status = 401, description = "`invalid_token`", body = ErrorBody),
         (status = 403, description = "`wrong_database`", body = ErrorBody),
-        (status = 409, description = "`has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import`", body = ErrorBody),
+        (status = 409, description = "`has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` (another import of the database runs, or this one still does)", body = ErrorBody),
         (status = 413, description = "`payload_too_large`", body = ErrorBody),
         (status = 415, description = "`unsupported_media_type`", body = ErrorBody),
-        (status = 422, description = "`import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `validation`", body = ErrorBody),
+        (status = 422, description = "`import_failed` (`details`: `ImportFailure`), `invalid_migrations`, `invalid_file`, `too_many_migrations`, `models_too_large`, `validation`", body = ErrorBody),
         (status = 429, description = "`rate_limited`, with `Retry-After`", body = ErrorBody),
         (status = 503, description = "`unavailable`: the sandbox is down or busy; nothing stored", body = ErrorBody),
     )

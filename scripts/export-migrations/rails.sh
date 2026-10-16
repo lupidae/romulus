@@ -20,9 +20,13 @@
 # Import the file in romulus (database page, "Import migrations"), or from
 # CI:
 #
-#     curl -fsS -H "Authorization: Bearer $ROMULUS_TOKEN" \
-#       -H "Content-Type: application/sql" --data-binary @rails.sql \
-#       "$ROMULUS_URL/api/databases/<id>/imports?format=rails"
+#     curl -sSN --fail-with-body -H "Authorization: Bearer $ROMULUS_TOKEN" \
+#       -H "Content-Type: application/sql" -H "Accept: application/x-ndjson" \
+#       --data-binary @rails.sql "$ROMULUS_URL/api/databases/<id>/imports?format=rails" \
+#       | tee /dev/stderr | tail -n 1 | grep -q '"event":"done"'
+#
+# (The progress streams, one event per line, so no proxy times out on a
+# long import; the last line is `done`, or `failed` with the error.)
 #
 # Works with Rails 6.0 and later (PostgreSQL adapter). RAILS runs the
 # runner (default: bin/rails). Refuses RAILS_ENV=production.
