@@ -15,7 +15,7 @@ database page's "Import migrations", or the CI endpoint below).
 `PYTHON` (Alembic, Django) and `RAILS` (Rails) pick the interpreter or the
 runner; `--help` prints each script's options. Point the project at the
 scratch database however its settings read it (`DATABASE_URL` in the
-examples): the scripts refuse a database that already has migrations.
+examples): the scripts refuse a database that is not empty (tables, or migrations applied). Django needs `--database ALIAS` (no default), Rails `DATABASE_URL` (checked against the database Active Record connects to; never production).
 
 What the import does with the output: each section becomes a version; the
 tool's bookkeeping (alembic_version, schema_migrations, ar_internal_metadata)
