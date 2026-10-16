@@ -424,7 +424,7 @@ pub fn check(parsed: &ParsedSql, sql: &str, catalog: &Catalog) -> Vec<Diagnostic
 /// the others as written). Import mode also lets through the function,
 /// procedure, trigger and rule definitions those rewrites produce (fixed
 /// bodies, no `WHEN`, rules doing nothing), their drops, renames and
-/// comments, text search configurations and dictionaries, and `CREATE
+/// comments, text search configurations, and `CREATE
 /// TABLE … AS … WITH NO DATA`. Extensions created twice are the replay's
 /// to sort out (a migration may well repeat `CREATE EXTENSION IF NOT
 /// EXISTS`).
@@ -781,11 +781,10 @@ fn check_import_statement(node: &NodeEnum, out: &mut Vec<Problem>) -> bool {
         N::CommentStmt(s) if import_object(s.objtype()) => true,
         N::RenameStmt(s) if import_object(s.rename_type()) => true,
         N::AlterObjectSchemaStmt(s) if import_object(s.object_type()) => true,
-        N::DefineStmt(s) => matches!(
-            s.kind(),
-            ObjectType::ObjectTsconfiguration | ObjectType::ObjectTsdictionary
-        ),
-        N::AlterTsconfigurationStmt(_) | N::AlterTsdictionaryStmt(_) => true,
+        // Configurations only: a dictionary's template runs C code reading
+        // files when it is created (the import skips dictionaries).
+        N::DefineStmt(s) => s.kind() == ObjectType::ObjectTsconfiguration,
+        N::AlterTsconfigurationStmt(_) => true,
         N::CreateTableAsStmt(s) => {
             let table = s.objtype() == ObjectType::ObjectTable && !s.is_select_into;
             table && s.into.as_ref().is_some_and(|i| i.skip_data)
@@ -806,7 +805,6 @@ fn import_object(objtype: ObjectType) -> bool {
             | O::ObjectTrigger
             | O::ObjectRule
             | O::ObjectTsconfiguration
-            | O::ObjectTsdictionary
     )
 }
 

@@ -9,7 +9,8 @@
 //!   `CALL`…), session settings, privileges and ownership, roles, databases
 //!   and other server objects, maintenance (`VACUUM`, `REINDEX`), objects
 //!   the model does not hold and the sandbox does not run (operators, casts,
-//!   aggregates, languages, foreign data, extensions it does not offer),
+//!   aggregates, languages, foreign data, text search dictionaries, whose
+//!   templates read files, extensions it does not offer),
 //!   psql meta-commands;
 //! - **stripped**: transaction control (`BEGIN`, `COMMIT`, `SAVEPOINT`…):
 //!   the replay is one transaction;
@@ -240,6 +241,8 @@ fn unsupported_object(objtype: ObjectType) -> bool {
             | O::ObjectUserMapping
             | O::ObjectTsparser
             | O::ObjectTstemplate
+            // A dictionary's template runs C code reading files at creation.
+            | O::ObjectTsdictionary
             | O::ObjectLargeobject
     )
 }
@@ -366,14 +369,15 @@ pub(crate) fn skip_reason(node: &NodeEnum) -> Option<SkipReason> {
         | N::DropUserMappingStmt(_)
         | N::ImportForeignSchemaStmt(_)
         | N::AlterExtensionStmt(_)
-        | N::AlterExtensionContentsStmt(_) => Some(R::Unsupported),
+        | N::AlterExtensionContentsStmt(_)
+        | N::AlterTsdictionaryStmt(_) => Some(R::Unsupported),
         N::CreateExtensionStmt(s) => {
             (!ALLOWED_EXTENSIONS.contains(&s.extname.as_str())).then_some(R::Unsupported)
         }
         N::DefineStmt(s) => {
             use ObjectType as O;
             match s.kind() {
-                O::ObjectCollation | O::ObjectTsconfiguration | O::ObjectTsdictionary => None,
+                O::ObjectCollation | O::ObjectTsconfiguration => None,
                 _ => Some(R::Unsupported),
             }
         }

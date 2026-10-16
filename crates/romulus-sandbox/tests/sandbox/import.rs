@@ -338,13 +338,14 @@ mod hostile {
                    CREATE DATABASE escape;\n\
                    CREATE TABLESPACE t LOCATION '/tmp';\n\
                    GRANT ALL ON SCHEMA public TO PUBLIC;\n\
+                   CREATE TEXT SEARCH DICTIONARY syn (TEMPLATE = synonym, SYNONYMS = 'synonym_sample');\n\
                    CREATE TABLE kept (id int);"],
                 0,
             )
             .await;
             assert!(replay.failure.is_none(), "{:?}", replay.failure);
             assert_eq!(super::tables(&models[0].1), ["public.kept"]);
-            assert_eq!(replay.skipped[0].len(), 16, "{:?}", replay.skipped[0]);
+            assert_eq!(replay.skipped[0].len(), 17, "{:?}", replay.skipped[0]);
         });
     }
 
