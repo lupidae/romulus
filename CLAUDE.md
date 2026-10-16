@@ -467,9 +467,10 @@ the up SQL, a `version_migrations` row: id, path, format, checksum, what was
 skipped). docs/MVP.md "Next: migration files" has the decisions.
 
 - **Pure part** (`romulus_sandbox::import`): `plan(files, format)` detects the
-  `Format` (wire names shared with migration generation: `plain`, `sqlx`,
-  `flyway`, `prisma`, `dbmate`, `golang_migrate`, `node_pg_migrate`, `alembic`,
-  `django`, `rails`), orders, keeps up sections (blanking the rest, so lines
+  `Format`: `Tool(romulus_migration::Format)` (the tools migrations are
+  generated for: their one list, names included) or `Read(ReadOnly)`
+  (`node_pg_migrate`, `alembic`, `django`, `rails`, read only); the stored
+  `migration_format` (`domain::MigrationFormat`) keeps the same names. It orders, keeps up sections (blanking the rest, so lines
   stay the file's) and lists ignored files; `analyze(sql)` classifies
   statements (`statements.rs`: skipped and reported, stripped, rewritten,
   kept) and unwraps DDL-only `DO` blocks (`plpgsql.rs`). Exported files
