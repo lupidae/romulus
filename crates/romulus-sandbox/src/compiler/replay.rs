@@ -51,6 +51,10 @@ use crate::{
     stubs::{Overrides, Stub},
 };
 
+/// Installs of one extension an import may make (a history may drop one and
+/// create it again).
+const MAX_INSTALLS: usize = 2;
+
 /// What runs between two migrations: a fresh session's search path.
 const SEPARATOR: &str = "\n;\nSET search_path TO \"$user\", public;\n";
 
@@ -612,6 +616,7 @@ fn check(
         .collect();
     let mut rewritten: HashMap<usize, NodeEnum> = HashMap::new();
     let mut installed: HashSet<String> = HashSet::new();
+    let mut installs: HashMap<String, usize> = HashMap::new();
     for statement in &parsed.statements {
         let k = joined.migration_at(statement.span.start);
         if guarded.iter().any(|g| g.contains(&statement.span.start)) {
@@ -647,6 +652,24 @@ fn check(
                     edits.omit.insert(statement.index);
                 } else {
                     installed.insert(s.extname.clone());
+                    // Installing one locks thousands of objects until the
+                    // replay ends: twice is a history that dropped it once.
+                    let count = installs.entry(s.extname.clone()).or_insert(0);
+                    *count += 1;
+                    if *count > MAX_INSTALLS {
+                        let d = Diagnostic::error(
+                            Code::NotAllowed,
+                            format!(
+                                "extension \"{}\" is installed more than {MAX_INSTALLS} times in these migrations",
+                                s.extname
+                            ),
+                        )
+                        .with_hint("Each install locks thousands of objects for the whole import: import fewer migrations at once.")
+                        .with_span(statement.span)
+                        .with_statement(statement.index);
+                        let d = joined.localize(k, &migrations[k], &parsed, d);
+                        return Err(Box::new(Replay::failed(skipped, k, vec![d])));
+                    }
                 }
             }
             NodeEnum::DropStmt(s)

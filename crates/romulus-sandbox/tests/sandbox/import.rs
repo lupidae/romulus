@@ -489,3 +489,14 @@ fn a_long_history_replays_in_bounded_time() {
         }
     });
 }
+
+#[test]
+fn an_extension_installed_over_and_over_is_refused() {
+    with_compiler(|compiler| async move {
+        let churn = "CREATE EXTENSION hstore;\nDROP EXTENSION hstore;";
+        let (replay, _) = replay(compiler, &[churn, churn, churn], 0).await;
+        let failure = replay.failure.expect("refused");
+        assert_eq!(failure.index, 2);
+        assert_eq!(failure.diagnostics[0].code, Code::NotAllowed);
+    });
+}

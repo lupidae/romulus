@@ -112,7 +112,9 @@ pub struct SandboxConfig {
     pub replay_timeout: Duration,
     /// The SQL an import replays, all migrations together. Default 16 MiB.
     pub max_import_bytes: usize,
-    /// Statements an import replays. Default 100 000.
+    /// Statements an import replays. Default 20 000: everything they touch
+    /// stays locked until the replay ends, in a lock table every compile
+    /// shares (about 120 000 locks, deploy/sandbox/README.md).
     pub max_import_statements: usize,
 }
 
@@ -135,7 +137,7 @@ impl SandboxConfig {
             upload_concurrency: None,
             replay_timeout: Duration::from_secs(300),
             max_import_bytes: 16 << 20,
-            max_import_statements: 100_000,
+            max_import_statements: 20_000,
         }
     }
 }
