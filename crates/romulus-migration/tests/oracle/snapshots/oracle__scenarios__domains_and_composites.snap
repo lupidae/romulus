@@ -9,7 +9,7 @@ expression: "plain[0].content"
 --
 -- Warnings:
 --   - Enum public.color loses 'blue': it is created again, and converting its
---     columns fails on any row that still holds it.
+--     columns fails on rows that still hold it.
 --   - Domain public.cents is created again over bigint, and its columns
 --     converted.
 --   - Domain public.warm is created again over public.color, and its columns

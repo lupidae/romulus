@@ -9,7 +9,7 @@ expression: "plain[0].content"
 --
 -- Warnings:
 --   - Enum public.size loses 'medium': it is created again, and converting
---     its columns fails on any row that still holds it.
+--     its columns fails on rows that still hold it.
 
 BEGIN;
 

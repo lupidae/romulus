@@ -8,10 +8,8 @@ expression: "plain[0].content"
 -- fail on existing rows).
 --
 -- Warnings:
---   - public.t ends up with its columns as (id, a, b, c, d, e, f, h, g), not
---     in the new model's order: Postgres adds columns last and cannot move
---     them. Only SELECT * and INSERT without a column list notice (g, h
---     placed differently).
+--   - public.t: Postgres adds columns last, so they end up as (id, a, b, c,
+--     d, e, f, h, g). Only SELECT * and INSERT without a column list notice.
 
 BEGIN;
 

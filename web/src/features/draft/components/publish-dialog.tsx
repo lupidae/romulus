@@ -365,7 +365,7 @@ function Changes({
         value="migration"
         className="mt-0 h-[50dvh] min-h-80 overflow-hidden rounded-lg border border-border"
       >
-        <MigrationView query={migration} />
+        <MigrationView query={migration} primary={false} />
       </TabsContent>
     </Tabs>
   );

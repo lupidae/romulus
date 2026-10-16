@@ -8,15 +8,13 @@ expression: "plain[0].content"
 -- fail on existing rows).
 --
 -- Warnings:
---   - users.legacy is dropped and users.nickname added with the same type: if
---     it is a rename, use RENAME COLUMN (in the comment) to keep the data.
---   - users.name is dropped and users.full_name added with the same type: if
---     it is a rename, use RENAME COLUMN (in the comment) to keep the data.
---   - public.users ends up with its columns as (id, email, nickname,
---     full_name, active, score, seq, num, email_lower), not in the new
---     model's order: Postgres adds columns last and cannot move them. Only
---     SELECT * and INSERT without a column list notice (nickname, full_name,
---     email placed differently).
+--   - users.legacy is dropped and users.nickname added, alike: if it is a
+--     rename, the RENAME COLUMN in the comment keeps the data.
+--   - users.name is dropped and users.full_name added, alike: if it is a
+--     rename, the RENAME COLUMN in the comment keeps the data.
+--   - public.users: Postgres adds columns last, so they end up as (id, email,
+--     nickname, full_name, active, score, seq, num, email_lower). Only SELECT
+--     * and INSERT without a column list notice.
 
 BEGIN;
 

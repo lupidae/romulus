@@ -838,7 +838,7 @@ impl<'a> Planner<'a> {
                 format!("Enum {} changes the order of its labels, which Postgres cannot do in place: it is created again and its columns converted.", dotted(name))
             } else {
                 format!(
-                    "Enum {} loses {}: it is created again, and converting its columns fails on any row that still holds {}.",
+                    "Enum {} loses {}: it is created again, and converting its columns fails on rows that still hold {}.",
                     dotted(name),
                     quoted(&removed),
                     if removed.len() == 1 { "it" } else { "one" }
@@ -2045,7 +2045,7 @@ impl<'a> Planner<'a> {
                 WarningCode::PossibleRename,
                 Some(format!("{}.{}.{to}", name.0, name.1)),
                 format!(
-                    "{}.{from} is dropped and {}.{to} added with the same type: if it is a rename, use RENAME COLUMN (in the comment) to keep the data.",
+                    "{}.{from} is dropped and {}.{to} added, alike: if it is a rename, the RENAME COLUMN in the comment keeps the data.",
                     name.1, name.1
                 ),
             );
@@ -2068,20 +2068,13 @@ impl<'a> Planner<'a> {
         }
         let wanted: Vec<&str> = a.columns.iter().map(|c| c.name.as_str()).collect();
         if order != wanted {
-            let moved: Vec<&str> = wanted
-                .iter()
-                .zip(&order)
-                .filter(|(w, o)| w != o)
-                .map(|(w, _)| *w)
-                .collect();
             self.warn(
                 WarningCode::ColumnOrder,
                 Some(dotted(name)),
                 format!(
-                    "{} ends up with its columns as ({}), not in the new model's order: Postgres adds columns last and cannot move them. Only SELECT * and INSERT without a column list notice ({} placed differently).",
+                    "{}: Postgres adds columns last, so they end up as ({}). Only SELECT * and INSERT without a column list notice.",
                     dotted(name),
-                    order.join(", "),
-                    moved.join(", ")
+                    order.join(", ")
                 ),
             );
         }

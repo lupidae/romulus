@@ -240,7 +240,7 @@ function Compare() {
                 type="single"
                 value={view}
                 onValueChange={(next) => next && setView(next as View)}
-                aria-label="Show"
+                aria-label="View"
               >
                 <ToggleGroupItem value="changes">
                   <ListIcon />
