@@ -1751,6 +1751,10 @@ impl<'a> Planner<'a> {
                         column_definition(column)
                     ),
                 );
+                let fails = column.not_null
+                    && column.default.is_none()
+                    && column.identity.is_none()
+                    && column.generated.is_none();
                 if let Some(from) = rename_from {
                     statement.alternative = Some(format!(
                         "ALTER TABLE {table} RENAME COLUMN {} TO {};",
@@ -1758,13 +1762,15 @@ impl<'a> Planner<'a> {
                         quote_ident(&column.name)
                     ));
                     statement.note = Some(format!(
-                        "Possibly a rename of {from}: the RENAME keeps its data, where this ADD and the DROP below lose it."
+                        "Possibly a rename of {from}: the RENAME keeps its data, where this ADD and the DROP below lose it.{}",
+                        if fails {
+                            " As it is, this ADD fails if the table has rows (NOT NULL without a default)."
+                        } else {
+                            ""
+                        }
                     ));
-                } else if column.not_null
-                    && column.default.is_none()
-                    && column.identity.is_none()
-                    && column.generated.is_none()
-                {
+                    statement.destructive = fails;
+                } else if fails {
                     statement.destroys("Fails if the table has rows: give it a DEFAULT, or add it nullable, fill it, then SET NOT NULL.");
                 }
                 self.own_sequence(Phase::Columns, &table, column);
