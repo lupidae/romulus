@@ -33,7 +33,10 @@ use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{Person, find, no_such_draft, not_open, publish::hub_error};
+use super::{
+    Person, find, no_such_draft, not_open,
+    publish::{PublishDraft, hub_error},
+};
 use crate::{
     ApiError, ApiResult, AppState, audit,
     auth::{Member, min},
@@ -378,18 +381,20 @@ pub(super) async fn status(
     })
 }
 
-/// Whether the frozen `content` may be published: approved enough, or an
-/// admin publishing without the approvals, saying why (`override_reason`),
-/// which answers the audit event to store with the version. 409
-/// `approvals_required` otherwise (`details`: `required`, `approvals`).
+/// Whether the frozen `content` of `draft` may be published: approved
+/// enough, or an admin publishing without the approvals, saying why
+/// (`body.override_reason`), which answers the audit event to store with
+/// the version. 409 `approvals_required` otherwise.
 pub(super) async fn gate(
-    db: &PgPool,
+    state: &AppState,
     member: &Member<min::Developer>,
     database: &DatabaseRef,
     draft: Uuid,
     content: &Content,
-    override_reason: Option<&str>,
+    body: &PublishDraft,
 ) -> ApiResult<Option<audit::Entry>> {
+    let db = &state.db;
+    let override_reason = body.override_reason.as_deref();
     let required = required(db, member.org.id).await?;
     if required == 0 {
         return Ok(None);

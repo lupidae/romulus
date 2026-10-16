@@ -348,37 +348,17 @@ pub enum Command {
     VersionCreated {
         number: i32,
     },
-    VersionRemoved {
-        number: i32,
-        by: String,
-    },
-    VersionRestored {
-        number: i32,
-        by: String,
-    },
+    /// News for everyone in the draft, as it is (a version removed or
+    /// restored).
+    Event(ServerEvent),
     /// May `user_id` approve the text hashing to `sha256`? (Then the
-    /// approval is written, and [`Command::Approved`] follows.)
+    /// approval is written, and [`ReviewChange::Approved`] follows.)
     CheckApproval {
         user_id: Uuid,
         sha256: String,
         reply: oneshot::Sender<Result<(), ApprovalError>>,
     },
-    /// An approval was written.
-    Approved {
-        approval: Approval,
-    },
-    /// Someone took their approval back.
-    Withdrawn {
-        user_id: Uuid,
-    },
-    /// The editors asked for a review, or no longer do.
-    ReviewRequested {
-        requested: Option<ReviewRequest>,
-    },
-    /// The organization changed how many approvals publishing needs.
-    ApprovalsRequired {
-        required: i32,
-    },
+    Review(ReviewChange),
     /// Replace the SQL with `changes`, computed against the text whose
     /// SHA-256 is `from`, for `reason` (`tidy`…): whether anything changed.
     Rewrite {
@@ -399,6 +379,18 @@ pub enum Command {
         conflicts: u32,
     },
     Shutdown,
+}
+
+/// What changed in a draft's review, written already.
+pub enum ReviewChange {
+    /// An approval was written.
+    Approved(Approval),
+    /// Someone took their approval back.
+    Withdrawn(Uuid),
+    /// The editors asked for a review, or no longer do.
+    Requested(Option<ReviewRequest>),
+    /// The organization changed how many approvals publishing needs.
+    Required(i32),
 }
 
 /// Messages from one socket, already decoded: the data channel's items.
@@ -769,12 +761,7 @@ impl Room {
             Command::VersionCreated { number } => {
                 self.broadcast_event(&ServerEvent::VersionCreated { number }, None);
             }
-            Command::VersionRemoved { number, by } => {
-                self.broadcast_event(&ServerEvent::VersionRemoved { number, by }, None);
-            }
-            Command::VersionRestored { number, by } => {
-                self.broadcast_event(&ServerEvent::VersionRestored { number, by }, None);
-            }
+            Command::Event(event) => self.broadcast_event(&event, None),
             Command::CheckApproval {
                 user_id,
                 sha256,
@@ -782,22 +769,7 @@ impl Room {
             } => {
                 let _ = reply.send(self.check_approval(user_id, &sha256));
             }
-            Command::Approved { approval } => {
-                self.review.approve(approval);
-                self.share_review(true);
-            }
-            Command::Withdrawn { user_id } => {
-                self.review.withdraw(user_id);
-                self.share_review(true);
-            }
-            Command::ReviewRequested { requested } => {
-                self.review.requested = requested;
-                self.share_review(true);
-            }
-            Command::ApprovalsRequired { required } => {
-                self.review.required = required;
-                self.share_review(true);
-            }
+            Command::Review(change) => self.review_changed(change),
             Command::Rewrite {
                 from,
                 changes,
@@ -1180,6 +1152,16 @@ impl Room {
         if !first || always {
             self.broadcast_event(&self.review.event(&sha256), None);
         }
+    }
+
+    fn review_changed(&mut self, change: ReviewChange) {
+        match change {
+            ReviewChange::Approved(approval) => self.review.approve(approval),
+            ReviewChange::Withdrawn(user_id) => self.review.withdraw(user_id),
+            ReviewChange::Requested(requested) => self.review.requested = requested,
+            ReviewChange::Required(required) => self.review.required = required,
+        }
+        self.share_review(true);
     }
 
     fn check_approval(&self, user_id: Uuid, sha256: &str) -> Result<(), ApprovalError> {

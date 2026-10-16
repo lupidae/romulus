@@ -138,7 +138,7 @@ mod tests {
         let mut review = Review::default();
         review.approve(approval(1, "a"));
         review.editors.insert(Uuid::from_u128(1));
-        assert_eq!(review.approved_by("a"), [Uuid::nil(); 0]);
+        assert_eq!(review.approved_by("a"), Vec::<Uuid>::new());
         let ServerEvent::Review { outdated, .. } = review.event("b") else {
             unreachable!()
         };
@@ -153,6 +153,6 @@ mod tests {
         assert_eq!(review.approvals.len(), 1);
         assert_eq!(review.approved_by("b"), [Uuid::from_u128(1)]);
         review.withdraw(Uuid::from_u128(1));
-        assert!(review.approvals.is_empty());
+        assert_eq!(review.approvals, []);
     }
 }

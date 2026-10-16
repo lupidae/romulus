@@ -235,15 +235,7 @@ pub(super) async fn publish(
                 .into(),
         });
     }
-    let audit = approvals::gate(
-        &state.db,
-        &member,
-        &database,
-        id,
-        &content,
-        body.override_reason.as_deref(),
-    )
-    .await?;
+    let audit = approvals::gate(&state, &member, &database, id, &content, &body).await?;
     let mut model = match compiled(&state.collab, &content).await? {
         (Some(model), _) => model,
         (None, diagnostics) => {

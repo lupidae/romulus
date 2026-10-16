@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, succeed, unwrap } from "@/api/client";
 import type { components } from "@/api/schema.gen";
@@ -120,7 +120,7 @@ export function useRevokeToken(org: string, db: string) {
 }
 
 /** Everything a removal or a restore changes: the latest version, the history, drafts' bases. */
-function versionsMoved(queryClient: ReturnType<typeof useQueryClient>, org: string, db: string) {
+function versionsMoved(queryClient: QueryClient, org: string, db: string) {
   for (const key of [
     databaseKeys.one(org, db),
     databaseKeys.versions(org, db),
@@ -151,16 +151,28 @@ export function useRemoveVersion(org: string, db: string, databaseId: string) {
   });
 }
 
-/** Restores a removed version (admins, within 30 days). */
+/**
+ * Restores a removed version (admins, within 30 days). A plain function as
+ * well as a hook: a toast's Undo outlives the dialog that removed it.
+ */
+export async function restoreVersion(
+  queryClient: QueryClient,
+  org: string,
+  db: string,
+  number: number,
+) {
+  const version = await unwrap(
+    api.POST("/api/orgs/{org}/databases/{db}/versions/{number}/restore", {
+      params: { path: { org, db, number } },
+    }),
+  );
+  versionsMoved(queryClient, org, db);
+  return version;
+}
+
 export function useRestoreVersion(org: string, db: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (number: number) =>
-      unwrap(
-        api.POST("/api/orgs/{org}/databases/{db}/versions/{number}/restore", {
-          params: { path: { org, db, number } },
-        }),
-      ),
-    onSuccess: () => versionsMoved(queryClient, org, db),
+    mutationFn: (number: number) => restoreVersion(queryClient, org, db, number),
   });
 }

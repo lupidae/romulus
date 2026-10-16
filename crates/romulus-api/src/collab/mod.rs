@@ -57,11 +57,11 @@ use uuid::Uuid;
 use self::{
     awareness::Peer,
     compile::SqlCompiler,
-    protocol::ReviewRequest,
+    protocol::{ReviewRequest, ServerEvent},
     review::{Approval, ApprovalError},
     room::{
         Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, FreezeFor, Incoming, Outbox,
-        RewriteError, Settings, Shared, UpdateTicket,
+        ReviewChange, RewriteError, Settings, Shared, UpdateTicket,
     },
 };
 use crate::AppState;
@@ -411,33 +411,32 @@ impl Hub {
     /// A version was removed: the drafts of that database open now hear it
     /// (those based on it now need "Update draft").
     pub fn version_removed(&self, database_id: Uuid, number: i32, by: &str) {
-        self.each_of_database(
+        self.to_database(
             database_id,
-            |by| Command::VersionRemoved {
+            &ServerEvent::VersionRemoved {
                 number,
                 by: by.to_owned(),
             },
-            by,
         );
     }
 
     /// A removed version was restored.
     pub fn version_restored(&self, database_id: Uuid, number: i32, by: &str) {
-        self.each_of_database(
+        self.to_database(
             database_id,
-            |by| Command::VersionRestored {
+            &ServerEvent::VersionRestored {
                 number,
                 by: by.to_owned(),
             },
-            by,
         );
     }
 
-    fn each_of_database(&self, database_id: Uuid, command: impl Fn(&str) -> Command, by: &str) {
+    /// `event` to every draft of the database open now.
+    fn to_database(&self, database_id: Uuid, event: &ServerEvent) {
         let rooms = self.0.rooms();
         for entry in rooms.entries.values() {
             if entry.shared.database_id.get() == Some(&database_id) {
-                let _ = entry.commands.send(command(by));
+                let _ = entry.commands.send(Command::Event(event.clone()));
             }
         }
     }
@@ -465,15 +464,18 @@ impl Hub {
 
     /// An approval was written: everyone in the draft hears it.
     pub fn approved(&self, draft: Uuid, approval: Approval) {
-        self.0.tell(draft, Command::Approved { approval });
+        self.0
+            .tell(draft, Command::Review(ReviewChange::Approved(approval)));
     }
 
     pub fn withdrawn(&self, draft: Uuid, user_id: Uuid) {
-        self.0.tell(draft, Command::Withdrawn { user_id });
+        self.0
+            .tell(draft, Command::Review(ReviewChange::Withdrawn(user_id)));
     }
 
     pub fn review_requested(&self, draft: Uuid, requested: Option<ReviewRequest>) {
-        self.0.tell(draft, Command::ReviewRequested { requested });
+        self.0
+            .tell(draft, Command::Review(ReviewChange::Requested(requested)));
     }
 
     /// The organization changed how many approvals publishing needs: its
@@ -482,7 +484,9 @@ impl Hub {
         let rooms = self.0.rooms();
         for entry in rooms.entries.values() {
             if entry.shared.org_id.get() == Some(&org_id) {
-                let _ = entry.commands.send(Command::ApprovalsRequired { required });
+                let _ = entry
+                    .commands
+                    .send(Command::Review(ReviewChange::Required(required)));
             }
         }
     }

@@ -124,21 +124,7 @@ pub(super) async fn update(
     let draft = read(&state, database.id, id).await?;
     let latest = versions::latest(&state.db, database.id).await?;
     if latest.is_none() && draft.base_version_id.is_some() {
-        // Its base was removed, and with it the last version: nothing to
-        // merge in. The draft keeps its text, relative to nothing now
-        // (published, it is the database's first version again).
-        sqlx::query!(
-            "UPDATE drafts SET base_version_id = NULL, base_sql = NULL,
-                               pending_base_version_id = NULL, pending_base_sql = NULL
-             WHERE id = $1 AND status = 'open' AND base_version_id IS NOT DISTINCT FROM $2",
-            id,
-            draft.base_version_id,
-        )
-        .execute(&state.db)
-        .await?;
-        drop(frozen);
-        tracing::info!(draft = %id, "draft moved onto no version: every version was removed");
-        return up_to_date(&state, database.id, id, None).await;
+        return onto_nothing(&state, database.id, id, draft.base_version_id, frozen).await;
     }
     let Some(latest) = latest.filter(|v| Some(v.id) != draft.base_version_id) else {
         drop(frozen);
@@ -214,6 +200,30 @@ pub(super) async fn update(
         conflicts,
         changed,
     }))
+}
+
+/// Its base was removed, and with it the last version: nothing to merge in.
+/// The draft keeps its text, relative to nothing now (published, it is the
+/// database's first version again).
+async fn onto_nothing(
+    state: &AppState,
+    database_id: Uuid,
+    id: Uuid,
+    base: Option<Uuid>,
+    frozen: Frozen<'_>,
+) -> ApiResult<Json<UpdatedDraft>> {
+    sqlx::query!(
+        "UPDATE drafts SET base_version_id = NULL, base_sql = NULL,
+                           pending_base_version_id = NULL, pending_base_sql = NULL
+         WHERE id = $1 AND status = 'open' AND base_version_id IS NOT DISTINCT FROM $2",
+        id,
+        base,
+    )
+    .execute(&state.db)
+    .await?;
+    drop(frozen);
+    tracing::info!(draft = %id, "draft moved onto no version: every version was removed");
+    up_to_date(state, database_id, id, None).await
 }
 
 /// What a merge starts from: the version and text the SQL is relative to,

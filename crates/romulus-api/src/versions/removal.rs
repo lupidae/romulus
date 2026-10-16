@@ -53,7 +53,7 @@ use crate::{
 /// How long a removed version can be restored.
 pub const RESTORE_DAYS: i32 = 30;
 /// How often [`purger`] looks for versions to purge.
-pub const PURGE_EVERY: Duration = Duration::from_secs(60 * 60);
+pub const PURGE_EVERY: Duration = Duration::from_hours(1);
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -392,7 +392,7 @@ pub async fn purge(db: &PgPool) -> Result<u64, sqlx::Error> {
             Ok(true) => purged += 1,
             Ok(false) => {}
             Err(err) => {
-                tracing::warn!(version = %id, error = %err, "purging a removed version failed")
+                tracing::warn!(version = %id, error = %err, "purging a removed version failed");
             }
         }
     }

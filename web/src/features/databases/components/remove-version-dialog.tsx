@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
@@ -15,7 +16,7 @@ import { Textarea } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
 import { modKey } from "@/lib/platform";
 
-import { useRemoveVersion, useRestoreVersion } from "../mutations";
+import { restoreVersion, useRemoveVersion } from "../mutations";
 import { type Database, neighbours } from "../queries";
 
 interface RemoveVersionDialogProps {
@@ -42,7 +43,7 @@ export function RemoveVersionDialog(props: RemoveVersionDialogProps) {
 
 function RemoveForm({ org, database, number, onOpenChange, onRemoved }: RemoveVersionDialogProps) {
   const remove = useRemoveVersion(org, database.slug, database.id);
-  const restore = useRestoreVersion(org, database.slug);
+  const queryClient = useQueryClient();
   const [reason, setReason] = React.useState("");
   const [error, setError] = React.useState<string>();
   const latest = database.latest?.number === number;
@@ -71,14 +72,14 @@ function RemoveForm({ org, database, number, onOpenChange, onRemoved }: RemoveVe
             action: {
               label: "Undo",
               onClick: () =>
-                restore.mutate(number, {
-                  onSuccess: () => toast.success(`v${number} restored`),
-                  onError: (failure) =>
+                void restoreVersion(queryClient, org, database.slug, number).then(
+                  () => toast.success(`v${number} restored`),
+                  (failure: unknown) =>
                     toast.error(`Could not restore v${number}`, {
                       description:
                         failure instanceof ApiError ? failure.message : "Check your connection.",
                     }),
-                }),
+                ),
             },
           });
         },

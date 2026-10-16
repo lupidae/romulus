@@ -2,6 +2,8 @@
 //! restorable for 30 days, then purged; drafts based on it update onto the
 //! latest version left; the audit log keeps who, when and why.
 
+use std::fmt::Write as _;
+
 use axum::http::StatusCode;
 use romulus_api::{domain::TokenScope, versions::removal};
 use serde_json::{Value, json};
@@ -18,9 +20,10 @@ async fn shop(db: &PgPool, n: i32) -> (Team, Uuid) {
     let team = Team::new(db, "acme").await;
     let shop = database(db, team.org, "shop").await;
     for k in 1..=n {
-        let sql: String = (1..=k)
-            .map(|t| format!("CREATE TABLE t{t} (id bigint);\n"))
-            .collect();
+        let mut sql = String::new();
+        for t in 1..=k {
+            let _ = writeln!(sql, "CREATE TABLE t{t} (id bigint);");
+        }
         version(db, shop, k, &sql, json!({})).await;
     }
     (team, shop)
@@ -539,9 +542,10 @@ async fn import(
 ) -> super::harness::TestResponse {
     let mut text = String::new();
     for (path, sql) in files {
-        text.push_str(&format!(
+        let _ = write!(
+            text,
             "--b\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{path}\"\r\nContent-Type: application/sql\r\n\r\n{sql}\r\n"
-        ));
+        );
     }
     text.push_str("--b--\r\n");
     app.send(

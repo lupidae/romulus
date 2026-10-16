@@ -90,51 +90,15 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     )
     .fetch_optional(&mut *tx)
     .await?;
-    let editors = sqlx::query_scalar!(
-        "SELECT user_id FROM draft_editors WHERE draft_id = $1",
-        draft_id
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    let approvals = sqlx::query!(
-        "SELECT a.user_id, u.name, a.sql_sha256, a.approved_at
-         FROM draft_approvals a
-         JOIN users u ON u.id = a.user_id
-         JOIN memberships m ON m.user_id = a.user_id AND m.org_id = $2
-         WHERE a.draft_id = $1 ORDER BY a.approved_at",
+    let review = load_review(
+        &mut tx,
         draft_id,
         draft.org_id,
+        i32::from(draft.approvals_required),
     )
-    .fetch_all(&mut *tx)
-    .await?;
-    let requested = sqlx::query!(
-        r#"SELECT r.requested_at, u.id AS "user_id?", u.name AS "name?"
-           FROM draft_review_requests r LEFT JOIN users u ON u.id = r.requested_by
-           WHERE r.draft_id = $1"#,
-        draft_id,
-    )
-    .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
 
-    let review = review::Review {
-        required: i32::from(draft.approvals_required),
-        editors: editors.into_iter().collect(),
-        approvals: approvals
-            .into_iter()
-            .map(|a| review::Approval {
-                user_id: a.user_id,
-                name: a.name,
-                sha256: hex(&a.sql_sha256),
-                at: a.approved_at,
-            })
-            .collect(),
-        requested: requested.map(|r| ReviewRequest {
-            user_id: r.user_id,
-            name: r.name,
-            at: r.requested_at,
-        }),
-    };
     let last_update_id = rows.last().map_or(upto, |row| row.id);
     let rows_since_snapshot = rows.len();
     let updates = snapshot
@@ -153,6 +117,58 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
         compile,
         review,
     }))
+}
+
+/// The draft's editors, its approvals (by members only) and review request.
+async fn load_review(
+    tx: &mut sqlx::PgConnection,
+    draft_id: Uuid,
+    org_id: Uuid,
+    required: i32,
+) -> Result<review::Review, sqlx::Error> {
+    let editors = sqlx::query_scalar!(
+        "SELECT user_id FROM draft_editors WHERE draft_id = $1",
+        draft_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let approvals = sqlx::query!(
+        "SELECT a.user_id, u.name, a.sql_sha256, a.approved_at
+         FROM draft_approvals a
+         JOIN users u ON u.id = a.user_id
+         JOIN memberships m ON m.user_id = a.user_id AND m.org_id = $2
+         WHERE a.draft_id = $1 ORDER BY a.approved_at",
+        draft_id,
+        org_id,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let requested = sqlx::query!(
+        r#"SELECT r.requested_at, u.id AS "user_id?", u.name AS "name?"
+           FROM draft_review_requests r LEFT JOIN users u ON u.id = r.requested_by
+           WHERE r.draft_id = $1"#,
+        draft_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    Ok(review::Review {
+        required,
+        editors: editors.into_iter().collect(),
+        approvals: approvals
+            .into_iter()
+            .map(|a| review::Approval {
+                user_id: a.user_id,
+                name: a.name,
+                sha256: hex(&a.sql_sha256),
+                at: a.approved_at,
+            })
+            .collect(),
+        requested: requested.map(|r| ReviewRequest {
+            user_id: r.user_id,
+            name: r.name,
+            at: r.requested_at,
+        }),
+    })
 }
 
 /// Lowercase hex, as `compile::sha256_hex` writes digests.
