@@ -312,9 +312,13 @@ test("updating a draft brings in a version pushed meanwhile, conflicts and all",
   ] as const) {
     await alice.page.emulateMedia({ colorScheme });
     await alice.page.setViewportSize({ width, height: 900 });
-    // Phones show one pane at a time.
-    const sqlTab = alice.page.getByRole("tab", { name: "SQL", exact: true });
-    if (await sqlTab.isVisible()) await sqlTab.click();
+    // Phones show one pane at a time: pick the SQL's once the layout has
+    // switched (two tabs are named SQL; the one in a hidden pane is not it).
+    if (width < 768) {
+      const panes = alice.page.getByRole("tablist", { name: "Pane" });
+      await expect(panes).toBeVisible();
+      await panes.getByRole("tab", { name: "SQL" }).click();
+    }
     await alice.page.getByRole("group", { name: "Conflict with v2" }).scrollIntoViewIfNeeded();
     await test.info().attach(`conflict-${name}`, {
       body: await alice.page.screenshot(),

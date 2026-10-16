@@ -83,7 +83,9 @@ const textOf = (p: Person, name: string) =>
     .locator(".cm-content")
     .evaluate((element) => {
       const content = element.cloneNode(true) as HTMLElement;
-      content.querySelectorAll(".cm-ySelectionCaret").forEach((caret) => caret.remove());
+      content
+        .querySelectorAll(".cm-ySelectionCaret, .cm-placeholder")
+        .forEach((node) => node.remove());
       return content.textContent ?? "";
     });
 
@@ -236,9 +238,13 @@ test("a schema draft becomes a migration, is updated onto newer versions, and go
   await alice.page.getByRole("button", { name: "More actions" }).click();
   await expect(alice.page.getByRole("menuitem", { name: /Discard migration…/ })).toBeDisabled();
   await alice.page.keyboard.press("Escape");
-  await panel(alice, "Migration").locator(".cm-content").click();
-  await alice.page.keyboard.press("ControlOrMeta+a");
-  await alice.page.keyboard.press("Backspace");
+  // (Again until it is: the menu hands the focus back on its own time.)
+  await expect(async () => {
+    await panel(alice, "Migration").locator(".cm-content").click();
+    await alice.page.keyboard.press("ControlOrMeta+a");
+    await alice.page.keyboard.press("Backspace");
+    expect((await textOf(alice, "Migration")).trim()).toBe("");
+  }).toPass();
   await compiled(alice);
   await alice.page.getByRole("button", { name: "More actions" }).click();
   await alice.page.getByRole("menuitem", { name: "Discard migration…" }).click();
