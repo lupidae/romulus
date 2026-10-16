@@ -127,7 +127,15 @@ test("a group made, named and moved by one developer lands for everyone; undo pu
   await alice.page.mouse.move(at.x, at.y);
   await alice.page.mouse.down();
   await alice.page.mouse.move(at.x + 120, at.y + 90, { steps: 12 });
+  // The tables follow the pointer a frame at a time: let the last one draw.
+  await alice.page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  const released = await box(node(alice, "users"));
   await alice.page.mouse.up();
+  // For Alice the tables stay where she let go: no jump back while the move
+  // goes round through the collab server.
+  expect(await box(node(alice, "users"))).toEqual(released);
 
   await expect
     .poll(async () => (await box(node(carol, "users"))).x - before.users.x)
@@ -138,6 +146,7 @@ test("a group made, named and moved by one developer lands for everyone; undo pu
   expect(orders.y - before.orders.y).toBeCloseTo(users.y - before.users.y, 0);
   expect(users.y - before.users.y).toBeGreaterThan(40);
   expect(await box(node(carol, "products"))).toEqual(products);
+  expect(await box(node(alice, "users"))).toEqual(released);
 
   // One undo of Alice's takes the whole move back, for everyone.
   await alice.page.getByRole("application", { name: "Schema graph" }).focus();

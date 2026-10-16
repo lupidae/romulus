@@ -106,6 +106,9 @@ jobs:
       - run: just e2e
         env:
           SQLX_OFFLINE: "true"
+      # The dev-only screens (graph editing, groups, the viewer on fixtures):
+      # the Vite dev server, no API.
+      - run: just e2e-dev
       - if: failure()
         run: docker compose logs --tail 200
       - if: always()

@@ -45,6 +45,16 @@ async function drag(
   await page.mouse.up();
 }
 
+/** A few frames, and the layout's round trip through the draft, later. */
+async function frames(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 250))),
+      ),
+  );
+}
+
 /** Shift-clicks the tables, then G: a group named in place, given `name`. */
 async function group(page: Page, tables: string[], name: string) {
   for (const t of tables) await header(page, t).click({ modifiers: ["Shift"] });
@@ -98,10 +108,16 @@ test("dragging a group by its label moves its tables; one undo puts them back", 
   await drag(page, frame(page, "Accounts").locator("[data-group-handle]"), -60, -120);
   const movedUsers = await box(node(page, "users"));
   const movedProfiles = await box(node(page, "profiles"));
+  // Where they were dropped as soon as the pointer is up: no jump back while
+  // the draft's layout comes round to the graph.
   expect(movedUsers.x - users.x).toBeCloseTo(-60, -1);
   expect(movedUsers.y - users.y).toBeCloseTo(-120, -1);
   expect(movedProfiles.x - profiles.x).toBeCloseTo(movedUsers.x - users.x, 0);
   expect(movedProfiles.y - profiles.y).toBeCloseTo(movedUsers.y - users.y, 0);
+  // And there they stay once it has.
+  await frames(page);
+  expect(await box(node(page, "users"))).toEqual(movedUsers);
+  expect(await box(node(page, "profiles"))).toEqual(movedProfiles);
   // A table outside the group stays.
   expect(await box(node(page, "posts"))).toEqual(posts);
 
@@ -135,11 +151,19 @@ test("a table dragged onto a group joins it, and leaves it when dragged out", as
     dx: accounts.x + accounts.width / 2 - (tags.x + 60),
     dy: accounts.y + accounts.height - 40 - (tags.y + tags.height / 2),
   };
+  let released: Awaited<ReturnType<typeof box>> | undefined;
   await drag(page, header(page, "tags"), into.dx, into.dy, async () => {
     await expect(page.getByRole("status").filter({ hasText: "Add to Accounts" })).toBeVisible();
     await expect(frame(page, "Accounts")).toHaveAttribute("data-drop-target", "");
+    released = await box(header(page, "tags"));
   });
+  // It stays exactly where it was let go of: no jump back while the draft's
+  // layout comes round to the graph, nor after.
+  expect(await box(header(page, "tags"))).toEqual(released);
   await expect(frame(page, "Accounts")).toContainText("3 tables");
+  expect(released!.y - tags.y).toBeLessThan(-40);
+  await frames(page);
+  expect(await box(header(page, "tags"))).toEqual(released);
 
   // Out again, far below.
   await drag(page, header(page, "tags"), 0, 260, async () => {

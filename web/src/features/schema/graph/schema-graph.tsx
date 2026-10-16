@@ -220,8 +220,10 @@ function GraphCanvas({
   const [ready, setReady] = useState(false);
   if (!ready && pending === 0) setReady(true);
   // Hand moves: `dragging` while the pointer is down; `dropped` after, until
-  // `layout` changes for that table (the move written back, a peer's move, an
-  // undo): the layout map then wins again.
+  // `layout` catches up (the move written back, a peer's move, an undo): the
+  // layout map then wins again. A draft writes the move at once, but its
+  // layout reaches this graph with the parent's next render (a frame later,
+  // more under load): without the hold, tables would jump back meanwhile.
   const [dragging, setDragging] = useState<Layout>({});
   const [dropped, setDropped] = useState<Record<string, Dropped>>({});
   // A group dragged by its label (its tables are in `dragging`), and what
@@ -231,14 +233,11 @@ function GraphCanvas({
   const [layoutSeen, setLayoutSeen] = useState(layout);
   if (layoutSeen !== layout) {
     setLayoutSeen(layout);
-    const kept = Object.entries(dropped).filter(([key, d]) => samePosition(layout?.[key], d.base));
+    const kept = Object.entries(dropped).filter(([key, d]) => holds(d, key, layout));
     if (kept.length !== Object.keys(dropped).length) setDropped(Object.fromEntries(kept));
   }
-  const moved = useMemo<Layout>(() => {
-    const out: Layout = {};
-    for (const [key, d] of Object.entries(dropped)) out[key] = d.position;
-    return { ...out, ...dragging };
-  }, [dropped, dragging]);
+  const held = useMemo(() => heldDrops(dropped, layout), [dropped, layout]);
+  const moved = useMemo<Layout>(() => ({ ...held, ...dragging }), [held, dragging]);
   const flow = useReactFlow();
   const flowStore = useStoreApi();
   const editorRef = useRef(editor);
@@ -641,11 +640,7 @@ function GraphCanvas({
     },
     [graph, positions, nodeState],
   );
-  const settledRects = useMemo(() => {
-    const settled: Layout = {};
-    for (const [key, d] of Object.entries(dropped)) settled[key] = d.position;
-    return rectsOf(settled);
-  }, [rectsOf, dropped]);
+  const settledRects = useMemo(() => rectsOf(held), [rectsOf, held]);
   // After a drop, only the edges the move can change are routed again (the
   // rest keep their route, and their edge object): see `affectedEdges`. And
   // not in the frame of the drop: the routes follow the boxes a render
@@ -780,7 +775,10 @@ function GraphCanvas({
   const onNodesChange = useCallback(
     (changes: NodeChange<TableFlowNode | GroupFlowNode | AreaLabelFlowNode>[]) => {
       const next: Layout = {};
-      for (const c of changes) if (c.type === "position" && c.position) next[c.id] = c.position;
+      // Whole units, as the layout map keeps them (and as a drop writes them).
+      for (const c of changes)
+        if (c.type === "position" && c.position)
+          next[c.id] = { x: Math.round(c.position.x), y: Math.round(c.position.y) };
       if (Object.keys(next).length) {
         draggingRef.current = { ...draggingRef.current, ...next };
         setDragging(draggingRef.current);
@@ -825,29 +823,26 @@ function GraphCanvas({
     (_: unknown, _node: Node, moves: Node[]) => {
       const out: Layout = {};
       const drops: Record<string, Dropped> = {};
+      const groupEditor = editorRef.current?.groups;
       for (const n of moves) {
-        const position = draggingRef.current[n.id] ?? n.position;
+        // Whole units (see onNodesChange): what was held is what is stored.
+        const at = draggingRef.current[n.id] ?? n.position;
+        const position = { x: Math.round(at.x), y: Math.round(at.y) };
         out[n.id] = position;
-        drops[n.id] = { position, base: layout?.[n.id] };
+        drops[n.id] = dropOf(position, n.id, layout, groupEditor !== undefined);
       }
       const drop = dropRef.current;
       dropRef.current = null;
       draggingRef.current = {};
       setDragging({});
       setDropHint(null);
-      const groupEditor = editorRef.current?.groups;
-      // A draft writes the move into its layout map at once, which the next
-      // render reads: nothing to hold. Elsewhere the drop is held until
-      // `layout` says otherwise (or for good, without a callback).
+      setDropped((current) => ({ ...current, ...drops }));
       if (groupEditor)
         groupEditor.place(
           out,
           drop?.membership ? { tables: [drop.table], group: drop.membership.group } : undefined,
         );
-      else {
-        setDropped((current) => ({ ...current, ...drops }));
-        onLayoutChange?.(out);
-      }
+      else onLayoutChange?.(out);
     },
     [onLayoutChange, layout],
   );
@@ -888,10 +883,14 @@ function GraphCanvas({
       const out = movedMembers(drag.base, drag.members, dx, dy);
       if (phase === "cancel" || Object.keys(out).every((k) => samePosition(out[k], drag.base[k])))
         return;
-      // Written at once (see onNodeDragStop): the next render reads it.
+      // Held until the layout with the move arrives (see `dropped`).
+      const drops: Record<string, Dropped> = {};
+      for (const [key, position] of Object.entries(out))
+        drops[key] = dropOf(position, key, layout, true);
+      setDropped((current) => ({ ...current, ...drops }));
       editorRef.current?.groups?.place(out);
     },
-    [members, moved, positions],
+    [members, moved, positions, layout],
   );
 
   // ---- Editing the schema ----------------------------------------------------
@@ -1498,6 +1497,34 @@ interface Dropped {
   position: { x: number; y: number };
   /** `layout` for the table when it was dropped: a change there ends the override. */
   base: { x: number; y: number } | undefined;
+  /**
+   * The move was written into the layout map at once (a draft): held only
+   * while `layout` is this object. The next one has the move (nothing renders
+   * between the drop and the write), so the hold can never outlive it, even
+   * when an undo brings the old position back.
+   */
+  heldWhile?: Layout;
+}
+
+function dropOf(
+  position: { x: number; y: number },
+  key: string,
+  layout: Layout | undefined,
+  written: boolean,
+): Dropped {
+  return { position, base: layout?.[key], heldWhile: written ? layout : undefined };
+}
+
+/** Whether a drop still holds its table where it was dropped. */
+function holds(d: Dropped, key: string, layout: Layout | undefined): boolean {
+  return d.heldWhile !== undefined ? d.heldWhile === layout : samePosition(layout?.[key], d.base);
+}
+
+/** The positions drops still hold. */
+function heldDrops(dropped: Record<string, Dropped>, layout: Layout | undefined): Layout {
+  const out: Layout = {};
+  for (const [key, d] of Object.entries(dropped)) if (holds(d, key, layout)) out[key] = d.position;
+  return out;
 }
 
 function samePosition(

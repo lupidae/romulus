@@ -608,8 +608,10 @@ side (list with presence, one-click create, rename, soft delete, publish).
   label is the drag handle; zoomed out, the area label) and
   `graph/editing/groups.tsx` (toolbar panel, pick bar, drop hint); G groups
   the picked tables. A drag writes once, on drop: a group's tables in one
-  transaction. With `editor.groups` the graph keeps no post-drop override
-  (`dropped`): the write is synchronous and the next render reads it.
+  transaction. The draft's layout reaches the graph with the parent's next
+  render (rAF), so a drop is held (`dropped`, `heldWhile`) until the layout
+  prop is a new object, which then has the move: no jump back, and the hold
+  cannot outlive an undo. Drag positions are whole units, as stored.
   Smoothness at 300 tables (`e2e/perf/groups.perf.spec.ts`, dev editor
   `?fixture=large&groups=schemas`): edges moving with both ends are shifted,
   many edges leaving a drag are routed around their ends only, a drop routes
