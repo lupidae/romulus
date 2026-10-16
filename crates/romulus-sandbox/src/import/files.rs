@@ -116,8 +116,8 @@ impl SourceFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Migration {
     /// What identifies it across imports: the tool's version
-    /// (`20240101120000`, `1.2`, `blog.0002_post_slug`), or the path for
-    /// plain folders.
+    /// (`20240101120000`, `1.2`, `blog.0002_post_slug`), or the file name
+    /// without `.sql` for plain folders (whatever folder was picked).
     pub id: String,
     /// The version's message: the file (or folder) name.
     pub name: String,
@@ -194,7 +194,7 @@ fn is_litter(path: &str) -> bool {
 }
 
 /// `migrations/2024/x.sql` → `2024/x.sql` when every file shares
-/// `migrations/`: ids then do not depend on which folder was picked.
+/// `migrations/`: paths are shown from the folder picked.
 fn strip_common_dir(files: &mut [SourceFile]) {
     loop {
         let Some(first) = files.first().and_then(|f| f.path.split_once('/')) else {
@@ -548,7 +548,9 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     ignored.push(ignore(IgnoreReason::Down));
                     continue;
                 }
-                let id = strip_sql_suffix(&file.path);
+                // The name, not the path: the same file has the same id
+                // whichever folder (or files) an import picks.
+                let id = strip_sql_suffix(&name);
                 candidates.push(Candidate {
                     order: OrderKey::Natural(file.path.clone()),
                     id,
@@ -687,9 +689,9 @@ fn flyway_prefixed(name: &str, prefix: char) -> bool {
         .is_some_and(|(version, _)| flyway_version(version).is_some())
 }
 
-/// `2024/x.up.sql` → `2024/x`.
-fn strip_sql_suffix(path: &str) -> String {
-    let stem = &path[..path.len() - 4];
+/// `x.up.sql` → `x`.
+fn strip_sql_suffix(name: &str) -> String {
+    let stem = &name[..name.len() - 4];
     if has_suffix(stem, ".up") {
         stem[..stem.len() - 3].to_owned()
     } else {
@@ -879,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_folders_keep_natural_order_and_ids_from_paths() {
+    fn plain_folders_keep_natural_order_and_ids_from_file_names() {
         let set = files(&[
             ("schema/10_indexes.sql", "x"),
             ("schema/2_tables.sql", "x"),
@@ -893,6 +895,36 @@ mod tests {
         let named = files(&[("b.sql", "x"), ("a.sql", "x")]);
         assert_eq!(detect(&named), Format::Plain);
         assert_eq!(ids(&plan_of(named).unwrap()), ["a", "b"]);
+    }
+
+    /// Appending works whether the next import picks the whole folder, a
+    /// subfolder or a few files: the ids are the same.
+    #[test]
+    fn plain_ids_do_not_depend_on_what_was_picked() {
+        let whole = files(&[
+            ("db/2024/01_users.sql", "x"),
+            ("db/2025/02_orders.up.sql", "x"),
+        ]);
+        let one = files(&[("2025/02_orders.up.sql", "x")]);
+        let alone = files(&[("02_orders.up.sql", "x")]);
+        assert_eq!(
+            ids(&plan(whole, Some(Format::Plain)).unwrap()),
+            ["01_users", "02_orders"]
+        );
+        assert_eq!(ids(&plan(one, Some(Format::Plain)).unwrap()), ["02_orders"]);
+        assert_eq!(
+            ids(&plan(alone, Some(Format::Plain)).unwrap()),
+            ["02_orders"]
+        );
+        let twice = files(&[("2024/01_init.sql", "x"), ("2025/01_init.sql", "y")]);
+        assert_eq!(
+            plan(twice, Some(Format::Plain)),
+            Err(PlanError::Duplicate {
+                id: "01_init".to_owned(),
+                first: "2024/01_init.sql".to_owned(),
+                second: "2025/01_init.sql".to_owned(),
+            })
+        );
     }
 
     #[test]
