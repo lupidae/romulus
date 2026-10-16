@@ -306,7 +306,6 @@ mod hostile {
                 "CREATE TABLE t (x text); CREATE INDEX ON t ((lpad('', 400000000, 'x')))",
                 "CREATE TABLE copy AS SELECT pg_sleep(30)",
                 "CREATE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS 'SELECT 1'",
-                "CREATE TEMP TABLE t (id int)",
                 "CREATE EXTENSION dblink; CREATE EXTENSION IF NOT EXISTS dblink; CREATE TABLE t (x int DEFAULT dblink_exec('x')::int)",
                 // DDL unwrapped from a DO block is checked like any other.
                 "DO $$ BEGIN CREATE TABLE t (x int DEFAULT pg_sleep(30)::int); EXCEPTION WHEN duplicate_table THEN NULL; END $$",
@@ -341,13 +340,14 @@ mod hostile {
                    CREATE TABLESPACE t LOCATION '/tmp';\n\
                    GRANT ALL ON SCHEMA public TO PUBLIC;\n\
                    CREATE TEXT SEARCH DICTIONARY syn (TEMPLATE = synonym, SYNONYMS = 'synonym_sample');\n\
+                   CREATE TEMP TABLE scratch AS SELECT pg_sleep(30);\n\
                    CREATE TABLE kept (id int);"],
                 0,
             )
             .await;
             assert!(replay.failure.is_none(), "{:?}", replay.failure);
             assert_eq!(super::tables(&models[0].1), ["public.kept"]);
-            assert_eq!(replay.skipped[0].len(), 17, "{:?}", replay.skipped[0]);
+            assert_eq!(replay.skipped[0].len(), 18, "{:?}", replay.skipped[0]);
         });
     }
 
@@ -679,4 +679,24 @@ fn a_slow_receiver_does_not_count_against_the_deadline() {
             assert_eq!(models, 8);
         },
     );
+}
+
+/// An enum created behind a catalog check (Rails' `create_enum`), values
+/// added in a later migration that commits before using them: one
+/// transaction in the replay, and still the values are usable.
+#[test]
+fn enum_values_added_and_committed_are_usable_in_the_replay() {
+    with_compiler(|compiler| async move {
+        let (replay, models) = replay(
+            compiler,
+            &[
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid WHERE t.typname = 'mood' AND n.nspname = ANY (current_schemas(false))) THEN CREATE TYPE mood AS ENUM ('happy'); END IF; END $$;\nCREATE TABLE people (id int, mood mood);",
+                "ALTER TYPE mood ADD VALUE IF NOT EXISTS 'sad';\nCOMMIT;\nALTER TABLE people ALTER COLUMN mood SET DEFAULT 'sad';\nCREATE INDEX people_sad ON people (id) WHERE mood = 'sad';",
+            ],
+            0,
+        )
+        .await;
+        assert!(replay.failure.is_none(), "{:?}", replay.failure);
+        assert_eq!(models.len(), 2);
+    });
 }

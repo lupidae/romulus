@@ -33,6 +33,7 @@ export const formats: { value: MigrationFormat; label: string; files: string }[]
 /** Why a statement was not replayed, as a short label. */
 export const skipReasonLabel: Record<SkipReason, string> = {
   data: "Data",
+  temporary: "Temporary helper",
   code: "Code",
   transaction: "Transaction",
   settings: "Setting",
@@ -46,6 +47,8 @@ export const skipReasonLabel: Record<SkipReason, string> = {
 /** What each reason means, for a tooltip. */
 export const skipReasonHint: Record<SkipReason, string> = {
   data: "Rows are not part of the schema; the statement is not run.",
+  temporary:
+    "A temporary table, view or sequence (a backfill's scaffolding), or a statement that only uses one: not part of the schema.",
   code: "Procedural code and queries are not run.",
   transaction: "The import runs in one transaction of its own.",
   settings: "Session settings do not change the schema.",

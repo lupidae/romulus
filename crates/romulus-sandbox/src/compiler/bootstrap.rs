@@ -379,6 +379,8 @@ struct ProbedExtension {
     #[serde(default)]
     types: Vec<String>,
     #[serde(default)]
+    opclasses: Vec<String>,
+    #[serde(default)]
     objects: Vec<ProbedObject>,
 }
 
@@ -480,6 +482,7 @@ async fn probe_catalog(
                 fixed_schema: e.schema,
                 functions: e.functions.into_iter().collect(),
                 types: e.types.into_iter().collect(),
+                opclasses: e.opclasses.into_iter().collect(),
                 objects,
             },
         );
@@ -509,6 +512,13 @@ SELECT coalesce(jsonb_agg(jsonb_build_object(
                               AND d.deptype = 'e' AND d.classid = 'pg_type'::regclass
               JOIN pg_type t ON t.oid = d.objid
               WHERE e.extname = v.name),
+    'opclasses', (SELECT coalesce(jsonb_agg(DISTINCT am.amname || ':' || oc.opcname), '[]')
+                  FROM pg_extension e
+                  JOIN pg_depend d ON d.refclassid = 'pg_extension'::regclass AND d.refobjid = e.oid
+                                  AND d.deptype = 'e' AND d.classid = 'pg_opclass'::regclass
+                  JOIN pg_opclass oc ON oc.oid = d.objid
+                  JOIN pg_am am ON am.oid = oc.opcmethod
+                  WHERE e.extname = v.name),
     'objects', (SELECT coalesce(jsonb_agg(o), '[]') FROM (
                   SELECT jsonb_build_object('schema', n.nspname, 'name', c.relname, 'kind', 'relation') AS o
                   FROM pg_extension e

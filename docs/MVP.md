@@ -419,7 +419,11 @@ Two features, built in this order:
    (`alembic upgrade head --sql`, `manage.py sqlmigrate`, Rails structure dumps)
    via a documented exporter script; romulus never runs user code.
    Data statements (INSERT/UPDATE/DELETE/COPY, `DO` blocks) are **skipped and
-   reported** per file; functions and triggers are allowed in import mode so later
+   reported** per file, and so are temporary tables, views and sequences (a
+   backfill's helpers, whatever builds them) with every later statement of the
+   migration that only concerns them, names resolved as Postgres does
+   (`pg_temp` first: a temporary table shadows a real one until dropped); a
+   draft or an upload still refuses temporary objects; functions and triggers are allowed in import mode so later
    DDL compiles (stubs never reach the model). Import runs from the web (upload a
    folder or zip) and from CI (an endpoint taking the files with the same bearer
    token as push), and refuses a database that already has versions unless asked
@@ -444,6 +448,19 @@ Two features, built in this order:
      condition) never runs. Any
      other `DO` block is skipped and reported, and a later "does not exist"
      error names it.
+   - A guard's handler may name any condition (pg_dump-made baselines guard
+     every object with `duplicate_object OR duplicate_table OR
+     invalid_table_definition`), never `query_canceled` or `assert_failure`.
+     A guarded enum type is created behind an existence check rather than in
+     a subtransaction, so values added to it later stay usable in the
+     replay's one transaction (migrations that `COMMIT` between adding and
+     using them).
+   - An allowlisted extension's operator class or type that the history uses
+     but never creates (a dump with its `CREATE EXTENSION` removed) makes the
+     replay install that extension first, as the database the history ran
+     on had it; it shows in the first version's model.
+   - A zip made on a Mac (`__MACOSX/._x.sql`, binary) imports: those files
+     are ignored, not refused as SQL that is not UTF-8.
    - Each migration starts with `search_path` reset (a fresh session).
    - A migration is matched across imports by its id (the tool's version, the
      file name without `.sql` for plain folders, so picking another folder or a

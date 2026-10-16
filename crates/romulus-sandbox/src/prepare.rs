@@ -96,7 +96,13 @@ pub(crate) struct Edits {
 /// dollar quote, whose tag is one the statement does not contain, so
 /// nothing in it can end the literal or the block early. `conditions` come
 /// from `import::plpgsql` (condition names or `SQLSTATE '…'`, validated).
-fn guarded(statement: &str, conditions: &[String]) -> String {
+///
+/// An enum type whose guard covers "already exists" is created behind an
+/// existence check instead (`exists`, a type name for `to_regtype`): a type
+/// created in a subtransaction (the handler's) loses Postgres's leave to
+/// use the values added to it later in the same transaction, which a
+/// replay (one transaction) needs where the migrations committed between.
+fn guarded(statement: &str, conditions: &[String], exists: Option<&str>) -> String {
     let literal = quote_literal(statement.trim_end().trim_end_matches(';'));
     // Each tag the literal contains takes 16 of its bytes: one of the
     // first `len + 1` is absent.
@@ -104,10 +110,37 @@ fn guarded(statement: &str, conditions: &[String]) -> String {
         .map(|k| format!("$romulus_guard{k}$"))
         .find(|tag| !literal.contains(tag.as_str()))
         .unwrap_or_default();
+    let duplicates = conditions.iter().any(|c| {
+        matches!(
+            c.as_str(),
+            "duplicate_object" | "others" | "SQLSTATE '42710'"
+        )
+    });
+    if let Some(name) = exists.filter(|_| duplicates) {
+        return format!(
+            "DO {tag} BEGIN IF to_regtype({}) IS NULL THEN EXECUTE {literal}; END IF; END {tag}",
+            quote_literal(name)
+        );
+    }
     format!(
         "DO {tag} BEGIN EXECUTE {literal}; EXCEPTION WHEN {} THEN NULL; END {tag}",
         conditions.join(" OR ")
     )
+}
+
+/// The enum type a statement creates, as `to_regtype` reads it.
+fn created_enum(node: &NodeEnum) -> Option<String> {
+    let NodeEnum::CreateEnumStmt(s) = node else {
+        return None;
+    };
+    let parts = crate::names::strings(&s.type_name);
+    (!parts.is_empty()).then(|| {
+        parts
+            .iter()
+            .map(|p| quote_ident(p))
+            .collect::<Vec<_>>()
+            .join(".")
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -245,12 +278,13 @@ pub(crate) fn prepare_with(
         }
         rewrites.sort_by_key(|(range, _)| range.start);
 
+        let exists = created_enum(&statement.node);
         emit(
             &mut script,
             sql,
             statement.span.range(),
             &rewrites,
-            edits.guarded.get(&i),
+            edits.guarded.get(&i).map(|c| (c, exists.as_deref())),
         );
         script.inject(";\n", Some(i), Injection::Terminator);
 
@@ -282,9 +316,9 @@ fn emit(
     sql: &str,
     span: Range<usize>,
     rewrites: &[(Range<usize>, String)],
-    guard: Option<&Vec<String>>,
+    guard: Option<(&Vec<String>, Option<&str>)>,
 ) {
-    if let Some(conditions) = guard {
+    if let Some((conditions, exists)) = guard {
         // The statement as rewritten, inside the guard: one segment.
         let mut text = String::new();
         let mut cursor = span.start;
@@ -294,7 +328,7 @@ fn emit(
             cursor = range.end;
         }
         text.push_str(&sql[cursor..span.end]);
-        script.replace(&guarded(&text, conditions), span);
+        script.replace(&guarded(&text, conditions, exists), span);
         return;
     }
     let mut cursor = span.start;

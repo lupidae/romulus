@@ -38,7 +38,10 @@ use pg_query::{
 };
 use serde::Serialize;
 
-use super::lexer::{self, NotSql};
+use super::{
+    lexer::{self, NotSql},
+    temporary::{self, Temporaries},
+};
 use crate::{
     allowlist::label,
     catalog::ALLOWED_EXTENSIONS,
@@ -55,6 +58,10 @@ pub enum SkipReason {
     /// Rows: `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `COPY`, `TRUNCATE`,
     /// `REFRESH MATERIALIZED VIEW`.
     Data,
+    /// A temporary table, view or sequence (a backfill's scaffolding), and
+    /// what only concerns it: an index on it, `ALTER`, `DROP`, a comment…
+    /// (`import::temporary`).
+    Temporary,
     /// Code and queries: `DO`, `SELECT`, `CALL`, `NOTIFY`, `LOCK`…
     Code,
     /// `BEGIN`, `COMMIT`, `SAVEPOINT`…: the replay is one transaction.
@@ -137,6 +144,7 @@ pub fn analyze(sql: &str) -> Analysis {
     let text = lexer::blank(sql, blanks.iter().cloned());
     let parsed = parse(&text);
     let mut guarded = Vec::new();
+    let mut temporaries = Temporaries::default();
     for statement in &parsed.statements {
         let span = statement.span;
         if let Some(unwrapped) =
@@ -159,7 +167,12 @@ pub fn analyze(sql: &str) -> Analysis {
             }
             continue;
         }
-        let Some(reason) = skip_reason(&statement.node) else {
+        let reason = if temporaries.follow(&statement.node) {
+            Some(SkipReason::Temporary)
+        } else {
+            skip_reason(&statement.node)
+        };
+        let Some(reason) = reason else {
             continue;
         };
         skipped.push(Skipped {
@@ -285,6 +298,9 @@ fn by_object(objtype: ObjectType) -> Option<SkipReason> {
 pub(crate) fn skip_reason(node: &NodeEnum) -> Option<SkipReason> {
     use NodeEnum as N;
     use SkipReason as R;
+    if temporary::created(node).is_some() {
+        return Some(R::Temporary);
+    }
     match node {
         N::InsertStmt(_)
         | N::UpdateStmt(_)
@@ -293,7 +309,8 @@ pub(crate) fn skip_reason(node: &NodeEnum) -> Option<SkipReason> {
         | N::CopyStmt(_)
         | N::TruncateStmt(_)
         | N::RefreshMatViewStmt(_) => Some(R::Data),
-        // `SELECT … INTO t` creates a table: rewritten, not skipped.
+        // `SELECT … INTO t` creates a table: rewritten, not skipped (into
+        // a temporary one, it is skipped above).
         N::SelectStmt(s) if s.into_clause.is_some() => None,
         N::SelectStmt(_)
         | N::DoStmt(_)

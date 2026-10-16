@@ -1289,3 +1289,71 @@ async fn staged_models_left_behind_are_swept(db: PgPool) {
     assert_eq!(staging::sweep(&db, &app.state.imports).await.unwrap(), 1);
     assert_eq!(staged().await, [fresh]);
 }
+
+/// A temporary helper table and what only uses it are skipped and
+/// reported (`temporary`), not refused: a history cannot be rewritten.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn temporary_helpers_are_reported_not_refused(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let app = TestApp::compiling(db.clone());
+    let imported = web(
+        &app,
+        &team.developer,
+        &team.path("/databases/app/imports"),
+        &[
+            ("000001_links.up.sql", "CREATE TABLE links (id bigint);\n"),
+            (
+                "000002_backfill.up.sql",
+                "ALTER TABLE links ADD COLUMN seen timestamptz;\n\
+                 CREATE TEMP TABLE seen_dates AS SELECT 1 AS id, now() AS seen;\n\
+                 UPDATE links SET seen = d.seen FROM seen_dates d WHERE d.id = links.id;\n\
+                 DROP TABLE seen_dates;\n",
+            ),
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(imported.status, StatusCode::CREATED, "{}", imported.json());
+    let skipped = &imported.json()["migrations"][1]["skipped"];
+    let reasons: Vec<&str> = skipped
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["reason"].as_str().unwrap())
+        .collect();
+    assert_eq!(reasons, ["temporary", "data", "temporary"]);
+    assert_eq!(skipped[0]["line"], 2);
+    assert_eq!(versions(&db, id).await.len(), 2);
+}
+
+/// A zip made on a Mac carries a binary `__MACOSX/._x.sql` per file:
+/// ignored, not refused as SQL that is not UTF-8.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_zip_made_on_a_mac_imports(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let token = api_token(&db, id, TokenScope::Push).await;
+    let app = TestApp::compiling(db.clone());
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut archive = zip::ZipWriter::new(&mut out);
+    let options = zip::write::SimpleFileOptions::default();
+    for (path, bytes) in [
+        (
+            "migrations/1_users.up.sql",
+            b"CREATE TABLE users (id int);".to_vec(),
+        ),
+        (
+            "__MACOSX/migrations/._1_users.up.sql",
+            vec![0, 5, 22, 7, 0, 2, 0, 0, 0xff, 0xfe],
+        ),
+        ("migrations/._1_users.up.sql", vec![0, 5, 22, 7, 0xff]),
+    ] {
+        archive.start_file(path, options).unwrap();
+        archive.write_all(&bytes).unwrap();
+    }
+    archive.finish().unwrap();
+    let imported = ci(&app, id, &token, "", "application/zip", out.into_inner()).await;
+    assert_eq!(imported.status, StatusCode::CREATED, "{}", imported.json());
+    assert_eq!(imported.json()["created"], 1);
+}

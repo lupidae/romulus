@@ -370,3 +370,150 @@ fn rails_migrations_import_with_their_enum_blocks() {
         assert_eq!(data.len(), 4, "{data:?}");
     });
 }
+
+/// A real migration's pattern (golang-migrate and sqlx layouts): columns
+/// added, backfilled from the activity log through a temporary table built
+/// with `CREATE TEMP TABLE … AS SELECT`, indexed, joined by `UPDATE … FROM`,
+/// dropped, and again. The helpers and what only uses them are skipped
+/// and reported; the columns and constraints land.
+#[test]
+fn temporary_helper_tables_are_skipped_and_reported() {
+    use SkipReason::{Data, Maintenance, Temporary};
+    with_compiler(|compiler| async move {
+        for (name, format) in [
+            (
+                "temporary/golang_migrate",
+                Format::Tool(Tool::GolangMigrate),
+            ),
+            ("temporary/sqlx", Format::Tool(Tool::Sqlx)),
+        ] {
+            let plan = plan(load(name), Some(format)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(plan.migrations.len(), 3, "{name}");
+            assert_eq!(
+                plan.migrations[1].name.split('.').next(),
+                Some("20260210000000_share_timestamps"),
+                "{name}"
+            );
+            let texts: Vec<&str> = plan.migrations.iter().map(|m| m.sql.as_str()).collect();
+            let (replay, models) = replay(compiler, &texts, 0).await;
+            assert!(replay.failure.is_none(), "{name}: {:#?}", replay.failure);
+            assert_eq!(models.len(), 3, "{name}");
+
+            let skipped: Vec<(SkipReason, &str)> = replay.skipped[1]
+                .iter()
+                .map(|s| (s.reason, s.text.as_str()))
+                .collect();
+            assert_eq!(
+                skipped,
+                [
+                    (Temporary, "CREATE TEMP TABLE link_first_seen AS"),
+                    (
+                        Temporary,
+                        "CREATE INDEX ON link_first_seen (resource_type, resource_id)"
+                    ),
+                    (Maintenance, "ANALYZE link_first_seen"),
+                    (Data, "UPDATE share_links l"),
+                    (Temporary, "DROP TABLE link_first_seen"),
+                    (
+                        Temporary,
+                        "CREATE TEMPORARY TABLE link_first_seen ON COMMIT DROP AS"
+                    ),
+                    (Data, "UPDATE share_grants g"),
+                    (Temporary, "DROP TABLE IF EXISTS link_first_seen"),
+                    (
+                        Data,
+                        "UPDATE share_links SET granted_at = created_at WHERE granted_at IS NULL"
+                    ),
+                    (
+                        Data,
+                        "UPDATE share_grants SET granted_at = created_at WHERE granted_at IS NULL"
+                    ),
+                ],
+                "{name}"
+            );
+
+            let last = json(&models[2].1);
+            let tables: Vec<&str> = last["entities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["name"].as_str().unwrap())
+                .collect();
+            assert!(!tables.contains(&"link_first_seen"), "{name}: {tables:?}");
+            let links = last["entities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["name"] == "share_links")
+                .unwrap();
+            let granted = links["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == "granted_at")
+                .unwrap();
+            assert_eq!(granted["not_null"], true, "{name}");
+            assert_eq!(granted["default"], "now()", "{name}");
+        }
+    });
+}
+
+/// A history whose first migration is a `pg_dump` made re-runnable (every
+/// object in a `DO` block ignoring `duplicate_object OR duplicate_table OR
+/// invalid_table_definition`, its `CREATE EXTENSION` removed though an
+/// index uses `pg_trgm`'s operator class), then enum values added, committed
+/// and used, then the extension created after the fact. The guards replay,
+/// the extension is installed first (the database the history ran on had
+/// it), the new enum values are usable, and the last model is what
+/// Postgres makes of the files (checked by hand against psql).
+#[test]
+fn a_dump_made_baseline_replays_with_its_assumptions() {
+    with_compiler(|compiler| async move {
+        let plan = plan(
+            load("dump_baseline"),
+            Some(Format::Tool(Tool::GolangMigrate)),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let texts: Vec<&str> = plan.migrations.iter().map(|m| m.sql.as_str()).collect();
+        let (replay, models) = replay(compiler, &texts, 0).await;
+        assert!(replay.failure.is_none(), "{:#?}", replay.failure);
+        assert_eq!(models.len(), 3);
+        let reasons: Vec<Vec<SkipReason>> = replay
+            .skipped
+            .iter()
+            .map(|list| list.iter().map(|s| s.reason).collect())
+            .collect();
+        assert_eq!(
+            reasons,
+            [
+                vec![SkipReason::Settings, SkipReason::Settings],
+                vec![SkipReason::Transaction],
+                vec![]
+            ]
+        );
+        let first = json(&models[0].1);
+        assert_eq!(first["extensions"][0]["name"], "pg_trgm", "installed first");
+        assert_eq!(first["enums"][0]["name"], "event_kind");
+        let last = json(&models[2].1);
+        let events = last["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == "events")
+            .unwrap();
+        let indexes: Vec<&str> = events["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["definition"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            indexes,
+            [
+                "CREATE INDEX idx_events_archived_pending ON public.events USING btree (project_id) WHERE ((kind = 'ARCHIVED'::public.event_kind) AND pending)",
+                "CREATE INDEX ix_events_title_trgm ON public.events USING gin (title public.gin_trgm_ops)",
+            ]
+        );
+        assert_eq!(events["constraints"].as_array().unwrap().len(), 2);
+    });
+}

@@ -263,6 +263,7 @@ impl Slot {
         &mut self,
         base: &PgConnectOptions,
         settings: &Settings,
+        preinstall: &[String],
         script: &str,
         steps: &[Step],
         records_policy_roles: bool,
@@ -284,6 +285,19 @@ impl Slot {
             .await
             .map_err(AttemptError::stale)?;
         *dirty = true;
+        // Extensions the history uses without creating them: there before
+        // its first migration, as on the database it ran on.
+        for name in preinstall {
+            let create = format!(
+                "CREATE EXTENSION IF NOT EXISTS {} CASCADE",
+                crate::names::quote_ident(name)
+            );
+            if let Err(err) = raw_sql(AssertSqlSafe(create)).execute(&mut *conn).await {
+                let failure = failed(conn, err, None).await;
+                *dirty = matches!(failure, AttemptError::Connection { .. });
+                return Err(failure);
+            }
+        }
         for (index, step) in steps.iter().enumerate() {
             let sent = &script[step.range.clone()];
             if !sent.trim().is_empty() {

@@ -22,11 +22,13 @@
 //! did. `IF NOT EXISTS (…catalogs…)` ignores "already exists" (the
 //! `duplicate_*` conditions), `IF EXISTS (…catalogs…)` ignores "does not
 //! exist" (`undefined_*`), and an `EXCEPTION WHEN …` handler ignores the
-//! conditions it names (a `duplicate_*`/`undefined_*` name, their SQLSTATE,
-//! or `others`, as the migration did on the real database). Any other block
-//! (loops, variables, data, a `RETURN` before its end, a condition on
-//! anything but the catalogs, a handler for other errors) is skipped and
-//! reported.
+//! conditions it names (any condition or SQLSTATE, `others` included, as
+//! the migration did on the real database: pg_dump-style guards ignore
+//! `duplicate_object OR duplicate_table OR invalid_table_definition`), but
+//! never `query_canceled` or `assert_failure` (the replay's own statement
+//! timeout must stay an error). Any other block (loops, variables, data, a
+//! `RETURN` before its end, a condition on anything but the catalogs, a
+//! handler that does something) is skipped and reported.
 
 use std::ops::Range;
 
@@ -65,24 +67,31 @@ const UNDEFINED: &[&str] = &[
     "undefined_function",
 ];
 
-/// SQLSTATEs of those conditions, for handlers written `WHEN SQLSTATE '…'`.
-const GUARD_SQLSTATES: &[&str] = &[
-    "42710", "42P07", "42701", "42P06", "42723", "42712", // duplicate_*
-    "42704", "42P01", "42703", "42883", // undefined_*
-];
+/// Conditions no guard may ignore: the replay's statement timeout
+/// (`query_canceled`) and assertions, by name or SQLSTATE.
+const NEVER_IGNORED: &[&str] = &["query_canceled", "assert_failure", "57014", "P0004"];
 
-/// A handler's condition, as it goes after `WHEN` in the replay's wrapper;
-/// `None` when the block handled other errors.
+/// A handler's condition, as it goes after `WHEN` in the replay's wrapper
+/// (a name, or `SQLSTATE '…'`); `None` for the conditions no guard may
+/// ignore. The PL/pgSQL parser already refused names it does not know, and
+/// a name or code here is plain characters: nothing in it can end the
+/// wrapper's handler.
 fn guard_condition(name: &str) -> Option<String> {
-    let identifier = !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
-    if identifier
-        && (name == "others" || name.starts_with("duplicate_") || name.starts_with("undefined_"))
-    {
+    if NEVER_IGNORED.contains(&name) {
+        return None;
+    }
+    let identifier = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if identifier {
         return Some(name.to_owned());
     }
-    GUARD_SQLSTATES
-        .contains(&name)
-        .then(|| format!("SQLSTATE '{name}'"))
+    let sqlstate = name.len() == 5
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase());
+    sqlstate.then(|| format!("SQLSTATE '{name}'"))
 }
 
 /// The block's DDL, if it is only DDL. `statement` is the `DO` statement's
@@ -391,6 +400,25 @@ mod tests {
         let codes = "DO $$ BEGIN CREATE TABLE a (); EXCEPTION WHEN SQLSTATE '42P07' OR others THEN NULL; END $$";
         assert_eq!(unwrapped(codes).unwrap().1, ["SQLSTATE '42P07'", "others"]);
 
+        // pg_dump-made schemas made re-runnable: every object guarded, by
+        // more than the duplicate conditions.
+        let dumped = "DO $$ BEGIN\nALTER TABLE ONLY public.a\n    ADD CONSTRAINT a_b_fkey FOREIGN KEY (b) REFERENCES public.b(id);\nEXCEPTION WHEN duplicate_object OR duplicate_table OR invalid_table_definition THEN NULL; END $$;";
+        let (statements, guard) = unwrapped(dumped).unwrap();
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            guard,
+            [
+                "duplicate_object",
+                "duplicate_table",
+                "invalid_table_definition"
+            ]
+        );
+        let division = "DO $$ BEGIN CREATE TABLE a (); EXCEPTION WHEN division_by_zero OR SQLSTATE '22012' THEN NULL; END $$";
+        assert_eq!(
+            unwrapped(division).unwrap().1,
+            ["SQLSTATE '22012'", "division_by_zero"]
+        );
+
         let plain =
             "DO $body$ BEGIN CREATE TABLE a (id int); CREATE INDEX ON a (id); RETURN; END $body$";
         assert_eq!(
@@ -424,8 +452,9 @@ mod tests {
             "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM public.pg_lookalike) THEN CREATE TABLE t (); END IF; END $$",
             "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class, generate_series(1, 10)) THEN CREATE TABLE t (); END IF; END $$",
             "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'm') THEN CREATE TYPE m AS ENUM ('a'); ELSE DROP TYPE m; END IF; END $$",
-            "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN division_by_zero THEN NULL; END $$",
-            "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN SQLSTATE '22012' THEN NULL; END $$",
+            "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN query_canceled THEN NULL; END $$",
+            "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN SQLSTATE '57014' THEN NULL; END $$",
+            "DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN duplicate_table OR assert_failure THEN NULL; END $$",
             "DO $$ BEGIN CREATE TABLE t (id int); RAISE EXCEPTION 'no'; END $$",
             "DO $$ BEGIN RETURN; CREATE TABLE t (id int); END $$",
             "DO 'BEGIN CREATE TABLE t (id int); END'",

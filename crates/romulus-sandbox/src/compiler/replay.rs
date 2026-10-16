@@ -385,6 +385,7 @@ impl Inner {
         // and locks only accumulate in a transaction: what phase 1 checked
         // holds for it.
         let mut overrides = Overrides::default();
+        let mut assumed: Vec<String> = Vec::new();
         let mut round = 0;
         let mut connection_retries = 0;
         let prepared = loop {
@@ -405,6 +406,7 @@ impl Inner {
                 .replay(
                     &self.options,
                     &settings,
+                    &assumed,
                     &prepared.script,
                     &each,
                     false,
@@ -421,6 +423,15 @@ impl Inner {
                     return Ok(too_many_locks(k, last, locks));
                 }
                 Err(AttemptError::Sql(failure)) => {
+                    // An allowlisted extension's object the history uses
+                    // but never creates: the database it ran on had it.
+                    if let Some(extension) = missing_extension(&failure.failure, &self.catalog)
+                        && !assumed.contains(&extension)
+                        && assumed.len() < MAX_ASSUMED
+                    {
+                        assumed.push(extension);
+                        continue;
+                    }
                     let failed_stub = failure
                         .failure
                         .position
@@ -531,6 +542,7 @@ impl Inner {
             .replay(
                 &self.options,
                 &settings,
+                &assumed,
                 &prepared.script,
                 &steps,
                 prepared.records_policy_roles,
@@ -581,6 +593,40 @@ impl Inner {
 }
 
 /// Where each migration's part of the script starts, plus the end.
+/// Extensions a replay may install first, at most (each is one install).
+const MAX_ASSUMED: usize = 4;
+
+/// The allowlisted extension a failure says is missing: an operator class
+/// (`operator class "public.gin_trgm_ops" does not exist for access method
+/// "gin"`) or a type of one, which the history uses but never creates (it
+/// was there before its first migration, as pg_dump-made baselines with
+/// their `CREATE EXTENSION` removed assume).
+fn missing_extension(
+    failure: &refine::Failure,
+    catalog: &crate::catalog::Catalog,
+) -> Option<String> {
+    if failure.sqlstate != "42704" {
+        return None;
+    }
+    let unqualified = |name: &str| name.rsplit('.').next().unwrap_or(name).to_owned();
+    let message = failure.message.as_str();
+    if let Some(rest) = message.strip_prefix("operator class \"") {
+        let (name, rest) = rest.split_once('"')?;
+        let method = rest
+            .strip_prefix(" does not exist for access method \"")?
+            .strip_suffix('"')?;
+        return catalog
+            .extension_with_opclass(method, &unqualified(name))
+            .map(str::to_owned);
+    }
+    let name = message
+        .strip_prefix("type \"")?
+        .strip_suffix("\" does not exist")?;
+    catalog
+        .extension_with_type(&unqualified(name))
+        .map(str::to_owned)
+}
+
 /// The wall-clock cap of a replay, in replay timeouts: the timeout counts
 /// the sandbox's work only, and this stops a replay whose receiver stopped
 /// taking its models.
@@ -716,7 +762,7 @@ fn skipped_hint(d: &Diagnostic, skipped: &[Vec<Skipped>], k: usize) -> Option<St
         .find_map(|(j, list)| {
             list.iter()
                 .rev()
-                .find(|s| s.reason == SkipReason::Code)
+                .find(|s| matches!(s.reason, SkipReason::Code | SkipReason::Temporary))
                 .map(|s| (j, s))
         })?;
     let place = if j == k {
@@ -724,10 +770,17 @@ fn skipped_hint(d: &Diagnostic, skipped: &[Vec<Skipped>], k: usize) -> Option<St
     } else {
         format!("an earlier migration (line {})", statement.line)
     };
-    Some(format!(
-        "The import does not run {} statements ({place} was skipped): if it created this, move that DDL out of it.",
-        statement.kind
-    ))
+    Some(if statement.reason == SkipReason::Temporary {
+        format!(
+            "The import skips temporary tables, views and sequences ({place}: `{}`) and what only uses them: a lasting object built from one cannot be replayed.",
+            statement.text
+        )
+    } else {
+        format!(
+            "The import does not run {} statements ({place} was skipped): if it created this, move that DDL out of it.",
+            statement.kind
+        )
+    })
 }
 
 struct Checked {
@@ -1059,9 +1112,97 @@ mod tests {
             refused(&["CREATE TABLE t (a int); CREATE TABLE u AS EXECUTE p;"]),
             ["CREATE TABLE … AS EXECUTE is not allowed"]
         );
+        // Temporary helpers (whatever builds them) are skipped, never run.
+        let script = script(&[
+            "CREATE TABLE t (a int); SELECT a INTO TEMP x FROM t; CREATE TEMP TABLE y AS EXECUTE p;",
+        ]);
+        assert!(!script.contains("TEMP"), "{script}");
+        assert!(!script.contains("EXECUTE"), "{script}");
+        // A function in pg_temp is not a helper the import can skip.
         assert_eq!(
-            refused(&["CREATE TABLE t (a int); SELECT a INTO TEMP x FROM t;"]),
-            ["temporary objects are not allowed"]
+            refused(&["CREATE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS 'SELECT 1';"]),
+            ["pg_temp is reserved"]
+        );
+    }
+
+    /// A guarded enum type is created behind an existence check, not in a
+    /// subtransaction: values added to it later stay usable in the
+    /// replay's one transaction. Other guarded statements keep the
+    /// handler.
+    #[test]
+    fn a_guarded_enum_is_checked_for_not_caught() {
+        let script = script(&[
+            "DO $$ BEGIN CREATE TYPE public.kind AS ENUM ('a'); EXCEPTION WHEN duplicate_object OR invalid_table_definition THEN NULL; END $$;\n\
+             DO $$ BEGIN CREATE TABLE t (id int); EXCEPTION WHEN duplicate_table THEN NULL; END $$;",
+        ]);
+        assert!(
+            script.contains(
+                "IF to_regtype('public.kind') IS NULL THEN EXECUTE 'CREATE TYPE public.kind AS ENUM (''a'')'; END IF;"
+            ),
+            "{script}"
+        );
+        assert!(
+            script.contains(
+                "EXECUTE 'CREATE TABLE t (id int)'; EXCEPTION WHEN duplicate_table THEN NULL;"
+            ),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn a_missing_object_names_the_extension_that_has_it() {
+        use crate::catalog::Extension;
+        let catalog = Catalog::new(
+            [],
+            [
+                (
+                    "pg_trgm".to_owned(),
+                    Extension {
+                        opclasses: ["gin:gin_trgm_ops".to_owned()].into(),
+                        ..Extension::default()
+                    },
+                ),
+                (
+                    "citext".to_owned(),
+                    Extension {
+                        types: ["citext".to_owned()].into(),
+                        ..Extension::default()
+                    },
+                ),
+            ],
+        );
+        let failure = |sqlstate: &str, message: &str| crate::refine::Failure {
+            sqlstate: sqlstate.to_owned(),
+            message: message.to_owned(),
+            position: None,
+        };
+        let missing = |f| super::missing_extension(&f, &catalog);
+        assert_eq!(
+            missing(failure(
+                "42704",
+                "operator class \"public.gin_trgm_ops\" does not exist for access method \"gin\""
+            ))
+            .as_deref(),
+            Some("pg_trgm")
+        );
+        assert_eq!(
+            missing(failure("42704", "type \"citext\" does not exist")).as_deref(),
+            Some("citext")
+        );
+        assert_eq!(
+            missing(failure(
+                "42704",
+                "operator class \"gin_trgm_ops\" does not exist for access method \"btree\""
+            )),
+            None
+        );
+        assert_eq!(
+            missing(failure("42704", "type \"mood\" does not exist")),
+            None
+        );
+        assert_eq!(
+            missing(failure("42P01", "relation \"x\" does not exist")),
+            None
         );
     }
 }

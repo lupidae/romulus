@@ -60,6 +60,9 @@ pub struct Extension {
     pub functions: HashSet<String>,
     /// Names of the types it creates (base types like `geometry` included).
     pub types: HashSet<String>,
+    /// Operator classes it creates, as `<access method>:<name>`
+    /// (`gin:gin_trgm_ops`).
+    pub opclasses: HashSet<String>,
     /// Relations and stand-alone types that remus would list, and render
     /// back as SQL: PostGIS's `spatial_ref_sys`, `geometry_columns`,
     /// `geometry_dump`… A text compiled from such a model creates them
@@ -122,6 +125,15 @@ impl Catalog {
         self.extensions
             .iter()
             .find(|(_, e)| e.types.contains(name))
+            .map(|(n, _)| n.as_str())
+    }
+
+    /// An extension that defines an operator class of this access method.
+    pub fn extension_with_opclass(&self, method: &str, name: &str) -> Option<&str> {
+        let key = format!("{method}:{name}");
+        self.extensions
+            .iter()
+            .find(|(_, e)| e.opclasses.contains(&key))
             .map(|(n, _)| n.as_str())
     }
 

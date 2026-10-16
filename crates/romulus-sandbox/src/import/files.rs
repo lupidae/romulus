@@ -207,8 +207,9 @@ fn duplicate_message(format: Format, id: &str, first: &str, second: &str) -> Str
 }
 
 /// Paths that are never migrations, whatever the format: macOS and editor
-/// litter, hidden files.
-fn is_litter(path: &str) -> bool {
+/// litter (a zip made on a Mac carries a binary `__MACOSX/._x.sql` per
+/// file), hidden files.
+pub fn is_litter(path: &str) -> bool {
     path.split('/')
         .any(|part| part.starts_with('.') && part != "." && part != ".." || part == "__MACOSX")
         || path.ends_with('~')

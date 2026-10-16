@@ -184,8 +184,8 @@ fn has_extension(path: &str, extension: &str) -> bool {
 }
 
 /// A file's text. SQL must be UTF-8; anything else (a README in another
-/// encoding, a binary) is kept with whatever text it has, as the plan only
-/// reads `.sql` files.
+/// encoding, a binary, the `__MACOSX/._x.sql` a Mac adds to a zip) is kept
+/// with whatever text it has, as the plan reads neither.
 fn text_file(path: &str, bytes: Vec<u8>) -> ApiResult<SourceFile> {
     let path = path.replace('\\', "/");
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -194,7 +194,7 @@ fn text_file(path: &str, bytes: Vec<u8>) -> ApiResult<SourceFile> {
     }
     let text = match String::from_utf8(bytes) {
         Ok(text) => text,
-        Err(err) if !has_extension(&path, "sql") => {
+        Err(err) if !has_extension(&path, "sql") || romulus_sandbox::import::is_litter(&path) => {
             String::from_utf8_lossy(err.as_bytes()).into_owned()
         }
         Err(_) => {
@@ -377,6 +377,9 @@ mod tests {
     fn sql_must_be_utf8_other_files_need_not() {
         assert!(text_file("a.sql", vec![0xff, 0xfe]).is_err());
         assert!(text_file("logo.png", vec![0xff, 0xfe]).is_ok());
+        // What a Mac adds to a zip: binary, named after the file, ignored.
+        assert!(text_file("__MACOSX/migrations/._1_a.sql", vec![0, 5, 22, 7, 0xff]).is_ok());
+        assert!(text_file("migrations/._1_a.sql", vec![0, 5, 22, 7, 0xff]).is_ok());
     }
 
     #[test]

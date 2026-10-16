@@ -16,9 +16,10 @@ mod files;
 mod lexer;
 mod plpgsql;
 pub mod statements;
+mod temporary;
 
 pub use files::{
     Format, IgnoreReason, Ignored, Migration, Plan, PlanError, ReadOnly, SourceFile, Tool,
-    description, detect, normalize, plan,
+    description, detect, is_litter, normalize, plan,
 };
 pub use statements::{Analysis, SkipReason, Skipped, analyze};

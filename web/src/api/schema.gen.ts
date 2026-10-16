@@ -2167,6 +2167,7 @@ export interface components {
      */
     SkipReason:
       | "data"
+      | "temporary"
       | "code"
       | "transaction"
       | "settings"

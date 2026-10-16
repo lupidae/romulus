@@ -7557,6 +7557,7 @@
         "description": "Why a statement is not replayed.",
         "enum": [
           "data",
+          "temporary",
           "code",
           "transaction",
           "settings",
