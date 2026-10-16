@@ -58,7 +58,11 @@ pub(crate) enum Phase {
     Composites,
     Sequences,
     Tables,
+    /// Columns dropped to be added again (below), before the conversions
+    /// they would block.
+    ReaddDrops,
     Columns,
+    ReaddAdds,
     DetachPartitions,
     DropPartitions,
     CreatePartitions,
@@ -92,7 +96,9 @@ impl Phase {
             P::Types | P::Domains | P::Composites => Section::Types,
             P::Sequences
             | P::Tables
+            | P::ReaddDrops
             | P::Columns
+            | P::ReaddAdds
             | P::DetachPartitions
             | P::DropPartitions
             | P::CreatePartitions
@@ -221,9 +227,10 @@ pub(crate) struct Planner<'a> {
     /// Per kept table, the columns whose type changes (or whose type is
     /// recreated).
     converted: BTreeMap<Name, BTreeSet<String>>,
-    /// Per kept table, the columns dropped and added again (a column that
-    /// becomes generated).
-    readded: BTreeMap<Name, BTreeSet<String>>,
+    /// Per kept table, the columns dropped and added again, and why: a
+    /// column that becomes generated, or a generated column reading a
+    /// column whose type changes.
+    readded: BTreeMap<Name, BTreeMap<String, String>>,
     /// Tables whose primary key, unique constraints or unique indexes are
     /// dropped or rebuilt: foreign keys to them go first.
     rekeyed: BTreeSet<Name>,
@@ -235,12 +242,20 @@ pub(crate) struct Planner<'a> {
     /// sequence) something new takes: removed tables go before anything is
     /// created, not last.
     early_removals: bool,
+    /// The names Postgres gave the old domains' unnamed checks, guessed:
+    /// (schema, domain, definition) → name.
+    check_names: BTreeMap<(String, String, String), String>,
     out: Vec<Planned>,
     warnings: Vec<Warning>,
 }
 
 impl<'a> Planner<'a> {
-    pub(crate) fn new(old: &'a Schema, new: &'a Schema, options: &'a Options) -> Self {
+    pub(crate) fn new(
+        old: &'a Schema,
+        new: &'a Schema,
+        options: &'a Options,
+        check_names: BTreeMap<(String, String, String), String>,
+    ) -> Self {
         let index = |s: &'a Schema| {
             s.entities
                 .iter()
@@ -261,6 +276,7 @@ impl<'a> Planner<'a> {
             views_dropped: BTreeSet::new(),
             sequences: BTreeSet::new(),
             early_removals: false,
+            check_names,
             out: Vec::new(),
             warnings: Vec::new(),
         }
@@ -379,10 +395,15 @@ impl<'a> Planner<'a> {
                     continue;
                 };
                 if readd(column, after) {
+                    let why = if column.generated.is_none() {
+                        "It becomes generated, which Postgres cannot do in place: dropped and added again, its values replaced by the generated ones."
+                    } else {
+                        "Its generated storage changes, which Postgres cannot do in place: dropped and added again."
+                    };
                     self.readded
                         .entry(name.clone())
                         .or_default()
-                        .insert(column.name.clone());
+                        .insert(column.name.clone(), why.to_owned());
                 } else if column.r#type != after.r#type || self.type_recreated(after) {
                     self.converted
                         .entry(name.clone())
@@ -428,6 +449,58 @@ impl<'a> Planner<'a> {
             .iter()
             .filter(|(n, e)| e.kind.is_table() && !self.new_entities.contains_key(*n))
             .any(|(_, e)| taken_by(e).iter().any(|n| wanted.contains(n)));
+
+        // Generated columns reading a converted column block its
+        // conversion: dropped before it, added again after.
+        for (name, columns) in self.converted.clone() {
+            let (b, a) = (self.old_entities[&name], self.new_entities[&name]);
+            for generated in b.columns.iter().filter(|c| c.generated.is_some()) {
+                let Some(expression) = &generated.default else { continue };
+                let reads: Vec<&String> = columns.iter().filter(|c| mentions(expression, c)).collect();
+                if reads.is_empty() || a.column(&generated.name).is_none_or(|c| c.generated.is_none()) {
+                    continue;
+                }
+                let why = format!(
+                    "Postgres cannot convert a column a generated column reads: dropped before {} changes type, and added again after.",
+                    reads.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+                );
+                self.converted.entry(name.clone()).or_default().remove(&generated.name);
+                self.readded
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(generated.name.clone(), why);
+            }
+        }
+        self.converted.retain(|_, c| !c.is_empty());
+        // A partition key's column cannot change type: the table is created
+        // again (sub-partitions' keys count too).
+        let old_parts: BTreeMap<Name, &Partition> = self
+            .old
+            .partitions
+            .iter()
+            .map(|p| (name_of(&p.child_schema, &p.child), p))
+            .collect();
+        for (name, columns) in self.converted.clone() {
+            let b = self.old_entities[&name];
+            let keys: Vec<&str> = b
+                .partition_key
+                .iter()
+                .map(String::as_str)
+                .chain(
+                    old_parts
+                        .iter()
+                        .filter(|(child, _)| {
+                            tree_root(&old_parts, &self.old_entities, child).as_ref() == Some(&name)
+                        })
+                        .filter_map(|(_, p)| p.partition_key.as_deref()),
+                )
+                .collect();
+            if columns.iter().any(|c| keys.iter().any(|k| mentions(k, c))) {
+                self.converted.remove(&name);
+                self.readded.remove(&name);
+                self.recreated.insert(name);
+            }
+        }
 
         // Keys that change: foreign keys to them must go first.
         for (name, b) in &self.old_entities {
@@ -495,7 +568,7 @@ impl<'a> Planner<'a> {
     fn mentions_readded(&self, table: &Name, sql: &str) -> bool {
         self.readded
             .get(table)
-            .is_some_and(|columns| columns.iter().any(|c| mentions(sql, c)))
+            .is_some_and(|columns| columns.keys().any(|c| mentions(sql, c)))
     }
 
     /// Why a foreign key that did not change must be dropped and added
@@ -788,15 +861,15 @@ impl<'a> Planner<'a> {
             self.push(Phase::Domains, Kind::AlterDomain, sql);
         }
         // The model lists checks by definition, without their names.
-        for (i, check) in b.constraints.iter().enumerate() {
+        for check in &b.constraints {
             if a.constraints.iter().any(|c| same_sql(c, check)) {
                 continue;
             }
-            let guessed = if i == 0 {
-                format!("{}_check", name.1)
-            } else {
-                format!("{}_check{i}", name.1)
-            };
+            let guessed = self
+                .check_names
+                .get(&(name.0.clone(), name.1.clone(), check.clone()))
+                .cloned()
+                .unwrap_or_else(|| format!("{}_check", name.1));
             self.push(
                 Phase::Domains,
                 Kind::AlterDomain,
@@ -1132,7 +1205,22 @@ impl<'a> Planner<'a> {
             }
             match (before, after) {
                 (Some(b), Some(a)) if self.recreated.contains(&name) => {
-                    if b.kind.is_table() {
+                    if b.kind.is_table() && class(b) == class(a) {
+                        self.push(
+                            Phase::EarlyDrops,
+                            Kind::DropTable,
+                            format!("DROP TABLE {};", table_name(b)),
+                        )
+                        .destroys("A column of its partition key changes type, which Postgres cannot do in place: dropped and created again, empty. Copy its rows out first.");
+                        self.warn(
+                            WarningCode::TableRecreated,
+                            Some(dotted(&name)),
+                            format!(
+                                "{} is dropped and created again, losing its rows: a column of its partition key changes type.",
+                                dotted(&name)
+                            ),
+                        );
+                    } else if b.kind.is_table() {
                         let note = if a.kind.is_table() {
                             format!(
                                 "Postgres cannot turn {} into {} in place: it is dropped and created again, empty. Copy its rows out first.",
@@ -1262,14 +1350,21 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// A kept column of the old schema already draws from it.
+    /// A column kept from the old schema draws from it, and so keeps
+    /// owning it. A sequence owned by a column or table this migration
+    /// drops is "created" (it exists: `IF NOT EXISTS`) and owned anew, or
+    /// the drop would take it along.
     fn sequence_exists(&self, sequence: &str) -> bool {
+        let draws = |c: &Column| c.default.as_deref().and_then(owned_sequence) == Some(sequence);
         self.old.entities.iter().any(|e| {
-            self.new_entities.contains_key(&name_of(&e.schema, &e.name))
-                && !self.recreated.contains(&name_of(&e.schema, &e.name))
+            let name = name_of(&e.schema, &e.name);
+            let Some(after) = self.new_entities.get(&name) else {
+                return false;
+            };
+            !self.recreated.contains(&name)
                 && e.columns
                     .iter()
-                    .any(|c| c.default.as_deref().and_then(owned_sequence) == Some(sequence))
+                    .any(|c| draws(c) && after.column(&c.name).is_some_and(draws))
         })
     }
 
@@ -1564,19 +1659,19 @@ impl<'a> Planner<'a> {
             let col = quote_ident(&column.name).into_owned();
             let alter = format!("ALTER TABLE {table} ALTER COLUMN {col}");
 
-            if self.readded.get(name).is_some_and(|r| r.contains(&column.name)) {
-                self.push(
-                    Phase::Columns,
+            if let Some(why) = self.readded.get(name).and_then(|r| r.get(&column.name)).cloned() {
+                let statement = self.push(
+                    Phase::ReaddDrops,
                     Kind::DropColumn,
                     format!("ALTER TABLE {table} DROP COLUMN {col};"),
-                )
-                .destroys(if before.generated.is_none() {
-                    "It becomes generated, which Postgres cannot do in place: dropped and added again, its values replaced by the generated ones."
+                );
+                if before.generated.is_none() {
+                    statement.destroys(why);
                 } else {
-                    "Its generated storage changes, which Postgres cannot do in place: dropped and added again."
-                });
+                    statement.noted(why);
+                }
                 self.push(
-                    Phase::Columns,
+                    Phase::ReaddAdds,
                     Kind::AddColumn,
                     format!("ALTER TABLE {table} ADD COLUMN {};", column_definition(column)),
                 );
@@ -1815,7 +1910,7 @@ impl<'a> Planner<'a> {
         let mut order: Vec<&str> = b
             .columns
             .iter()
-            .filter(|c| a.column(&c.name).is_some() && !readded.is_some_and(|r| r.contains(&c.name)))
+            .filter(|c| a.column(&c.name).is_some() && !readded.is_some_and(|r| r.contains_key(&c.name)))
             .map(|c| c.name.as_str())
             .collect();
         for column in &a.columns {

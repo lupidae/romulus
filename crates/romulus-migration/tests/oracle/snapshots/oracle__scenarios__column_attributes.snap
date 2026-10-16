@@ -19,6 +19,10 @@ BEGIN;
 -- Tables and columns
 -- --------------------------------------------------------------------------
 
+-- DESTRUCTIVE: It becomes generated, which Postgres cannot do in place:
+-- dropped and added again, its values replaced by the generated ones.
+ALTER TABLE public.t DROP COLUMN g;
+
 ALTER TABLE public.t ALTER COLUMN a SET DEFAULT 0;
 
 -- DESTRUCTIVE: Fails if a row holds NULL here: fill those first.
@@ -41,12 +45,8 @@ ALTER TABLE public.t ALTER COLUMN e SET EXPRESSION AS ((a * 3));
 -- Keeps the values computed so far; new rows get the default instead.
 ALTER TABLE public.t ALTER COLUMN f DROP EXPRESSION;
 
--- DESTRUCTIVE: It becomes generated, which Postgres cannot do in place:
--- dropped and added again, its values replaced by the generated ones.
-ALTER TABLE public.t DROP COLUMN g;
+ALTER TABLE public.t ALTER COLUMN h DROP IDENTITY;
 
 ALTER TABLE public.t ADD COLUMN g integer GENERATED ALWAYS AS ((a - 1)) STORED;
-
-ALTER TABLE public.t ALTER COLUMN h DROP IDENTITY;
 
 COMMIT;

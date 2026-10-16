@@ -273,9 +273,26 @@ pub enum WarningCode {
 /// `romulus_diff::diff(old, new)` is empty; a change it cannot make
 /// (moving a column, a foreign table) is a warning instead.
 pub fn migration(old: &Schema, new: &Schema, options: &Options) -> Migration {
+    // The catalog lists a domain's checks by name, which for unnamed ones
+    // (`<domain>_check`, `<domain>_check1`…) is the order they were added:
+    // the names are guessed from it, before normalizing sorts them.
+    let check_names = old
+        .domains
+        .iter()
+        .flat_map(|d| {
+            d.constraints.iter().enumerate().map(move |(i, check)| {
+                let name = if i == 0 {
+                    format!("{}_check", d.name)
+                } else {
+                    format!("{}_check{i}", d.name)
+                };
+                ((d.schema.clone(), d.name.clone(), check.clone()), name)
+            })
+        })
+        .collect();
     let mut old = romulus_diff::normalize(old);
     let mut new = romulus_diff::normalize(new);
     extensions::without_provided(&mut old);
     extensions::without_provided(&mut new);
-    plan::Planner::new(&old, &new, options).plan()
+    plan::Planner::new(&old, &new, options, check_names).plan()
 }

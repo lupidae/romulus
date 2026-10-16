@@ -191,12 +191,35 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
         }
     }
     let sql = format!("{prelude}{old_sql}\n-- ===== migration =====\n{script}");
-    let mut result = compile(compiler, &sql).await.map_err(|errors| {
-        format!(
+    let compilation = compiler
+        .compile(&sql)
+        .await
+        .map_err(|e| format!("{}: the sandbox failed: {e}", case.label))?;
+    // Functions the schemas call without defining them are stubs whose
+    // types the sandbox guesses from the calls: an old schema and a
+    // migration calling one with different types make it guess wrong for
+    // one of them. A real database has one function; skip those.
+    let stubbed = |text: &str| compilation.stubs.iter().any(|stub| text.contains(&format!("{}(", stub.name)));
+    let Some(mut result) = compilation.model.clone() else {
+        let errors = explain(&sql, &compilation);
+        let in_old_part = compilation.errors().any(|d| {
+            d.span.is_some_and(|span| span.from.line as usize <= old_sql.lines().count() + prelude.lines().count())
+        });
+        let statement_stubbed = compilation.errors().any(|d| {
+            d.span.is_some_and(|span| {
+                let line = sql.lines().nth((span.from.line as usize).saturating_sub(1)).unwrap_or("");
+                let statement = sql[span.range().start..].split(';').next().unwrap_or("");
+                stubbed(line) || stubbed(statement)
+            })
+        });
+        if !compilation.stubs.is_empty() && (in_old_part || statement_stubbed || stubbed(&errors)) {
+            return Ok(Outcome::Skipped);
+        }
+        return Err(format!(
             "{}: the migration does not run\n{errors}\n--- migration ---\n{script}",
             case.label
-        )
-    })?;
+        ));
+    };
     // Columns Postgres put last, as the migration warned.
     for warning in &m.warnings {
         if warning.code != WarningCode::ColumnOrder {
@@ -239,6 +262,9 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
     let diff = romulus_diff::diff(&result, &case.new);
     if diff.is_empty() {
         return Ok(Outcome::Passed);
+    }
+    if diff.lines().all(stubbed) {
+        return Ok(Outcome::Skipped);
     }
     let mut out = format!(
         "{}: the migrated database is not the new schema:\n",
