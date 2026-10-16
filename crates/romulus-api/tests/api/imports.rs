@@ -763,3 +763,40 @@ async fn a_zip_dropped_in_the_browser_is_unpacked(db: PgPool) {
     assert_eq!(imported.json()["ignored"][0]["reason"], "repeatable");
     assert_eq!(versions(&db, id).await.len(), 2);
 }
+
+/// Many tiny zips that each inflate to 8 MiB: refused at the request's
+/// budget (64 MiB unpacked), never inflated past it.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn zip_bombs_spread_over_many_zips_are_refused(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let token = api_token(&db, id, TokenScope::Push).await;
+    let app = TestApp::compiling(db.clone());
+    let spaces = " ".repeat(8 << 20);
+    let bomb = zip(&[("a.sql", spaces.as_str())]);
+    let mut body = Vec::new();
+    for k in 0..500 {
+        write!(
+            body,
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"m{k}.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+        )
+        .unwrap();
+        body.extend_from_slice(&bomb);
+        body.extend_from_slice(b"\r\n");
+    }
+    write!(body, "--{BOUNDARY}--\r\n").unwrap();
+    let started = std::time::Instant::now();
+    let refused = ci(
+        &app,
+        id,
+        &token,
+        "",
+        &format!("multipart/form-data; boundary={BOUNDARY}"),
+        body,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.code(), "validation");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert_eq!(versions(&db, id).await, []);
+}
