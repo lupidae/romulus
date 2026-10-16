@@ -29,13 +29,23 @@
 //!   [member]: the `ALTER …` statements from one version to another
 //!   (`romulus-migration`) and the files of one migration tool.
 //!
-//! Table: `versions` (immutable by trigger). Numbers are assigned under a
-//! lock on the `databases` row ([`store`]).
+//! Removing ([`removal`]):
+//! - `POST …/versions/{number}/remove` [admin], with a reason: hidden from
+//!   the history, diffs, imports and the latest version; `POST
+//!   …/versions/{number}/restore` [admin] within 30 days; `GET
+//!   …/versions/removed` [developer]. Then the purge deletes it; its number
+//!   is never given again.
+//!
+//! Table: `versions` (immutable by trigger, but for its removal). Numbers are
+//! assigned under a lock on the `databases` row ([`store`]), after the
+//! highest ever given (`databases.last_version_number`). Every read here is
+//! of live versions (`removed_at IS NULL`).
 
 pub mod diff;
 pub mod layout;
 pub mod migration;
 pub mod push;
+pub mod removal;
 pub mod store;
 
 use axum::{extract::State, http::StatusCode};
@@ -72,6 +82,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(diff::router())
         .merge(migration::router())
         .merge(push::router())
+        .merge(removal::router())
 }
 
 /// Who made a version: a person (uploads, drafts) or an API token (pushes).
@@ -102,7 +113,8 @@ impl Author {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VersionSummary {
     pub id: Uuid,
-    /// 1, 2, 3… per database, without gaps.
+    /// 1, 2, 3… per database, never given twice (a removed version leaves
+    /// its number unused).
     pub number: i32,
     pub origin: VersionOrigin,
     pub source_kind: SourceKind,
@@ -257,7 +269,7 @@ async fn page(
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
-           WHERE v.database_id = $1 AND ($2::int IS NULL OR v.number < $2)
+           WHERE v.database_id = $1 AND v.removed_at IS NULL AND ($2::int IS NULL OR v.number < $2)
            ORDER BY v.number DESC LIMIT $3"#,
         database_id,
         before,
@@ -285,7 +297,7 @@ async fn summary(db: &PgPool, id: Uuid) -> ApiResult<VersionSummary> {
     Ok(row.into())
 }
 
-/// A version by number (`None`: the latest), whole.
+/// A live version by number (`None`: the latest), whole.
 pub(crate) async fn detail(
     db: &PgPool,
     database_id: Uuid,
@@ -302,17 +314,16 @@ pub(crate) async fn detail(
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
            LEFT JOIN version_migrations m ON m.version_id = v.id
-           WHERE v.database_id = $1 AND ($2::int IS NULL OR v.number = $2)
+           WHERE v.database_id = $1 AND v.removed_at IS NULL AND ($2::int IS NULL OR v.number = $2)
            ORDER BY v.number DESC LIMIT 1"#,
         database_id,
         number,
     )
     .fetch_optional(db)
-    .await?
-    .ok_or_else(|| match number {
-        Some(n) => ApiError::not_found(format!("There is no version {n} of this database.")),
-        None => ApiError::not_found("This database has no version yet."),
-    })?;
+    .await?;
+    let Some(row) = row else {
+        return Err(missing(db, database_id, number).await);
+    };
     Ok(VersionDetail {
         id: row.id,
         number: row.number,
@@ -334,6 +345,39 @@ pub(crate) async fn detail(
             _ => None,
         },
     })
+}
+
+/// The 404 for a version that is not there: removed, or never was.
+pub(crate) async fn missing(db: &PgPool, database_id: Uuid, number: Option<i32>) -> ApiError {
+    let Some(n) = number else {
+        return ApiError::not_found("This database has no version yet.");
+    };
+    let removed = sqlx::query_scalar!(
+        r#"SELECT removed_at IS NOT NULL AS "removed!" FROM versions WHERE database_id = $1 AND number = $2"#,
+        database_id,
+        n,
+    )
+    .fetch_optional(db)
+    .await;
+    match removed {
+        Ok(Some(true)) => ApiError::not_found(format!("v{n} was removed.")),
+        Ok(Some(false) | None) => {
+            ApiError::not_found(format!("There is no version {n} of this database."))
+        }
+        Err(err) => err.into(),
+    }
+}
+
+/// The number the database's next version gets: after the highest ever
+/// given, removed and purged ones included.
+pub(crate) async fn next_number(db: &PgPool, database_id: Uuid) -> ApiResult<i32> {
+    Ok(sqlx::query_scalar!(
+        "SELECT last_version_number + 1 AS \"next!\" FROM databases WHERE id = $1",
+        database_id
+    )
+    .fetch_optional(db)
+    .await?
+    .unwrap_or(1))
 }
 
 /// A message as stored: trimmed, `None` when empty, at most 1000 characters.
@@ -457,6 +501,7 @@ async fn upload(
         layout: None,
         expected_base: None,
         publishes_draft: None,
+        audit: None,
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.
@@ -505,7 +550,8 @@ async fn check(
         }));
     };
     let latest = sqlx::query!(
-        "SELECT number, model FROM versions WHERE database_id = $1 ORDER BY number DESC LIMIT 1",
+        "SELECT number, model FROM versions WHERE database_id = $1 AND removed_at IS NULL
+         ORDER BY number DESC LIMIT 1",
         database.id,
     )
     .fetch_optional(&state.db)
@@ -595,15 +641,15 @@ async fn texts(
     let database = databases::find(&db, member.org.id, &slug).await?;
     let row = sqlx::query!(
         r#"SELECT model, source, source_kind AS "source_kind: SourceKind"
-           FROM versions WHERE database_id = $1 AND number = $2"#,
+           FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL"#,
         database.id,
         number,
     )
     .fetch_optional(&db)
-    .await?
-    .ok_or_else(|| {
-        ApiError::not_found(format!("There is no version {number} of this database."))
-    })?;
+    .await?;
+    let Some(row) = row else {
+        return Err(missing(&db, database.id, Some(number)).await);
+    };
     let model = Schema::deserialize(&row.model).map_err(ApiError::internal)?;
     // Rendering a few hundred tables takes milliseconds; off the async
     // workers all the same.

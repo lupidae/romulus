@@ -26,6 +26,9 @@
 //! - **Graph edits markers**: two editors making their first graph edit at
 //!   once each append `-- edits from the graph`; before compiling, the room
 //!   removes all but the first (a server edit).
+//! - **Review**: the first update of a person's that changes the SQL makes
+//!   them an editor; approvals count while the text is the one approved
+//!   (see `review`); everyone hears when that changes.
 //! - **Publishing** and **updating** freeze the room (every update dropped)
 //!   until they are done or fail; then every connection is asked to sync
 //!   again, which brings back what was dropped meanwhile. A frozen room
@@ -70,7 +73,8 @@ use super::{
     compile::{self, CompileState, Compiled, Rejected, SqlCompiler, sha256_hex},
     doc::{self, Roots},
     patch,
-    protocol::{self, LiveStatus, ServerEvent},
+    protocol::{self, LiveStatus, ReviewRequest, ServerEvent},
+    review::{Approval, ApprovalError, Review},
     store::{self, CompileRow, Job, Loaded, Writer},
 };
 use crate::{
@@ -262,6 +266,8 @@ pub struct Content {
     pub model: Option<Arc<Value>>,
     /// The version "Update draft" last merged into the text (`meta.merged`).
     pub merged: Option<i32>,
+    /// Who approved exactly this SQL without having edited it (`review`).
+    pub approved_by: Vec<Uuid>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -342,6 +348,37 @@ pub enum Command {
     VersionCreated {
         number: i32,
     },
+    VersionRemoved {
+        number: i32,
+        by: String,
+    },
+    VersionRestored {
+        number: i32,
+        by: String,
+    },
+    /// May `user_id` approve the text hashing to `sha256`? (Then the
+    /// approval is written, and [`Command::Approved`] follows.)
+    CheckApproval {
+        user_id: Uuid,
+        sha256: String,
+        reply: oneshot::Sender<Result<(), ApprovalError>>,
+    },
+    /// An approval was written.
+    Approved {
+        approval: Approval,
+    },
+    /// Someone took their approval back.
+    Withdrawn {
+        user_id: Uuid,
+    },
+    /// The editors asked for a review, or no longer do.
+    ReviewRequested {
+        requested: Option<ReviewRequest>,
+    },
+    /// The organization changed how many approvals publishing needs.
+    ApprovalsRequired {
+        required: i32,
+    },
     /// Replace the SQL with `changes`, computed against the text whose
     /// SHA-256 is `from`, for `reason` (`tidy`…): whether anything changed.
     Rewrite {
@@ -374,7 +411,10 @@ pub struct Data {
 #[derive(Default)]
 pub struct Shared {
     pub database_id: std::sync::OnceLock<Uuid>,
+    pub org_id: std::sync::OnceLock<Uuid>,
     pub present: std::sync::Mutex<Vec<Present>>,
+    /// How many approvals count now (`None` until the room loaded).
+    pub approvals: std::sync::Mutex<Option<usize>>,
 }
 
 struct Conn {
@@ -451,6 +491,11 @@ struct Room {
     last_compile: Option<LastCompile>,
     good_model: Option<Arc<Value>>,
     good_tables: HashMap<String, usize>,
+
+    review: Review,
+    /// The approvals that counted when everyone last heard (an edit that
+    /// changes them is told).
+    review_shown: Option<Vec<Uuid>>,
 
     idle_since: Option<Instant>,
 }
@@ -581,6 +626,7 @@ impl Room {
             DraftStatus::Published => LiveStatus::Published,
             DraftStatus::Deleted => LiveStatus::Deleted,
         };
+        let _ = shared.org_id.set(loaded.org_id);
         let doc_bytes = loaded.updates.iter().map(Vec::len).sum();
         let (failed, failures) = mpsc::unbounded_channel();
 
@@ -612,8 +658,11 @@ impl Room {
             last_compile: None,
             good_model: None,
             good_tables: HashMap::new(),
+            review: loaded.review,
+            review_shown: None,
             idle_since: Some(Instant::now()),
         };
+        room.share_review(false);
         if let Some(saved) = loaded.compile {
             room.good_model = saved.good_model.map(Arc::new);
             room.good_tables = saved
@@ -720,6 +769,35 @@ impl Room {
             Command::VersionCreated { number } => {
                 self.broadcast_event(&ServerEvent::VersionCreated { number }, None);
             }
+            Command::VersionRemoved { number, by } => {
+                self.broadcast_event(&ServerEvent::VersionRemoved { number, by }, None);
+            }
+            Command::VersionRestored { number, by } => {
+                self.broadcast_event(&ServerEvent::VersionRestored { number, by }, None);
+            }
+            Command::CheckApproval {
+                user_id,
+                sha256,
+                reply,
+            } => {
+                let _ = reply.send(self.check_approval(user_id, &sha256));
+            }
+            Command::Approved { approval } => {
+                self.review.approve(approval);
+                self.share_review(true);
+            }
+            Command::Withdrawn { user_id } => {
+                self.review.withdraw(user_id);
+                self.share_review(true);
+            }
+            Command::ReviewRequested { requested } => {
+                self.review.requested = requested;
+                self.share_review(true);
+            }
+            Command::ApprovalsRequired { required } => {
+                self.review.required = required;
+                self.share_review(true);
+            }
             Command::Rewrite {
                 from,
                 changes,
@@ -760,6 +838,7 @@ impl Room {
         if let Some(compile) = self.compile_for_joiner() {
             first.push(compile);
         }
+        first.push(protocol::event(&self.review.event(&self.sha256_for_review())));
         if self.save_failed {
             first.push(protocol::event(&ServerEvent::SaveFailed));
         }
@@ -895,6 +974,7 @@ impl Room {
         let Some(c) = self.conns.get(&conn) else {
             return;
         };
+        let user_id = c.peer.user_id;
         if !c.peer.can_edit() {
             tracing::debug!(draft = %self.id, user = %c.peer.user_id, "collab: dropped an update from a reviewer");
             return;
@@ -929,7 +1009,9 @@ impl Room {
         self.doc_bytes += bytes.len();
         self.broadcast(&protocol::update(bytes.to_vec()), Some(conn));
         self.queue_write(bytes);
-        self.sql_may_have_changed();
+        if self.sql_may_have_changed() {
+            self.edited_by(user_id);
+        }
     }
 
     /// A change the server makes itself (moving a renamed table's entries,
@@ -1033,7 +1115,9 @@ impl Room {
             }
             edited
         });
-        self.sql_may_have_changed();
+        if self.sql_may_have_changed() {
+            self.share_review(false);
+        }
         Ok(edited)
     }
 
@@ -1047,8 +1131,67 @@ impl Room {
             layout: self.roots.layout(&txn),
             model: compiled_now.then(|| self.good_model.clone()).flatten(),
             merged: self.roots.merged(&txn),
+            approved_by: self.review.approved_by(&sha256_hex(&sql)),
             sql,
         }
+    }
+
+    // ---- Review ---------------------------------------------------------------
+
+    /// The hash approvals are compared with: the SQL's, when there is any
+    /// approval to compare (hashing a large text for nothing on every
+    /// keystroke is not free).
+    fn sha256_for_review(&self) -> String {
+        if self.review.approvals.is_empty() {
+            String::new()
+        } else {
+            sha256_hex(&self.sql)
+        }
+    }
+
+    /// Someone's update changed the SQL: they are an editor now (written
+    /// once), and the approvals may no longer count.
+    fn edited_by(&mut self, user_id: Uuid) {
+        let new = self.review.editors.insert(user_id);
+        if new {
+            self.writer.send(Job::Editor(user_id));
+        }
+        self.share_review(new);
+    }
+
+    /// Tells everyone the review when what counts changed (or `always`),
+    /// and the hub how many approvals count.
+    fn share_review(&mut self, always: bool) {
+        let sha256 = self.sha256_for_review();
+        let approved = self.review.approved_by(&sha256);
+        *self
+            .shared
+            .approvals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(approved.len());
+        if !always && self.review_shown.as_ref() == Some(&approved) {
+            return;
+        }
+        // Nobody to tell yet: whoever joins gets it.
+        let first = self.review_shown.is_none();
+        self.review_shown = Some(approved);
+        if !first || always {
+            self.broadcast_event(&self.review.event(&sha256), None);
+        }
+    }
+
+    fn check_approval(&self, user_id: Uuid, sha256: &str) -> Result<(), ApprovalError> {
+        if self.status != LiveStatus::Open {
+            return Err(ApprovalError::NotOpen);
+        }
+        if self.review.editors.contains(&user_id) {
+            return Err(ApprovalError::Editor);
+        }
+        let current = self.roots.sql(&self.doc.transact());
+        if sha256_hex(&current) != sha256 {
+            return Err(ApprovalError::Changed);
+        }
+        Ok(())
     }
 
     // ---- Awareness ----------------------------------------------------------
@@ -1203,14 +1346,16 @@ impl Room {
 
     // ---- Compiling ------------------------------------------------------------
 
-    fn sql_may_have_changed(&mut self) {
+    /// Whether it did.
+    fn sql_may_have_changed(&mut self) -> bool {
         let sql = self.roots.sql(&self.doc.transact());
         if sql == self.sql {
-            return;
+            return false;
         }
         self.sql = sql;
         let now = Instant::now();
         self.dirty = Some(self.dirty.map_or((now, now), |(first, _)| (first, now)));
+        true
     }
 
     fn compile_due(&self) -> Option<Instant> {
@@ -1263,6 +1408,7 @@ impl Room {
         let current = self.sql.clone();
         self.server_edit(|roots, txn| patch::apply(&roots.sql, txn, &current, &changes));
         self.sql = self.roots.sql(&self.doc.transact());
+        self.share_review(false);
     }
 
     fn compiled(&mut self, done: CompileDone) {

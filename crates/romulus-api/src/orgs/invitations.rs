@@ -435,11 +435,18 @@ async fn accept(
         .await?
         .ok_or_else(not_found)?;
     let preview = found.preview;
+    let approvals_required = sqlx::query_scalar!(
+        "SELECT approvals_required::int AS \"n!\" FROM organizations WHERE id = $1",
+        found.org_id
+    )
+    .fetch_one(&state.db)
+    .await?;
     let org = |role| Org {
         id: found.org_id,
         slug: preview.org.slug.clone(),
         name: preview.org.name.clone(),
         role,
+        approvals_required,
     };
     match preview.status {
         InvitationStatus::AlreadyMember => {

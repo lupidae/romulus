@@ -145,6 +145,11 @@ async fn serve() -> Result<(), MainError> {
         state.imports.clone(),
         romulus_api::imports::staging::SWEEP_EVERY,
     );
+    // Versions removed more than 30 days ago: now, and every hour.
+    let purger = romulus_api::versions::removal::purger(
+        state.db.clone(),
+        romulus_api::versions::removal::PURGE_EVERY,
+    );
     // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
     let app = app(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
@@ -156,6 +161,7 @@ async fn serve() -> Result<(), MainError> {
         })
         .await?;
     sweeper.abort();
+    purger.abort();
     compiler.close().await;
     tracing::info!("shut down cleanly");
     Ok(())

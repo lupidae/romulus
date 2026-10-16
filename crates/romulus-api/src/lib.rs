@@ -7,6 +7,7 @@
 //! With `ROMULUS_WEB_DIR` set, [`app`] also serves the web app at `/app`
 //! ([`web`]).
 
+pub mod audit;
 pub mod auth;
 pub mod collab;
 pub mod compile;
@@ -58,6 +59,7 @@ fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(health::router())
         .merge(auth::router())
+        .merge(audit::router())
         .merge(orgs::router())
         .merge(databases::router())
         .merge(versions::router())

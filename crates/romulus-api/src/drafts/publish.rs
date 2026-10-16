@@ -8,8 +8,11 @@
 //!    every update from then on);
 //! 2. checks that the frozen text is the one previewed (409
 //!    `draft_changed` otherwise: someone typed meanwhile, review again);
-//! 3. compiles exactly that text (422 when it does not compile);
-//! 4. stores it as the next version, under the lock on the database row,
+//! 3. checks the approvals of that text, when the organization requires
+//!    some (409 `approvals_required`; an admin may publish without them,
+//!    saying why: [`approvals::gate`]);
+//! 4. compiles exactly that text (422 when it does not compile);
+//! 5. stores it as the next version, under the lock on the database row,
 //!    unless someone published since the draft started (409 `stale_base`:
 //!    "Update draft" comes first), and marks the draft published.
 //!
@@ -24,9 +27,12 @@ use serde_json::{Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{find, latest_number, not_open, versions};
+use super::{
+    approvals::{self, PublishApprovals},
+    find, latest_number, not_open, versions,
+};
 use crate::{
-    ApiError, ApiResult, AppState,
+    ApiError, ApiResult, AppState, audit,
     auth::{Member, min},
     collab::{
         Hub, HubError,
@@ -62,6 +68,8 @@ pub struct PublishPreview {
     /// The model the version would have.
     #[schema(value_type = Option<Object>)]
     pub model: Option<Value>,
+    /// The approvals the organization requires, and who approved this SQL.
+    pub approvals: PublishApprovals,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -70,6 +78,9 @@ pub struct PublishDraft {
     pub sha256: String,
     /// What changed, in a line (at most 1000 characters).
     pub message: Option<String>,
+    /// Publish without the approvals the organization requires, saying why
+    /// (admins; the audit log keeps it).
+    pub override_reason: Option<String>,
 }
 
 /// The version a draft became.
@@ -107,6 +118,8 @@ pub(super) async fn preview(
     let latest = latest_number(&state.db, database.id).await?;
     let content = state.collab.content(id).await.map_err(hub_error)?;
     let sha256 = sha256_hex(&content.sql);
+    let approvals = approvals::status(&state.db, member.org.id, member.role, &content).await?;
+    let number = crate::versions::next_number(&state.db, database.id).await?;
 
     let (model, diagnostics) = compiled(&state.collab, &content).await?;
     let base_model = match row.base_version {
@@ -127,7 +140,7 @@ pub(super) async fn preview(
     });
 
     Ok(Json(PublishPreview {
-        number: latest.map_or(1, |n| n + 1),
+        number,
         base_version: row.base_version,
         latest_version: latest,
         stale: row.base_version != latest,
@@ -138,6 +151,7 @@ pub(super) async fn preview(
         model: model
             .map(|m| serde_json::to_value(m).map_err(ApiError::internal))
             .transpose()?,
+        approvals,
     }))
 }
 
@@ -221,6 +235,15 @@ pub(super) async fn publish(
                 .into(),
         });
     }
+    let audit = approvals::gate(
+        &state.db,
+        &member,
+        &database,
+        id,
+        &content,
+        body.override_reason.as_deref(),
+    )
+    .await?;
     let mut model = match compiled(&state.collab, &content).await? {
         (Some(model), _) => model,
         (None, diagnostics) => {
@@ -241,6 +264,7 @@ pub(super) async fn publish(
         model,
         message,
         member.user.id,
+        audit,
     )
     .await
     {
@@ -280,6 +304,7 @@ async fn store(
     model: Schema,
     message: Option<&str>,
     by: Uuid,
+    audit: Option<audit::Entry>,
 ) -> ApiResult<versions::Created> {
     let stored = versions::create_version(
         &state.db,
@@ -292,6 +317,7 @@ async fn store(
             source: content.sql.clone(),
             message: message.map(str::to_owned),
             created_by: by,
+            audit,
         },
     )
     .await;

@@ -362,6 +362,7 @@ fn new_version(database_id: Uuid, tables: &[&str]) -> NewVersion {
         layout: None,
         expected_base: None,
         publishes_draft: None,
+        audit: None,
     }
 }
 

@@ -106,16 +106,19 @@ pub struct Planned {
     pub history: Vec<Existing>,
     /// The new migrations, by index into `migrations`.
     pub new: Vec<usize>,
-    /// The latest version (any origin), which the first new one follows.
+    /// The latest live version (any origin), which the first new one
+    /// follows.
     pub latest: Option<Latest>,
+    /// The highest number given (`databases.last_version_number`): the new
+    /// versions are numbered after it.
+    pub last_number: i32,
 }
 
-/// The latest version when the import was planned: the first new version
-/// is compared with its model and inherits its layout. Storing refuses if
-/// it changed meanwhile.
+/// The latest live version when the import was planned: the first new
+/// version is compared with its model and inherits its layout. Storing
+/// refuses if a version was created meanwhile ([`Planned::last_number`]).
 #[derive(Debug)]
 pub struct Latest {
-    pub number: i32,
     pub model: serde_json::Value,
     pub layout: serde_json::Value,
 }
@@ -213,54 +216,64 @@ pub async fn plan(
 /// do), or another version been created. Unchanged when neither happened.
 pub async fn rematch(db: &PgPool, database_id: Uuid, planned: Planned) -> ApiResult<Planned> {
     let now = sqlx::query!(
-        r#"SELECT (SELECT count(*) FROM version_migrations WHERE database_id = $1) AS "imported!",
-                  (SELECT max(number) FROM versions WHERE database_id = $1) AS latest"#,
+        r#"SELECT (SELECT count(*) FROM version_migrations WHERE database_id = $1 AND NOT removed) AS "imported!",
+                  (SELECT last_version_number FROM databases WHERE id = $1) AS last_number"#,
         database_id,
     )
     .fetch_one(db)
     .await?;
     let imported = usize::try_from(now.imported).unwrap_or(usize::MAX);
-    if imported == planned.history.len() && now.latest == planned.latest.as_ref().map(|l| l.number)
-    {
+    if imported == planned.history.len() && now.last_number == Some(planned.last_number) {
         return Ok(planned);
     }
     matched(db, database_id, planned.into_plan()).await
 }
 
-/// The files' migrations matched with the database's imports.
+/// The files' migrations matched with the database's imports: its live
+/// versions only. A removed version is as if never imported (removing what
+/// an import created and importing again creates it again).
 async fn matched(db: &PgPool, database_id: Uuid, plan: Plan) -> ApiResult<Planned> {
     let history = sqlx::query_as!(
         Existing,
         r#"SELECT m.migration_id, m.checksum, v.number, v.source
            FROM version_migrations m JOIN versions v ON v.id = m.version_id
-           WHERE m.database_id = $1 ORDER BY v.number"#,
+           WHERE m.database_id = $1 AND NOT m.removed ORDER BY v.number"#,
         database_id,
     )
     .fetch_all(db)
     .await?;
     let others = sqlx::query_scalar!(
-        r#"SELECT EXISTS (SELECT 1 FROM versions WHERE database_id = $1 AND origin <> 'import') AS "exists!""#,
+        r#"SELECT EXISTS (
+               SELECT 1 FROM versions WHERE database_id = $1 AND origin <> 'import' AND removed_at IS NULL
+           ) AS "exists!""#,
         database_id,
     )
     .fetch_one(db)
     .await?;
     let latest = sqlx::query_as!(
         Latest,
-        "SELECT number, model, layout FROM versions WHERE database_id = $1 ORDER BY number DESC LIMIT 1",
+        "SELECT model, layout FROM versions WHERE database_id = $1 AND removed_at IS NULL
+         ORDER BY number DESC LIMIT 1",
         database_id,
     )
     .fetch_optional(db)
     .await?;
+    let last_number = sqlx::query_scalar!(
+        "SELECT last_version_number FROM databases WHERE id = $1",
+        database_id,
+    )
+    .fetch_optional(db)
+    .await?
+    .unwrap_or(0);
 
     // Analysing hundreds of migrations: off the async workers.
-    let latest_number = latest.as_ref().map(|l| l.number);
-    let planned = tokio::task::spawn_blocking(move || build(plan, history, others, latest_number))
+    let planned = tokio::task::spawn_blocking(move || build(plan, history, others, last_number))
         .await
         .map_err(ApiError::internal)?;
     Ok(Planned { latest, ..planned })
 }
 
-fn build(plan: Plan, history: Vec<Existing>, others: bool, latest: Option<i32>) -> Planned {
+fn build(plan: Plan, history: Vec<Existing>, others: bool, last_number: i32) -> Planned {
     let Plan {
         format,
         detected,
@@ -334,7 +347,7 @@ fn build(plan: Plan, history: Vec<Existing>, others: bool, latest: Option<i32>) 
         format: format.into(),
         detected: detected.into(),
         new: new.len(),
-        first_number: (!new.is_empty()).then(|| latest.map_or(1, |n| n + 1)),
+        first_number: (!new.is_empty()).then_some(last_number + 1),
         needs_append: others && !new.is_empty(),
         migrations: planned,
         ignored: ignored.into_iter().map(Into::into).collect(),
@@ -349,6 +362,7 @@ fn build(plan: Plan, history: Vec<Existing>, others: bool, latest: Option<i32>) 
         history,
         new,
         latest: None,
+        last_number,
     }
 }
 
@@ -502,12 +516,12 @@ mod tests {
 
     fn planned(files: &[(&str, &str)], history: Vec<Existing>, others: bool) -> Planned {
         let files = files.iter().map(|(p, t)| SourceFile::new(*p, *t)).collect();
-        let latest = history.iter().map(|e| e.number).max();
+        let last_number = history.iter().map(|e| e.number).max().unwrap_or(0);
         build(
             plan(files, Some(Format::Tool(Tool::Sqlx))).unwrap(),
             history,
             others,
-            latest,
+            last_number,
         )
     }
 
@@ -526,7 +540,7 @@ mod tests {
             SourceFile::new("V1__a.sql", "CREATE TABLE a (s text DEFAULT '${kept}');"),
             SourceFile::new("V2__b.sql", "CREATE SCHEMA ${schema};"),
         ];
-        let planned = build(plan(files, None).unwrap(), Vec::new(), false, None);
+        let planned = build(plan(files, None).unwrap(), Vec::new(), false, 0);
         let [a, b] = planned.preview.migrations.as_slice() else {
             panic!("two migrations");
         };
@@ -701,7 +715,7 @@ mod tests {
                 created_by_token: None,
                 append: false,
                 imported_before: 0,
-                latest: None,
+                last_number: 0,
                 staging,
                 versions,
             },

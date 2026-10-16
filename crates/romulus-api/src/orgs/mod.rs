@@ -3,7 +3,8 @@
 //! Endpoints (who may call them in brackets; see `auth::member`):
 //! - `GET /orgs` [signed in]: mine, with my role. `POST /orgs` [signed in]:
 //!   create one; its creator is its admin.
-//! - `GET /orgs/{org}` [member], `PATCH /orgs/{org}` [admin]: name and slug.
+//! - `GET /orgs/{org}` [member], `PATCH /orgs/{org}` [admin]: name, slug,
+//!   and how many approvals publishing a draft needs (`drafts::approvals`).
 //! - `GET /orgs/{org}/members` [member]; `PATCH /orgs/{org}/members/{user}`
 //!   [admin]: change a role; `DELETE /orgs/{org}/members/{user}` [admin, or
 //!   the member themselves: leaving].
@@ -60,6 +61,9 @@ pub struct Org {
     pub name: String,
     /// The caller's role in it.
     pub role: Role,
+    /// Approvals publishing a draft needs, from members who did not edit
+    /// it; 0: none (pushes and imports are never gated).
+    pub approvals_required: i32,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -76,6 +80,8 @@ pub struct UpdateOrg {
     pub name: Option<String>,
     /// Changing it changes every link to the organization.
     pub slug: Option<String>,
+    /// 0 (none) to 10.
+    pub approvals_required: Option<i32>,
 }
 
 /// A 422 naming the field, in the shape the web app's forms read.
@@ -132,7 +138,7 @@ fn slug_taken(slug: &str) -> impl FnOnce(sqlx::Error) -> ApiError + '_ {
 async fn list(user: CurrentUser, State(db): State<PgPool>) -> ApiResult<Json<Vec<Org>>> {
     let orgs = sqlx::query_as!(
         Org,
-        r#"SELECT o.id, o.slug, o.name, m.role AS "role: Role"
+        r#"SELECT o.id, o.slug, o.name, m.role AS "role: Role", o.approvals_required::int AS "approvals_required!"
            FROM memberships m JOIN organizations o ON o.id = m.org_id
            WHERE m.user_id = $1
            ORDER BY lower(o.name), o.slug"#,
@@ -188,6 +194,7 @@ async fn create(
             slug,
             name,
             role: Role::Admin,
+            approvals_required: 0,
         }),
     ))
 }
@@ -210,10 +217,12 @@ async fn get(member: Member) -> Json<Org> {
         slug: member.org.slug,
         name: member.org.name,
         role: member.role,
+        approvals_required: member.org.approvals_required.into(),
     })
 }
 
-/// Renames an organization, or moves it to another slug. Admins only.
+/// Renames an organization, moves it to another slug, or changes how many
+/// approvals publishing needs. Admins only.
 #[utoipa::path(
     patch,
     path = "/orgs/{org}",
@@ -231,25 +240,52 @@ async fn get(member: Member) -> Json<Org> {
 async fn update(
     member: Member<min::Admin>,
     State(db): State<PgPool>,
+    State(collab): State<crate::collab::Hub>,
     Json(body): Json<UpdateOrg>,
 ) -> ApiResult<Json<Org>> {
     let name = body.name.as_deref().map(checked_name).transpose()?;
     let slug = body.slug.as_deref().map(checked_slug).transpose()?;
+    let approvals = body
+        .approvals_required
+        .map(|n| {
+            i16::try_from(n)
+                .ok()
+                .filter(|n| (0..=MAX_APPROVALS).contains(n))
+                .ok_or_else(|| {
+                    invalid(
+                        "approvals_required",
+                        "Between 0 (no approvals) and 10 approvals.",
+                    )
+                })
+        })
+        .transpose()?;
     let shown = slug.clone().unwrap_or_default();
     let org = sqlx::query!(
-        "UPDATE organizations SET name = coalesce($2, name), slug = coalesce($3, slug)
-         WHERE id = $1 RETURNING slug, name",
+        "UPDATE organizations
+         SET name = coalesce($2, name), slug = coalesce($3, slug),
+             approvals_required = coalesce($4, approvals_required)
+         WHERE id = $1 RETURNING slug, name, approvals_required",
         member.org.id,
         name,
         slug,
+        approvals,
     )
     .fetch_one(&db)
     .await
     .map_err(slug_taken(&shown))?;
+    if org.approvals_required != member.org.approvals_required {
+        // Its drafts open now show the new count at once.
+        collab.approvals_required(member.org.id, org.approvals_required.into());
+        tracing::info!(org = %org.slug, approvals = org.approvals_required, "approvals required changed");
+    }
     Ok(Json(Org {
         id: member.org.id,
         slug: org.slug,
         name: org.name,
         role: member.role,
+        approvals_required: org.approvals_required.into(),
     }))
 }
+
+/// Approvals an organization may require, at most.
+const MAX_APPROVALS: i16 = 10;

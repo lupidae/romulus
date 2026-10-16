@@ -72,6 +72,8 @@ pub struct OrgRef {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    /// Approvals publishing a draft needs (0: none).
+    pub approvals_required: i16,
 }
 
 /// The signed-in user, a member of the `{org}` in the path with at least
@@ -103,7 +105,7 @@ impl<R: MinRole> FromRequestParts<AppState> for Member<R> {
             })?;
 
         let membership = sqlx::query!(
-            r#"SELECT o.id, o.slug, o.name, m.role AS "role: Role"
+            r#"SELECT o.id, o.slug, o.name, o.approvals_required, m.role AS "role: Role"
                FROM organizations o
                JOIN memberships m ON m.org_id = o.id AND m.user_id = $2
                WHERE o.slug = $1"#,
@@ -123,6 +125,7 @@ impl<R: MinRole> FromRequestParts<AppState> for Member<R> {
                 id: membership.id,
                 slug: membership.slug,
                 name: membership.name,
+                approvals_required: membership.approvals_required,
             },
             role: membership.role,
             min: PhantomData,

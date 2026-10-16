@@ -139,6 +139,20 @@ pub enum DraftStatus {
     Deleted,
 }
 
+/// What an audit event records (`audit_action`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "audit_action", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum AuditAction {
+    /// An admin removed a version (hidden, restorable for 30 days).
+    VersionRemoved,
+    VersionRestored,
+    /// A removed version's 30 days passed: romulus deleted it.
+    VersionPurged,
+    /// An admin published a draft without the approvals it needed.
+    ApprovalsOverridden,
+}
+
 /// What an API token may do (`api_token_scope`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "api_token_scope", rename_all = "snake_case")]

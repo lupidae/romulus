@@ -44,7 +44,7 @@ impl Version {
     }
 }
 
-/// One version of the database.
+/// One version of the database, removed or not (a draft's base may be).
 pub async fn by_id(db: &PgPool, database_id: Uuid, id: Uuid) -> ApiResult<Option<Version>> {
     Ok(sqlx::query_as!(
         Version,
@@ -57,12 +57,12 @@ pub async fn by_id(db: &PgPool, database_id: Uuid, id: Uuid) -> ApiResult<Option
     .await?)
 }
 
-/// The database's latest version, if it has one.
+/// The database's latest live version, if it has one.
 pub async fn latest(db: &PgPool, database_id: Uuid) -> ApiResult<Option<Version>> {
     Ok(sqlx::query_as!(
         Version,
         r#"SELECT id, number, model, source, source_kind AS "source_kind: SourceKind", layout
-           FROM versions WHERE database_id = $1 ORDER BY number DESC LIMIT 1"#,
+           FROM versions WHERE database_id = $1 AND removed_at IS NULL ORDER BY number DESC LIMIT 1"#,
         database_id,
     )
     .fetch_optional(db)
@@ -83,6 +83,8 @@ pub struct DraftVersion {
     pub layout: VersionLayout,
     pub message: Option<String>,
     pub created_by: Uuid,
+    /// Stored with the version: published without its approvals.
+    pub audit: Option<crate::audit::Entry>,
 }
 
 pub struct Created {
@@ -109,6 +111,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             layout: Some(new.layout),
             expected_base: Some(new.expected_base),
             publishes_draft: Some(new.draft),
+            audit: new.audit,
         },
         false,
     )

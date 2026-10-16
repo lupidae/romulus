@@ -16,7 +16,9 @@
 //! - a role change or removal closes that member's sockets (the client
 //!   reconnects with the rights it has now, or is refused);
 //! - compile results, status changes and renames are [`protocol::ServerEvent`]s,
-//!   a message type only the server sends.
+//!   a message type only the server sends;
+//! - who edited the SQL, and the approvals that count, are the room's to
+//!   say ([`review`]).
 //!
 //! **One API instance.** Docs live in this process's memory and each one
 //! has a single writer (see [`store`]); two instances would each hold their
@@ -31,6 +33,7 @@ pub mod compile;
 pub mod doc;
 pub mod patch;
 pub mod protocol;
+pub mod review;
 pub mod room;
 mod socket;
 pub mod store;
@@ -54,6 +57,8 @@ use uuid::Uuid;
 use self::{
     awareness::Peer,
     compile::SqlCompiler,
+    protocol::ReviewRequest,
+    review::{Approval, ApprovalError},
     room::{
         Command, ConnId, Content, DATA_QUEUE, Data, FreezeError, FreezeFor, Incoming, Outbox,
         RewriteError, Settings, Shared, UpdateTicket,
@@ -401,6 +406,95 @@ impl Hub {
                 let _ = entry.commands.send(Command::VersionCreated { number });
             }
         }
+    }
+
+    /// A version was removed: the drafts of that database open now hear it
+    /// (those based on it now need "Update draft").
+    pub fn version_removed(&self, database_id: Uuid, number: i32, by: &str) {
+        self.each_of_database(database_id, |by| Command::VersionRemoved {
+            number,
+            by: by.to_owned(),
+        }, by);
+    }
+
+    /// A removed version was restored.
+    pub fn version_restored(&self, database_id: Uuid, number: i32, by: &str) {
+        self.each_of_database(database_id, |by| Command::VersionRestored {
+            number,
+            by: by.to_owned(),
+        }, by);
+    }
+
+    fn each_of_database(&self, database_id: Uuid, command: impl Fn(&str) -> Command, by: &str) {
+        let rooms = self.0.rooms();
+        for entry in rooms.entries.values() {
+            if entry.shared.database_id.get() == Some(&database_id) {
+                let _ = entry.commands.send(command(by));
+            }
+        }
+    }
+
+    /// Whether `user_id` may approve the draft's SQL as it is now, the text
+    /// hashing to `sha256` (loading the draft if needed). The approval is
+    /// then the caller's to write, and to announce ([`Hub::approved`]).
+    pub async fn check_approval(
+        &self,
+        draft: Uuid,
+        user_id: Uuid,
+        sha256: String,
+    ) -> Result<Result<(), ApprovalError>, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::CheckApproval {
+                user_id,
+                sha256,
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
+    /// An approval was written: everyone in the draft hears it.
+    pub fn approved(&self, draft: Uuid, approval: Approval) {
+        self.0.tell(draft, Command::Approved { approval });
+    }
+
+    pub fn withdrawn(&self, draft: Uuid, user_id: Uuid) {
+        self.0.tell(draft, Command::Withdrawn { user_id });
+    }
+
+    pub fn review_requested(&self, draft: Uuid, requested: Option<ReviewRequest>) {
+        self.0.tell(draft, Command::ReviewRequested { requested });
+    }
+
+    /// The organization changed how many approvals publishing needs: its
+    /// drafts open now hear it.
+    pub fn approvals_required(&self, org_id: Uuid, required: i32) {
+        let rooms = self.0.rooms();
+        for entry in rooms.entries.values() {
+            if entry.shared.org_id.get() == Some(&org_id) {
+                let _ = entry.commands.send(Command::ApprovalsRequired { required });
+            }
+        }
+    }
+
+    /// How many approvals count now, for each of these drafts whose room is
+    /// loaded (the others' are the database's to say).
+    pub fn approvals(&self, drafts: &[Uuid]) -> HashMap<Uuid, usize> {
+        let rooms = self.0.rooms();
+        drafts
+            .iter()
+            .filter_map(|id| {
+                let entry = rooms.entries.get(id)?;
+                let count = *entry
+                    .shared
+                    .approvals
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                Some((*id, count?))
+            })
+            .collect()
     }
 
     /// The database was deleted: its drafts' rooms close as deleted drafts

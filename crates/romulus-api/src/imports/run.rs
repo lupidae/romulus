@@ -324,7 +324,7 @@ impl Job {
                 created_by_token,
                 append: self.options.append,
                 imported_before: planned.history.len(),
-                latest: planned.latest.as_ref().map(|l| l.number),
+                last_number: planned.last_number,
                 staging,
                 versions,
             },

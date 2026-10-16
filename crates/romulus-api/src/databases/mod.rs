@@ -54,9 +54,16 @@ pub struct Database {
     pub description: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// The newest version (its `number` is also how many there are);
-    /// `null` before the first upload or push.
+    /// The newest version; `null` before the first upload or push (or
+    /// once every version is removed).
     pub latest: Option<VersionSummary>,
+    /// How many versions it has (removed ones not counted).
+    pub versions: i64,
+    /// The number the next version gets: numbers are never given twice.
+    pub next_number: i32,
+    /// Numbers below `latest`'s that have no version: removed, or purged
+    /// 30 days after (the history skips them).
+    pub missing: Vec<i32>,
     /// When something last happened: the newest version, or an edit.
     pub last_activity_at: DateTime<Utc>,
 }
@@ -163,12 +170,23 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                   v.message AS "v_message?", v.created_at AS "v_created_at?",
                   u.id AS "user_id?", u.name AS "user_name?",
                   t.id AS "token_id?", t.name AS "token_name?",
-                  greatest(d.updated_at, v.created_at) AS "last_activity_at!"
+                  greatest(d.updated_at, v.created_at) AS "last_activity_at!",
+                  d.last_version_number + 1 AS "next_number!", n.live AS "versions!",
+                  CASE WHEN n.live < coalesce(v.number, 0) THEN ARRAY(
+                      SELECT g FROM generate_series(1, v.number) g
+                      WHERE NOT EXISTS (
+                          SELECT 1 FROM versions o WHERE o.database_id = d.id AND o.number = g AND o.removed_at IS NULL
+                      )
+                      ORDER BY g
+                  ) ELSE '{}' END AS "missing!"
            FROM databases d
            LEFT JOIN LATERAL (
                SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token
-               FROM versions WHERE database_id = d.id ORDER BY number DESC LIMIT 1
+               FROM versions WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1
            ) v ON true
+           CROSS JOIN LATERAL (
+               SELECT count(*) AS live FROM versions WHERE database_id = d.id AND removed_at IS NULL
+           ) n
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
            WHERE d.org_id = $1 AND d.deleted_at IS NULL AND ($2::text IS NULL OR d.slug = $2)
@@ -214,6 +232,9 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                 created_at: r.created_at,
                 updated_at: r.updated_at,
                 latest,
+                versions: r.versions,
+                next_number: r.next_number,
+                missing: r.missing,
                 last_activity_at: r.last_activity_at,
             }
         })
@@ -289,6 +310,9 @@ async fn create(
             created_at: row.created_at,
             updated_at: row.updated_at,
             latest: None,
+            versions: 0,
+            next_number: 1,
+            missing: Vec::new(),
             last_activity_at: row.updated_at,
         }),
     ))

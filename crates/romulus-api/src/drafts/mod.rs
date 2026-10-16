@@ -21,12 +21,18 @@
 //! - `POST …/drafts/{id}/tidy` [developer]: rewrite the SQL in remus's
 //!   canonical form, as a minimal edit ([`tidy`]).
 //! - `POST …/drafts/{id}/update` [developer]: "Update draft", when someone
-//!   published since the draft started: merges the latest version in
-//!   ([`update`]); publishing a stale draft answers 409 `stale_base`.
+//!   published since the draft started, or its base version was removed:
+//!   merges the latest version in ([`update`]); publishing a stale draft
+//!   answers 409 `stale_base`.
+//! - `POST/DELETE …/drafts/{id}/approvals` [member], `POST/DELETE
+//!   …/drafts/{id}/review-request` [developer]: approvals before
+//!   publishing, and "Request review" ([`approvals`]).
 //!
 //! Tables: `drafts`, `draft_compiles` (with `collab`'s `draft_updates`,
-//! `draft_snapshots`).
+//! `draft_snapshots`), `draft_approvals`, `draft_review_requests`,
+//! `draft_editors`.
 
+pub mod approvals;
 pub mod migration;
 pub mod publish;
 pub mod tidy;
@@ -42,6 +48,7 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
+use self::approvals::DraftReview;
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
@@ -62,6 +69,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(migration::draft_migration))
         .routes(routes!(tidy::tidy))
         .routes(routes!(update::update))
+        .routes(routes!(approvals::approve, approvals::withdraw))
+        .routes(routes!(approvals::request_review, approvals::cancel_review))
 }
 
 /// A draft, as the database page and the editor show it.
@@ -75,9 +84,14 @@ pub struct Draft {
     pub base_version: Option<i32>,
     /// The database's newest version now.
     pub latest_version: Option<i32>,
-    /// Someone published since the draft started: publishing it needs
-    /// "Update draft" first.
+    /// The number publishing would give it (numbers are never given twice).
+    pub next_version: i32,
+    /// Someone published since the draft started, or its base version was
+    /// removed: publishing it needs "Update draft" first.
     pub stale: bool,
+    /// Its base version was removed (it is stale: "Update draft" moves it
+    /// onto the latest version left).
+    pub base_removed: bool,
     /// The version it became, once published.
     pub published_version: Option<i32>,
     /// `null` once their account is gone.
@@ -87,6 +101,8 @@ pub struct Draft {
     pub updated_at: DateTime<Utc>,
     /// Who has it open right now.
     pub present: Vec<Present>,
+    /// Approvals and the review request.
+    pub review: DraftReview,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -115,14 +131,25 @@ struct Row {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     base_version: Option<i32>,
+    base_removed: Option<bool>,
     published_version: Option<i32>,
     creator_id: Option<Uuid>,
     creator_name: Option<String>,
 }
 
+/// Where the database's versions stand, for its drafts.
+#[derive(Debug, Clone, Copy)]
+struct Line {
+    /// The latest live version's number.
+    latest: Option<i32>,
+    /// The number the next version gets.
+    next: i32,
+}
+
 impl Row {
-    fn into_draft(self, database: &DatabaseRef, latest: Option<i32>, hub: &Hub) -> Draft {
+    fn into_draft(self, database: &DatabaseRef, line: Line, hub: &Hub, review: DraftReview) -> Draft {
         let present = hub.present(&[self.id]).remove(&self.id).unwrap_or_default();
+        let latest = line.latest;
         Draft {
             id: self.id,
             name: self.name,
@@ -133,8 +160,10 @@ impl Row {
                 name: database.name.clone(),
             },
             stale: self.status == DraftStatus::Open && self.base_version != latest,
+            base_removed: self.base_removed.unwrap_or(false),
             base_version: self.base_version,
             latest_version: latest,
+            next_version: line.next,
             published_version: self.published_version,
             created_by: self
                 .creator_id
@@ -143,17 +172,57 @@ impl Row {
             created_at: self.created_at,
             updated_at: self.updated_at,
             present,
+            review,
         }
     }
 }
 
+/// The latest live version's number.
 async fn latest_number(db: &PgPool, database_id: Uuid) -> ApiResult<Option<i32>> {
-    Ok(sqlx::query_scalar!(
-        "SELECT max(number) FROM versions WHERE database_id = $1",
+    Ok(line(db, database_id).await?.latest)
+}
+
+async fn line(db: &PgPool, database_id: Uuid) -> ApiResult<Line> {
+    let row = sqlx::query!(
+        r#"SELECT (SELECT max(number) FROM versions WHERE database_id = $1 AND removed_at IS NULL) AS latest,
+                  last_version_number + 1 AS "next!"
+           FROM databases WHERE id = $1"#,
         database_id
     )
     .fetch_one(db)
-    .await?)
+    .await?;
+    Ok(Line {
+        latest: row.latest,
+        next: row.next,
+    })
+}
+
+/// `rows` as drafts, with their reviews.
+async fn drafts(
+    state: &AppState,
+    org_id: Uuid,
+    database: &DatabaseRef,
+    rows: Vec<Row>,
+) -> ApiResult<Vec<Draft>> {
+    let line = line(&state.db, database.id).await?;
+    let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let mut reviews = approvals::reviews(&state.db, &state.collab, org_id, &ids).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let review = reviews.remove(&row.id).unwrap_or(DraftReview {
+                required: 0,
+                approvals: 0,
+                requested: None,
+            });
+            row.into_draft(database, line, &state.collab, review)
+        })
+        .collect())
+}
+
+async fn one(state: &AppState, org_id: Uuid, database: &DatabaseRef, row: Row) -> ApiResult<Draft> {
+    let mut all = drafts(state, org_id, database, vec![row]).await?;
+    all.pop().ok_or_else(no_such_draft)
 }
 
 /// A draft of the database that is not deleted, or 404.
@@ -161,7 +230,8 @@ async fn find(db: &PgPool, database: &DatabaseRef, id: Uuid) -> ApiResult<Row> {
     sqlx::query_as!(
         Row,
         r#"SELECT d.id, d.name, d.status AS "status: DraftStatus", d.created_at, d.updated_at,
-                  bv.number AS "base_version?", pv.number AS "published_version?",
+                  bv.number AS "base_version?", bv.removed_at IS NOT NULL AS "base_removed?",
+                  pv.number AS "published_version?",
                   u.id AS "creator_id?", u.name AS "creator_name?"
            FROM drafts d
            LEFT JOIN versions bv ON bv.id = d.base_version_id
@@ -209,11 +279,11 @@ async fn list(
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<Draft>>> {
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
-    let latest = latest_number(&state.db, database.id).await?;
     let rows = sqlx::query_as!(
         Row,
         r#"SELECT d.id, d.name, d.status AS "status: DraftStatus", d.created_at, d.updated_at,
-                  bv.number AS "base_version?", pv.number AS "published_version?",
+                  bv.number AS "base_version?", bv.removed_at IS NOT NULL AS "base_removed?",
+                  pv.number AS "published_version?",
                   u.id AS "creator_id?", u.name AS "creator_name?"
            FROM drafts d
            LEFT JOIN versions bv ON bv.id = d.base_version_id
@@ -225,11 +295,7 @@ async fn list(
     )
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|row| row.into_draft(&database, latest, &state.collab))
-            .collect(),
-    ))
+    Ok(Json(drafts(&state, member.org.id, &database, rows).await?))
 }
 
 /// A new draft from the latest version, ready to edit: no form, renamed
@@ -312,11 +378,10 @@ async fn create(
     tx.commit().await?;
     tracing::info!(draft = %id, database = %database.id, "draft created");
 
-    let latest = base.as_ref().map(|v| v.number);
     let row = find(&state.db, &database, id).await?;
     Ok((
         StatusCode::CREATED,
-        Json(row.into_draft(&database, latest, &state.collab)),
+        Json(one(&state, member.org.id, &database, row).await?),
     ))
 }
 
@@ -336,8 +401,7 @@ async fn get(
 ) -> ApiResult<Json<Draft>> {
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
-    let latest = latest_number(&state.db, database.id).await?;
-    Ok(Json(row.into_draft(&database, latest, &state.collab)))
+    Ok(Json(one(&state, member.org.id, &database, row).await?))
 }
 
 /// Renames an open draft; everyone in it sees the new name at once.
@@ -383,8 +447,7 @@ async fn rename(
     .await?;
     state.collab.renamed(id, name);
     let row = find(&state.db, &database, id).await?;
-    let latest = latest_number(&state.db, database.id).await?;
-    Ok(Json(row.into_draft(&database, latest, &state.collab)))
+    Ok(Json(one(&state, member.org.id, &database, row).await?))
 }
 
 /// Deletes an open draft. Whoever has it open is told and let go.

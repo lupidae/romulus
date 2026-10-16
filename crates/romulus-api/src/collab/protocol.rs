@@ -19,8 +19,10 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
+use uuid::Uuid;
 use yrs::{
     StateVector,
     encoding::read::Cursor,
@@ -132,6 +134,27 @@ pub enum ServerEvent {
     /// The database has a new version (another draft was published): if
     /// it is not this draft's base, publishing now needs "Update draft".
     VersionCreated { number: i32 },
+    /// An admin removed a version: if it is this draft's base, publishing
+    /// now needs "Update draft" (onto the latest version left).
+    VersionRemoved { number: i32, by: String },
+    /// An admin restored a removed version.
+    VersionRestored { number: i32, by: String },
+    /// Approvals and the review request (`collab::review`): sent on joining
+    /// and whenever they change (an approval, an edit resetting them,
+    /// someone becoming an editor, the organization's setting).
+    Review {
+        /// Approvals publishing needs (the organization's setting); 0: none.
+        required: i32,
+        /// Approvals of the SQL as it is now, by members who did not edit
+        /// it, oldest first: these count.
+        approvals: Vec<ReviewApproval>,
+        /// Approvals of an earlier text: an edit since reset them.
+        outdated: Vec<ReviewApproval>,
+        /// Who changed the SQL: they cannot approve it.
+        editors: Vec<Uuid>,
+        /// The review the editors asked for, if they did.
+        requested: Option<ReviewRequest>,
+    },
     /// The server could not store some edits (its database failing): they
     /// live in the open tabs only.
     SaveFailed,
@@ -142,6 +165,23 @@ pub enum ServerEvent {
         by: String,
         conflicts: u32,
     },
+}
+
+/// One member's approval, as the people in the draft see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ReviewApproval {
+    pub user_id: Uuid,
+    pub name: String,
+    pub at: DateTime<Utc>,
+}
+
+/// A draft's editors asked for a review ("Request review").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, ToSchema)]
+pub struct ReviewRequest {
+    /// `null` once their account is gone.
+    pub user_id: Option<Uuid>,
+    pub name: Option<String>,
+    pub at: DateTime<Utc>,
 }
 
 impl LiveStatus {

@@ -14,6 +14,10 @@
 //! 4. Move `base_version_id` to the latest version and keep the new
 //!    `base_sql`; tell everyone; unfreeze.
 //!
+//! "The latest version" is the latest live one: a draft whose base was
+//! removed updates onto the latest version left (merging from the removed
+//! version's text), or, with none left, keeps its text relative to nothing.
+//!
 //! Conflicts become blocks in the text that the compiler refuses, so the
 //! draft cannot be published until they are resolved. Updating again while
 //! blocks remain (a newer version came out meanwhile) rewrites the blocks it
@@ -119,6 +123,23 @@ pub(super) async fn update(
     // and left its text, and this one starts from both.
     let draft = read(&state, database.id, id).await?;
     let latest = versions::latest(&state.db, database.id).await?;
+    if latest.is_none() && draft.base_version_id.is_some() {
+        // Its base was removed, and with it the last version: nothing to
+        // merge in. The draft keeps its text, relative to nothing now
+        // (published, it is the database's first version again).
+        sqlx::query!(
+            "UPDATE drafts SET base_version_id = NULL, base_sql = NULL,
+                               pending_base_version_id = NULL, pending_base_sql = NULL
+             WHERE id = $1 AND status = 'open' AND base_version_id IS NOT DISTINCT FROM $2",
+            id,
+            draft.base_version_id,
+        )
+        .execute(&state.db)
+        .await?;
+        drop(frozen);
+        tracing::info!(draft = %id, "draft moved onto no version: every version was removed");
+        return up_to_date(&state, database.id, id, None).await;
+    }
     let Some(latest) = latest.filter(|v| Some(v.id) != draft.base_version_id) else {
         drop(frozen);
         return up_to_date(&state, database.id, id, draft.base_version_id).await;

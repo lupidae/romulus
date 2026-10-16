@@ -16,11 +16,13 @@ use sqlx::PgPool;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+use super::{protocol::ReviewRequest, review};
 use crate::domain::DraftStatus;
 
 /// What loading a draft finds.
 pub struct Loaded {
     pub database_id: Uuid,
+    pub org_id: Uuid,
     pub status: DraftStatus,
     /// Its database is deleted (its drafts are then deleted too).
     pub database_deleted: bool,
@@ -31,6 +33,9 @@ pub struct Loaded {
     /// Update rows not yet folded into the snapshot.
     pub rows_since_snapshot: usize,
     pub compile: Option<SavedCompile>,
+    /// Editors, approvals (of members only), the review request, and the
+    /// organization's setting.
+    pub review: review::Review,
 }
 
 /// A `draft_compiles` row.
@@ -51,8 +56,9 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
         .await?;
     let Some(draft) = sqlx::query!(
         r#"SELECT d.database_id, d.status AS "status: DraftStatus",
-                  b.deleted_at IS NOT NULL AS "database_deleted!"
+                  b.deleted_at IS NOT NULL AS "database_deleted!", b.org_id, o.approvals_required
            FROM drafts d JOIN databases b ON b.id = d.database_id
+           JOIN organizations o ON o.id = b.org_id
            WHERE d.id = $1"#,
         draft_id,
     )
@@ -84,8 +90,51 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     )
     .fetch_optional(&mut *tx)
     .await?;
+    let editors = sqlx::query_scalar!(
+        "SELECT user_id FROM draft_editors WHERE draft_id = $1",
+        draft_id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let approvals = sqlx::query!(
+        "SELECT a.user_id, u.name, a.sql_sha256, a.approved_at
+         FROM draft_approvals a
+         JOIN users u ON u.id = a.user_id
+         JOIN memberships m ON m.user_id = a.user_id AND m.org_id = $2
+         WHERE a.draft_id = $1 ORDER BY a.approved_at",
+        draft_id,
+        draft.org_id,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let requested = sqlx::query!(
+        r#"SELECT r.requested_at, u.id AS "user_id?", u.name AS "name?"
+           FROM draft_review_requests r LEFT JOIN users u ON u.id = r.requested_by
+           WHERE r.draft_id = $1"#,
+        draft_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
     tx.commit().await?;
 
+    let review = review::Review {
+        required: i32::from(draft.approvals_required),
+        editors: editors.into_iter().collect(),
+        approvals: approvals
+            .into_iter()
+            .map(|a| review::Approval {
+                user_id: a.user_id,
+                name: a.name,
+                sha256: hex(&a.sql_sha256),
+                at: a.approved_at,
+            })
+            .collect(),
+        requested: requested.map(|r| ReviewRequest {
+            user_id: r.user_id,
+            name: r.name,
+            at: r.requested_at,
+        }),
+    };
     let last_update_id = rows.last().map_or(upto, |row| row.id);
     let rows_since_snapshot = rows.len();
     let updates = snapshot
@@ -95,13 +144,36 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
         .collect();
     Ok(Some(Loaded {
         database_id: draft.database_id,
+        org_id: draft.org_id,
         status: draft.status,
         database_deleted: draft.database_deleted,
         updates,
         last_update_id,
         rows_since_snapshot,
         compile,
+        review,
     }))
+}
+
+/// Lowercase hex, as `compile::sha256_hex` writes digests.
+pub fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+/// Records that `user_id` edited the draft's SQL (once is enough).
+pub async fn mark_editor(db: &PgPool, draft_id: Uuid, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "INSERT INTO draft_editors (draft_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        draft_id,
+        user_id,
+    )
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// Appends one update; also marks the draft as just edited (at most every
@@ -196,6 +268,8 @@ pub enum Job {
     /// The doc's whole state: becomes the snapshot.
     Compact(Vec<u8>),
     Compile(Box<CompileRow>),
+    /// Someone's first edit of the SQL (`draft_editors`).
+    Editor(Uuid),
     /// Answered once every job queued before it is done.
     Flush(oneshot::Sender<()>),
 }
@@ -267,6 +341,12 @@ async fn run(
             Job::Compile(row) => {
                 retry("save a compile", draft_id, || {
                     save_compile(&db, draft_id, &row)
+                })
+                .await;
+            }
+            Job::Editor(user_id) => {
+                retry("record an editor", draft_id, || {
+                    mark_editor(&db, draft_id, user_id)
                 })
                 .await;
             }

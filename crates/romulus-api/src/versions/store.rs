@@ -1,5 +1,7 @@
 //! Creating a version: the number, the layout, and the unchanged check, under
-//! a lock on the database row.
+//! a lock on the database row. "The latest version" is the latest live one
+//! (removed versions are compared with nothing and give no layout); the
+//! number follows the highest ever given (`databases.last_version_number`).
 
 use std::sync::Arc;
 
@@ -10,7 +12,7 @@ use uuid::Uuid;
 
 use super::{VersionSummary, layout::VersionLayout, summary};
 use crate::{
-    ApiError,
+    ApiError, audit,
     databases::no_such_database,
     domain::{SourceKind, VersionOrigin},
 };
@@ -40,6 +42,9 @@ pub struct NewVersion {
     /// transaction, and nothing is stored unless it is still open
     /// ([`StoreError::DraftNotOpen`]).
     pub publishes_draft: Option<Uuid>,
+    /// Recorded in the same transaction, with the new version's number (a
+    /// draft published without its approvals).
+    pub audit: Option<audit::Entry>,
 }
 
 /// Why [`store`] stored nothing.
@@ -102,10 +107,11 @@ pub enum Stored {
 /// (pushes), a model romulus-diff finds no difference in from the latest
 /// version's creates nothing.
 ///
-/// Numbers come from the latest version under `FOR NO KEY UPDATE` on the
-/// databases row: concurrent creations for one database queue there (and
-/// nothing else waits: inserting a token or a version's foreign key only
-/// takes `KEY SHARE`), so numbers have no gaps and no duplicates;
+/// Numbers come from the highest given (`last_version_number`, which a
+/// trigger moves on insert) under `FOR NO KEY UPDATE` on the databases row:
+/// concurrent creations for one database queue there (and nothing else
+/// waits: inserting a token or a version's foreign key only takes `KEY
+/// SHARE`), so numbers are never given twice, a removed version's included;
 /// `UNIQUE (database_id, number)` is the backstop.
 ///
 /// The costly part (reading the previous model, the diff, serialising) runs
@@ -130,15 +136,16 @@ pub async fn store(
     let mut compared = compare(&new, latest(db, database_id).await?, skip_unchanged).await?;
 
     let mut tx = db.begin().await?;
-    sqlx::query_scalar!(
-        "SELECT id FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
+    let last_number = sqlx::query_scalar!(
+        "SELECT last_version_number FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
         database_id,
     )
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(no_such_database)?;
     let current = sqlx::query_scalar!(
-        "SELECT id FROM versions WHERE database_id = $1 ORDER BY number DESC LIMIT 1",
+        "SELECT id FROM versions WHERE database_id = $1 AND removed_at IS NULL
+         ORDER BY number DESC LIMIT 1",
         database_id,
     )
     .fetch_optional(&mut *tx)
@@ -164,7 +171,7 @@ pub async fn store(
         return Ok(Stored::Unchanged(summary(db, id).await?));
     }
 
-    let number = base.map_or(1, |(_, number)| number + 1);
+    let number = last_number + 1;
     let id = sqlx::query_scalar!(
         "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,
                                message, created_by, created_by_token)
@@ -197,12 +204,19 @@ pub async fn store(
             return Err(StoreError::DraftNotOpen);
         }
     }
+    if let Some(entry) = &new.audit {
+        let entry = audit::Entry {
+            version_number: Some(number),
+            ..entry.clone()
+        };
+        audit::record(&mut *tx, &entry).await?;
+    }
     tx.commit().await?;
     tracing::info!(database = %database_id, number, origin = ?new.origin, "version created");
     Ok(Stored::Created(summary(db, id).await?))
 }
 
-/// The latest version of a database, whole.
+/// The latest live version of a database, whole.
 struct Latest {
     id: Uuid,
     number: i32,
@@ -214,7 +228,7 @@ async fn latest(db: impl PgExecutor<'_>, database_id: Uuid) -> Result<Option<Lat
     sqlx::query_as!(
         Latest,
         "SELECT id, number, model, layout FROM versions
-         WHERE database_id = $1 ORDER BY number DESC LIMIT 1",
+         WHERE database_id = $1 AND removed_at IS NULL ORDER BY number DESC LIMIT 1",
         database_id,
     )
     .fetch_optional(db)
@@ -297,12 +311,15 @@ pub struct NewImport {
     pub created_by_token: Option<Uuid>,
     /// Versions that were not imported may precede these.
     pub append: bool,
-    /// How many migrations the database had imported when the import was
-    /// planned: another import storing meanwhile makes this one stale.
+    /// How many migrations the database had imported (live ones) when the
+    /// import was planned: another import storing meanwhile makes this one
+    /// stale.
     pub imported_before: usize,
-    /// The latest version's number when the import was planned: the first
-    /// version was compared with it and inherits its layout.
-    pub latest: Option<i32>,
+    /// The highest number given when the import was planned
+    /// (`last_version_number`): another version created meanwhile makes it
+    /// stale (the first version was compared with the latest then, and
+    /// inherits its layout).
+    pub last_number: i32,
     pub staging: Uuid,
     pub versions: Vec<ImportedVersion>,
 }
@@ -324,21 +341,21 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
         created_by_token,
         append,
         imported_before,
-        latest: planned_latest,
+        last_number: planned_last,
         staging,
         versions,
     } = new;
 
     let mut tx = db.begin().await?;
-    sqlx::query_scalar!(
-        "SELECT id FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
+    let last_number = sqlx::query_scalar!(
+        "SELECT last_version_number FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
         database_id,
     )
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(no_such_database)?;
     let imported = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "count!" FROM version_migrations WHERE database_id = $1"#,
+        r#"SELECT count(*) AS "count!" FROM version_migrations WHERE database_id = $1 AND NOT removed"#,
         database_id,
     )
     .fetch_one(&mut *tx)
@@ -352,7 +369,9 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
     }
     if !append {
         let others = sqlx::query_scalar!(
-            r#"SELECT EXISTS (SELECT 1 FROM versions WHERE database_id = $1 AND origin <> 'import') AS "exists!""#,
+            r#"SELECT EXISTS (
+                   SELECT 1 FROM versions WHERE database_id = $1 AND origin <> 'import' AND removed_at IS NULL
+               ) AS "exists!""#,
             database_id,
         )
         .fetch_one(&mut *tx)
@@ -365,20 +384,14 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
             }));
         }
     }
-    let latest = sqlx::query_scalar!(
-        "SELECT max(number) FROM versions WHERE database_id = $1",
-        database_id,
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if latest != planned_latest {
+    if last_number != planned_last {
         return Err(StoreError::Api(ApiError::Conflict {
             code: "concurrent_import",
             message: "A version of this database was created during the import. Import again: nothing was stored."
                 .into(),
         }));
     }
-    let mut number = latest.unwrap_or(0);
+    let mut number = last_number;
 
     let mut stored = Vec::with_capacity(versions.len());
     for (k, version) in versions.into_iter().enumerate() {
