@@ -342,7 +342,7 @@ async fn publishing_keeps_who_approved_with_the_version(db: PgPool) {
     // A reason given anyway is not an override.
     let published = s.publish(&s.team.admin, Some("just in case")).await;
     assert_eq!(published.status, StatusCode::CREATED);
-    assert!(events(&s, "approvals_overridden").await.is_empty());
+    assert_eq!(events(&s, "approvals_overridden").await, Vec::<Value>::new());
     let kept = events(&s, "version_published").await;
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0]["version_number"], 2);
