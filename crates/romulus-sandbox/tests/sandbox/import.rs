@@ -501,3 +501,46 @@ fn an_extension_installed_over_and_over_is_refused() {
         assert_eq!(failure.diagnostics[0].code, Code::NotAllowed);
     });
 }
+
+/// CASCADE installs count: `postgis_topology` CASCADE installs PostGIS too.
+#[test]
+fn cascaded_extension_installs_count() {
+    with_compiler(|compiler| async move {
+        let churn = "CREATE EXTENSION postgis_topology CASCADE;\nDROP EXTENSION postgis CASCADE;";
+        let (replay, _) = replay(compiler, &[churn, churn, "CREATE EXTENSION postgis;"], 0).await;
+        let failure = replay.failure.expect("refused");
+        assert_eq!(failure.index, 2);
+        assert!(
+            failure.diagnostics[0].message.contains("\"postgis\""),
+            "{:?}",
+            failure.diagnostics
+        );
+    });
+}
+
+/// Past the lock budget, the import stops cleanly at the migration that
+/// crossed it, nothing kept.
+#[test]
+fn an_import_holding_too_many_locks_stops_there() {
+    crate::with_own_compiler(
+        |url| romulus_sandbox::SandboxConfig {
+            max_import_locks: 200,
+            ..crate::config(url, "romulus_test_locks")
+        },
+        |compiler| async move {
+            let tables = |from: usize| {
+                (from..from + 20)
+                    .map(|k| format!("CREATE TABLE t{k} (id bigint PRIMARY KEY, x text);"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let migrations: Vec<String> = (0..10).map(|k| tables(k * 20)).collect();
+            let texts: Vec<&str> = migrations.iter().map(String::as_str).collect();
+            let (replay, models) = replay(&compiler, &texts, 0).await;
+            let failure = replay.failure.expect("over the budget");
+            assert!(failure.index < 9, "stopped at {}", failure.index);
+            assert_eq!(failure.diagnostics[0].code, Code::TooLarge);
+            assert_eq!(models.len(), 0);
+        },
+    );
+}

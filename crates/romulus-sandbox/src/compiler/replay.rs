@@ -34,7 +34,7 @@ use serde::Serialize;
 
 use super::{
     Inner, Lease, MODEL_DATABASE, SandboxError, bump, millis, readable,
-    session::{self, AttemptError, Settings, Slot, Step},
+    session::{self, AttemptError, Ran, Settings, Slot, Step},
 };
 use crate::{
     allowlist,
@@ -331,28 +331,46 @@ impl Inner {
             Replay::failed(skipped.to_vec(), k, vec![d])
         };
 
-        // Phase 1: the whole script, correcting stubs.
+        let max_locks = self.config.max_import_locks;
+        let too_many_locks = |k: usize, locks: i64| {
+            let d = Diagnostic::error(
+                Code::TooLarge,
+                format!(
+                    "after this migration the import holds {locks} locks; it may hold at most {max_locks}"
+                ),
+            )
+            .with_hint("Everything an import creates or changes stays locked until it ends, in a lock table every compile shares: this history touches too many objects to be replayed.");
+            Replay::failed(skipped.to_vec(), k, vec![d])
+        };
+
+        // Phase 1: the whole script, a migration at a time (the lock budget
+        // is checked between them), correcting stubs.
         let mut overrides = Overrides::default();
         let mut round = 0;
         let mut connection_retries = 0;
         let prepared = loop {
             let prepared = prepare_with(&joined.text, parsed, &self.catalog, &overrides, edits);
-            let whole = [Step {
-                range: 0..prepared.script.len(),
-                introspect: None,
-            }];
+            let starts = migration_starts(joined, parsed, &prepared);
+            let each: Vec<Step> = (0..migrations.len())
+                .map(|k| Step {
+                    range: starts[k]..starts[k + 1],
+                    introspect: None,
+                })
+                .collect();
             match slot
                 .replay(
                     &self.options,
                     &settings,
                     &prepared.script,
-                    &whole,
+                    &each,
                     false,
+                    max_locks,
                     &mut |_, _, _| {},
                 )
                 .await
             {
-                Ok(()) => break prepared,
+                Ok(Ran::All) => break prepared,
+                Ok(Ran::TooManyLocks { step, locks }) => return Ok(too_many_locks(step, locks)),
                 Err(AttemptError::Sql(failure)) => {
                     let failed_stub = failure
                         .failure
@@ -393,15 +411,19 @@ impl Inner {
         };
         on_event(ReplayEvent::Checked);
 
-        // Phase 2: a migration at a time, models from `from` on.
+        // Phase 2: a migration at a time, models from `from` on, sent as
+        // they are read.
         let starts = migration_starts(joined, parsed, &prepared);
         let mut steps = Vec::new();
+        // The migration each step ends with.
+        let mut step_migration = Vec::new();
         let first = from.min(migrations.len());
         if first > 0 {
             steps.push(Step {
                 range: 0..starts[first],
                 introspect: None,
             });
+            step_migration.push(first - 1);
         }
         // A migration with nothing to run still runs its part of the
         // script (the search path reset after it), without a model read.
@@ -416,20 +438,24 @@ impl Inner {
                 range: starts[k]..starts[k + 1],
                 introspect: (!shares).then_some(k),
             });
+            step_migration.push(k);
         }
-        let mut models: Vec<Option<Schema>> = vec![None; migrations.len()];
+        let mut read = 0;
         let mut unreadable = None;
         let mut emit = |k: usize, json: String, roles: Vec<session::PolicyRoles>| {
             match session::postprocess(&json, &roles, MODEL_DATABASE) {
                 Ok(model) => {
-                    // Migrations with nothing to run in between share it.
-                    for (j, shared) in models.iter_mut().enumerate().skip(k + 1) {
-                        if !empty.contains(&j) {
-                            break;
-                        }
-                        *shared = Some(model.clone());
+                    // Migrations with nothing to run after it share it.
+                    let shared = (k + 1..migrations.len())
+                        .take_while(|j| empty.contains(j))
+                        .count();
+                    for index in k..=k + shared {
+                        on_event(ReplayEvent::Replayed {
+                            index,
+                            model: Box::new(model.clone()),
+                        });
                     }
-                    models[k] = Some(model);
+                    read += shared + 1;
                 }
                 Err(e) => unreadable = Some(e.to_string()),
             }
@@ -441,11 +467,15 @@ impl Inner {
                 &prepared.script,
                 &steps,
                 prepared.records_policy_roles,
+                max_locks,
                 &mut emit,
             )
             .await;
         match ran {
-            Ok(()) => {}
+            Ok(Ran::All) => {}
+            Ok(Ran::TooManyLocks { step, locks }) => {
+                return Ok(too_many_locks(step_migration[step], locks));
+            }
             Err(AttemptError::Sql(failure)) => return Ok(fail(&failure, &prepared)),
             Err(AttemptError::Connection { error, .. }) => {
                 slot.discard();
@@ -457,16 +487,11 @@ impl Inner {
                 "unreadable model: {error}"
             )));
         }
-        for (k, model) in models.into_iter().enumerate().skip(first) {
-            let Some(model) = model else {
-                return Err(SandboxError::Unavailable(format!(
-                    "no model was read after migration {k}"
-                )));
-            };
-            on_event(ReplayEvent::Replayed {
-                index: k,
-                model: Box::new(model),
-            });
+        if read != migrations.len() - first {
+            return Err(SandboxError::Unavailable(format!(
+                "{read} models were read for {} migrations",
+                migrations.len() - first
+            )));
         }
 
         let mut notes = vec![Vec::new(); migrations.len()];
@@ -650,21 +675,33 @@ fn check(
             NodeEnum::CreateExtensionStmt(s) => {
                 if installed.contains(&s.extname) && s.if_not_exists {
                     edits.omit.insert(statement.index);
+                    continue;
+                }
+                // CASCADE installs what it requires too: each install counts.
+                let cascade = s.options.iter().any(|o| {
+                    matches!(o.node.as_ref(), Some(NodeEnum::DefElem(d)) if d.defname == "cascade")
+                });
+                let names = if cascade {
+                    catalog.with_requirements(&s.extname)
                 } else {
-                    installed.insert(s.extname.clone());
+                    vec![s.extname.clone()]
+                };
+                for name in names {
+                    if !installed.insert(name.clone()) {
+                        continue;
+                    }
                     // Installing one locks thousands of objects until the
                     // replay ends: twice is a history that dropped it once.
-                    let count = installs.entry(s.extname.clone()).or_insert(0);
+                    let count = installs.entry(name.clone()).or_insert(0);
                     *count += 1;
                     if *count > MAX_INSTALLS {
                         let d = Diagnostic::error(
                             Code::NotAllowed,
                             format!(
-                                "extension \"{}\" is installed more than {MAX_INSTALLS} times in these migrations",
-                                s.extname
+                                "extension \"{name}\" is installed more than {MAX_INSTALLS} times in these migrations"
                             ),
                         )
-                        .with_hint("Each install locks thousands of objects for the whole import: import fewer migrations at once.")
+                        .with_hint("Each install locks thousands of objects for the whole import.")
                         .with_span(statement.span)
                         .with_statement(statement.index);
                         let d = joined.localize(k, &migrations[k], &parsed, d);
@@ -678,6 +715,10 @@ fn check(
                 for object in &s.objects {
                     if let Some(name) = crate::names::string(object) {
                         installed.remove(name);
+                        // With CASCADE, what requires it goes too.
+                        installed.retain(|other| {
+                            !catalog.with_requirements(other).iter().any(|r| r == name)
+                        });
                     }
                 }
             }

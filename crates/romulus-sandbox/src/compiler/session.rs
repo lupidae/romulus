@@ -232,10 +232,26 @@ pub(crate) struct Step {
     pub introspect: Option<usize>,
 }
 
+/// How a replay's steps ended, short of an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ran {
+    /// Every step ran; rolled back.
+    All,
+    /// Step `step` left the session holding `locks` locks, over the budget:
+    /// stopped there and rolled back. Everything a replay creates stays
+    /// locked until it ends, in the lock table every compile shares.
+    TooManyLocks { step: usize, locks: i64 },
+}
+
+/// The locks this session holds.
+const OWN_LOCKS_SQL: &str =
+    "SELECT count(*) FROM pg_catalog.pg_locks WHERE pid = pg_catalog.pg_backend_pid()";
+
 impl Slot {
     /// Run a script step by step in one transaction, reading the model
     /// after the steps that ask for it (`each(k, model, policy roles)`),
     /// then roll back. A failure's position is in the whole script.
+    #[allow(clippy::too_many_arguments)]
     pub async fn replay(
         &mut self,
         base: &PgConnectOptions,
@@ -243,8 +259,9 @@ impl Slot {
         script: &str,
         steps: &[Step],
         records_policy_roles: bool,
+        max_locks: usize,
         each: &mut (dyn FnMut(usize, String, Vec<PolicyRoles>) + Send),
-    ) -> Result<(), AttemptError> {
+    ) -> Result<Ran, AttemptError> {
         self.connection(base).await.map_err(AttemptError::stale)?;
         let Self { conn, dirty, .. } = self;
         let conn = conn
@@ -260,7 +277,7 @@ impl Slot {
             .await
             .map_err(AttemptError::stale)?;
         *dirty = true;
-        for step in steps {
+        for (index, step) in steps.iter().enumerate() {
             let sent = &script[step.range.clone()];
             if !sent.trim().is_empty() {
                 let ran = raw_sql(AssertSqlSafe(sent)).execute(&mut *conn).await;
@@ -272,6 +289,19 @@ impl Slot {
                             failure.failure.position.map(|p| p + step.range.start);
                     }
                     return Err(failure);
+                }
+                let locks: i64 = raw_sql(OWN_LOCKS_SQL)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .and_then(|row| row.try_get(0))
+                    .map_err(AttemptError::running)?;
+                if usize::try_from(locks).unwrap_or(usize::MAX) > max_locks {
+                    raw_sql("ROLLBACK")
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(AttemptError::running)?;
+                    *dirty = false;
+                    return Ok(Ran::TooManyLocks { step: index, locks });
                 }
             }
             let Some(k) = step.introspect else { continue };
@@ -313,7 +343,7 @@ impl Slot {
             .await
             .map_err(AttemptError::running)?;
         *dirty = false;
-        Ok(())
+        Ok(Ran::All)
     }
 }
 
