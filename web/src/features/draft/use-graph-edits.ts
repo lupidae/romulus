@@ -72,6 +72,13 @@ export function useGraphEdits({
             },
             marks,
             onUndo: (id) => session.undoSchemaEdit(id),
+            groups: {
+              create: (members) => session.createGroup(members),
+              update: (id, patch) => session.updateGroup(id, patch),
+              remove: (id) => session.deleteGroup(id),
+              assign: (tables, group) => session.assignGroup(tables, group),
+              place: (positions, membership) => session.placeTables(positions, membership),
+            },
           }
         : undefined,
     [session, canEdit, marks],

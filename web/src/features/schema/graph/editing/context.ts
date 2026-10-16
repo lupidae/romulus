@@ -8,9 +8,10 @@ import type { Editing, GraphEditor } from "./types";
 
 /** Where the actions menu opens, and on what. */
 export interface MenuTarget {
-  /** A table (and one of its columns), or the canvas (a new table there). */
+  /** A table (and one of its columns), a group, or the canvas (a new table there). */
   table?: string;
   column?: string;
+  group?: string;
   /** In graph coordinates, for "add table here". */
   at?: Position;
   /** Where the menu shows, in screen pixels. */
@@ -34,6 +35,20 @@ export interface EditContextValue {
   openMenu: (target: MenuTarget) => void;
   /** The center of the visible graph, in graph coordinates. */
   center: () => Position;
+  /** Groups these tables (picked ones let go) and starts naming the group. */
+  makeGroup: (tables: string[]) => void;
+  /** Sets the picked tables (shift-click's list). */
+  pick: (tables: string[]) => void;
+  /**
+   * A group dragged by its label: (dx, dy) from where the drag started, in
+   * graph units. "end" writes the move; "cancel" (Esc) puts it back.
+   */
+  dragGroup: (
+    id: string,
+    phase: "start" | "move" | "end" | "cancel",
+    dx?: number,
+    dy?: number,
+  ) => void;
 }
 
 export const EditContext = createContext<EditContextValue | null>(null);

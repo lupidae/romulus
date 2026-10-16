@@ -1,8 +1,10 @@
 import {
   ChatBubbleEmptyIcon,
   EditPencilIcon,
+  FrameSelectIcon,
   InputFieldIcon,
   LinkIcon,
+  MinusCircleIcon,
   PlusIcon,
   TableIcon,
   TextSquareIcon,
@@ -21,17 +23,24 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { toast } from "@/components/ui/toaster";
+import { cn } from "@/lib/utils";
 
 import { findColumn } from "../../edits/inspect";
 import { targetOf } from "../../edits/plan";
+import { groupColor } from "../../layout";
 import { isView, primaryKey } from "../../model";
 import type { TableModel } from "../build";
+import { useGraphUiStore } from "../graph-ui";
 import { type EditContextValue, type MenuTarget, useEdit } from "./context";
+import { SWATCH, tablesLabel } from "./group-labels";
+import { GroupColorItems } from "./groups";
 
 /**
- * The edit actions of a table, a column or the canvas, in one menu: opened
- * by a right click, the ⋯ of a table, or the keyboard (Shift+F10, M) on the
- * selected table. Every item names its shortcut when it has one.
+ * The edit actions of a table, a column, a group or the canvas, in one
+ * menu: opened by a right click, the ⋯ of a table or a group, or the
+ * keyboard (Shift+F10, M) on the selected table. Every item names its
+ * shortcut when it has one.
  */
 export function ActionsMenu({
   target,
@@ -65,13 +74,18 @@ export function ActionsMenu({
         ) : table ? (
           <TableItems edit={edit} table={table} />
         ) : (
-          <MenuItem
-            onSelect={() => edit.start({ kind: "newTable", position: target.at ?? edit.center() })}
-          >
-            <PlusIcon />
-            Add a table here
-            <MenuShortcut>N</MenuShortcut>
-          </MenuItem>
+          <>
+            {target.group && <GroupItems edit={edit} group={target.group} />}
+            <MenuItem
+              onSelect={() =>
+                edit.start({ kind: "newTable", position: target.at ?? edit.center() })
+              }
+            >
+              <PlusIcon />
+              Add a table here
+              <MenuShortcut>N</MenuShortcut>
+            </MenuItem>
+          </>
         )}
       </MenuContent>
     </Menu>
@@ -119,6 +133,7 @@ function TableItems({ edit, table }: { edit: EditContextValue; table: TableModel
           </MenuSubContent>
         </MenuSub>
       )}
+      <TableGroupItems edit={edit} table={table} />
       <MenuSeparator />
       <MenuItem
         variant="destructive"
@@ -207,6 +222,103 @@ function ColumnItems({
           </MenuItem>
         </>
       )}
+    </>
+  );
+}
+
+/**
+ * A table's group: make one (of it, or of the picked tables it is among),
+ * move it to another, take it out. Read when the menu opens.
+ */
+function TableGroupItems({ edit, table }: { edit: EditContextValue; table: TableModel }) {
+  const store = useGraphUiStore();
+  const groupEditor = edit.editor.groups;
+  if (!groupEditor) return null;
+  const { groups, groupOf, picked } = store.get();
+  const current = groupOf.get(table.key) ?? null;
+  const others = Object.entries(groups)
+    .filter(([id]) => id !== current)
+    .sort(([, a], [, b]) => a.name.localeCompare(b.name));
+  const withPicked = picked.includes(table.key) && picked.length > 1;
+  return (
+    <>
+      <MenuSeparator />
+      <MenuItem onSelect={() => edit.makeGroup(withPicked ? [...picked] : [table.key])}>
+        <FrameSelectIcon />
+        {withPicked ? `Group the ${picked.length} picked tables` : "New group"}
+        <MenuShortcut>G</MenuShortcut>
+      </MenuItem>
+      {others.length > 0 && (
+        <MenuSub>
+          <MenuSubTrigger>
+            <FrameSelectIcon />
+            {current ? "Move to group" : "Add to group"}
+          </MenuSubTrigger>
+          <MenuSubContent className="max-h-80 min-w-44 overflow-y-auto">
+            {others.map(([id, g]) => (
+              <MenuItem key={id} onSelect={() => groupEditor.assign([table.key], id)}>
+                <span
+                  aria-hidden
+                  className={cn("size-3 rounded-xs", SWATCH[groupColor(g.color)])}
+                />
+                <span className="truncate">{g.name}</span>
+              </MenuItem>
+            ))}
+          </MenuSubContent>
+        </MenuSub>
+      )}
+      {current && groups[current] && (
+        <MenuItem onSelect={() => groupEditor.assign([table.key], null)}>
+          <MinusCircleIcon />
+          <span className="truncate">Remove from {groups[current].name}</span>
+        </MenuItem>
+      )}
+    </>
+  );
+}
+
+/** A group's own actions: on its label's ⋯, or a right click anywhere in it. */
+function GroupItems({ edit, group }: { edit: EditContextValue; group: string }) {
+  const store = useGraphUiStore();
+  const groupEditor = edit.editor.groups;
+  const g = store.get().groups[group];
+  if (!groupEditor || !g) return null;
+  return (
+    <>
+      <MenuLabel className="truncate">{g.name}</MenuLabel>
+      <MenuItem onSelect={() => edit.start({ kind: "renameGroup", group })}>
+        <EditPencilIcon />
+        Rename group
+      </MenuItem>
+      <MenuSub>
+        <MenuSubTrigger>
+          <span aria-hidden className={cn("size-3 rounded-xs", SWATCH[groupColor(g.color)])} />
+          Color
+        </MenuSubTrigger>
+        <MenuSubContent className="min-w-36">
+          <GroupColorItems
+            value={g.color}
+            onChange={(color) => groupEditor.update(group, { color })}
+          />
+        </MenuSubContent>
+      </MenuSub>
+      <MenuItem onSelect={() => edit.pick([...g.members])}>
+        <TableIcon />
+        Pick its tables
+      </MenuItem>
+      <MenuItem
+        variant="destructive"
+        onSelect={() => {
+          groupEditor.remove(group);
+          toast(`Deleted ${g.name}`, {
+            description: `Its ${tablesLabel(g.members.length)} stay where they are. Undo brings the group back.`,
+          });
+        }}
+      >
+        <TrashIcon />
+        Delete group
+      </MenuItem>
+      <MenuSeparator />
     </>
   );
 }

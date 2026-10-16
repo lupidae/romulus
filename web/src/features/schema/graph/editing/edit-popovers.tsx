@@ -37,11 +37,18 @@ import type { Editing } from "./types";
 
 type PopoverEditing = Exclude<
   Editing,
-  { kind: "renameTable" } | { kind: "renameColumn" } | { kind: "newTable" }
+  | { kind: "renameTable" }
+  | { kind: "renameColumn" }
+  | { kind: "newTable" }
+  | { kind: "renameGroup" }
 >;
 
 const isPopover = (e: Editing | null): e is PopoverEditing =>
-  !!e && e.kind !== "renameTable" && e.kind !== "renameColumn" && e.kind !== "newTable";
+  !!e &&
+  e.kind !== "renameTable" &&
+  e.kind !== "renameColumn" &&
+  e.kind !== "newTable" &&
+  e.kind !== "renameGroup";
 
 /**
  * The small forms an edit asks for, each in a popover beside the table or
@@ -148,6 +155,7 @@ const TITLES: Record<Editing["kind"], string> = {
   drop: "Drop",
   foreignKey: "Add a foreign key",
   newTable: "New table",
+  renameGroup: "Rename group",
   failure: "This edit failed",
 };
 

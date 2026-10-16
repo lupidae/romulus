@@ -46,7 +46,7 @@ const CLEARANCE = 14;
 const BEND = 24;
 const CROSSING = 100_000;
 /** Obstacles further than this from an edge's box are not considered. */
-const REACH = 320;
+export const REACH = 320;
 
 const right = (r: Rect) => r.x + r.width;
 const bottom = (r: Rect) => r.y + r.height;
@@ -211,4 +211,52 @@ export function roundedPath(points: Point[], radius = 10): string {
   }
   const last = points[points.length - 1]!;
   return `${d} L ${last.x} ${last.y}`;
+}
+
+const overlaps = (a: Rect, b: Rect) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * The edges whose routes can differ once tables moved from `before` to
+ * `after`: those of a moved table, and those with a moved table (where it
+ * was or where it is) within reach of their two ends, as `route` only looks
+ * that far. Every other route is the same; null when nothing moved.
+ */
+export function affectedEdges<E extends { source: string; target: string }>(
+  edges: readonly E[],
+  before: ReadonlyMap<string, Rect>,
+  after: ReadonlyMap<string, Rect>,
+): E[] | null {
+  const moved = new Set<string>();
+  const places: Rect[] = [];
+  const same = (a: Rect, b: Rect) =>
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  for (const [key, r] of after) {
+    const old = before.get(key);
+    if (old && same(old, r)) continue;
+    moved.add(key);
+    places.push(r);
+    if (old) places.push(old);
+  }
+  for (const [key, old] of before)
+    if (!after.has(key)) {
+      moved.add(key);
+      places.push(old);
+    }
+  if (moved.size === 0) return null;
+  return edges.filter((e) => {
+    if (moved.has(e.source) || moved.has(e.target)) return true;
+    const a = after.get(e.source);
+    const b = after.get(e.target);
+    if (!a || !b) return false;
+    const x = Math.min(a.x, b.x) - REACH;
+    const y = Math.min(a.y, b.y) - REACH;
+    const reach = {
+      x,
+      y,
+      width: Math.max(right(a), right(b)) + REACH - x,
+      height: Math.max(bottom(a), bottom(b)) + REACH - y,
+    };
+    return places.some((p) => overlaps(p, reach));
+  });
 }

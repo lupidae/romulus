@@ -36,6 +36,13 @@
   pointer-events: none;
 }
 
+/* Zoomed out, where the area labels are drawn (see group-node.tsx), a
+   group's label is the handle that drags it. */
+.schema-graph[data-far] .sg-area-handle {
+  pointer-events: auto;
+  cursor: grab;
+}
+
 /* The minimap reads status and schema from the same tokens as the nodes. */
 .schema-graph .react-flow__minimap-node.minimap-added {
   fill: var(--color-success);

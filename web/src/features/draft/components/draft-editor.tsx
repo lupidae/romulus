@@ -32,7 +32,6 @@ import {
 } from "../use-session";
 import { EditorBar } from "./editor-bar";
 import { FirstTable } from "./first-table";
-import { GroupsMenu, PickBar } from "./groups";
 import { LiveGraph } from "./live-graph";
 import { PublishDialog } from "./publish-dialog";
 
@@ -208,8 +207,6 @@ export function Workspace({
   const [view, setView] = React.useState<EditorView | null>(null);
   const [selected, setSelected] = React.useState<string | null>(null);
   const [picked, setPicked] = React.useState<string[]>([]);
-  const [groupsOpen, setGroupsOpen] = React.useState(false);
-  const [focusGroup, setFocusGroup] = React.useState<string | null>(null);
   const [publishing, setPublishing] = React.useState(false);
   const conflicts = React.useMemo(() => findConflicts(sql), [sql]);
   const update = useUpdateDraft(org, db, draft.id);
@@ -328,13 +325,6 @@ export function Workspace({
       },
     });
   };
-  const group = () => {
-    if (!session || picked.length === 0) return;
-    const id = session.createGroup(picked);
-    setPicked([]);
-    setFocusGroup(id);
-    setGroupsOpen(true);
-  };
 
   return (
     <div className="flex h-dvh flex-col bg-background">
@@ -417,30 +407,7 @@ export function Workspace({
                 />
               )
             }
-            graphControls={
-              canEdit && (
-                <GroupsMenu
-                  session={session}
-                  groups={groups}
-                  picked={picked}
-                  onPickedChange={setPicked}
-                  open={groupsOpen}
-                  onOpenChange={(open) => {
-                    setGroupsOpen(open);
-                    if (!open) setFocusGroup(null);
-                  }}
-                  focus={focusGroup}
-                />
-              )
-            }
-            graphChildren={
-              <>
-                <LiveGraph session={session} peers={peers} />
-                {canEdit && (
-                  <PickBar picked={picked} onGroup={group} onClear={() => setPicked([])} />
-                )}
-              </>
-            }
+            graphChildren={<LiveGraph session={session} peers={peers} />}
           />
         ) : (
           <SchemaViewerSkeleton />

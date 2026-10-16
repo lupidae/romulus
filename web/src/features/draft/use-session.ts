@@ -121,7 +121,11 @@ export function usePeers(session: DraftSession | null): Peer[] {
     return {
       subscribe(listener) {
         let frame = 0;
-        const changed = () => {
+        const changed = (change: { added: number[]; updated: number[]; removed: number[] }) => {
+          // This tab's own pointer (sent while it moves) is no peer's: no render.
+          const me = session.doc.clientID;
+          const ids = [...change.added, ...change.updated, ...change.removed];
+          if (ids.every((id) => id === me)) return;
           dirty = true;
           cancelAnimationFrame(frame);
           frame = requestAnimationFrame(listener);

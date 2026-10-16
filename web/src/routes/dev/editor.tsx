@@ -9,6 +9,7 @@ import { useSessionState } from "@/features/draft/use-session";
 import { applyEdit } from "@/features/schema/edits/apply";
 import blogJson from "@/features/schema/fixtures/blog.json";
 import blogSql from "@/features/schema/fixtures/blog.sql?raw";
+import type { GroupColor, Groups } from "@/features/schema/layout";
 import { parseSchema, type Schema } from "@/features/schema/model";
 import { devRoutes } from "@/lib/dev-routes";
 
@@ -19,16 +20,19 @@ import { devRoutes } from "@/lib/dev-routes";
 //   ?role=reviewer       read-only
 //   ?fixture=empty       no SQL yet
 //   ?fixture=large       300 tables (frame times while editing)
+//   &groups=schemas      a group per schema (frame times while dragging one)
 
 interface Search {
   role?: "reviewer";
   fixture?: "empty" | "large";
+  groups?: "schemas";
 }
 
 export const Route = createFileRoute("/dev/editor")({
   validateSearch: (search: Record<string, unknown>): Search => ({
     role: search.role === "reviewer" ? "reviewer" : undefined,
     fixture: search.fixture === "empty" || search.fixture === "large" ? search.fixture : undefined,
+    groups: search.groups === "schemas" ? "schemas" : undefined,
   }),
   beforeLoad: () => {
     if (!devRoutes) throw notFound();
@@ -71,8 +75,25 @@ function error(from: number, to: number, message: string): Diagnostic {
   } as unknown as Diagnostic;
 }
 
+const PALETTE: GroupColor[] = ["blue", "teal", "violet", "green", "amber", "pink"];
+
+/** One group per schema, named after it. */
+function groupsBySchema(schema: Schema): Groups {
+  const out: Groups = {};
+  for (const e of schema.entities ?? []) {
+    const id = `schema-${e.schema}`;
+    out[id] ??= {
+      name: e.schema,
+      color: PALETTE[Object.keys(out).length % PALETTE.length]!,
+      members: [],
+    };
+    out[id].members.push(`${e.schema}.${e.name}`);
+  }
+  return out;
+}
+
 function DevEditor() {
-  const { role, fixture } = Route.useSearch();
+  const { role, fixture, groups } = Route.useSearch();
   const [session, setSession] = React.useState<DraftSession | null>(null);
   const [failNext, setFailNext] = React.useState(false);
   const failNextRef = React.useRef(false);
@@ -99,6 +120,7 @@ function DevEditor() {
     const created = new DraftSession("acme", "dev", {
       local: {
         sql: fixture === "empty" ? "" : fixture === "large" ? large!.sql : blogSql,
+        groups: groups === "schemas" ? groupsBySchema(base) : undefined,
         role: role ?? "developer",
         compile: (sql) => {
           let model = base;
@@ -140,7 +162,7 @@ function DevEditor() {
       created.destroy();
       setSession(null);
     };
-  }, [role, fixture, large]);
+  }, [role, fixture, groups, large]);
 
   const state = useSessionState(session, (s) => s, null);
   return (

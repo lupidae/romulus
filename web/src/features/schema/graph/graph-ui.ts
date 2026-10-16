@@ -4,6 +4,7 @@
 
 import { createContext, useContext, useSyncExternalStore } from "react";
 
+import type { Groups } from "../layout";
 import type { Editing, ElementMark } from "./editing/types";
 import type { NodeState } from "./geometry";
 
@@ -22,6 +23,10 @@ export interface GraphUiState {
   editing: Editing | null;
   /** Edits in flight or failed, by table key or `table\u0000column`. */
   marks: ReadonlyMap<string, ElementMark>;
+  /** The groups drawn (menus and the groups panel read them here, not from props). */
+  groups: Groups;
+  /** The group each table is drawn in, by table key. */
+  groupOf: ReadonlyMap<string, string>;
 }
 
 export interface GraphUiStore {
@@ -40,6 +45,8 @@ export function createGraphUiStore(initial: Partial<GraphUiState> = {}): GraphUi
     lod: "overview",
     editing: null,
     marks: new Map(),
+    groups: {},
+    groupOf: new Map(),
     ...initial,
   };
   const listeners = new Set<() => void>();

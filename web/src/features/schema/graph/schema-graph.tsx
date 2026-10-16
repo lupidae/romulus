@@ -16,6 +16,7 @@ import {
 import {
   type ReactNode,
   useCallback,
+  useDeferredValue,
   useEffect,
   useId,
   useLayoutEffect,
@@ -45,6 +46,7 @@ import {
   type MenuTarget,
 } from "./editing/context";
 import { EditPopovers } from "./editing/edit-popovers";
+import { DropHint, GroupsPanel, PickBar } from "./editing/groups";
 import { LinkDrag } from "./editing/link-drag";
 import { NewTable } from "./editing/new-table";
 import type { Editing, ElementMark, GraphEditor } from "./editing/types";
@@ -56,18 +58,25 @@ import {
   columnAnchorY,
   FIT_VIEW,
   freeSpot,
-  GROUP_PADDING,
   NODE,
   type NodeState,
   nextLod,
   tableSize,
 } from "./geometry";
+import {
+  drawnMembers,
+  type DropMembership,
+  dropMembership,
+  frameOf,
+  groupOfTable,
+  movedMembers,
+} from "./groups";
 import { type DetailsTarget, HoverDetails } from "./hover-details";
 import { NavigatorMap } from "./navigator-map";
 import { KIND_LABEL } from "./kind";
 import { type Box, type Direction, nearestInDirection, nearestTo } from "./navigation";
 import { RelationEdge, type RelationFlowEdge } from "./relation-edge";
-import { type Rect, type Route, route } from "./routing";
+import { affectedEdges, type Point, type Rect, type Route, route } from "./routing";
 import { TableNode, type TableFlowNode, type TableNodeData } from "./table-node";
 import { TableSearch } from "./table-search";
 import { useAutoLayout } from "./use-auto-layout";
@@ -215,6 +224,10 @@ function GraphCanvas({
   // undo): the layout map then wins again.
   const [dragging, setDragging] = useState<Layout>({});
   const [dropped, setDropped] = useState<Record<string, Dropped>>({});
+  // A group dragged by its label (its tables are in `dragging`), and what
+  // dropping the table being dragged would do to its group.
+  const [movingGroup, setMovingGroup] = useState<string | null>(null);
+  const [dropHint, setDropHint] = useState<DropHintState | null>(null);
   const [layoutSeen, setLayoutSeen] = useState(layout);
   if (layoutSeen !== layout) {
     setLayoutSeen(layout);
@@ -228,6 +241,10 @@ function GraphCanvas({
   }, [dropped, dragging]);
   const flow = useReactFlow();
   const flowStore = useStoreApi();
+  const editorRef = useRef(editor);
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
   const [pinned, setPinned] = useState<DetailsTarget | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const hintId = useId();
@@ -262,6 +279,15 @@ function GraphCanvas({
     store.set({ picked: picked ?? [] });
   }, [picked, store]);
 
+  // Groups drawn: a table in two groups (two people grouping at once) is
+  // drawn in the first by id.
+  const groupMap = groups ?? NO_GROUPS;
+  const groupOf = useMemo(() => groupOfTable(groupMap), [groupMap]);
+  const members = useMemo(() => drawnMembers(groupMap, groupOf), [groupMap, groupOf]);
+  useEffect(() => {
+    store.set({ groups: groupMap, groupOf });
+  }, [groupMap, groupOf, store]);
+
   // Zoom-driven styling, written to the element (see ZoomLevel).
   const applyZoom = useCallback(
     function apply(zoom: number) {
@@ -275,6 +301,12 @@ function GraphCanvas({
         return;
       }
       el.style.setProperty("--graph-zoom", String(zoom));
+      // Where the area labels are fully drawn (group-node.tsx): they become handles.
+      const far = zoom < 0.12;
+      if (far !== "far" in el.dataset) {
+        if (far) el.dataset.far = "";
+        else delete el.dataset.far;
+      }
       const lod = nextLod(store.get().lod, zoom);
       if (el.dataset.lod !== lod) el.dataset.lod = lod;
       store.set({ lod });
@@ -424,6 +456,7 @@ function GraphCanvas({
     );
   }, [graph, schemaColors, diff, canEdit]);
 
+  const nodeCache = useRef(new Map<string, TableFlowNode>());
   const nodes = useMemo(() => {
     const out: (TableFlowNode | GroupFlowNode | AreaLabelFlowNode)[] = [];
     const sizes = new Map<string, { width: number; height: number }>();
@@ -433,9 +466,27 @@ function GraphCanvas({
       if (!position) continue;
       const size = tableSize(table, graph.multiSchema, nodeState[table.key]);
       sizes.set(table.key, size);
+      const data = nodeData.get(table.key)!;
+      const zIndex = nodeState[table.key]?.partitions || nodeState[table.key]?.allColumns ? 2 : 1;
+      // A table that did not change keeps its node object: React Flow then
+      // skips it, so a drag frame costs the tables it moves, not all 300.
+      const kept = nodeCache.current.get(table.key);
+      if (
+        kept &&
+        kept.position.x === position.x &&
+        kept.position.y === position.y &&
+        kept.width === size.width &&
+        kept.height === size.height &&
+        kept.data === data &&
+        kept.draggable === editable &&
+        kept.zIndex === zIndex
+      ) {
+        tables.push(kept);
+        continue;
+      }
       // `data` objects are stable per table, so the memoized nodes skip
       // re-rendering when only the array around them changed.
-      tables.push({
+      const node: TableFlowNode = {
         id: table.key,
         type: "table",
         position,
@@ -444,18 +495,20 @@ function GraphCanvas({
         // Sizes are computed, not measured: saying so spares React Flow a
         // measure-and-update round on every new node object (each drag frame).
         measured: size,
-        data: nodeData.get(table.key)!,
+        data,
         draggable: editable,
         selectable: false,
         ariaLabel: `${KIND_LABEL[table.kind] ?? "table"} ${table.key}, ${table.columns.length} columns`,
         // Unfolded partitions overlap what is below: draw them on top.
-        zIndex: nodeState[table.key]?.partitions || nodeState[table.key]?.allColumns ? 2 : 1,
-      });
+        zIndex,
+      };
+      nodeCache.current.set(table.key, node);
+      tables.push(node);
     }
     // Groups behind their tables, sized to the members placed so far. Without
     // groups, a graph over several schemas shows each schema's area instead,
     // as long as no two areas overlap (hand-made layouts can mix them).
-    const userGroups = Object.entries(groups ?? {});
+    const userGroups = Object.entries(groupMap);
     const labels: AreaLabelFlowNode[] = [];
     const areas: {
       id: string;
@@ -469,7 +522,7 @@ function GraphCanvas({
             id,
             name: g.name,
             color: groupColor(g.color),
-            members: g.members,
+            members: members.get(id) ?? [],
             schema: false,
           }))
         : graph.multiSchema
@@ -481,32 +534,40 @@ function GraphCanvas({
               schema: true,
             }))
           : [];
+    // A table dragged on its own is drawn out of its group's frame, which
+    // shrinks around the others: where it lands decides if it stays. A
+    // group dragged by its label carries its tables (and a table alone in
+    // its group carries the group).
+    const alone = movingGroup ? NO_LAYOUT : dragging;
+    const boxOfMember = (key: string) => {
+      const p = moved[key] ?? positions[key];
+      const size = sizes.get(key);
+      return p && size ? { ...p, ...size } : undefined;
+    };
     const boxes: (GroupFlowNode & { width: number; height: number })[] = [];
     for (const area of areas.sort((a, b) => a.id.localeCompare(b.id))) {
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let x1 = -Infinity;
-      let y1 = -Infinity;
-      for (const member of area.members) {
-        const p = moved[member] ?? positions[member];
-        const size = sizes.get(member);
-        if (!p || !size) continue;
-        x0 = Math.min(x0, p.x);
-        y0 = Math.min(y0, p.y);
-        x1 = Math.max(x1, p.x + size.width);
-        y1 = Math.max(y1, p.y + size.height);
-      }
-      if (x0 === Infinity) continue;
-      const width = x1 - x0 + GROUP_PADDING.side * 2;
-      const height = y1 - y0 + GROUP_PADDING.top + GROUP_PADDING.bottom;
+      const placed = area.members.map(boxOfMember).filter((b) => b !== undefined);
+      const staying = area.members
+        .filter((key) => !alone[key])
+        .map(boxOfMember)
+        .filter((b) => b !== undefined);
+      const frame = frameOf(staying.length > 0 ? staying : placed);
+      if (!frame) continue;
       boxes.push({
         id: `group:${area.id}`,
         type: "tableGroup",
-        position: { x: x0 - GROUP_PADDING.side, y: y0 - GROUP_PADDING.top },
-        width,
-        height,
-        measured: { width, height },
-        data: { name: area.name, color: area.color, schema: area.schema },
+        position: { x: frame.x, y: frame.y },
+        width: frame.width,
+        height: frame.height,
+        measured: { width: frame.width, height: frame.height },
+        data: {
+          name: area.name,
+          color: area.color,
+          schema: area.schema,
+          group: area.schema ? undefined : area.id,
+          count: placed.length,
+          dropTarget: !area.schema && dropHint?.membership?.group === area.id,
+        },
         draggable: false,
         selectable: false,
         focusable: false,
@@ -542,12 +603,27 @@ function GraphCanvas({
       }
     }
     return [...out, ...tables, ...labels];
-  }, [graph, positions, moved, nodeState, nodeData, groups, editable, schemaColors]);
+  }, [
+    graph,
+    positions,
+    moved,
+    dragging,
+    movingGroup,
+    dropHint,
+    nodeState,
+    nodeData,
+    groupMap,
+    members,
+    editable,
+    schemaColors,
+  ]);
 
   // Every placed table's box: the edges route around them. Routing all edges
   // costs tens of milliseconds at 300 tables, so while tables are dragged only
-  // the edges touching them are routed again; the rest keep the routes of the
-  // last drop, and everything is routed once the pointer is up.
+  // the edges touching them are routed again (around their two ends only when
+  // there are many: a group whose tables everything references), the rest
+  // keep the routes of the last drop, and everything is routed once the
+  // pointer is up.
   const rectsOf = useCallback(
     (live: Layout) => {
       const out = new Map<string, Rect>();
@@ -568,27 +644,129 @@ function GraphCanvas({
     for (const [key, d] of Object.entries(dropped)) settled[key] = d.position;
     return rectsOf(settled);
   }, [rectsOf, dropped]);
-  const settledRoutes = useMemo(
-    () => routeAll(graph, settledRects, nodeState, graph.edges),
-    [graph, settledRects, nodeState],
+  // After a drop, only the edges the move can change are routed again (the
+  // rest keep their route, and their edge object): see `affectedEdges`. And
+  // not in the frame of the drop: the routes follow the boxes a render
+  // later (deferred), while the edges of what moved are drawn as during the
+  // drag.
+  const routedRects = useDeferredValue(settledRects);
+  const lastRouted = useRef<{
+    graph: GraphModel;
+    nodeState: Record<string, NodeState>;
+    rects: Map<string, Rect>;
+    routes: Map<string, Route>;
+  } | null>(null);
+  const settledRoutes = useMemo(() => {
+    const last = lastRouted.current;
+    let routes: Map<string, Route>;
+    if (last && last.graph === graph && last.nodeState === nodeState) {
+      const affected = affectedEdges(graph.edges, last.rects, routedRects);
+      if (!affected) return last.routes;
+      routes = new Map(last.routes);
+      for (const [id, r] of routeAll(graph, routedRects, nodeState, affected)) routes.set(id, r);
+    } else {
+      routes = routeAll(graph, routedRects, nodeState, graph.edges);
+    }
+    lastRouted.current = { graph, nodeState, rects: routedRects, routes };
+    return routes;
+  }, [graph, routedRects, nodeState]);
+  const edgeCache = useRef(new Map<string, RelationFlowEdge>());
+  const routeReuse = useRef(
+    new Map<
+      string,
+      {
+        key: string;
+        /** The settled route it is shifted from, or null: routed around its ends. */
+        base: Route | null;
+        route: Route;
+        ends: boolean;
+        graph: GraphModel;
+        nodeState: Record<string, NodeState>;
+      }
+    >(),
   );
   const edges = useMemo<RelationFlowEdge[]>(() => {
     const live = Object.keys(dragging).length ? rectsOf(moved) : settledRects;
-    const touched = graph.edges.filter((e) => dragging[e.source] || dragging[e.target]);
-    const fresh = touched.length ? routeAll(graph, live, nodeState, touched) : undefined;
+    // Where a table is drawn against where its routes were made: the same,
+    // or moved by (dx, dy) (dragged, or dropped a render ago), or resized.
+    const shift = (key: string): Point | null => {
+      const to = live.get(key);
+      const from = routedRects.get(key);
+      if (!to || !from || to.width !== from.width || to.height !== from.height) return null;
+      return { x: to.x - from.x, y: to.y - from.y };
+    };
+    // An edge whose two tables moved together (inside a dragged group, or a
+    // table's edge to itself) keeps its shape: shifted, not routed again.
+    const shifted = new Map<string, Point>();
+    const touched: EdgeModel[] = [];
+    for (const e of graph.edges) {
+      const a = shift(e.source);
+      const b = shift(e.target);
+      const routed = settledRoutes.has(e.id);
+      if (routed && a && b && a.x === 0 && a.y === 0 && b.x === 0 && b.y === 0) continue;
+      if (routed && a && b && a.x === b.x && a.y === b.y) shifted.set(e.id, a);
+      else touched.push(e);
+    }
+    // Routes made for this frame are kept for the next: the frame of a drop
+    // draws what the last drag frame drew, with the same objects (nothing
+    // re-renders). Around their ends only, a route depends on its two boxes.
+    const reuse = routeReuse.current;
+    const ends = touched.length > FULL_ROUTES_WHILE_DRAGGING;
+    const boxKey = (r: Rect | undefined) => (r ? `${r.x},${r.y},${r.width},${r.height}` : "");
+    const keyOf = (e: EdgeModel) => `${boxKey(live.get(e.source))}|${boxKey(live.get(e.target))}`;
+    const toRoute = touched.filter((e) => {
+      const kept = reuse.get(e.id);
+      return !(
+        ends &&
+        kept?.ends &&
+        kept.base === null &&
+        kept.key === keyOf(e) &&
+        kept.graph === graph &&
+        kept.nodeState === nodeState
+      );
+    });
+    const fresh = toRoute.length ? routeAll(graph, live, nodeState, toRoute, ends) : undefined;
+    const moving = new Set(touched.map((e) => e.id));
+    const routeOf = (e: EdgeModel): Route | undefined => {
+      const by = shifted.get(e.id);
+      const settled = settledRoutes.get(e.id);
+      const kept = reuse.get(e.id);
+      if (by && settled) {
+        const key = `${by.x},${by.y}`;
+        if (kept?.base === settled && kept.key === key) return kept.route;
+        const route = shiftRoute(settled, by);
+        reuse.set(e.id, { key, base: settled, route, ends: false, graph, nodeState });
+        return route;
+      }
+      if (!moving.has(e.id)) return settled;
+      const made = fresh?.get(e.id);
+      if (!made) return kept?.route;
+      reuse.set(e.id, { key: keyOf(e), base: null, route: made, ends, graph, nodeState });
+      return made;
+    };
     return graph.edges
       .filter((e) => live.has(e.source) && live.has(e.target))
-      .map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        type: "relation",
-        data: { model: e, route: fresh?.get(e.id) ?? settledRoutes.get(e.id)! },
-        selectable: false,
-        focusable: false,
-        zIndex: 1,
-      }));
-  }, [graph, dragging, moved, rectsOf, settledRects, settledRoutes, nodeState]);
+      .map((e) => {
+        const route = routeOf(e);
+        if (!route) return null;
+        // Unchanged, the same object: React Flow skips the edge.
+        const kept = edgeCache.current.get(e.id);
+        if (kept?.data?.route === route && kept.data.model === e) return kept;
+        const edge: RelationFlowEdge = {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          type: "relation",
+          data: { model: e, route },
+          selectable: false,
+          focusable: false,
+          zIndex: 1,
+        };
+        edgeCache.current.set(e.id, edge);
+        return edge;
+      })
+      .filter((e) => e !== null);
+  }, [graph, dragging, moved, rectsOf, settledRects, routedRects, settledRoutes, nodeState]);
 
   // ---- Editing: moving tables ----------------------------------------------
   // Drag stop can fire before React re-renders: the latest moves live here.
@@ -604,6 +782,39 @@ function GraphCanvas({
     },
     [],
   );
+  // Where a dragged table would land, group-wise: frames drawn without the
+  // dragged table, the pointer over one of them (or none).
+  const dropRef = useRef<DropHintState | null>(null);
+  const latestGroups = useRef({ groupOf, members, boxOf });
+  useLayoutEffect(() => {
+    latestGroups.current = { groupOf, members, boxOf };
+  }, [groupOf, members, boxOf]);
+  const onNodeDrag = useCallback(
+    (event: MouseEvent | TouchEvent, node: Node) => {
+      if (!editorRef.current?.groups || node.type !== "table") return;
+      const { groupOf, members, boxOf } = latestGroups.current;
+      const frames = new Map<string, Rect>();
+      for (const [id, keys] of members) {
+        const frame = frameOf(
+          keys
+            .filter((k) => k !== node.id)
+            .map(boxOf)
+            .filter((b) => b !== undefined),
+        );
+        if (frame) frames.set(id, frame);
+      }
+      const current = groupOf.get(node.id) ?? null;
+      const pointer = "touches" in event ? event.touches[0] : event;
+      if (!pointer) return;
+      const at = flow.screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY });
+      const membership = dropMembership(current, at, frames);
+      const before = dropRef.current;
+      if (before?.table === node.id && before.membership?.group === membership?.group) return;
+      dropRef.current = { table: node.id, current, membership };
+      setDropHint(membership ? dropRef.current : null);
+    },
+    [flow],
+  );
   const onNodeDragStop = useCallback(
     (_: unknown, _node: Node, moves: Node[]) => {
       const out: Layout = {};
@@ -613,20 +824,72 @@ function GraphCanvas({
         out[n.id] = position;
         drops[n.id] = { position, base: layout?.[n.id] };
       }
+      const drop = dropRef.current;
+      dropRef.current = null;
       draggingRef.current = {};
       setDragging({});
-      setDropped((current) => ({ ...current, ...drops }));
-      onLayoutChange?.(out);
+      setDropHint(null);
+      const groupEditor = editorRef.current?.groups;
+      // A draft writes the move into its layout map at once, which the next
+      // render reads: nothing to hold. Elsewhere the drop is held until
+      // `layout` says otherwise (or for good, without a callback).
+      if (groupEditor)
+        groupEditor.place(
+          out,
+          drop?.membership ? { tables: [drop.table], group: drop.membership.group } : undefined,
+        );
+      else {
+        setDropped((current) => ({ ...current, ...drops }));
+        onLayoutChange?.(out);
+      }
     },
     [onLayoutChange, layout],
   );
 
+  // A group dragged by its label: its tables follow, a frame at a time, and
+  // the move is written once, when the pointer is up (one undo step).
+  const groupDrag = useRef<{ id: string; members: string[]; base: Layout; frame: number } | null>(
+    null,
+  );
+  const dragGroup = useCallback(
+    (id: string, phase: "start" | "move" | "end" | "cancel", dx = 0, dy = 0) => {
+      if (phase === "start") {
+        const base: Layout = {};
+        for (const key of members.get(id) ?? []) {
+          const p = moved[key] ?? positions[key];
+          if (p) base[key] = p;
+        }
+        groupDrag.current = { id, members: Object.keys(base), base, frame: 0 };
+        setMovingGroup(id);
+        setPinned(null);
+        return;
+      }
+      const drag = groupDrag.current;
+      if (!drag || drag.id !== id) return;
+      if (phase === "move") {
+        draggingRef.current = movedMembers(drag.base, drag.members, dx, dy);
+        drag.frame ||= requestAnimationFrame(() => {
+          drag.frame = 0;
+          if (groupDrag.current === drag) setDragging(draggingRef.current);
+        });
+        return;
+      }
+      cancelAnimationFrame(drag.frame);
+      groupDrag.current = null;
+      draggingRef.current = {};
+      setDragging({});
+      setMovingGroup(null);
+      const out = movedMembers(drag.base, drag.members, dx, dy);
+      if (phase === "cancel" || Object.keys(out).every((k) => samePosition(out[k], drag.base[k])))
+        return;
+      // Written at once (see onNodeDragStop): the next render reads it.
+      editorRef.current?.groups?.place(out);
+    },
+    [members, moved, positions],
+  );
+
   // ---- Editing the schema ----------------------------------------------------
   const [menu, setMenu] = useState<MenuTarget | null>(null);
-  const editorRef = useRef(editor);
-  useEffect(() => {
-    editorRef.current = editor;
-  }, [editor]);
   const marks = editor?.marks ?? NO_MARKS;
   const editingNow = useSyncExternalStore(store.subscribe, () => store.get().editing !== null);
   useEffect(() => {
@@ -724,10 +987,48 @@ function GraphCanvas({
   // The context's actions are stable (they read the latest state when
   // called): a context value changing with every drag frame would redraw
   // every node of a draft at each one.
-  const latestActions = useRef({ startEditing, stopEditing, emit, center });
+  const pick = useCallback((keys: string[]) => onPickedChange?.(keys), [onPickedChange]);
+  /** Groups these tables, then names the group in place, on its label. */
+  const makeGroup = useCallback(
+    (tables: string[]) => {
+      const groupEditor = editorRef.current?.groups;
+      if (!groupEditor || tables.length === 0) return;
+      const id = groupEditor.create(tables);
+      onPickedChange?.([]);
+      startEditing({ kind: "renameGroup", group: id });
+      // The label is the frame's top left: bring it into view if it is not.
+      const frame = frameOf(tables.map(boxOf).filter((b) => b !== undefined));
+      const { width, height } = flowStore.getState();
+      if (!frame || !width || !height) return;
+      const { x, y, zoom } = flow.getViewport();
+      const left = frame.x * zoom + x;
+      const top = frame.y * zoom + y;
+      if (left < 0 || top < 0 || left + 240 > width || top + 60 > height) {
+        autoFit.current = false;
+        void flow.setCenter(
+          frame.x + Math.min(frame.width, width / zoom) / 2,
+          frame.y + height / zoom / 3,
+          {
+            zoom,
+            duration: 300,
+          },
+        );
+      }
+    },
+    [onPickedChange, startEditing, boxOf, flow, flowStore],
+  );
+  const latestActions = useRef({
+    startEditing,
+    stopEditing,
+    emit,
+    center,
+    makeGroup,
+    pick,
+    dragGroup,
+  });
   useLayoutEffect(() => {
-    latestActions.current = { startEditing, stopEditing, emit, center };
-  }, [startEditing, stopEditing, emit, center]);
+    latestActions.current = { startEditing, stopEditing, emit, center, makeGroup, pick, dragGroup };
+  }, [startEditing, stopEditing, emit, center, makeGroup, pick, dragGroup]);
   const actions = useMemo(
     () => ({
       start: (editing: Editing) => latestActions.current.startEditing(editing),
@@ -735,6 +1036,14 @@ function GraphCanvas({
       emit: (edit: GraphEdit, options?: { position?: { x: number; y: number } }) =>
         latestActions.current.emit(edit, options),
       center: () => latestActions.current.center(),
+      makeGroup: (tables: string[]) => latestActions.current.makeGroup(tables),
+      pick: (tables: string[]) => latestActions.current.pick(tables),
+      dragGroup: (
+        id: string,
+        phase: "start" | "move" | "end" | "cancel",
+        dx?: number,
+        dy?: number,
+      ) => latestActions.current.dragGroup(id, phase, dx, dy),
     }),
     [],
   );
@@ -752,14 +1061,16 @@ function GraphCanvas({
     event.preventDefault();
     const node = target.closest<HTMLElement>(".react-flow__node[data-id]");
     const table = node?.dataset.id;
-    if (table && graph.byKey.has(table)) {
+    const at = () => flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    if (table?.startsWith("group:") && editor?.groups && groupMap[table.slice(6)]) {
+      setMenu({ group: table.slice(6), at: at(), x: event.clientX, y: event.clientY });
+    } else if (table && graph.byKey.has(table)) {
       if (!editableKind(graph.byKey.get(table)!.entity)) return;
       select(table);
       const column = target.closest<HTMLElement>("[data-column]")?.dataset.column;
       setMenu({ table, column, x: event.clientX, y: event.clientY });
     } else if (target.closest(".react-flow__pane")) {
-      const at = flow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      setMenu({ at, x: event.clientX, y: event.clientY });
+      setMenu({ at: at(), x: event.clientX, y: event.clientY });
     }
   };
 
@@ -771,6 +1082,11 @@ function GraphCanvas({
     const key = event.key;
     if ((key === "n" || key === "N") && !event.shiftKey) {
       startEditing({ kind: "newTable", position: center() });
+    } else if ((key === "g" || key === "G") && editContext.editor.groups) {
+      // The picked tables, or else the selected one.
+      const tables = picked?.length ? [...picked] : current ? [current] : [];
+      if (tables.length === 0) return false;
+      makeGroup(tables);
     } else if (!editable || !table) {
       return false;
     } else if (key === "F2") {
@@ -973,6 +1289,7 @@ function GraphCanvas({
             {graph.tables.length} tables. Arrow keys move between tables, Enter zooms to the
             selected one, slash finds a table.
             {onPickedChange && " P picks the selected table for a group."}
+            {editor?.groups && " G groups the picked tables."}
             {editor &&
               " F2 renames the selected table, A adds a column, Delete drops it, M opens its actions; N adds a table."}
           </p>
@@ -991,8 +1308,11 @@ function GraphCanvas({
               nodeTypes={nodeTypes}
               edgeTypes={edgeTypes}
               onNodesChange={editable ? onNodesChange : undefined}
+              onNodeDrag={editable ? onNodeDrag : undefined}
               onNodeDragStop={editable ? onNodeDragStop : undefined}
               onNodeClick={(event, node) => {
+                // A group's empty area is the canvas, as far as selection goes.
+                if (node.type === "tableGroup") select(null);
                 if (node.type !== "table") return;
                 if (onPickedChange && (event.shiftKey || event.metaKey || event.ctrlKey)) {
                   const current = picked ?? [];
@@ -1070,6 +1390,7 @@ function GraphCanvas({
                         </Button>
                       </Tooltip>
                     )}
+                    <GroupsPanel />
                     <GraphKey diff={graph.counts !== undefined} />
                     {controls}
                   </div>
@@ -1097,7 +1418,19 @@ function GraphCanvas({
                 <>
                   <NewTable />
                   <LinkDrag />
+                  <PickBar />
                 </>
+              )}
+              {dropHint && dragging[dropHint.table] && (
+                <DropHint
+                  at={dragging[dropHint.table]!}
+                  text={dropText(dropHint, groupMap)}
+                  color={
+                    dropHint.membership?.group
+                      ? groupColor(groupMap[dropHint.membership.group]?.color ?? "")
+                      : null
+                  }
+                />
               )}
               {children}
             </ReactFlow>
@@ -1133,6 +1466,27 @@ function GraphCanvas({
 }
 
 const NO_MARKS: ReadonlyMap<string, ElementMark> = new Map();
+const NO_GROUPS: Groups = {};
+const NO_LAYOUT: Layout = {};
+
+interface DropHintState {
+  table: string;
+  /** The group it is in now. */
+  current: string | null;
+  membership: DropMembership;
+}
+
+/** What a drop will do, in a few words: "Add to Billing". */
+function dropText(hint: DropHintState, groups: Groups): string {
+  const name = (id: string | null) => (id ? (groups[id]?.name ?? "the group") : "");
+  const to = hint.membership?.group ?? null;
+  if (to === null) return `Remove from ${name(hint.current)}`;
+  return hint.current ? `Move to ${name(to)}` : `Add to ${name(to)}`;
+}
+
+function shiftRoute(route: Route, by: Point): Route {
+  return { ...route, points: route.points.map((p) => ({ x: p.x + by.x, y: p.y + by.y })) };
+}
 
 interface Dropped {
   position: { x: number; y: number };
@@ -1147,14 +1501,22 @@ function samePosition(
   return a === b || (!!a && !!b && a.x === b.x && a.y === b.y);
 }
 
-/** Routes for `edges` among the tables in `rects` (see routing.ts). */
+/** Edges routed around every table while tables are dragged; past this, around their ends. */
+const FULL_ROUTES_WHILE_DRAGGING = 40;
+
+/**
+ * Routes for `edges` among the tables in `rects` (see routing.ts). `ends`:
+ * around their own two tables only, for a drag moving many edges at once
+ * (lines may cross other tables until the drop routes them again).
+ */
 function routeAll(
   graph: GraphModel,
   rects: Map<string, Rect>,
   nodeState: Record<string, NodeState>,
   edges: EdgeModel[],
+  ends = false,
 ): Map<string, Route> {
-  const obstacles = [...rects.values()];
+  const all = [...rects.values()];
   const anchor = (key: string, column: string | undefined, kind: EdgeModel["kind"]) =>
     rects.get(key)!.y +
     (kind === "reads"
@@ -1173,7 +1535,7 @@ function routeAll(
           sourceY: anchor(e.source, e.sourceColumn, e.kind),
           targetY: anchor(e.target, e.targetColumn, e.kind),
         },
-        obstacles,
+        ends ? [rects.get(e.source)!, rects.get(e.target)!] : all,
       ),
     );
   }

@@ -1,4 +1,12 @@
-import { type Point, type Rect, route, roundedPath, simplify, STUB } from "./routing";
+import {
+  affectedEdges,
+  type Point,
+  type Rect,
+  route,
+  roundedPath,
+  simplify,
+  STUB,
+} from "./routing";
 
 const box = (x: number, y: number, width = 200, height = 120): Rect => ({ x, y, width, height });
 
@@ -89,5 +97,59 @@ describe("roundedPath", () => {
       { x: 8, y: 100 },
     ]);
     expect(d).toBe("M 0 0 L 4 0 Q 8 0 8 4 L 8 100");
+  });
+});
+
+describe("routes after a move", () => {
+  /** A seeded grid of tables, edges between random pairs. */
+  function scene(seed: number) {
+    let state = seed;
+    const rand = () => (state = (state * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    const rects = new Map<string, Rect>();
+    for (let i = 0; i < 60; i++)
+      rects.set(`t${i}`, box((i % 10) * 320 + rand() * 40, Math.floor(i / 10) * 260 + rand() * 40));
+    const edges = Array.from({ length: 90 }, (_, i) => ({
+      id: `e${i}`,
+      source: `t${Math.floor(rand() * 60)}`,
+      target: `t${Math.floor(rand() * 60)}`,
+    }));
+    return { rects, edges, rand };
+  }
+  const routeOf = (e: { id: string; source: string; target: string }, rects: Map<string, Rect>) =>
+    route(
+      {
+        id: e.id,
+        source: rects.get(e.source)!,
+        target: rects.get(e.target)!,
+        sourceY: rects.get(e.source)!.y + 20,
+        targetY: rects.get(e.target)!.y + 20,
+      },
+      [...rects.values()],
+    );
+
+  test("routing only the edges a move can change gives the same routes as routing all", () => {
+    for (const seed of [1, 7, 42]) {
+      const { rects, edges, rand } = scene(seed);
+      const before = new Map(edges.map((e) => [e.id, routeOf(e, rects)]));
+      // A group of tables moved together, and one moved on its own.
+      const after = new Map(rects);
+      for (const key of ["t11", "t12", "t21", "t22"]) {
+        const r = rects.get(key)!;
+        after.set(key, { ...r, x: r.x + 140, y: r.y - 90 });
+      }
+      const lone = rects.get("t47")!;
+      after.set("t47", { ...lone, x: lone.x - 500 * rand(), y: lone.y + 300 });
+
+      const affected = affectedEdges(edges, rects, after)!;
+      expect(affected.length).toBeLessThan(edges.length);
+      const incremental = new Map(before);
+      for (const e of affected) incremental.set(e.id, routeOf(e, after));
+      for (const e of edges) expect(incremental.get(e.id)).toEqual(routeOf(e, after));
+    }
+  });
+
+  test("is nothing when nothing moved", () => {
+    const { rects, edges } = scene(3);
+    expect(affectedEdges(edges, rects, new Map(rects))).toBeNull();
   });
 });
