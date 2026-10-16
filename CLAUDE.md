@@ -10,6 +10,7 @@ remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
+crates/romulus-migration/ model → model migration (ALTER … in dependency order), tool files; no I/O; oracle in tests/
 crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, allowlist, stubs, compile pool
 deploy/sandbox/       the sandbox image: Postgres 17 + PostGIS + pgvector, allowlisted extensions trusted
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
@@ -242,6 +243,20 @@ Made in the skeleton (S0):
   serialised content (all but the two summaries, whose authors can be
   renamed) is cached in `AppState::diffs` by the two version ids; a request
   resolves numbers to summaries first and loads full versions only on a miss.
+- **Migrations** (`versions::migration`, `GET …/migration?from=&to=&format=`;
+  `drafts::migration`, `GET …/drafts/{id}/migration?format=`, base → draft):
+  `romulus_migration::migration(old, new)` plans the statements (phases in
+  `plan.rs`: what blocks a change dropped first, types, tables, keys, views,
+  security, comments, then the removals), `files(up, down, format, meta)`
+  lays them out per tool (`plain`, `sqlx`, `flyway`, `prisma`, `dbmate`,
+  `golang_migrate`: the names migration import uses too) with a best-effort
+  down migration (`migration(new, old)`). Every change kind is proven by the
+  oracle (`crates/romulus-migration/tests/oracle`: `render_sql(old)` + the
+  migration compiled in the sandbox must introspect as `new`; scenarios,
+  corpus pairs, random mutations; `ROMULUS_ORACLE_SEEDS=100` for a deep
+  run). Change the planner, run it. Objects an extension owns
+  (`extensions::PROVIDED`, checked against the sandbox catalog) are never
+  created or dropped.
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
   compiles), 429 `rate_limited` with `Retry-After`. Handlers that must decide
@@ -309,6 +324,9 @@ src/features/databases/  databases, versions, API tokens: queries, mutations, th
 src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; no router, no
                          queries: reuse it wherever two models are compared), CompareBar,
                          diffQuery; /app/<org>/<db>/diff/<from>...<to>, /app/dev/diff shows it
+src/features/migration/  MigrationView (tool picker, concurrently, warnings, files with destructive
+                         lines tinted, Copy, Download/.zip; no router): the diff page's Migration
+                         view (?view=migration) and the publish dialog's Migration tab
 src/api/                 client.ts (typed openapi-fetch + CSRF header), generated types
 src/styles/globals.css   every token; the only file with raw colors
 ```

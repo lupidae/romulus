@@ -428,6 +428,16 @@ Two features, built in this order:
    two versions, produce a ready-to-review migration (`ALTER …` statements in
    dependency order, with destructive changes flagged) in the formats above
    (file naming per tool), downloadable or copyable.
+   Built (crates/romulus-migration): renames appear as a drop and an add,
+   flagged "possibly a rename" with the `RENAME` offered in a comment; columns
+   added in the middle go last (Postgres cannot reorder; a warning says so);
+   an enum losing or reordering labels, or a domain changing type, is
+   recreated and its columns converted; a table changing kind or partition
+   key is dropped and created again (flagged); destructive statements wait in
+   a closing "Removals" section unless something new needs their names.
+   `CREATE INDEX CONCURRENTLY` is an option (its own files where the tool runs
+   one transaction per file). Down migrations are the reverse migration, for
+   the tools that have them (dbmate, golang-migrate).
 
 ## Decided
 
