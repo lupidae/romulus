@@ -81,7 +81,8 @@ interface SidebarItemProps extends Omit<React.ComponentProps<"a">, "children"> {
   label: string;
   /**
    * Its name on the rail, where the section's heading is gone (the
-   * organization's "General" settings say "Settings"). Defaults to `label`.
+   * organization's "General" settings say "Organization settings").
+   * Defaults to `label`.
    */
   railLabel?: string;
   /** With `asChild`: the link, without content (the item draws icon and label in it). */

@@ -67,7 +67,16 @@ export function GroupsPanel() {
           </Button>
         </PopoverTrigger>
       </Tooltip>
-      <PopoverContent align="end" className="grid w-80 gap-3 p-0">
+      <PopoverContent
+        align="end"
+        className="grid w-80 gap-3 p-0"
+        // The panel takes the focus, not its first swatch (whose tooltip
+        // would cover the list); Tab goes on from there.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.focus();
+        }}
+      >
         <div className="flex items-center justify-between px-3 pt-3">
           <h2 className="text-sm font-semibold text-foreground">Groups</h2>
           <span className="text-xs text-muted-foreground tabular">

@@ -66,7 +66,12 @@ function OrgLayout() {
         </SidebarItem>
       </SidebarSection>
       <SidebarSection label="Settings">
-        <SidebarItem asChild icon={<SettingsIcon />} label="General" railLabel="Settings">
+        <SidebarItem
+          asChild
+          icon={<SettingsIcon />}
+          label="General"
+          railLabel="Organization settings"
+        >
           <Link to="/$org/settings" params={params} activeOptions={{ exact: true }} />
         </SidebarItem>
         <SidebarItem asChild icon={<GroupIcon />} label="Members">
