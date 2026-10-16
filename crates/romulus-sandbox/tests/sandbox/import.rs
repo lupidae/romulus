@@ -476,10 +476,16 @@ fn a_long_history_replays_in_bounded_time() {
         assert!(replay.failure.is_none(), "{:?}", replay.failure);
         assert_eq!(models.len(), 300);
         assert_eq!(models[299].1.entities.len(), 100);
-        assert!(elapsed < std::time::Duration::from_secs(120), "took {elapsed:?}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(120),
+            "took {elapsed:?}"
+        );
         #[allow(clippy::print_stderr)]
         {
-            eprintln!("300 migrations replayed in {elapsed:?} ({} ms)", replay.duration_ms);
+            eprintln!(
+                "300 migrations replayed in {elapsed:?} ({} ms)",
+                replay.duration_ms
+            );
         }
     });
 }

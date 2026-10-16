@@ -7529,7 +7529,7 @@
             "items": {
               "$ref": "#/components/schemas/SkippedStatement"
             },
-            "description": "What was not replayed (`SkippedStatement[]`, lines in `path`)."
+            "description": "What was not replayed (`SkippedStatement[]`, lines in the version's\n`source`: the migration's own text)."
           }
         }
       },

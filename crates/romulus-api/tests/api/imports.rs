@@ -719,3 +719,47 @@ async fn an_imported_migration_is_as_immutable_as_its_version(db: PgPool) {
         Some("versions_are_immutable")
     );
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_zip_dropped_in_the_browser_is_unpacked(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let app = TestApp::compiling(db.clone());
+    let archive = zip(&[
+        (
+            "db/migrations/V1__users.sql",
+            "CREATE TABLE users (id int);",
+        ),
+        (
+            "db/migrations/V2__posts.sql",
+            "CREATE TABLE posts (id int);",
+        ),
+        ("db/migrations/R__views.sql", "CREATE VIEW v AS SELECT 1;"),
+    ]);
+    let mut body = Vec::new();
+    write!(
+        body,
+        "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"migrations.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+    )
+    .unwrap();
+    body.extend_from_slice(&archive);
+    write!(body, "\r\n--{BOUNDARY}--\r\n").unwrap();
+    let imported = app
+        .send(
+            Request::post(team.path("/databases/app/imports"))
+                .header(header::ORIGIN, ORIGIN)
+                .header(csrf::HEADER, "1")
+                .header(header::COOKIE, team.developer.cookie())
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(imported.status, StatusCode::CREATED, "{}", imported.json());
+    assert_eq!(imported.json()["format"], "flyway");
+    assert_eq!(imported.json()["ignored"][0]["reason"], "repeatable");
+    assert_eq!(versions(&db, id).await.len(), 2);
+}

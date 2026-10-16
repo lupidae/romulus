@@ -2193,7 +2193,10 @@ export interface components {
       id: string;
       /** @description The file, relative to the folder imported. */
       path: string;
-      /** @description What was not replayed (`SkippedStatement[]`, lines in `path`). */
+      /**
+       * @description What was not replayed (`SkippedStatement[]`, lines in the version's
+       *     `source`: the migration's own text).
+       */
       skipped: components["schemas"]["SkippedStatement"][];
     };
     /**
