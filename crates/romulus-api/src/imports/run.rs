@@ -242,7 +242,18 @@ impl Job {
                 migration_id: migration.id.clone(),
                 path: migration.path.clone(),
                 checksum: plan::checksum(&migration.sql),
-                skipped: serde_json::to_value(skipped).unwrap_or_default(),
+                // Lines in the migration's own text (the version's source),
+                // which is what the version shows next to them.
+                skipped: serde_json::to_value(
+                    skipped
+                        .iter()
+                        .map(|s| SkippedStatement {
+                            line: s.line - migration.line.saturating_sub(1),
+                            ..s.clone()
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or_default(),
             })
             .collect();
         let stored = store_import(

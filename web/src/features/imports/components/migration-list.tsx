@@ -65,6 +65,10 @@ export function MigrationList({
     return out;
   }, [migrations, firstNumber]);
 
+  // "New" says something only next to migrations that are not; once
+  // imported, the version's link says it.
+  const badges = !created && migrations.some((m) => m.status !== "new");
+
   return (
     <ol aria-label="Migrations, in order" className="divide-y divide-border">
       {migrations.map((m, i) => (
@@ -73,6 +77,7 @@ export function MigrationList({
           org={org}
           db={db}
           migration={m}
+          badge={badges || m.status !== "new"}
           number={created?.get(i) ?? numbers.get(i)}
           linked={created?.has(i) ?? false}
           progress={progress?.get(i)}
@@ -87,6 +92,7 @@ function Row({
   org,
   db,
   migration,
+  badge,
   number,
   linked,
   progress,
@@ -95,6 +101,7 @@ function Row({
   org: string;
   db: string;
   migration: PlannedMigration;
+  badge: boolean;
   number: number | undefined;
   linked: boolean;
   progress: RowProgress | undefined;
@@ -112,7 +119,7 @@ function Row({
       className={cn("px-4 py-2.5", errors.length > 0 && "bg-destructive/4")}
       aria-current={progress?.state === "running" ? "step" : undefined}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex min-h-8 items-center gap-3">
         {progress && <ProgressIcon progress={progress} />}
         <span
           className={cn(
@@ -174,7 +181,7 @@ function Row({
             />
           </Button>
         )}
-        <StatusBadge migration={migration} />
+        {badge && <StatusBadge migration={migration} />}
       </div>
       {errors.length > 0 && <ErrorDetails errors={errors} excerpt={failure?.excerpt ?? null} />}
       {open && shown && skipped.length > 0 && <SkippedList id={detailsId} statements={skipped} />}
@@ -202,11 +209,7 @@ function ProgressIcon({ progress }: { progress: RowProgress }) {
 function StatusBadge({ migration }: { migration: PlannedMigration }) {
   switch (migration.status) {
     case "new":
-      return (
-        <Badge variant="primary" className="max-sm:hidden">
-          New
-        </Badge>
-      );
+      return <Badge variant="primary">New</Badge>;
     case "imported":
       return <Badge variant="outline">Imported</Badge>;
     case "changed":

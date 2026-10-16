@@ -194,7 +194,7 @@ export function ImportFlow({
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-4xl gap-6 px-4 py-6 md:px-8">
+    <div className="grid w-full max-w-4xl gap-6 px-4 py-6 md:px-8">
       <div className="grid gap-1">
         <h2
           ref={heading}
@@ -503,36 +503,42 @@ function SummaryBar({
         {preview.new > 0 && preview.new < count && ` · ${preview.new} new`}
       </p>
       {preview.ignored.length > 0 && <Ignored preview={preview} />}
-      <div className="flex items-center gap-2">
-        <Label htmlFor="import-format" className="text-sm text-muted-foreground">
-          Read as
-        </Label>
-        <Select
-          value={preview.format}
-          disabled={phase.step !== "review" || replanning}
-          onValueChange={(value) => onFormat(value as ImportOptions["format"])}
-        >
-          <SelectTrigger id="import-format" className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="end">
-            {formats.map((f) => (
-              <SelectItem
-                key={f.value}
-                value={f.value}
-                description={f.value === preview.detected ? `Detected · ${f.files}` : f.files}
-              >
-                {f.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {options.format && options.format !== preview.detected && phase.step === "review" && (
-          <Button variant="ghost" size="sm" onClick={() => onFormat(undefined)}>
-            Use {formatLabel(preview.detected)}
-          </Button>
-        )}
-      </div>
+      {phase.step !== "review" ? (
+        <p className="text-sm text-muted-foreground">
+          Read as <span className="font-medium text-foreground">{formatLabel(preview.format)}</span>
+        </p>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Label htmlFor="import-format" className="text-sm text-muted-foreground">
+            Read as
+          </Label>
+          <Select
+            value={preview.format}
+            disabled={replanning}
+            onValueChange={(value) => onFormat(value as ImportOptions["format"])}
+          >
+            <SelectTrigger id="import-format" className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="end">
+              {formats.map((f) => (
+                <SelectItem
+                  key={f.value}
+                  value={f.value}
+                  description={f.value === preview.detected ? `Detected · ${f.files}` : f.files}
+                >
+                  {f.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {options.format && options.format !== preview.detected && (
+            <Button variant="ghost" size="sm" onClick={() => onFormat(undefined)}>
+              Use {formatLabel(preview.detected)}
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { CompareWith } from "@/features/diff/components/compare-with";
+import { MigrationButton } from "@/features/imports/components/migration-dialog";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
@@ -203,7 +204,8 @@ function VersionStrip({
       ) : (
         <span className="flex-1" />
       )}
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-1">
+        {version && <MigrationButton version={version} />}
         <CompareWith org={org} db={db} number={number} latest={latest} />
       </div>
     </div>

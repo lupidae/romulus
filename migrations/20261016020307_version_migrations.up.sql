@@ -35,7 +35,7 @@ COMMENT ON COLUMN version_migrations.path IS 'The file it was read from, relativ
 COMMENT ON COLUMN version_migrations.checksum IS
     'sha256 of the migration''s up SQL (versions.source): a later import of a changed file is refused.';
 COMMENT ON COLUMN version_migrations.skipped IS
-    'Statements not replayed (data, code, settings…): [{"line", "kind", "reason", "text"}], line in the file.';
+    'Statements not replayed (data, code, settings…): [{"line", "kind", "reason", "text"}], line in versions.source.';
 
 CREATE FUNCTION version_migrations_are_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$

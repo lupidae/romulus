@@ -144,7 +144,8 @@ pub struct VersionMigration {
     /// The file, relative to the folder imported.
     pub path: String,
     pub format: MigrationFormat,
-    /// What was not replayed (`SkippedStatement[]`, lines in `path`).
+    /// What was not replayed (`SkippedStatement[]`, lines in the version's
+    /// `source`: the migration's own text).
     #[schema(value_type = Vec<crate::imports::SkippedStatement>)]
     pub skipped: serde_json::Value,
 }
