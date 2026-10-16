@@ -1,5 +1,6 @@
-# The API image (Dockerfile) builds from crates/, migrations/, .sqlx/, web/ and
-# the workspace files: nothing local (build output, dependencies, state,
+# The API image (Dockerfile) builds from crates/, migrations/, .sqlx/, web/,
+# scripts/export-migrations/ (downloads the web app offers) and the workspace
+# files: nothing local (build output, dependencies, state,
 # secrets) goes into the context.
 .git
 target

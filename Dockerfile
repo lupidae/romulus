@@ -11,6 +11,9 @@ WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# The exporter scripts the import page offers for download (imported as raw
+# text by web/src/features/imports/commands.ts, from ../scripts).
+COPY scripts/export-migrations/ /src/scripts/export-migrations/
 RUN npm run build
 
 # --- the API ------------------------------------------------------------------
