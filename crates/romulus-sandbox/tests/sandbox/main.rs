@@ -10,6 +10,7 @@
 mod concurrency;
 mod corpus;
 mod errors;
+mod import;
 mod keys;
 mod malicious;
 

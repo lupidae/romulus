@@ -37,6 +37,8 @@
 //! memory, so an oversized value fails with "out of memory" instead of
 //! growing (deploy/sandbox/README.md).
 
+use std::collections::HashMap;
+
 use pg_query::{
     NodeEnum,
     protobuf::{AlterTableType, ObjectType, Token as TokenKind, VariableSetKind},
@@ -414,15 +416,54 @@ const HINT_CLUSTER: &str =
 /// which names are built-in or extension functions (the others are the
 /// text's own, stubbed while compiling).
 pub fn check(parsed: &ParsedSql, sql: &str, catalog: &Catalog) -> Vec<Diagnostic> {
+    check_with(parsed, sql, catalog, Mode::Compile, &HashMap::new())
+}
+
+/// [`check`] for a migration import's replay (see [`crate::import`]): the
+/// statements as the import rewrote them (`rewritten`, by statement index;
+/// the others as written). Import mode also lets through the function,
+/// procedure, trigger and rule definitions those rewrites produce (fixed
+/// bodies, no `WHEN`, rules doing nothing), their drops, renames and
+/// comments, text search configurations and dictionaries, and `CREATE
+/// TABLE … AS … WITH NO DATA`. Extensions created twice are the replay's
+/// to sort out (a migration may well repeat `CREATE EXTENSION IF NOT
+/// EXISTS`).
+pub(crate) fn check_import(
+    parsed: &ParsedSql,
+    sql: &str,
+    catalog: &Catalog,
+    rewritten: &HashMap<usize, NodeEnum>,
+) -> Vec<Diagnostic> {
+    check_with(parsed, sql, catalog, Mode::Import, rewritten)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Compile,
+    Import,
+}
+
+fn check_with(
+    parsed: &ParsedSql,
+    sql: &str,
+    catalog: &Catalog,
+    mode: Mode,
+    rewritten: &HashMap<usize, NodeEnum>,
+) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let mut extensions = std::collections::HashSet::new();
     for statement in &parsed.statements {
         let mut problems = Vec::new();
-        check_statement(&statement.node, &mut problems);
+        let replaced = rewritten.get(&statement.index);
+        let node = replaced.unwrap_or(&statement.node);
+        if mode == Mode::Compile || !check_import_statement(node, &mut problems) {
+            check_statement(node, &mut problems);
+        }
         // Each extension at most once: installing one locks thousands of
         // objects until the compile ends, and the lock table is shared by
         // every compile.
-        if let NodeEnum::CreateExtensionStmt(s) = &statement.node
+        if mode == Mode::Compile
+            && let NodeEnum::CreateExtensionStmt(s) = node
             && !extensions.insert(s.extname.clone())
         {
             problems.push(Problem::not_allowed(
@@ -430,7 +471,14 @@ pub fn check(parsed: &ParsedSql, sql: &str, catalog: &Catalog) -> Vec<Diagnostic
                 "Create each extension once.",
             ));
         }
-        check_expressions(&statement.node, catalog, &mut problems);
+        check_expressions(node, catalog, &mut problems);
+        if replaced.is_some() {
+            // Locations in a rewritten statement are the rewrite's, not
+            // the text's: underline the statement.
+            for problem in &mut problems {
+                problem.at = None;
+            }
+        }
         check_identifiers(sql, parsed.tokens_of(statement), &mut problems);
         let label = label(sql, parsed.tokens_of(statement));
         for problem in problems {
@@ -671,6 +719,127 @@ fn check_statement(node: &NodeEnum, out: &mut Vec<Problem>) {
         | N::ImportForeignSchemaStmt(_) => out.push(Problem::statement(HINT_FOREIGN)),
         _ => out.push(Problem::statement(HINT_CLUSTER)),
     }
+}
+
+/// Statements import mode allows beyond the compile allowlist: what the
+/// import's rewrites produce, checked to be exactly that. `false` when the
+/// statement is not one of them (the compile allowlist then decides).
+fn check_import_statement(node: &NodeEnum, out: &mut Vec<Problem>) -> bool {
+    use NodeEnum as N;
+    const HINT_REPLAY: &str = "The import replays functions, triggers and rules without their code; this one could not be rewritten that way.";
+    match node {
+        N::CreateFunctionStmt(s) => {
+            if !is_stub_function(s) {
+                out.push(Problem::not_allowed(
+                    "{statement} cannot be replayed",
+                    HINT_REPLAY,
+                ));
+            }
+            true
+        }
+        N::AlterFunctionStmt(s) => {
+            if !s.actions.iter().all(|a| {
+                matches!(
+                    a.node.as_ref(),
+                    Some(N::DefElem(d)) if matches!(d.defname.as_str(), "volatility" | "strict" | "parallel" | "cost" | "rows")
+                )
+            }) {
+                out.push(Problem::not_allowed(
+                    "{statement} cannot be replayed",
+                    HINT_REPLAY,
+                ));
+            }
+            true
+        }
+        N::CreateTrigStmt(s) => {
+            if s.when_clause.is_some() {
+                out.push(Problem::not_allowed(
+                    "{statement} cannot be replayed",
+                    HINT_REPLAY,
+                ));
+            }
+            true
+        }
+        N::RuleStmt(s) => {
+            if !s.actions.is_empty() || s.where_clause.is_some() {
+                out.push(Problem::not_allowed(
+                    "{statement} cannot be replayed",
+                    HINT_REPLAY,
+                ));
+            }
+            true
+        }
+        N::DropStmt(s) if import_object(s.remove_type()) => {
+            if s.concurrent {
+                out.push(Problem::not_allowed(
+                    "DROP … CONCURRENTLY is not allowed",
+                    HINT_REPLAY,
+                ));
+            }
+            true
+        }
+        N::CommentStmt(s) if import_object(s.objtype()) => true,
+        N::RenameStmt(s) if import_object(s.rename_type()) => true,
+        N::AlterObjectSchemaStmt(s) if import_object(s.object_type()) => true,
+        N::DefineStmt(s) => matches!(
+            s.kind(),
+            ObjectType::ObjectTsconfiguration | ObjectType::ObjectTsdictionary
+        ),
+        N::AlterTsconfigurationStmt(_) | N::AlterTsdictionaryStmt(_) => true,
+        N::CreateTableAsStmt(s) => {
+            let table = s.objtype() == ObjectType::ObjectTable && !s.is_select_into;
+            table && s.into.as_ref().is_some_and(|i| i.skip_data)
+        }
+        _ => false,
+    }
+}
+
+/// Objects only an import creates (and so only an import drops, renames,
+/// moves or comments on).
+fn import_object(objtype: ObjectType) -> bool {
+    use ObjectType as O;
+    matches!(
+        objtype,
+        O::ObjectFunction
+            | O::ObjectProcedure
+            | O::ObjectRoutine
+            | O::ObjectTrigger
+            | O::ObjectRule
+            | O::ObjectTsconfiguration
+            | O::ObjectTsdictionary
+    )
+}
+
+/// A function as the import rewrites it: PL/pgSQL, one of the fixed
+/// bodies, nothing that runs code of the text's (no SQL body, `SET`,
+/// `SUPPORT`, transforms, `WINDOW`).
+fn is_stub_function(s: &pg_query::protobuf::CreateFunctionStmt) -> bool {
+    use crate::import::statements::{STUB_BODY_NOTHING, STUB_BODY_VALUE};
+    if s.sql_body.is_some() {
+        return false;
+    }
+    let mut language = None;
+    let mut body = None;
+    for option in &s.options {
+        let Some(NodeEnum::DefElem(d)) = option.node.as_ref() else {
+            return false;
+        };
+        let arg = d.arg.as_deref();
+        match d.defname.as_str() {
+            "language" => language = arg.and_then(crate::names::string),
+            "as" => {
+                body = match arg.and_then(|a| a.node.as_ref()) {
+                    Some(NodeEnum::List(list)) if list.items.len() == 1 => {
+                        crate::names::string(&list.items[0])
+                    }
+                    _ => None,
+                };
+            }
+            "volatility" | "strict" | "parallel" | "cost" | "rows" => {}
+            _ => return false,
+        }
+    }
+    language == Some("plpgsql") && matches!(body, Some(STUB_BODY_VALUE | STUB_BODY_NOTHING))
 }
 
 /// `TO CURRENT_USER` (and the like) names whoever runs the SQL: a role the

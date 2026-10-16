@@ -26,7 +26,7 @@
 //! from, so a Postgres error position maps back to the user's text.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     ops::Range,
 };
 
@@ -67,6 +67,23 @@ pub(crate) struct Prepared {
     pub created_schemas: Vec<String>,
     /// Whether any policy roles were recorded (worth reading back).
     pub records_policy_roles: bool,
+    /// Where each statement's part of the script starts (its progress
+    /// marker), by statement index: an import runs the script a migration
+    /// at a time.
+    pub statement_starts: Vec<usize>,
+}
+
+/// What a migration import changes in the text it replays (see
+/// [`crate::import`]); nothing for a compile.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Edits {
+    /// Ranges of a statement replaced for the replay, by statement index.
+    pub replace: HashMap<usize, Vec<(Range<usize>, String)>>,
+    /// Statements not run at all (a repeated `CREATE EXTENSION IF NOT
+    /// EXISTS`).
+    pub omit: HashSet<usize>,
+    /// Functions the text defines, `(schema, name)`: never stubbed.
+    pub defined: HashSet<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,7 +141,18 @@ pub(crate) fn prepare(
     catalog: &Catalog,
     overrides: &Overrides,
 ) -> Prepared {
-    let inferred = stubs::infer(&parsed.statements, catalog, overrides);
+    prepare_with(sql, parsed, catalog, overrides, &Edits::default())
+}
+
+/// [`prepare`] with an import's [`Edits`].
+pub(crate) fn prepare_with(
+    sql: &str,
+    parsed: &ParsedSql,
+    catalog: &Catalog,
+    overrides: &Overrides,
+    edits: &Edits,
+) -> Prepared {
+    let inferred = stubs::infer(&parsed.statements, catalog, overrides, &edits.defined);
     let skipped = provided_by_extensions(&parsed.statements, catalog);
     let created_schemas = missing_schemas(&parsed.statements, catalog, &inferred.stubs);
 
@@ -144,8 +172,10 @@ pub(crate) fn prepare(
 
     let mut notes = Vec::new();
     let mut records_policy_roles = false;
+    let mut statement_starts = Vec::with_capacity(parsed.statements.len());
     for statement in &parsed.statements {
         let i = statement.index;
+        statement_starts.push(script.text.len());
         script.inject(
             &format!(
                 "SELECT pg_catalog.setval('{PROGRESS}', {}, true);\n",
@@ -176,8 +206,12 @@ pub(crate) fn prepare(
             );
             continue;
         }
+        if edits.omit.contains(&i) {
+            continue;
+        }
 
-        let mut rewrites: Vec<(Range<usize>, String)> = Vec::new();
+        let mut rewrites: Vec<(Range<usize>, String)> =
+            edits.replace.get(&i).cloned().unwrap_or_default();
         let roles = policy_roles(statement, parsed);
         if let Some(range) = roles.as_ref().and_then(|r| r.rewrite.clone()) {
             rewrites.push((range, "PUBLIC".to_owned()));
@@ -213,6 +247,7 @@ pub(crate) fn prepare(
         notes,
         created_schemas,
         records_policy_roles,
+        statement_starts,
     }
 }
 
@@ -531,7 +566,8 @@ fn missing_schemas(statements: &[Statement], catalog: &Catalog, stubs: &[Stub]) 
                 | ObjectKind::Type
                 | ObjectKind::Domain
                 | ObjectKind::Statistics
-                | ObjectKind::Collation,
+                | ObjectKind::Collation
+                | ObjectKind::Function,
                 [schema, ..],
             ) => {
                 needed.insert(schema.clone());

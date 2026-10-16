@@ -216,6 +216,7 @@ pub(crate) fn infer(
     statements: &[Statement],
     catalog: &Catalog,
     overrides: &Overrides,
+    defined: &HashSet<(String, String)>,
 ) -> Inferred {
     let mut extension_functions = HashSet::new();
     for statement in statements {
@@ -230,6 +231,7 @@ pub(crate) fn infer(
     let mut inference = Inference {
         catalog,
         overrides,
+        defined,
         extension_functions,
         tables: HashMap::new(),
         domains: HashMap::new(),
@@ -299,6 +301,8 @@ impl Scope {
 struct Inference<'a> {
     catalog: &'a Catalog,
     overrides: &'a Overrides,
+    /// Functions the text itself defines (an import's migrations).
+    defined: &'a HashSet<(String, String)>,
     extension_functions: HashSet<String>,
     /// Columns of the tables created so far.
     tables: HashMap<(String, String), Columns>,
@@ -970,6 +974,15 @@ impl Inference<'_> {
         if aggregate || builtin || self.extension_functions.contains(&name) {
             return None;
         }
+        // A function the text defines is called as itself; unqualified,
+        // wherever the path finds it.
+        let defined = match &schema {
+            Some(schema) => self.defined.contains(&(schema.clone(), name.clone())),
+            None => self.defined.iter().any(|(_, n)| *n == name),
+        };
+        if defined {
+            return None;
+        }
         let schema = schema.unwrap_or_else(|| self.path.creation_schema().to_owned());
 
         let mut args = Vec::new();
@@ -1133,6 +1146,8 @@ fn readable_type(sql: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{Overrides, infer};
     use crate::{
         catalog::{Catalog, Extension},
@@ -1171,7 +1186,7 @@ mod tests {
     fn signatures_with(sql: &str, overrides: &Overrides) -> Vec<String> {
         let parsed = parse(sql);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        infer(&parsed.statements, &catalog(), overrides)
+        infer(&parsed.statements, &catalog(), overrides, &HashSet::new())
             .stubs
             .iter()
             .map(super::Stub::signature)
@@ -1254,7 +1269,12 @@ mod tests {
              SET search_path TO app, public;
              CREATE TABLE b (x int DEFAULT f(), y int DEFAULT f(), z text DEFAULT f(1));",
         );
-        let inferred = infer(&parsed.statements, &catalog(), &Overrides::default());
+        let inferred = infer(
+            &parsed.statements,
+            &catalog(),
+            &Overrides::default(),
+            &HashSet::new(),
+        );
         let stubs: Vec<(String, usize)> = inferred
             .stubs
             .iter()
@@ -1306,7 +1326,13 @@ mod tests {
     #[test]
     fn stub_ddl_is_an_immutable_null_returning_sql_function() {
         let parsed = parse("CREATE TABLE t (a int DEFAULT \"My\".f(p => 1::bigint));");
-        let stubs = infer(&parsed.statements, &catalog(), &Overrides::default()).stubs;
+        let stubs = infer(
+            &parsed.statements,
+            &catalog(),
+            &Overrides::default(),
+            &HashSet::new(),
+        )
+        .stubs;
         assert_eq!(
             stubs[0].ddl(),
             "CREATE FUNCTION \"My\".f(p pg_catalog.int8) RETURNS pg_catalog.int4 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS 'SELECT NULL::pg_catalog.int4'"

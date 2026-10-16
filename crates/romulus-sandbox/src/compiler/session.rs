@@ -224,6 +224,99 @@ impl Slot {
     }
 }
 
+/// One step of a replay: a range of the script, then (`Some(k)`) the
+/// model as it stands after it, for migration `k`.
+#[derive(Debug, Clone)]
+pub(crate) struct Step {
+    pub range: std::ops::Range<usize>,
+    pub introspect: Option<usize>,
+}
+
+impl Slot {
+    /// Run a script step by step in one transaction, reading the model
+    /// after the steps that ask for it (`each(k, model, policy roles)`),
+    /// then roll back. A failure's position is in the whole script.
+    pub async fn replay(
+        &mut self,
+        base: &PgConnectOptions,
+        settings: &Settings,
+        script: &str,
+        steps: &[Step],
+        records_policy_roles: bool,
+        each: &mut (dyn FnMut(usize, String, Vec<PolicyRoles>) + Send),
+    ) -> Result<(), AttemptError> {
+        self.connection(base).await.map_err(AttemptError::stale)?;
+        let Self { conn, dirty, .. } = self;
+        let conn = conn
+            .as_mut()
+            .ok_or_else(|| AttemptError::stale(sqlx::Error::PoolClosed))?;
+        let begin = format!(
+            "BEGIN; SET LOCAL statement_timeout = '{}ms'; SET LOCAL lock_timeout = '{}ms'; \
+             SET LOCAL search_path TO \"$user\", public",
+            settings.statement_timeout_ms, settings.lock_timeout_ms
+        );
+        raw_sql(AssertSqlSafe(begin))
+            .execute(&mut *conn)
+            .await
+            .map_err(AttemptError::stale)?;
+        *dirty = true;
+        for step in steps {
+            let sent = &script[step.range.clone()];
+            if !sent.trim().is_empty() {
+                let ran = raw_sql(AssertSqlSafe(sent)).execute(&mut *conn).await;
+                if let Err(err) = ran {
+                    let mut failure = failed(conn, err, Some(sent)).await;
+                    *dirty = matches!(failure, AttemptError::Connection { .. });
+                    if let AttemptError::Sql(failure) = &mut failure {
+                        failure.failure.position =
+                            failure.failure.position.map(|p| p + step.range.start);
+                    }
+                    return Err(failure);
+                }
+            }
+            let Some(k) = step.introspect else { continue };
+            let model: Result<String, sqlx::Error> = async {
+                raw_sql(INTROSPECT_SQL)
+                    .fetch_one(&mut *conn)
+                    .await?
+                    .try_get(0)
+            }
+            .await;
+            let model = match model {
+                Ok(model) => model,
+                Err(err) => {
+                    let failure = failed(conn, err, None).await;
+                    *dirty = matches!(failure, AttemptError::Connection { .. });
+                    return Err(failure);
+                }
+            };
+            let roles = if records_policy_roles {
+                let json: String = raw_sql(POLICY_ROLES_SQL)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .and_then(|row| row.try_get(0))
+                    .map_err(AttemptError::running)?;
+                serde_json::from_str(&json).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            // The introspection empties `search_path` until the transaction
+            // ends; the next migration starts as a fresh session would.
+            raw_sql("SET LOCAL search_path TO \"$user\", public")
+                .execute(&mut *conn)
+                .await
+                .map_err(AttemptError::running)?;
+            each(k, model, roles);
+        }
+        raw_sql("ROLLBACK")
+            .execute(&mut *conn)
+            .await
+            .map_err(AttemptError::running)?;
+        *dirty = false;
+        Ok(())
+    }
+}
+
 /// Turn a failed statement into a user error (rolling back and reading the
 /// progress marker), or a connection error. `sent` is the user's script,
 /// whose positions map back to the text; `None` for our own queries.

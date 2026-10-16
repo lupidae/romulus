@@ -100,11 +100,11 @@ pub struct Analysis {
 
 /// Classify a migration's statements (see the module documentation).
 pub fn analyze(sql: &str) -> Analysis {
-    let scan = lexer::scan(sql);
+    let scanned = lexer::scan(sql);
     let lines = crate::source::LineIndex::new(sql);
     let mut skipped = Vec::new();
     let mut blanks: Vec<Range<usize>> = Vec::new();
-    for (range, kind) in &scan.not_sql {
+    for (range, kind) in &scanned.not_sql {
         if *kind == NotSql::Psql {
             let text = sql[range.clone()].trim();
             skipped.push(Skipped {
@@ -116,7 +116,7 @@ pub fn analyze(sql: &str) -> Analysis {
         }
         blanks.push(range.clone());
     }
-    let text = lexer::blank(sql, &blanks);
+    let text = lexer::blank(sql, blanks.iter().cloned());
     let parsed = parse(&text);
     for statement in &parsed.statements {
         let Some(reason) = skip_reason(&statement.node) else {
@@ -139,7 +139,7 @@ pub fn analyze(sql: &str) -> Analysis {
     }
     skipped.sort_by_key(|s| s.line);
     Analysis {
-        sql: lexer::blank(sql, &blanks),
+        sql: lexer::blank(sql, blanks),
         skipped,
         errors: parsed.errors,
     }
@@ -500,7 +500,7 @@ pub(crate) struct Rewrite {
 }
 
 impl Rewrite {
-    fn whole(statement: &Statement, node: NodeEnum) -> Result<Self, String> {
+    fn whole(statement: &Statement, node: &NodeEnum) -> Result<Self, String> {
         let text = node
             .deparse()
             .map_err(|e| format!("could not rewrite the statement for the replay: {e}"))?;
@@ -511,7 +511,7 @@ impl Rewrite {
             .and_then(|s| s.stmt)
             .and_then(|s| s.node)
             .ok_or_else(|| "the statement's rewrite for the replay does not parse".to_owned())?;
-        if std::mem::discriminant(&reparsed) != std::mem::discriminant(&node) {
+        if std::mem::discriminant(&reparsed) != std::mem::discriminant(node) {
             return Err("the statement's rewrite for the replay is another statement".to_owned());
         }
         Ok(Self {
@@ -520,10 +520,11 @@ impl Rewrite {
         })
     }
 
-    fn token(range: Range<usize>, text: &str) -> Self {
+    /// A token-level edit; `node` is the statement as edited.
+    fn token(range: Range<usize>, text: &str, node: NodeEnum) -> Self {
         Self {
             edits: vec![(range, text.to_owned())],
-            node: None,
+            node: Some(node),
         }
     }
 }
@@ -553,25 +554,25 @@ pub(crate) fn rewrite(
     Ok(match &statement.node {
         N::CreateFunctionStmt(s) => Some(Rewrite::whole(
             statement,
-            N::CreateFunctionStmt(Box::new(stub_function(s))),
+            &N::CreateFunctionStmt(Box::new(stub_function(s))),
         )?),
         N::AlterFunctionStmt(s) => {
             let mut kept = s.clone();
             kept.actions = kept_function_actions(&s.actions).cloned().collect();
             (kept.actions.len() != s.actions.len())
-                .then(|| Rewrite::whole(statement, N::AlterFunctionStmt(kept)))
+                .then(|| Rewrite::whole(statement, &N::AlterFunctionStmt(kept)))
                 .transpose()?
         }
         N::CreateTrigStmt(s) if s.when_clause.is_some() => {
             let mut kept = s.clone();
             kept.when_clause = None;
-            Some(Rewrite::whole(statement, N::CreateTrigStmt(kept))?)
+            Some(Rewrite::whole(statement, &N::CreateTrigStmt(kept))?)
         }
         N::RuleStmt(s) if !s.actions.is_empty() || s.where_clause.is_some() => {
             let mut kept = s.clone();
             kept.actions.clear();
             kept.where_clause = None;
-            Some(Rewrite::whole(statement, N::RuleStmt(kept))?)
+            Some(Rewrite::whole(statement, &N::RuleStmt(kept))?)
         }
         N::CreateSchemaStmt(s) if s.authrole.is_some() => {
             let mut kept = s.clone();
@@ -582,22 +583,47 @@ pub(crate) fn rewrite(
                 }
                 kept.schemaname = role;
             }
-            Some(Rewrite::whole(statement, N::CreateSchemaStmt(kept))?)
+            Some(Rewrite::whole(statement, &N::CreateSchemaStmt(kept))?)
         }
         N::IndexStmt(s) if s.concurrent => {
-            keyword(parsed, statement, sql, "concurrently").map(|r| Rewrite::token(r, ""))
+            let mut edited = s.clone();
+            edited.concurrent = false;
+            keyword(parsed, statement, sql, "concurrently")
+                .map(|r| Rewrite::token(r, "", N::IndexStmt(edited)))
         }
         N::DropStmt(s) if s.concurrent => {
-            keyword(parsed, statement, sql, "concurrently").map(|r| Rewrite::token(r, ""))
+            let mut edited = s.clone();
+            edited.concurrent = false;
+            keyword(parsed, statement, sql, "concurrently")
+                .map(|r| Rewrite::token(r, "", N::DropStmt(edited)))
         }
         N::AlterTableStmt(s) if detaches_concurrently(&s.cmds) => {
-            keyword(parsed, statement, sql, "concurrently").map(|r| Rewrite::token(r, ""))
+            let mut edited = s.clone();
+            for cmd in &mut edited.cmds {
+                if let Some(NodeEnum::AlterTableCmd(cmd)) = cmd.node.as_mut()
+                    && let Some(NodeEnum::PartitionCmd(p)) =
+                        cmd.def.as_mut().and_then(|d| d.node.as_mut())
+                {
+                    p.concurrent = false;
+                }
+            }
+            keyword(parsed, statement, sql, "concurrently")
+                .map(|r| Rewrite::token(r, "", N::AlterTableStmt(edited)))
         }
         N::CreateTableAsStmt(s)
             if s.objtype() == ObjectType::ObjectTable
                 && !s.into.as_ref().is_some_and(|i| i.skip_data) =>
         {
-            Some(without_data(statement, parsed, sql))
+            let mut edited = s.clone();
+            if let Some(into) = edited.into.as_mut() {
+                into.skip_data = true;
+            }
+            Some(without_data(
+                statement,
+                parsed,
+                sql,
+                N::CreateTableAsStmt(edited),
+            ))
         }
         N::SelectStmt(s) if s.into_clause.is_some() => {
             let mut query = s.clone();
@@ -607,7 +633,7 @@ pub(crate) fn rewrite(
             });
             Some(Rewrite::whole(
                 statement,
-                N::CreateTableAsStmt(Box::new(CreateTableAsStmt {
+                &N::CreateTableAsStmt(Box::new(CreateTableAsStmt {
                     query: Some(Box::new(Node {
                         node: Some(N::SelectStmt(query)),
                     })),
@@ -636,7 +662,7 @@ fn detaches_concurrently(cmds: &[Node]) -> bool {
 
 /// `CREATE TABLE … AS … [WITH DATA]` → `… WITH NO DATA`: the table gets
 /// its columns, the query never runs.
-fn without_data(statement: &Statement, parsed: &ParsedSql, sql: &str) -> Rewrite {
+fn without_data(statement: &Statement, parsed: &ParsedSql, sql: &str, edited: NodeEnum) -> Rewrite {
     let code: Vec<_> = parsed
         .tokens_of(statement)
         .iter()
@@ -646,10 +672,10 @@ fn without_data(statement: &Statement, parsed: &ParsedSql, sql: &str) -> Rewrite
         && sql[with.start..with.end].eq_ignore_ascii_case("with")
         && sql[data.start..data.end].eq_ignore_ascii_case("data")
     {
-        return Rewrite::token(data.start..data.end, "NO DATA");
+        return Rewrite::token(data.start..data.end, "NO DATA", edited);
     }
     let end = statement.span.end;
-    Rewrite::token(end..end, " WITH NO DATA")
+    Rewrite::token(end..end, " WITH NO DATA", edited)
 }
 
 #[cfg(test)]

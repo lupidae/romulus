@@ -422,7 +422,7 @@ fn up_section(
     if end < start {
         return Err("its down section comes before its up section".to_owned());
     }
-    let mut kept = lexer::blank(text, &[0..start]);
+    let mut kept = lexer::blank(text, std::iter::once(0..start));
     kept.truncate(end);
     Ok(kept)
 }
@@ -466,6 +466,7 @@ impl OrderKey {
 /// The ordered migrations of a file set, in `format` (detected when
 /// `None`). Files are normalised ([`normalize`]); their paths keep only
 /// what follows the folder they all share.
+#[allow(clippy::too_many_lines)]
 pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, PlanError> {
     let mut files: Vec<SourceFile> = files
         .into_iter()

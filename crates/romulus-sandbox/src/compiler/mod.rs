@@ -26,6 +26,7 @@
 //! reused by its next compile.
 
 mod bootstrap;
+mod replay;
 mod session;
 
 use std::{
@@ -44,6 +45,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Connection, PgConnection, postgres::PgConnectOptions};
 use tokio::sync::{Semaphore, oneshot};
 
+pub use self::replay::{Replay, ReplayEvent, ReplayFailure};
 use self::{
     bootstrap::{Bootstrapped, hex},
     session::{AttemptError, Settings, Slot, SqlFailure},
@@ -105,6 +107,13 @@ pub struct SandboxConfig {
     /// at once, so uploads cannot starve drafts. Default: half the pool,
     /// at least 1. Per-user or per-organization rate limits are the API's.
     pub upload_concurrency: Option<usize>,
+    /// A migration import's replay, from start to last model ([`Compiler::replay`]).
+    /// Default 5 min.
+    pub replay_timeout: Duration,
+    /// The SQL an import replays, all migrations together. Default 16 MiB.
+    pub max_import_bytes: usize,
+    /// Statements an import replays. Default 100 000.
+    pub max_import_statements: usize,
 }
 
 impl SandboxConfig {
@@ -124,6 +133,9 @@ impl SandboxConfig {
             cache_entries: 256,
             admin_check_interval: Duration::from_secs(10),
             upload_concurrency: None,
+            replay_timeout: Duration::from_secs(300),
+            max_import_bytes: 16 << 20,
+            max_import_statements: 100_000,
         }
     }
 }
@@ -321,8 +333,10 @@ struct Inner {
     version_changed: Mutex<Option<String>>,
     /// Backends of connections dropped mid-transaction, to terminate.
     orphans: Mutex<Vec<i32>>,
-    /// Bounds the pool share of `compile()` (uploads).
+    /// Bounds the pool share of `compile()` (uploads) and imports.
     uploads: Semaphore,
+    /// One import replays at a time.
+    imports: Semaphore,
     slots: Mutex<Vec<Slot>>,
     permits: Semaphore,
     keys: Mutex<HashMap<String, KeyState>>,
@@ -397,6 +411,7 @@ impl Compiler {
                         .unwrap_or(config.pool_size.div_ceil(2))
                         .clamp(1, config.pool_size),
                 ),
+                imports: Semaphore::new(1),
                 options,
                 catalog: Arc::new(catalog),
                 server_version,
@@ -476,6 +491,33 @@ impl Compiler {
         .map_err(|e| SandboxError::Unavailable(format!("the compile failed unexpectedly: {e}")))?
     }
 
+    /// Replay migrations from an empty database, one after the other in one
+    /// sandbox session, reading the model after each one from `from` on
+    /// (the earlier ones are only run): a migration import (see
+    /// [`crate::import`] and the `replay` module). Models arrive through
+    /// `on_event`, as they are read; the result says what was skipped per
+    /// migration, and where the replay stopped if it did.
+    ///
+    /// Cancel-safe like [`Compiler::compile`]. One import at a time; it
+    /// counts as an upload for the pool's share.
+    pub async fn replay(
+        &self,
+        migrations: Vec<String>,
+        from: usize,
+        mut on_event: impl FnMut(ReplayEvent) + Send + 'static,
+    ) -> Result<Replay, SandboxError> {
+        bump(&self.inner.counters.requests);
+        let inner = Arc::clone(&self.inner);
+        tokio::spawn(async move {
+            let closed = || SandboxError::Unavailable("the compiler is closed".into());
+            let _import = inner.imports.acquire().await.map_err(|_| closed())?;
+            let _upload = inner.uploads.acquire().await.map_err(|_| closed())?;
+            inner.replay(migrations, from, &mut on_event).await
+        })
+        .await
+        .map_err(|e| SandboxError::Unavailable(format!("the import failed unexpectedly: {e}")))?
+    }
+
     /// Compile a draft's text: coalesced per `key`, rate-limited, never two
     /// at once for one key. See the module documentation.
     pub async fn compile_for(&self, key: &str, sql: String) -> Result<Compilation, Rejected> {
@@ -510,6 +552,7 @@ impl Compiler {
         }
         self.inner.permits.close();
         self.inner.uploads.close();
+        self.inner.imports.close();
         if let Some(admin) = self.inner.admin.lock().await.take() {
             // Closing the session releases the prefix lock.
             let _ = admin.close().await;

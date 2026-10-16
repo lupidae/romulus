@@ -69,7 +69,8 @@ pub mod stubs;
 mod walk;
 
 pub use compiler::{
-    Compilation, Compiler, MODEL_DATABASE, Metrics, Rejected, SandboxConfig, SandboxError,
+    Compilation, Compiler, MODEL_DATABASE, Metrics, Rejected, Replay, ReplayEvent, ReplayFailure,
+    SandboxConfig, SandboxError,
 };
 pub use diagnostic::{Code, Diagnostic, Severity};
 pub use key::{Action, Key, KeyParseError, ObjectKind};

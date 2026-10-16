@@ -38,6 +38,7 @@ enum State {
     Line,
 }
 
+#[allow(clippy::too_many_lines)]
 /// Scan `text`. Never fails: an unterminated string just runs to the end
 /// (the parser reports it).
 pub(crate) fn scan(text: &str) -> Scan {
@@ -210,10 +211,10 @@ fn copy_data(text: &str, start: usize) -> (Range<usize>, usize) {
 
 /// `text` with `ranges` replaced by spaces (line breaks kept), so every
 /// offset, line and column of the rest is unchanged.
-pub(crate) fn blank(text: &str, ranges: &[Range<usize>]) -> String {
+pub(crate) fn blank(text: &str, ranges: impl IntoIterator<Item = Range<usize>>) -> String {
     let mut bytes = text.as_bytes().to_vec();
     for range in ranges {
-        for at in range.clone() {
+        for at in range {
             // Only whole characters are blanked, so the result stays UTF-8:
             // every byte of a multi-byte character becomes a space.
             if bytes[at] != b'\n' && bytes[at] != b'\r' {
@@ -277,17 +278,18 @@ mod tests {
             ]
         );
         // A COPY from a file has no inline data.
-        assert!(
+        assert_eq!(
             scan("COPY t FROM '/tmp/x';\nCREATE TABLE u ();\n")
                 .not_sql
-                .is_empty()
+                .len(),
+            0
         );
     }
 
     #[test]
     fn blanking_keeps_offsets_and_lines() {
         let text = "INSERT INTO t VALUES ('é');\nCREATE TABLE u ();";
-        let blanked = blank(text, &[0..text.find('\n').unwrap()]);
+        let blanked = blank(text, std::iter::once(0..text.find('\n').unwrap()));
         assert_eq!(blanked.len(), text.len());
         assert!(blanked.starts_with("   "));
         assert!(blanked.ends_with("\nCREATE TABLE u ();"));

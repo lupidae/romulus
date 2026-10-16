@@ -220,7 +220,7 @@ fn without_alembic_bookkeeping(sql: &str) -> String {
         }
         k += 1;
     }
-    lexer::blank(sql, &ranges)
+    lexer::blank(sql, ranges)
 }
 
 #[cfg(test)]
