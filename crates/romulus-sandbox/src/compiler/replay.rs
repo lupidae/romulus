@@ -228,6 +228,11 @@ impl Inner {
         bump(&self.counters.sandbox_runs);
 
         let pid = Arc::clone(&slot.pid);
+        // The deadline counts the sandbox's work, not the time spent
+        // waiting for the receiver to take a model (the caller's: comparing
+        // and storing it); a receiver that stops taking them is caught by
+        // the wall-clock cap.
+        let clock = Arc::new(Stopwatch::default());
         let mut work = Box::pin(self.replay_on(
             slot,
             &migrations,
@@ -237,38 +242,61 @@ impl Inner {
             &edits,
             from,
             events,
+            &clock,
         ));
-        let outcome = tokio::select! {
-            outcome = &mut work => Some(outcome),
-            () = tokio::time::sleep(self.config.replay_timeout) => None,
-        };
-        let outcome = if let Some(outcome) = outcome {
-            drop(work);
-            outcome
-        } else {
-            let backend = pid.load(Ordering::Relaxed);
-            self.terminate((backend != 0).then_some(backend)).await;
-            let _ = tokio::time::timeout(Duration::from_secs(2), &mut work).await;
-            drop(work);
-            if let Some(still) = slot.discard().filter(|p| *p != backend) {
-                self.terminate(Some(still)).await;
+        let limit = self.config.replay_timeout;
+        let wall = limit * WALL_FACTOR;
+        let outcome = loop {
+            let left = limit.saturating_sub(clock.working());
+            let wall_left = wall.saturating_sub(clock.started.elapsed());
+            if left.is_zero() || wall_left.is_zero() {
+                break Err(left.is_zero());
             }
-            bump(&self.counters.timeouts);
-            let diagnostic = Diagnostic::error(
-                Code::Timeout,
-                format!(
-                    "the import took longer than {} and was stopped",
-                    readable(self.config.replay_timeout)
-                ),
-            )
-            .with_hint(
-                "Import fewer migrations at once, or look for a migration that takes long to run.",
-            );
-            Ok(Replay::failed(
-                skipped,
-                migrations.len().saturating_sub(1),
-                vec![diagnostic],
-            ))
+            tokio::select! {
+                outcome = &mut work => break Ok(outcome),
+                () = tokio::time::sleep(left.min(wall_left)) => {}
+            }
+        };
+        let outcome = match outcome {
+            Ok(outcome) => {
+                drop(work);
+                outcome
+            }
+            Err(sandbox_time) => {
+                let backend = pid.load(Ordering::Relaxed);
+                self.terminate((backend != 0).then_some(backend)).await;
+                let _ = tokio::time::timeout(Duration::from_secs(2), &mut work).await;
+                drop(work);
+                if let Some(still) = slot.discard().filter(|p| *p != backend) {
+                    self.terminate(Some(still)).await;
+                }
+                bump(&self.counters.timeouts);
+                let diagnostic = if sandbox_time {
+                    Diagnostic::error(
+                        Code::Timeout,
+                        format!(
+                            "the migrations took longer than {} to replay and were stopped",
+                            readable(limit)
+                        ),
+                    )
+                    .with_hint(
+                        "Import fewer migrations at once, or look for a migration that takes long to run.",
+                    )
+                } else {
+                    Diagnostic::error(
+                        Code::Timeout,
+                        format!(
+                            "the import was stopped after {}: its models were not taken in time",
+                            readable(wall)
+                        ),
+                    )
+                };
+                Ok(Replay::failed(
+                    skipped,
+                    migrations.len().saturating_sub(1),
+                    vec![diagnostic],
+                ))
+            }
         };
         drop(lease);
         drop(permit);
@@ -307,6 +335,7 @@ impl Inner {
         edits: &Edits,
         from: usize,
         events: &mpsc::Sender<ReplayEvent>,
+        clock: &Arc<Stopwatch>,
     ) -> Result<Replay, SandboxError> {
         let settings = Settings {
             statement_timeout_ms: self.config.statement_timeout.as_millis(),
@@ -429,7 +458,11 @@ impl Inner {
                 }
             }
         };
-        if events.send(ReplayEvent::Checked).await.is_err() {
+        if clock
+            .waiting(events.send(ReplayEvent::Checked))
+            .await
+            .is_err()
+        {
             return Err(SandboxError::Abandoned);
         }
 
@@ -473,6 +506,7 @@ impl Inner {
                         .count();
                     read += shared + 1;
                     let events = events.clone();
+                    let clock = Arc::clone(clock);
                     let model = Box::new(model);
                     Box::pin(async move {
                         for index in k..=k + shared {
@@ -480,7 +514,7 @@ impl Inner {
                                 index,
                                 model: model.clone(),
                             };
-                            if events.send(event).await.is_err() {
+                            if clock.waiting(events.send(event)).await.is_err() {
                                 return false;
                             }
                         }
@@ -547,6 +581,54 @@ impl Inner {
 }
 
 /// Where each migration's part of the script starts, plus the end.
+/// The wall-clock cap of a replay, in replay timeouts: the timeout counts
+/// the sandbox's work only, and this stops a replay whose receiver stopped
+/// taking its models.
+const WALL_FACTOR: u32 = 3;
+
+/// A replay's time: since it started, and the part spent waiting for the
+/// receiver to take a model (`waiting`), which is not the sandbox's.
+struct Stopwatch {
+    started: Instant,
+    /// Time waited so far, and since when it waits now.
+    waited: std::sync::Mutex<(Duration, Option<Instant>)>,
+}
+
+impl Default for Stopwatch {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            waited: std::sync::Mutex::new((Duration::ZERO, None)),
+        }
+    }
+}
+
+impl Stopwatch {
+    /// Runs `send`, counting its time as waited.
+    async fn waiting<T>(&self, send: impl Future<Output = T>) -> T {
+        self.lock().1 = Some(Instant::now());
+        let out = send.await;
+        let mut waited = self.lock();
+        if let Some(since) = waited.1.take() {
+            waited.0 += since.elapsed();
+        }
+        out
+    }
+
+    /// The time the replay worked: elapsed, minus waited.
+    fn working(&self) -> Duration {
+        let waited = self.lock();
+        let now = waited.1.map_or(Duration::ZERO, |since| since.elapsed());
+        self.started.elapsed().saturating_sub(waited.0 + now)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, (Duration, Option<Instant>)> {
+        self.waited
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// Statements run between two checks of the lock budget, at most: a
 /// migration of thousands of statements is checked as it runs, not only
 /// after it.

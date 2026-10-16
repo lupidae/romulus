@@ -107,7 +107,9 @@ pub struct SandboxConfig {
     /// at once, so uploads cannot starve drafts. Default: half the pool,
     /// at least 1. Per-user or per-organization rate limits are the API's.
     pub upload_concurrency: Option<usize>,
-    /// A migration import's replay, from start to last model ([`Compiler::replay`]).
+    /// The sandbox's work on a migration import ([`Compiler::replay`]):
+    /// time spent waiting for the caller to take a model is not counted.
+    /// A replay is stopped anyway after three times this, wall clock.
     /// Default 5 min.
     pub replay_timeout: Duration,
     /// The SQL an import replays, all migrations together. Default 16 MiB.

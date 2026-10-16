@@ -646,3 +646,37 @@ fn a_replay_whose_receiver_leaves_stops() {
         );
     });
 }
+
+/// The replay's deadline counts the sandbox's work, not the time its
+/// receiver takes to store each model: a slow receiver does not time it
+/// out.
+#[test]
+fn a_slow_receiver_does_not_count_against_the_deadline() {
+    crate::with_own_compiler(
+        |url| romulus_sandbox::SandboxConfig {
+            replay_timeout: std::time::Duration::from_secs(2),
+            ..crate::config(url, "romulus_test_slow_receiver")
+        },
+        |compiler| async move {
+            let (events, mut received) = tokio::sync::mpsc::channel(1);
+            let migrations: Vec<String> = (0..8)
+                .map(|k| format!("CREATE TABLE t{k} (id int);"))
+                .collect();
+            let slowly = async move {
+                let mut models = 0;
+                while let Some(event) = received.recv().await {
+                    if let ReplayEvent::Replayed { .. } = event {
+                        models += 1;
+                        // Storing a model, slowly: 4 s in all.
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+                models
+            };
+            let (replay, models) = tokio::join!(compiler.replay(migrations, 0, events), slowly);
+            let replay = replay.expect("the sandbox runs");
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+            assert_eq!(models, 8);
+        },
+    );
+}
