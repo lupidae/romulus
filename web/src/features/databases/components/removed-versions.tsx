@@ -35,8 +35,8 @@ export function RemovedVersions({
         <div className="grid gap-0.5">
           <CardTitle>Removed versions</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Hidden from the history, diffs and imports. An admin can restore one for 30 days after
-            its removal; then it is deleted for good.
+            Hidden from the history, diffs and imports. An admin can restore one for 30 days; then
+            it is deleted for good.
           </p>
         </div>
       </CardHeader>
@@ -122,9 +122,7 @@ function Row({
           Removed by {item.removed_by?.name ?? "a deleted account"}{" "}
           <span title={formatDateTime(item.removed_at)}>{timeAgo(item.removed_at)}</span>
         </p>
-        <blockquote className="border-l-2 border-border-strong pl-2 text-sm text-foreground">
-          {item.reason}
-        </blockquote>
+        <p className="text-sm text-foreground">“{item.reason}”</p>
         <p className="text-xs text-faint-foreground">
           {expired
             ? "No longer restorable: deleted for good within the hour."

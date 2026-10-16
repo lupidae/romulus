@@ -13,8 +13,8 @@ import { toast } from "@/components/ui/toaster";
 import { useUpdateOrg } from "../mutations";
 import type { Org } from "../queries";
 
-/** What the API allows: 0 (none) to 10. */
-const CHOICES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+/** The usual choices (the API allows up to 10: one set there is shown too). */
+const CHOICES = [0, 1, 2, 3, 4, 5];
 
 function choiceLabel(n: number): string {
   return n === 0 ? "None" : n === 1 ? "1 approval" : `${n} approvals`;
@@ -27,15 +27,15 @@ function choiceLabel(n: number): string {
 export function ApprovalsCard({ org, editable }: { org: Org; editable: boolean }) {
   const update = useUpdateOrg(org.slug);
   const required = org.approvals_required;
+  const choices = CHOICES.includes(required) ? CHOICES : [...CHOICES, required];
   return (
     <Card className="max-w-2xl">
       <CardHeader>
         <div className="grid gap-0.5">
           <CardTitle>Approvals</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Publishing a draft waits for approvals from members who did not edit it; any edit resets
-            them. Pushes from CI and imports are never held. Admins can publish without them, saying
-            why.
+            Publishing a draft waits for approvals from members who did not edit it. Any edit resets
+            them; pushes from CI and imports are never held.
           </p>
         </div>
       </CardHeader>
@@ -78,7 +78,7 @@ export function ApprovalsCard({ org, editable }: { org: Org; editable: boolean }
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {CHOICES.map((n) => (
+              {choices.map((n) => (
                 <SelectItem key={n} value={String(n)}>
                   {choiceLabel(n)}
                 </SelectItem>

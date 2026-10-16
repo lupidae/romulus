@@ -410,7 +410,7 @@ function DraftName({
           variant="ghost"
           size="sm"
           onClick={() => onEditingChange(true)}
-          className="max-w-[min(18rem,40vw)] px-1.5 text-sm font-semibold text-foreground"
+          className="max-w-[min(18rem,100%)] px-1.5 text-sm font-semibold text-foreground"
           aria-label={`${draft.name}, rename`}
         >
           <span className="truncate">{draft.name}</span>

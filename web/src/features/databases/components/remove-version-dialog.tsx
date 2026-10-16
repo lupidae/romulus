@@ -105,9 +105,8 @@ function RemoveForm({ org, database, number, onOpenChange, onRemoved }: RemoveVe
       <DialogHeader>
         <DialogTitle>Remove v{number}?</DialogTitle>
         <DialogDescription>
-          v{number} disappears from the history, diffs and imports for everyone{after}. Drafts
-          started from it will need “Update draft”. You can restore it for 30 days; after that it is
-          deleted for good, and its number is never used again.
+          v{number} is hidden from the history, diffs and imports{after}. Drafts on it will need
+          “Update draft”. Restorable for 30 days, then deleted.
         </DialogDescription>
       </DialogHeader>
       <Field label="Reason" error={error}>

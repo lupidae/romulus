@@ -48,6 +48,8 @@ export function ReviewControl(props: ReviewControlProps) {
           loading={approve.isPending}
           onClick={approve.run}
           aria-label="Approve this version of the draft"
+          // A narrow bar keeps a writer's room for Publish: Approve is in the popover too.
+          className={role === "reviewer" ? undefined : "max-sm:hidden"}
         >
           <CheckCircleIcon />
           <span className="max-sm:sr-only">Approve</span>

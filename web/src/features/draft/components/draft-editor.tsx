@@ -594,7 +594,9 @@ function Notice({
           <>
             You’re viewing as a reviewer.{" "}
             <span className="font-normal text-muted-foreground">
-              Everyone sees your cursor; only developers and admins can edit.
+              {state?.review && state.review.required > 0
+                ? "Everyone sees your cursor. Approve it when it looks right; only developers and admins can edit."
+                : "Everyone sees your cursor; only developers and admins can edit."}
             </span>
           </>
         }

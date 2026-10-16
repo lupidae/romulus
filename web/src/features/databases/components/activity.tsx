@@ -29,8 +29,7 @@ export function Activity({ org, db }: { org: string; db: string }) {
         <div className="grid gap-0.5">
           <CardTitle>Activity</CardTitle>
           <p className="text-sm text-muted-foreground">
-            What the organization may need to account for: removed and restored versions, and drafts
-            published without their approvals.
+            Removed and restored versions, and drafts published without their approvals.
           </p>
         </div>
       </CardHeader>
@@ -133,11 +132,7 @@ function Event({ event }: { event: AuditEvent }) {
             {details.draft_name ? `From the draft “${details.draft_name}”` : details.message}
           </p>
         )}
-        {event.reason && (
-          <blockquote className="border-l-2 border-border-strong pl-2 text-sm text-foreground">
-            {event.reason}
-          </blockquote>
-        )}
+        {event.reason && <p className="text-sm text-foreground">“{event.reason}”</p>}
       </div>
       <time
         dateTime={event.created_at}
