@@ -26,8 +26,8 @@ use remus_core::{
     Schema,
     emit::ident::{qualified, quote_ident, quote_literal},
     model::{
-        Column, CompositeType, Constraint, ConstraintKind, DomainType, Entity, EntityKind, EnumType,
-        Index, Partition, Policy, TypeKind,
+        Column, CompositeType, Constraint, ConstraintKind, DomainType, Entity, EntityKind,
+        EnumType, Index, Partition, Policy, TypeKind,
     },
 };
 
@@ -112,9 +112,7 @@ impl Phase {
             | P::DropComposites
             | P::DropDomains
             | P::DropEnums
-            | P::DropExtensions => {
-                Section::Removals
-            }
+            | P::DropExtensions => Section::Removals,
         }
     }
 }
@@ -166,7 +164,9 @@ fn pair<'a, T, K: Ord>(
 fn class(entity: &Entity) -> (u8, Option<String>) {
     match entity.kind {
         EntityKind::Table => (0, None),
-        EntityKind::PartitionedTable => (1, entity.partition_key.as_deref().map(crate::sql::squash)),
+        EntityKind::PartitionedTable => {
+            (1, entity.partition_key.as_deref().map(crate::sql::squash))
+        }
         EntityKind::View => (2, None),
         EntityKind::MaterializedView => (3, None),
         EntityKind::ForeignTable => (4, None),
@@ -295,6 +295,7 @@ impl<'a> Planner<'a> {
         self.drop_views();
         self.entities();
         self.drop_removed_tables();
+        self.possible_table_renames();
         self.partitions();
         self.create_views();
         self.unforce_for_foreign_keys();
@@ -346,10 +347,20 @@ impl<'a> Planner<'a> {
             .iter()
             .map(|e| name_of(&e.schema, &e.name))
             .chain(self.old.domains.iter().map(|d| name_of(&d.schema, &d.name)))
-            .chain(self.old.composites.iter().map(|c| name_of(&c.schema, &c.name)))
+            .chain(
+                self.old
+                    .composites
+                    .iter()
+                    .map(|c| name_of(&c.schema, &c.name)),
+            )
             .chain(self.new.enums.iter().map(|e| name_of(&e.schema, &e.name)))
             .chain(self.new.domains.iter().map(|d| name_of(&d.schema, &d.name)))
-            .chain(self.new.composites.iter().map(|c| name_of(&c.schema, &c.name)))
+            .chain(
+                self.new
+                    .composites
+                    .iter()
+                    .map(|c| name_of(&c.schema, &c.name)),
+            )
             .chain(self.old_entities.keys().cloned())
             .chain(self.new_entities.keys().cloned())
             .collect();
@@ -388,7 +399,9 @@ impl<'a> Planner<'a> {
             .old_entities
             .iter()
             .filter(|(n, e)| {
-                e.kind.is_table() && self.new_entities.contains_key(*n) && !self.recreated.contains(*n)
+                e.kind.is_table()
+                    && self.new_entities.contains_key(*n)
+                    && !self.recreated.contains(*n)
             })
             .map(|(n, _)| n.clone())
             .collect();
@@ -446,7 +459,12 @@ impl<'a> Planner<'a> {
                 names.push(name_of(&e.schema, &e.name));
                 names
             })
-            .chain(self.new.partitions.iter().map(|p| name_of(&p.child_schema, &p.child)))
+            .chain(
+                self.new
+                    .partitions
+                    .iter()
+                    .map(|p| name_of(&p.child_schema, &p.child)),
+            )
             .collect();
         self.early_removals = self
             .old_entities
@@ -459,16 +477,29 @@ impl<'a> Planner<'a> {
         for (name, columns) in self.converted.clone() {
             let (b, a) = (self.old_entities[&name], self.new_entities[&name]);
             for generated in b.columns.iter().filter(|c| c.generated.is_some()) {
-                let Some(expression) = &generated.default else { continue };
-                let reads: Vec<&String> = columns.iter().filter(|c| mentions(expression, c)).collect();
-                if reads.is_empty() || a.column(&generated.name).is_none_or(|c| c.generated.is_none()) {
+                let Some(expression) = &generated.default else {
+                    continue;
+                };
+                let reads: Vec<&String> =
+                    columns.iter().filter(|c| mentions(expression, c)).collect();
+                if reads.is_empty()
+                    || a.column(&generated.name)
+                        .is_none_or(|c| c.generated.is_none())
+                {
                     continue;
                 }
                 let why = format!(
                     "Postgres cannot convert a column a generated column reads: dropped before {} changes type, and added again after.",
-                    reads.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+                    reads
+                        .iter()
+                        .map(|c| c.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
-                self.converted.entry(name.clone()).or_default().remove(&generated.name);
+                self.converted
+                    .entry(name.clone())
+                    .or_default()
+                    .remove(&generated.name);
                 self.readded
                     .entry(name.clone())
                     .or_default()
@@ -553,10 +584,26 @@ impl<'a> Planner<'a> {
     fn constraint_changed(&self, table: &Name, b: &Constraint, a: &Constraint) -> bool {
         b.kind != a.kind
             || !same_sql(&b.definition, &a.definition)
-            || (b.kind != ConstraintKind::ForeignKey
-                && self.converted.contains_key(table)
-                && self.mentions_aside(&b.definition))
-            || self.mentions_readded(table, &b.definition)
+            || self.rebuild_reason(table, &b.definition).is_some()
+    }
+
+    /// Why an unchanged constraint or index must be dropped and built
+    /// again: it names a type recreated under it, or a column dropped and
+    /// added again.
+    fn rebuild_reason(&self, table: &Name, definition: &str) -> Option<String> {
+        if self.converted.contains_key(table)
+            && let Some((schema, ty)) = self.aside.keys().find(|(_, t)| mentions(definition, t))
+        {
+            return Some(format!(
+                "Dropped above and built again: it names {schema}.{ty}, which is created again."
+            ));
+        }
+        self.readded.get(table).and_then(|columns| {
+            columns
+                .keys()
+                .find(|c| mentions(definition, c))
+                .map(|c| format!("Dropped above and built again on {c}, which is added again."))
+        })
     }
 
     fn index_changed(&self, table: &Name, b: &Index, a: &Index) -> bool {
@@ -564,15 +611,7 @@ impl<'a> Planner<'a> {
             || b.unique != a.unique
             || b.partial != a.partial
             || self.mentions_aside(&b.definition)
-            || self.mentions_readded(table, &b.definition)
-    }
-
-    /// `sql` names a column of `table` that is dropped and added again,
-    /// which takes everything built on it along.
-    fn mentions_readded(&self, table: &Name, sql: &str) -> bool {
-        self.readded
-            .get(table)
-            .is_some_and(|columns| columns.keys().any(|c| mentions(sql, c)))
+            || self.rebuild_reason(table, &b.definition).is_some()
     }
 
     /// Why a foreign key that did not change must be dropped and added
@@ -583,7 +622,10 @@ impl<'a> Planner<'a> {
             return Some(format!("{} is created again", dotted(&target)));
         }
         if self.rekeyed.contains(&target) {
-            return Some(format!("the key it references on {} is rebuilt", dotted(&target)));
+            return Some(format!(
+                "the key it references on {} is rebuilt",
+                dotted(&target)
+            ));
         }
         let converted = |table: &Name, columns: &[String]| {
             self.converted
@@ -762,7 +804,10 @@ impl<'a> Planner<'a> {
         let why = if removed.is_empty() {
             "Postgres cannot reorder an enum's labels".to_owned()
         } else {
-            format!("Postgres cannot remove an enum label ({})", quoted(&removed))
+            format!(
+                "Postgres cannot remove an enum label ({})",
+                quoted(&removed)
+            )
         };
         let statement = self.push(
             Phase::Types,
@@ -814,7 +859,11 @@ impl<'a> Planner<'a> {
                     }
                 }
                 (Some(_), None) => {
-                    self.push(Phase::DropDomains, Kind::DropDomain, format!("DROP DOMAIN {ty};"));
+                    self.push(
+                        Phase::DropDomains,
+                        Kind::DropDomain,
+                        format!("DROP DOMAIN {ty};"),
+                    );
                 }
                 (Some(b), Some(a)) => {
                     let recreated = self.aside.contains_key(&name);
@@ -824,10 +873,17 @@ impl<'a> Planner<'a> {
                             Kind::AlterDomain,
                             format!("ALTER DOMAIN {ty} RENAME TO {};", quote_ident(&aside)),
                         )
-                        .noted(format!(
-                            "Postgres cannot change a domain's type ({} → {}): it is created again and every column using it converted.",
-                            b.base_type, a.base_type
-                        ));
+                        .noted(if same_sql(&b.base_type, &a.base_type) {
+                            format!(
+                                "Its type {} is created again, so it is too, and every column using it converted.",
+                                a.base_type
+                            )
+                        } else {
+                            format!(
+                                "Postgres cannot change a domain's type ({} → {}): it is created again and every column using it converted.",
+                                b.base_type, a.base_type
+                            )
+                        });
                         self.push(Phase::Domains, Kind::CreateDomain, create_domain(a));
                         self.push(
                             Phase::DropDomains,
@@ -934,7 +990,11 @@ impl<'a> Planner<'a> {
                     }
                 }
                 (Some(_), None) => {
-                    self.push(Phase::DropComposites, Kind::DropType, format!("DROP TYPE {ty};"));
+                    self.push(
+                        Phase::DropComposites,
+                        Kind::DropType,
+                        format!("DROP TYPE {ty};"),
+                    );
                 }
                 (Some(b), Some(a)) => {
                     self.alter_composite(&name, b, a);
@@ -963,7 +1023,10 @@ impl<'a> Planner<'a> {
                 self.push(
                     Phase::Composites,
                     Kind::AlterType,
-                    format!("ALTER TYPE {ty} DROP ATTRIBUTE {};", quote_ident(&attribute.name)),
+                    format!(
+                        "ALTER TYPE {ty} DROP ATTRIBUTE {};",
+                        quote_ident(&attribute.name)
+                    ),
                 )
                 .destroys("Deletes this attribute from every value of the type.");
             }
@@ -1155,7 +1218,11 @@ impl<'a> Planner<'a> {
                 );
             }
             for index in &view.indexes {
-                self.push(Phase::Views, Kind::CreateIndex, format!("{};", index.definition));
+                self.push(
+                    Phase::Views,
+                    Kind::CreateIndex,
+                    format!("{};", index.definition),
+                );
             }
             self.entity_comments(view, None);
         }
@@ -1193,7 +1260,8 @@ impl<'a> Planner<'a> {
         for name in names {
             let before = self.old_entities.get(&name).copied();
             let after = self.new_entities.get(&name).copied();
-            let foreign = |e: Option<&Entity>| e.is_some_and(|e| e.kind == EntityKind::ForeignTable);
+            let foreign =
+                |e: Option<&Entity>| e.is_some_and(|e| e.kind == EntityKind::ForeignTable);
             if foreign(before) || foreign(after) {
                 if before != after {
                     self.warn(
@@ -1264,7 +1332,6 @@ impl<'a> Planner<'a> {
                 _ => {}
             }
         }
-        self.possible_table_renames();
     }
 
     fn create_table(&mut self, table: &Entity) {
@@ -1309,7 +1376,11 @@ impl<'a> Planner<'a> {
             self.add_constraint(&name, fk, None);
         }
         for index in &table.indexes {
-            self.push(Phase::Indexes, Kind::CreateIndex, format!("{};", index.definition));
+            self.push(
+                Phase::Indexes,
+                Kind::CreateIndex,
+                format!("{};", index.definition),
+            );
         }
         self.security(table, None);
         self.entity_comments(table, None);
@@ -1384,7 +1455,11 @@ impl<'a> Planner<'a> {
             );
         }
         if after.rls_forced != forced {
-            let verb = if after.rls_forced { "FORCE" } else { "NO FORCE" };
+            let verb = if after.rls_forced {
+                "FORCE"
+            } else {
+                "NO FORCE"
+            };
             self.push(
                 Phase::Security,
                 Kind::RowLevelSecurity,
@@ -1393,8 +1468,7 @@ impl<'a> Planner<'a> {
         }
         let old_policies = before.map_or(&[][..], |b| &b.policies[..]);
         let name = name_of(&after.schema, &after.name);
-        let rebuild_all =
-            self.converted.contains_key(&name) || self.readded.contains_key(&name);
+        let rebuild_all = self.converted.contains_key(&name) || self.readded.contains_key(&name);
         for (policy_name, b, a) in pair(old_policies, &after.policies, |p| p.name.clone()) {
             // Around a recreated type or table it mentions, too.
             let rebuild = rebuild_all
@@ -1418,19 +1492,31 @@ impl<'a> Planner<'a> {
             match (b, a) {
                 (Some(_), None) => drop(self),
                 (None, Some(a)) => {
-                    self.push(Phase::Security, Kind::CreatePolicy, create_policy(&table, a));
+                    self.push(
+                        Phase::Security,
+                        Kind::CreatePolicy,
+                        create_policy(&table, a),
+                    );
                 }
                 (Some(_), Some(a)) if rebuild => {
                     drop(self);
-                    self.push(Phase::Security, Kind::CreatePolicy, create_policy(&table, a))
-                        .noted("Dropped above and created again around a column's type change.");
+                    self.push(
+                        Phase::Security,
+                        Kind::CreatePolicy,
+                        create_policy(&table, a),
+                    )
+                    .noted("Dropped above and created again around a column's type change.");
                 }
                 (Some(b), Some(a)) if !same_policy(b, a) => {
                     if let Some(sql) = alter_policy(&table, b, a) {
                         self.push(Phase::Security, Kind::AlterPolicy, sql);
                     } else {
                         drop(self);
-                        self.push(Phase::Security, Kind::CreatePolicy, create_policy(&table, a));
+                        self.push(
+                            Phase::Security,
+                            Kind::CreatePolicy,
+                            create_policy(&table, a),
+                        );
                     }
                 }
                 _ => {}
@@ -1468,8 +1554,14 @@ impl<'a> Planner<'a> {
                         None
                     };
                     if self.constraint_changed(name, cb, ca) {
+                        let note = if cb.kind == ca.kind && same_sql(&cb.definition, &ca.definition)
+                        {
+                            self.rebuild_reason(name, &cb.definition)
+                        } else {
+                            Some(adding_note(ca))
+                        };
                         self.drop_constraint(&table, cb);
-                        self.add_constraint(&table, ca, Some(adding_note(ca)));
+                        self.add_constraint(&table, ca, note);
                         if let Some(comment) = &ca.comment {
                             self.constraint_comment(&table, ca, Some(comment));
                         }
@@ -1584,7 +1676,13 @@ impl<'a> Planner<'a> {
                             format!("DROP INDEX {qualified_index};"),
                         );
                     }
+                    let rebuilt = same_sql(&ib.definition, &ia.definition)
+                        .then(|| self.rebuild_reason(name, &ib.definition))
+                        .flatten();
                     self.create_index(ia, concurrently, true);
+                    if let (Some(reason), false) = (rebuilt, concurrently) {
+                        self.out.last_mut().expect("just pushed").statement.note = Some(reason);
+                    }
                 }
                 _ => {}
             }
@@ -1593,13 +1691,18 @@ impl<'a> Planner<'a> {
 
     fn create_index(&mut self, index: &Index, concurrently: bool, existing_table: bool) {
         if concurrently {
-            let sql = index.definition.replacen(" INDEX ", " INDEX CONCURRENTLY ", 1);
+            let sql = index
+                .definition
+                .replacen(" INDEX ", " INDEX CONCURRENTLY ", 1);
             let statement = self.push(Phase::Indexes, Kind::CreateIndex, format!("{sql};"));
             statement.stage = Stage::Concurrent;
             statement.noted("Outside the transaction: CONCURRENTLY does not block writes, and cannot run in one. If it fails, drop the invalid index it leaves and run it again.");
         } else {
-            let statement =
-                self.push(Phase::Indexes, Kind::CreateIndex, format!("{};", index.definition));
+            let statement = self.push(
+                Phase::Indexes,
+                Kind::CreateIndex,
+                format!("{};", index.definition),
+            );
             if existing_table && index.unique {
                 statement.noted("Fails if existing rows hold duplicates.");
             }
@@ -1643,7 +1746,10 @@ impl<'a> Planner<'a> {
                 let statement = self.push(
                     Phase::Columns,
                     Kind::AddColumn,
-                    format!("ALTER TABLE {table} ADD COLUMN {};", column_definition(column)),
+                    format!(
+                        "ALTER TABLE {table} ADD COLUMN {};",
+                        column_definition(column)
+                    ),
                 );
                 if let Some(from) = rename_from {
                     statement.alternative = Some(format!(
@@ -1667,7 +1773,12 @@ impl<'a> Planner<'a> {
             let col = quote_ident(&column.name).into_owned();
             let alter = format!("ALTER TABLE {table} ALTER COLUMN {col}");
 
-            if let Some(why) = self.readded.get(name).and_then(|r| r.get(&column.name)).cloned() {
+            if let Some(why) = self
+                .readded
+                .get(name)
+                .and_then(|r| r.get(&column.name))
+                .cloned()
+            {
                 let statement = self.push(
                     Phase::ReaddDrops,
                     Kind::DropColumn,
@@ -1681,14 +1792,21 @@ impl<'a> Planner<'a> {
                 self.push(
                     Phase::ReaddAdds,
                     Kind::AddColumn,
-                    format!("ALTER TABLE {table} ADD COLUMN {};", column_definition(column)),
+                    format!(
+                        "ALTER TABLE {table} ADD COLUMN {};",
+                        column_definition(column)
+                    ),
                 );
                 continue;
             }
 
             // 1. Identity and generation removed.
             if before.identity.is_some() && column.identity.is_none() {
-                self.push(Phase::Columns, Kind::AlterColumn, format!("{alter} DROP IDENTITY;"));
+                self.push(
+                    Phase::Columns,
+                    Kind::AlterColumn,
+                    format!("{alter} DROP IDENTITY;"),
+                );
             }
             if before.generated.is_some() && column.generated.is_none() {
                 self.push(
@@ -1701,7 +1819,11 @@ impl<'a> Planner<'a> {
             // 2. Type.
             let generated = column.generated.is_some();
             let mut default_done = false;
-            if self.converted.get(name).is_some_and(|c| c.contains(&column.name)) {
+            if self
+                .converted
+                .get(name)
+                .is_some_and(|c| c.contains(&column.name))
+            {
                 let recreated = self.type_recreated(column);
                 let conversion = if recreated && column.type_kind == TypeKind::Domain {
                     let base = |s: &Schema| {
@@ -1759,16 +1881,20 @@ impl<'a> Planner<'a> {
                     && self.enum_loses_labels(&column.type_schema, &column.type_name);
                 let statement = self.push(Phase::Columns, Kind::AlterColumn, sql);
                 if recreated {
-                    let what = if column.type_kind == TypeKind::Domain { "domain" } else { "enum" };
+                    let what = if column.type_kind == TypeKind::Domain {
+                        "domain"
+                    } else {
+                        "enum"
+                    };
                     if loses_labels {
                         statement.destroys(format!(
                             "Converts to the recreated {what} {}: fails on a row holding a label it lost.",
-                            column.r#type
+                            column.r#type.trim_end_matches("[]")
                         ));
                     } else {
                         statement.noted(format!(
                             "Converts to the recreated {what} {}.",
-                            column.r#type
+                            column.r#type.trim_end_matches("[]")
                         ));
                     }
                 } else if conversion.lossless {
@@ -1787,7 +1913,10 @@ impl<'a> Planner<'a> {
                         ),
                     );
                 }
-                if a.partition_key.as_deref().is_some_and(|k| mentions(k, &column.name)) {
+                if a.partition_key
+                    .as_deref()
+                    .is_some_and(|k| mentions(k, &column.name))
+                {
                     self.warn(
                         WarningCode::Unsupported,
                         Some(dotted(name)),
@@ -1800,7 +1929,10 @@ impl<'a> Planner<'a> {
                 self.own_sequence(Phase::Columns, &table, column);
             }
             // 3. Default.
-            if !default_done && !generated && !same_opt_sql(before.default.as_ref(), column.default.as_ref()) {
+            if !default_done
+                && !generated
+                && !same_opt_sql(before.default.as_ref(), column.default.as_ref())
+            {
                 match &column.default {
                     Some(default) => {
                         self.sequence_for(column);
@@ -1918,7 +2050,9 @@ impl<'a> Planner<'a> {
         let mut order: Vec<&str> = b
             .columns
             .iter()
-            .filter(|c| a.column(&c.name).is_some() && !readded.is_some_and(|r| r.contains_key(&c.name)))
+            .filter(|c| {
+                a.column(&c.name).is_some() && !readded.is_some_and(|r| r.contains_key(&c.name))
+            })
             .map(|c| c.name.as_str())
             .collect();
         for column in &a.columns {
@@ -1948,7 +2082,11 @@ impl<'a> Planner<'a> {
     }
 
     fn enum_loses_labels(&self, schema: &str, name: &str) -> bool {
-        let find = |s: &'a Schema| s.enums.iter().find(|e| e.schema == schema && e.name == name);
+        let find = |s: &'a Schema| {
+            s.enums
+                .iter()
+                .find(|e| e.schema == schema && e.name == name)
+        };
         match (find(self.old), find(self.new)) {
             (Some(b), Some(a)) => b.labels.iter().any(|l| !a.labels.contains(l)),
             _ => false,
@@ -1976,10 +2114,12 @@ impl<'a> Planner<'a> {
         };
         let mut taken = BTreeSet::new();
         for r in removed {
-            let Some(x) = added
-                .iter()
-                .find(|x| !taken.contains(&table_name(x)) && x.schema == r.schema && !r.columns.is_empty() && shape(x) == shape(r))
-            else {
+            let Some(x) = added.iter().find(|x| {
+                !taken.contains(&table_name(x))
+                    && x.schema == r.schema
+                    && !r.columns.is_empty()
+                    && shape(x) == shape(r)
+            }) else {
                 continue;
             };
             taken.insert(table_name(x));
@@ -1993,7 +2133,9 @@ impl<'a> Planner<'a> {
             let drop = format!("DROP TABLE {};", table_name(r));
             for planned in &mut self.out {
                 let s = &mut planned.statement;
-                if s.kind == Kind::CreateTable && (s.sql.starts_with(&create) || s.sql.starts_with(&create_paren)) {
+                if s.kind == Kind::CreateTable
+                    && (s.sql.starts_with(&create) || s.sql.starts_with(&create_paren))
+                {
                     s.alternative = Some(rename.clone());
                     s.note = Some(format!(
                         "Possibly a rename of {}: the RENAME keeps its rows, where this CREATE and the DROP below lose them.",
@@ -2098,8 +2240,12 @@ impl<'a> Planner<'a> {
             } else {
                 "Deletes the table and its rows."
             };
-            self.push(phase, Kind::DropTable, format!("DROP TABLE {};", table_name(table)))
-                .destroys(what);
+            self.push(
+                phase,
+                Kind::DropTable,
+                format!("DROP TABLE {};", table_name(table)),
+            )
+            .destroys(what);
         }
     }
 
@@ -2221,7 +2367,10 @@ impl<'a> Planner<'a> {
                 if has_default && !root_fresh.contains(name) {
                     statement.noted("Fails if the DEFAULT partition holds rows that belong here: move them out first.");
                 }
-            } else if detach.iter().any(|o| name_of(&o.child_schema, &o.child) == *name) {
+            } else if detach
+                .iter()
+                .any(|o| name_of(&o.child_schema, &o.child) == *name)
+            {
                 self.push(
                     Phase::AttachPartitions,
                     Kind::AttachPartition,
@@ -2284,17 +2433,13 @@ impl<'a> Planner<'a> {
             if s.kind != Kind::AlterType || !s.sql.contains(" ADD VALUE ") {
                 continue;
             }
-            let Some(label) = s
-                .sql
-                .split(" ADD VALUE ")
-                .nth(1)
-                .and_then(literal_prefix)
-            else {
+            let Some(label) = s.sql.split(" ADD VALUE ").nth(1).and_then(literal_prefix) else {
                 continue;
             };
             let used = self.out.iter().enumerate().any(|(j, p)| {
                 j != i
-                    && !(p.statement.kind == Kind::AlterType && p.statement.sql.contains(" ADD VALUE "))
+                    && !(p.statement.kind == Kind::AlterType
+                        && p.statement.sql.contains(" ADD VALUE "))
                     && p.statement.sql.contains(&label)
             });
             if used {
@@ -2418,7 +2563,10 @@ fn label_additions<'l>(old: &[String], new: &'l [String]) -> Option<Vec<(&'l str
         let at = if i == 0 {
             0
         } else {
-            current.iter().position(|l| *l == new[i - 1]).map_or(current.len(), |p| p + 1)
+            current
+                .iter()
+                .position(|l| *l == new[i - 1])
+                .map_or(current.len(), |p| p + 1)
         };
         current.insert(at, label);
         out.push((label.as_str(), position));
@@ -2528,7 +2676,11 @@ fn alter_policy(table: &str, b: &Policy, a: &Policy) -> Option<String> {
     rb.sort();
     if ra != rb {
         let roles = policy_roles(a);
-        sql.push_str(if roles.is_empty() { " TO PUBLIC" } else { &roles });
+        sql.push_str(if roles.is_empty() {
+            " TO PUBLIC"
+        } else {
+            &roles
+        });
     }
     if !same_opt_sql(b.using.as_ref(), a.using.as_ref())
         && let Some(using) = &a.using

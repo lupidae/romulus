@@ -69,7 +69,13 @@ fn tables(schema: &Schema) -> Vec<usize> {
         .collect()
 }
 
-fn column(name: &str, r#type: &str, kind: TypeKind, default: Option<&str>, not_null: bool) -> Column {
+fn column(
+    name: &str,
+    r#type: &str,
+    kind: TypeKind,
+    default: Option<&str>,
+    not_null: bool,
+) -> Column {
     Column {
         name: name.to_owned(),
         r#type: r#type.to_owned(),
@@ -133,10 +139,18 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 ("integer".into(), TypeKind::Base, Some("0".into())),
                 ("bigint".into(), TypeKind::Base, None),
                 ("boolean".into(), TypeKind::Base, Some("false".into())),
-                ("timestamp with time zone".into(), TypeKind::Base, Some("now()".into())),
+                (
+                    "timestamp with time zone".into(),
+                    TypeKind::Base,
+                    Some("now()".into()),
+                ),
                 ("numeric(10,2)".into(), TypeKind::Base, None),
                 ("jsonb".into(), TypeKind::Base, Some("'{}'::jsonb".into())),
-                ("uuid".into(), TypeKind::Base, Some("gen_random_uuid()".into())),
+                (
+                    "uuid".into(),
+                    TypeKind::Base,
+                    Some("gen_random_uuid()".into()),
+                ),
                 ("character varying(40)".into(), TypeKind::Base, None),
                 ("text[]".into(), TypeKind::Base, None),
             ];
@@ -170,7 +184,8 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                     !entity.constraints.iter().any(|x| named(&x.definition))
                         && !entity.indexes.iter().any(|x| named(&x.definition))
                         && !entity.policies.iter().any(|p| {
-                            named(p.using.as_deref().unwrap_or("")) || named(p.check.as_deref().unwrap_or(""))
+                            named(p.using.as_deref().unwrap_or(""))
+                                || named(p.check.as_deref().unwrap_or(""))
                         })
                         && !entity.partition_key.as_deref().is_some_and(named)
                         && !entity.columns.iter().any(|o| {
@@ -184,12 +199,17 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             let views_use_it = schema.entities.iter().any(|v| {
                 v.kind.is_view()
                     && v.depends_on.contains(&reference)
-                    && v.view_definition.as_deref().is_some_and(|d| mentions(d, &name))
+                    && v.view_definition
+                        .as_deref()
+                        .is_some_and(|d| mentions(d, &name))
             });
             if views_use_it {
                 drop_views_over(schema, &reference);
             }
-            let entity = schema.entities.iter_mut().find(|e| e.reference() == reference)?;
+            let entity = schema
+                .entities
+                .iter_mut()
+                .find(|e| e.reference() == reference)?;
             entity.columns.retain(|c| c.name != name);
             Some(format!("drop column {}.{name}", reference.name))
         }
@@ -204,7 +224,10 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 .filter(|(_, c)| {
                     c.identity.is_none()
                         && c.generated.is_none()
-                        && !entity.partition_key.as_deref().is_some_and(|k| mentions(k, &c.name))
+                        && !entity
+                            .partition_key
+                            .as_deref()
+                            .is_some_and(|k| mentions(k, &c.name))
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -222,8 +245,12 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 "uuid" => &["text", "bigint"],
                 "jsonb" => &["json", "text"],
                 "double precision" => &["numeric", "real"],
-                _ if from.starts_with("numeric") => &["double precision", "numeric(20,4)", "integer"],
-                _ if from.starts_with("character varying") => &["text", "character varying(5)", "character varying(400)"],
+                _ if from.starts_with("numeric") => {
+                    &["double precision", "numeric(20,4)", "integer"]
+                }
+                _ if from.starts_with("character varying") => {
+                    &["text", "character varying(5)", "character varying(400)"]
+                }
                 _ => &["text"],
             };
             let to = (*rng.pick(options)?).to_owned();
@@ -234,7 +261,10 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             if rng.chance(50) {
                 column.default = None;
             }
-            Some(format!("type {}.{}: {from} → {to}", entity.name, column.name))
+            Some(format!(
+                "type {}.{}: {from} → {to}",
+                entity.name, column.name
+            ))
         }
         // Nullability.
         6 => {
@@ -246,7 +276,10 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 return None;
             }
             column.not_null = !column.not_null;
-            Some(format!("not null {}.{} = {}", entity.name, column.name, column.not_null))
+            Some(format!(
+                "not null {}.{} = {}",
+                entity.name, column.name, column.not_null
+            ))
         }
         // Default.
         7 => {
@@ -265,7 +298,10 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 "timestamp with time zone" => Some("now()".into()),
                 _ => None,
             };
-            Some(format!("default {}.{} = {:?}", entity.name, column.name, column.default))
+            Some(format!(
+                "default {}.{} = {:?}",
+                entity.name, column.name, column.default
+            ))
         }
         // Add an index.
         8 | 9 => {
@@ -283,7 +319,7 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             );
             let partial = rng.chance(30);
             if partial {
-                definition.push_str(&format!(" WHERE ({} IS NOT NULL)", quote_ident(&column)));
+                definition = format!("{definition} WHERE ({} IS NOT NULL)", quote_ident(&column));
             }
             schema.entities[t].indexes.push(Index {
                 name: name.clone(),
@@ -321,13 +357,23 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             let col = quote_ident(&column.name).into_owned();
             let (name, kind, definition) = if rng.chance(50) {
                 let check = match column.r#type.as_str() {
-                    "integer" | "bigint" | "smallint" | "numeric" => format!("CHECK (({col} >= 0))"),
+                    "integer" | "bigint" | "smallint" | "numeric" => {
+                        format!("CHECK (({col} >= 0))")
+                    }
                     "text" => format!("CHECK ((length({col}) < 1000))"),
                     _ => format!("CHECK (({col} IS NOT NULL))"),
                 };
-                (format!("{}_m{n}_check", entity.name), ConstraintKind::Check, check)
+                (
+                    format!("{}_m{n}_check", entity.name),
+                    ConstraintKind::Check,
+                    check,
+                )
             } else {
-                (format!("{}_m{n}_key", entity.name), ConstraintKind::Unique, format!("UNIQUE ({col})"))
+                (
+                    format!("{}_m{n}_key", entity.name),
+                    ConstraintKind::Unique,
+                    format!("UNIQUE ({col})"),
+                )
             };
             let mut c = constraint(name.clone(), kind, definition);
             c.columns = vec![column.name.clone()];
@@ -349,7 +395,9 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             let to = *rng.pick(&tables)?;
             let target = &schema.entities[to];
             let pk = target.primary_key()?;
-            let [key] = pk.columns.as_slice() else { return None };
+            let [key] = pk.columns.as_slice() else {
+                return None;
+            };
             let key = key.clone();
             let key_type = target.column(&key)?.r#type.clone();
             let target_name = qualified(&target.schema, &target.name);
@@ -418,7 +466,11 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             } else {
                 let c = rng.below(entity.columns.len());
                 let column = entity.columns.get_mut(c)?;
-                column.comment = if column.comment.is_some() { None } else { Some(format!("Column note {n}")) };
+                column.comment = if column.comment.is_some() {
+                    None
+                } else {
+                    Some(format!("Column note {n}"))
+                };
             }
             Some(format!("comment on {}", entity.name))
         }
@@ -431,9 +483,17 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 1 => entity.rls_forced = !entity.rls_forced,
                 2 => entity.policies.push(Policy {
                     name: format!("m{n}_policy"),
-                    command: if rng.chance(50) { PolicyCommand::Select } else { PolicyCommand::All },
+                    command: if rng.chance(50) {
+                        PolicyCommand::Select
+                    } else {
+                        PolicyCommand::All
+                    },
                     permissive: rng.chance(70),
-                    roles: if rng.chance(50) { vec!["app_user".into()] } else { Vec::new() },
+                    roles: if rng.chance(50) {
+                        vec!["app_user".into()]
+                    } else {
+                        Vec::new()
+                    },
                     using: Some("true".into()),
                     check: None,
                 }),
@@ -458,13 +518,20 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             schema.entities.push(Entity {
                 schema: target.schema.clone(),
                 name: name.clone(),
-                kind: if materialized { EntityKind::MaterializedView } else { EntityKind::View },
+                kind: if materialized {
+                    EntityKind::MaterializedView
+                } else {
+                    EntityKind::View
+                },
                 comment: None,
                 rls: false,
                 rls_forced: false,
                 unlogged: false,
                 partition_key: None,
-                view_definition: Some(format!(" SELECT count(*) AS n\n   FROM {};", qualified(&target.schema, &target.name))),
+                view_definition: Some(format!(
+                    " SELECT count(*) AS n\n   FROM {};",
+                    qualified(&target.schema, &target.name)
+                )),
                 depends_on: vec![target],
                 columns: Vec::new(),
                 constraints: Vec::new(),
@@ -489,7 +556,12 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 Some(format!("drop view {}", reference.name))
             } else {
                 let view = &mut schema.entities[v];
-                let body = view.view_definition.as_deref()?.trim().trim_end_matches(';').to_owned();
+                let body = view
+                    .view_definition
+                    .as_deref()?
+                    .trim()
+                    .trim_end_matches(';')
+                    .to_owned();
                 view.view_definition = Some(format!(" SELECT *\n   FROM ({body}) m{n};"));
                 Some(format!("change view {}", reference.name))
             }
@@ -553,9 +625,9 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                         && !mentions(p.check.as_deref().unwrap_or(""), &reference.name)
                 });
             }
-            schema.partitions.retain(|p| {
-                !(p.parent_schema == reference.schema && p.parent == reference.name)
-            });
+            schema
+                .partitions
+                .retain(|p| !(p.parent_schema == reference.schema && p.parent == reference.name));
             Some(format!("drop table {}", reference.name))
         }
         // Rename a column or a table nothing else names.
@@ -565,10 +637,12 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             let reference = entity.reference();
             let referenced = schema.entities.iter().any(|e| {
                 e.depends_on.contains(&reference)
-                    || e.constraints.iter().any(|c| c.target().as_ref() == Some(&reference))
-                    || e.policies.iter().any(|p| {
-                        mentions(p.using.as_deref().unwrap_or(""), &reference.name)
-                    })
+                    || e.constraints
+                        .iter()
+                        .any(|c| c.target().as_ref() == Some(&reference))
+                    || e.policies
+                        .iter()
+                        .any(|p| mentions(p.using.as_deref().unwrap_or(""), &reference.name))
             }) || schema
                 .partitions
                 .iter()
@@ -588,17 +662,27 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                         let named = |sql: &str| mentions(sql, &c.name);
                         !entity.constraints.iter().any(|x| named(&x.definition))
                             && !entity.indexes.iter().any(|x| named(&x.definition))
-                            && !entity.policies.iter().any(|p| named(p.using.as_deref().unwrap_or("")))
+                            && !entity
+                                .policies
+                                .iter()
+                                .any(|p| named(p.using.as_deref().unwrap_or("")))
                             && !entity.partition_key.as_deref().is_some_and(named)
-                            && !entity.columns.iter().any(|o| o.default.as_deref().is_some_and(named))
-                            && !schema.entities.iter().any(|v| {
-                                v.view_definition.as_deref().is_some_and(named)
-                            })
+                            && !entity
+                                .columns
+                                .iter()
+                                .any(|o| o.default.as_deref().is_some_and(named))
+                            && !schema
+                                .entities
+                                .iter()
+                                .any(|v| v.view_definition.as_deref().is_some_and(named))
                     })
                     .map(|c| c.name.clone())
                     .collect();
                 let old = rng.pick(&free)?.clone();
-                let column = schema.entities[t].columns.iter_mut().find(|c| c.name == old)?;
+                let column = schema.entities[t]
+                    .columns
+                    .iter_mut()
+                    .find(|c| c.name == old)?;
                 column.name = format!("{old}_m{n}");
                 Some(format!("rename column {}.{old}", reference.name))
             }
@@ -612,7 +696,9 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
                 1 if !domain.constraints.is_empty() => {
                     domain.constraints.pop();
                 }
-                _ => domain.constraints.push("CHECK ((VALUE IS NOT NULL))".to_owned()),
+                _ => domain
+                    .constraints
+                    .push("CHECK ((VALUE IS NOT NULL))".to_owned()),
             }
             Some(format!("domain {}", domain.name))
         }
@@ -625,7 +711,11 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
             let name = format!("m{n}_table");
             let mut id = column("id", "bigint", TypeKind::Base, None, true);
             id.identity = Some(remus_core::model::Identity::Always);
-            let mut pk = constraint(format!("{name}_pkey"), ConstraintKind::PrimaryKey, "PRIMARY KEY (id)".into());
+            let mut pk = constraint(
+                format!("{name}_pkey"),
+                ConstraintKind::PrimaryKey,
+                "PRIMARY KEY (id)".into(),
+            );
             pk.columns = vec!["id".into()];
             schema.entities.push(Entity {
                 schema: schema_name,
@@ -664,7 +754,9 @@ fn random_edits_of_the_corpus_migrate_both_ways() {
         let mut invalid = 0;
         for (name, model) in models {
             for seed in 0..seeds() {
-                let mut rng = Rng(seed.wrapping_mul(1_000_003) ^ name.len() as u64 ^ (name.as_bytes()[0] as u64) << 32);
+                let mut rng = Rng(seed.wrapping_mul(1_000_003)
+                    ^ name.len() as u64
+                    ^ u64::from(name.as_bytes()[0]) << 32);
                 let mut mutated = model.clone();
                 let mut edits = Vec::new();
                 let count = 1 + rng.below(3);

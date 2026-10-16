@@ -231,7 +231,9 @@ pub(crate) fn mentions(sql: &str, ident: &str) -> bool {
             }
         } else if c.is_alphabetic() || c == '_' {
             let mut end = start + c.len_utf8();
-            while let Some((i, d)) = chars.next_if(|(_, d)| d.is_alphanumeric() || *d == '_' || *d == '$') {
+            while let Some((i, d)) =
+                chars.next_if(|(_, d)| d.is_alphanumeric() || *d == '_' || *d == '$')
+            {
                 end = i + d.len_utf8();
             }
             if sql[start..end].to_lowercase() == ident {
@@ -249,7 +251,10 @@ mod tests {
     #[test]
     fn mentions_finds_identifiers_not_literals_or_longer_words() {
         assert!(mentions("'a'::mood", "mood"));
-        assert!(mentions("(state)::text = ANY (ARRAY['a'::public.mood])", "mood"));
+        assert!(mentions(
+            "(state)::text = ANY (ARRAY['a'::public.mood])",
+            "mood"
+        ));
         assert!(mentions("x::\"Mood\"", "Mood"));
         assert!(!mentions("'mood'", "mood"));
         assert!(!mentions("moods > 1", "mood"));

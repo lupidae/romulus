@@ -125,7 +125,7 @@ pub struct Lines {
 pub fn slug(text: &str) -> String {
     let mut out = String::new();
     let mut gap = false;
-    for c in text.chars() {
+    for c in text.to_lowercase().chars() {
         let c = fold(c);
         if c.is_ascii_alphanumeric() {
             if gap && !out.is_empty() {
@@ -185,7 +185,10 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
         let mut out = Writer::new();
         header(&mut out, up, meta, None);
         body(&mut out, &up.statements.iter().collect::<Vec<_>>(), true);
-        return vec![out.file(format!("{}_{}.sql", meta.timestamp, meta.name), FileRole::Up)];
+        return vec![out.file(
+            format!("{}_{}.sql", meta.timestamp, meta.name),
+            FileRole::Up,
+        )];
     }
     let units = split(up);
     let parts = units.len();
@@ -197,7 +200,9 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
             UnitKind::Concurrent => (i, format!("{}_{}", meta.name, concurrent_name(unit))),
         };
         let part = (parts > 1).then_some((i + 1, parts));
-        files.extend(unit_files(format, unit, up, down, meta, version, &name, part));
+        files.extend(unit_files(
+            format, unit, up, down, meta, version, &name, part,
+        ));
     }
     files
 }
@@ -205,7 +210,11 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
 /// The statements split into the files a per-file-transaction tool needs.
 fn split(m: &Migration) -> Vec<Unit<'_>> {
     let mut units = Vec::new();
-    let commit: Vec<&Statement> = m.statements.iter().filter(|s| s.stage == Stage::Commit).collect();
+    let commit: Vec<&Statement> = m
+        .statements
+        .iter()
+        .filter(|s| s.stage == Stage::Commit)
+        .collect();
     if !commit.is_empty() {
         units.push(Unit {
             kind: UnitKind::Commit,
@@ -232,13 +241,21 @@ fn split(m: &Migration) -> Vec<Unit<'_>> {
 /// `create_index_users_email_idx`, from the statement itself.
 fn concurrent_name(unit: &Unit) -> String {
     let sql = unit.statements.first().map_or("", |s| s.sql.as_str());
-    let verb = if sql.starts_with("DROP") { "drop" } else { "create" };
+    let verb = if sql.starts_with("DROP") {
+        "drop"
+    } else {
+        "create"
+    };
     let name = sql
         .split_whitespace()
         .skip_while(|w| *w != "CONCURRENTLY")
         .nth(1)
         .unwrap_or("index");
-    let name = name.rsplit('.').next().unwrap_or(name).trim_end_matches(';');
+    let name = name
+        .rsplit('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches(';');
     slug(&format!("{verb}_index_{name}"))
 }
 
@@ -316,7 +333,10 @@ fn unit_files(
             let mut back = Writer::new();
             down_header(&mut back, down, meta);
             down_body(&mut back, unit.kind, down, true);
-            vec![up_file, back.file(format!("{ts}_{name}.down.sql"), FileRole::Down)]
+            vec![
+                up_file,
+                back.file(format!("{ts}_{name}.down.sql"), FileRole::Down),
+            ]
         }
     }
 }
@@ -337,7 +357,11 @@ fn down_body(out: &mut Writer, kind: UnitKind, down: &Migration, transaction: bo
                 out.comment("Nothing to undo.");
             } else {
                 // Concurrent statements of the down migration run with it.
-                body(out, &down.statements.iter().collect::<Vec<_>>(), transaction);
+                body(
+                    out,
+                    &down.statements.iter().collect::<Vec<_>>(),
+                    transaction,
+                );
             }
         }
         UnitKind::Commit => {
@@ -371,10 +395,7 @@ fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usi
     if count == 0 {
         out.comment("Nothing to migrate: the schemas are the same.");
     } else {
-        let mut line = format!(
-            "{count} statement{}",
-            if count == 1 { "" } else { "s" }
-        );
+        let mut line = format!("{count} statement{}", if count == 1 { "" } else { "s" });
         if destructive > 0 {
             let _ = write!(
                 line,
@@ -426,10 +447,13 @@ fn body(out: &mut Writer, statements: &[&Statement], transaction: bool) {
         out.blank();
     }
     let mut section = None;
+    let removals_destroy = main
+        .iter()
+        .any(|s| s.section == Section::Removals && s.destructive);
     for s in &main {
         if section != Some(s.section) && s.stage != Stage::Concurrent {
             section = Some(s.section);
-            heading(out, s.section);
+            heading(out, s.section, removals_destroy);
         }
         statement(out, s);
     }
@@ -440,7 +464,9 @@ fn body(out: &mut Writer, statements: &[&Statement], transaction: bool) {
         let concurrent: Vec<&Statement> = stage(Stage::Concurrent).collect();
         if !concurrent.is_empty() {
             out.blank();
-            out.comment("After the transaction, one at a time: CONCURRENTLY cannot run inside one.");
+            out.comment(
+                "After the transaction, one at a time: CONCURRENTLY cannot run inside one.",
+            );
             out.blank();
             for s in concurrent {
                 statement(out, s);
@@ -449,10 +475,10 @@ fn body(out: &mut Writer, statements: &[&Statement], transaction: bool) {
     }
 }
 
-fn heading(out: &mut Writer, section: Section) {
+fn heading(out: &mut Writer, section: Section, destroys: bool) {
     let rule = format!("-- {}", "-".repeat(74));
     out.line(&rule);
-    if section == Section::Removals {
+    if section == Section::Removals && destroys {
         out.line("-- Removals. DESTRUCTIVE: what follows deletes data. Back up first.");
     } else {
         out.line(&format!("-- {}", section.title()));
@@ -622,7 +648,10 @@ mod tests {
 
     #[test]
     fn slugs_are_file_name_safe() {
-        assert_eq!(slug("Add invoices & their line items!"), "add_invoices_their_line_items");
+        assert_eq!(
+            slug("Add invoices & their line items!"),
+            "add_invoices_their_line_items"
+        );
         assert_eq!(slug("Équipes: créer"), "equipes_creer");
         assert_eq!(slug("   "), "migration");
         assert!(slug(&"word ".repeat(40)).len() <= 60);

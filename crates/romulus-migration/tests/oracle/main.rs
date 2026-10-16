@@ -132,6 +132,7 @@ impl Case {
         }
     }
 
+    #[must_use]
     pub fn reversed(&self) -> Self {
         Self {
             label: format!("{} (reversed)", self.label),
@@ -141,6 +142,7 @@ impl Case {
         }
     }
 
+    #[must_use]
     pub fn concurrently(&self) -> Self {
         Self {
             label: format!("{} (concurrently)", self.label),
@@ -160,31 +162,35 @@ pub enum Outcome {
     Skipped,
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> {
     let m = migration(&case.old, &case.new, &case.options);
-    let back = migration(&case.new, &case.old, &case.options);
-    if romulus_diff::diff(&case.old, &case.new).is_empty() != m.is_empty() && m.warnings.is_empty() {
+    if romulus_diff::diff(&case.old, &case.new).is_empty() != m.is_empty() && m.warnings.is_empty()
+    {
         return Err(format!(
             "{}: the diff and the migration disagree on emptiness\n{}",
             case.label,
             m.script()
         ));
     }
-    let _ = back;
     // The sandbox's compile role does not own extensions: it cannot move
     // one to another schema, which a real owner can.
-    if m.statements.iter().any(|s| s.sql.starts_with("ALTER EXTENSION ") && s.sql.contains(" SET SCHEMA ")) {
+    if m.statements
+        .iter()
+        .any(|s| s.sql.starts_with("ALTER EXTENSION ") && s.sql.contains(" SET SCHEMA "))
+    {
         return Ok(Outcome::Skipped);
     }
-    let script = m
-        .script()
-        .replace(" INDEX CONCURRENTLY ", " INDEX ");
+    let script = m.script().replace(" INDEX CONCURRENTLY ", " INDEX ");
     let old_sql = render_sql(&case.old);
     // A schema the old side uses for functions alone exists in a real
     // database, but the sandbox creates it only when the text does not.
     let mut prelude = String::new();
     for s in &m.statements {
-        if let Some(schema) = s.sql.strip_prefix("CREATE SCHEMA IF NOT EXISTS ").and_then(|r| r.strip_suffix(';'))
+        if let Some(schema) = s
+            .sql
+            .strip_prefix("CREATE SCHEMA IF NOT EXISTS ")
+            .and_then(|r| r.strip_suffix(';'))
             && old_sql.contains(&format!("{schema}."))
         {
             let _ = writeln!(prelude, "CREATE SCHEMA IF NOT EXISTS {schema};");
@@ -199,15 +205,25 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
     // types the sandbox guesses from the calls: an old schema and a
     // migration calling one with different types make it guess wrong for
     // one of them. A real database has one function; skip those.
-    let stubbed = |text: &str| compilation.stubs.iter().any(|stub| text.contains(&format!("{}(", stub.name)));
+    let stubbed = |text: &str| {
+        compilation
+            .stubs
+            .iter()
+            .any(|stub| text.contains(&format!("{}(", stub.name)))
+    };
     let Some(mut result) = compilation.model.clone() else {
         let errors = explain(&sql, &compilation);
         let in_old_part = compilation.errors().any(|d| {
-            d.span.is_some_and(|span| span.from.line as usize <= old_sql.lines().count() + prelude.lines().count())
+            d.span.is_some_and(|span| {
+                span.from.line as usize <= old_sql.lines().count() + prelude.lines().count()
+            })
         });
         let statement_stubbed = compilation.errors().any(|d| {
             d.span.is_some_and(|span| {
-                let line = sql.lines().nth((span.from.line as usize).saturating_sub(1)).unwrap_or("");
+                let line = sql
+                    .lines()
+                    .nth((span.from.line as usize).saturating_sub(1))
+                    .unwrap_or("");
                 let statement = sql[span.range().start..].split(';').next().unwrap_or("");
                 stubbed(line) || stubbed(statement)
             })
@@ -225,7 +241,9 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
         if warning.code != WarningCode::ColumnOrder {
             continue;
         }
-        let Some(object) = &warning.object else { continue };
+        let Some(object) = &warning.object else {
+            continue;
+        };
         let Some(wanted) = case
             .new
             .entities
@@ -247,8 +265,15 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
                     .unwrap_or(usize::MAX)
             });
         }
-        if let Some(composite) = result.composites.iter_mut().find(|c| format!("{}.{}", c.schema, c.name) == *object)
-            && let Some(wanted) = case.new.composites.iter().find(|c| format!("{}.{}", c.schema, c.name) == *object)
+        if let Some(composite) = result
+            .composites
+            .iter_mut()
+            .find(|c| format!("{}.{}", c.schema, c.name) == *object)
+            && let Some(wanted) = case
+                .new
+                .composites
+                .iter()
+                .find(|c| format!("{}.{}", c.schema, c.name) == *object)
         {
             composite.attributes.sort_by_key(|a| {
                 wanted
@@ -304,14 +329,25 @@ pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) {
     }
     #[allow(clippy::print_stderr)]
     {
-        eprintln!("{total} pairs: {} passed, {skipped} skipped (the sandbox cannot run them), {} failed", total - skipped - failures.len(), failures.len());
+        eprintln!(
+            "{total} pairs: {} passed, {skipped} skipped (the sandbox cannot run them), {} failed",
+            total - skipped - failures.len(),
+            failures.len()
+        );
     }
-    assert!(skipped * 10 <= total, "{skipped} of {total} pairs skipped: too many to call this tested");
+    assert!(
+        skipped * 10 <= total,
+        "{skipped} of {total} pairs skipped: too many to call this tested"
+    );
     if !failures.is_empty() {
         #[allow(clippy::print_stderr)]
         for failure in &failures {
             let mut lines = failure.lines();
-            eprintln!("FAILED {} | {}", lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+            eprintln!(
+                "FAILED {} | {}",
+                lines.next().unwrap_or(""),
+                lines.next().unwrap_or("")
+            );
         }
         let shown = failures
             .iter()

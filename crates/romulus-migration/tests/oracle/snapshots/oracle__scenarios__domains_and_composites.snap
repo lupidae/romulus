@@ -41,8 +41,8 @@ ALTER DOMAIN public.code SET NOT NULL;
 -- Fails if a value of this domain already breaks it.
 ALTER DOMAIN public.email ADD CHECK ((length(VALUE) < 255));
 
--- Postgres cannot change a domain's type (public.color → public.color): it is
--- created again and every column using it converted.
+-- Its type public.color is created again, so it is too, and every column
+-- using it converted.
 ALTER DOMAIN public.warm RENAME TO warm_old;
 
 CREATE DOMAIN public.warm AS public.color CHECK ((VALUE <> 'green'::public.color));
@@ -67,7 +67,7 @@ ALTER TABLE public.contacts ALTER COLUMN balance TYPE public.cents;
 ALTER TABLE public.contacts ALTER COLUMN tint TYPE public.warm USING tint::text::public.warm;
 
 -- --------------------------------------------------------------------------
--- Removals. DESTRUCTIVE: what follows deletes data. Back up first.
+-- Removals
 -- --------------------------------------------------------------------------
 
 DROP DOMAIN public.cents_old;

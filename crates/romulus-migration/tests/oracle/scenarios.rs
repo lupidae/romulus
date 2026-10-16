@@ -18,7 +18,11 @@ fn scenarios() -> Vec<(String, String, String)> {
     paths
         .into_iter()
         .map(|path| {
-            let name = path.file_stem().expect("a name").to_string_lossy().into_owned();
+            let name = path
+                .file_stem()
+                .expect("a name")
+                .to_string_lossy()
+                .into_owned();
             let text = std::fs::read_to_string(&path).expect("a readable scenario");
             let (old, new) = text
                 .split_once("-- ==== new ====\n")

@@ -113,9 +113,7 @@ fn family(base: &str) -> Family {
         "real" => Family::Float(4),
         "double precision" => Family::Float(8),
         "money" => Family::Money,
-        "text" | "character varying" | "character" | "citext" | "name" | "\"char\"" => {
-            Family::Text
-        }
+        "text" | "character varying" | "character" | "citext" | "name" | "\"char\"" => Family::Text,
         "boolean" => Family::Bool,
         "date" => Family::Date,
         "timestamp without time zone" => Family::Timestamp,
@@ -220,7 +218,9 @@ fn widening(a: &Ty, b: &Ty) -> bool {
         (F::Int(_), F::Numeric) => b.modifiers.is_none(),
         (F::Int(x), F::Float(8)) => x <= 4,
         (F::Numeric, F::Numeric) => numeric_widens(a.modifiers.as_deref(), b.modifiers.as_deref()),
-        (F::Text, F::Text) if !unbounded_text && (a.base == b.base || b.base == "character varying") => {
+        (F::Text, F::Text)
+            if !unbounded_text && (a.base == b.base || b.base == "character varying") =>
+        {
             length_widens(a.modifiers.as_deref(), b.modifiers.as_deref())
         }
         // To unbounded text: the text output of anything.
@@ -316,7 +316,12 @@ mod tests {
         let t = Ty::parse("character varying(20)[]", false);
         assert_eq!((t.base.as_str(), t.arrays), ("character varying", 1));
         assert_eq!(Ty::parse("public.citext", false).family, Family::Text);
-        assert_eq!(Ty::parse("geometry(Point,4326)", false).modifiers.as_deref(), Some("Point,4326"));
+        assert_eq!(
+            Ty::parse("geometry(Point,4326)", false)
+                .modifiers
+                .as_deref(),
+            Some("Point,4326")
+        );
     }
 
     #[test]

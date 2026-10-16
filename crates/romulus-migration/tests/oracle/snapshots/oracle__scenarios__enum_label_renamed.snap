@@ -35,7 +35,7 @@ CREATE TYPE public.size AS ENUM ('small', 'regular', 'large');
 ALTER TABLE public.shirts ALTER COLUMN size TYPE public.size USING size::text::public.size;
 
 -- --------------------------------------------------------------------------
--- Removals. DESTRUCTIVE: what follows deletes data. Back up first.
+-- Removals
 -- --------------------------------------------------------------------------
 
 DROP TYPE public.size_old;

@@ -84,7 +84,7 @@ check:
     # --all-features: the `utoipa` features of romulus-diff and romulus-sandbox
     # (and their tests) included; the feature-off builds are linted too.
     cargo clippy --workspace --all-targets --all-features -- -D warnings
-    cargo clippy -p romulus-diff -p romulus-sandbox --all-targets -- -D warnings
+    cargo clippy -p romulus-diff -p romulus-sandbox -p romulus-migration --all-targets -- -D warnings
     cargo test --workspace --all-features
     cargo sqlx prepare --workspace --check -- --all-targets
     just gen-check

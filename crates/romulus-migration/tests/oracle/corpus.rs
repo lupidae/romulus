@@ -13,7 +13,10 @@ static MODELS: OnceCell<Vec<(String, Schema)>> = OnceCell::const_new();
 pub async fn models(compiler: &Compiler) -> &'static [(String, Schema)] {
     MODELS
         .get_or_init(|| async {
-            let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../romulus-sandbox/tests/corpus");
+            let dir = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../romulus-sandbox/tests/corpus"
+            );
             let mut paths: Vec<_> = std::fs::read_dir(dir)
                 .expect("the sandbox corpus")
                 .map(|entry| entry.expect("a corpus file").path())

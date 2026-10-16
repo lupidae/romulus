@@ -72,8 +72,16 @@ pub(crate) fn without_provided(schema: &mut Schema) {
         .iter()
         .map(|e| provided(&e.schema, &e.name))
         .collect();
-    let enums: Vec<bool> = schema.enums.iter().map(|e| provided(&e.schema, &e.name)).collect();
-    let domains: Vec<bool> = schema.domains.iter().map(|d| provided(&d.schema, &d.name)).collect();
+    let enums: Vec<bool> = schema
+        .enums
+        .iter()
+        .map(|e| provided(&e.schema, &e.name))
+        .collect();
+    let domains: Vec<bool> = schema
+        .domains
+        .iter()
+        .map(|d| provided(&d.schema, &d.name))
+        .collect();
     let composites: Vec<bool> = schema
         .composites
         .iter()
