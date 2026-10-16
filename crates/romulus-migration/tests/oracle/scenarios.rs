@@ -86,13 +86,26 @@ fn every_scenario_migrates_both_ways() {
 fn every_scenario_runs_as_each_tool_would_run_it() {
     with_compiler(|compiler| async move {
         let mut cases = Vec::new();
-        for (name, old, new) in scenarios() {
-            let old = compile(&compiler, &old)
+        for (name, old_sql, new_sql) in scenarios() {
+            let old = compile(&compiler, &old_sql)
                 .await
                 .expect("the old schema compiles");
-            let new = compile(&compiler, &new)
+            let new = compile(&compiler, &new_sql)
                 .await
                 .expect("the new schema compiles");
+            // Built from the text itself too: what render_sql leaves out
+            // (partitions' copies of their parent's indexes, under the
+            // names Postgres chose) is there to migrate.
+            for (format, concurrently) in [(Format::GolangMigrate, false), (Format::Plain, true)] {
+                cases.push(ToolCase {
+                    label: format!("{name} (as written)"),
+                    old: old.clone(),
+                    new: new.clone(),
+                    options: Options { concurrently },
+                    format,
+                    sources: Some((old_sql.clone(), new_sql.clone())),
+                });
+            }
             for format in Format::ALL {
                 for concurrently in [false, true] {
                     cases.push(ToolCase {
@@ -101,6 +114,7 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
                         new: new.clone(),
                         options: Options { concurrently },
                         format,
+                        sources: None,
                     });
                 }
             }
@@ -111,6 +125,7 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
                     new: old.clone(),
                     options: Options::default(),
                     format,
+                    sources: None,
                 });
             }
         }

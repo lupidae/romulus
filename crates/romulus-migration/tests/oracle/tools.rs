@@ -51,6 +51,10 @@ pub struct ToolCase {
     pub new: Schema,
     pub options: Options,
     pub format: Format,
+    /// The old and new SQL as written, built instead of `render_sql` of the
+    /// models: a partitioned table's index then has its partitions' copies,
+    /// named by Postgres (`render_sql` creates it `ON ONLY`, without them).
+    pub sources: Option<(String, String)>,
 }
 
 /// How a case went, when it did not fail.
@@ -62,7 +66,7 @@ pub enum ToolOutcome {
 }
 
 /// A database of its own on the sandbox cluster, dropped by [`drop_scratch`].
-async fn scratch(admin: &str) -> Result<(String, PgConnection), String> {
+pub async fn scratch(admin: &str) -> Result<(String, PgConnection), String> {
     let name = format!(
         "romulus_test_tools_{}_{}",
         std::process::id(),
@@ -84,7 +88,7 @@ async fn scratch(admin: &str) -> Result<(String, PgConnection), String> {
     Ok((name, db))
 }
 
-async fn drop_scratch(admin: &str, name: &str, db: PgConnection) {
+pub async fn drop_scratch(admin: &str, name: &str, db: PgConnection) {
     let _ = db.close().await;
     if let Ok(mut conn) = PgConnection::connect(admin).await {
         let _ = raw_sql(AssertSqlSafe(format!(
@@ -205,7 +209,7 @@ fn rendered(schema: &Schema) -> String {
 
 /// One multi-statement query (an implicit transaction unless the text
 /// controls its own).
-async fn script(db: &mut PgConnection, sql: &str) -> Result<(), String> {
+pub async fn script(db: &mut PgConnection, sql: &str) -> Result<(), String> {
     raw_sql(AssertSqlSafe(sql.to_owned()))
         .execute(&mut *db)
         .await
@@ -214,7 +218,7 @@ async fn script(db: &mut PgConnection, sql: &str) -> Result<(), String> {
 }
 
 /// Each statement on its own, as psql or Flyway send them.
-async fn statements(db: &mut PgConnection, sql: &str) -> Result<(), String> {
+pub async fn statements(db: &mut PgConnection, sql: &str) -> Result<(), String> {
     let parsed = parse(sql);
     if let Some(error) = parsed.errors.first() {
         return Err(format!("does not parse: {}", error.message));
@@ -439,7 +443,10 @@ fn listing(files: &[MigrationFile]) -> String {
 
 /// Runs one case; `Err` explains how it went wrong.
 pub async fn run(compiler: &Compiler, admin: &str, case: &ToolCase) -> Result<ToolOutcome, String> {
-    let (old_sql, new_sql) = (rendered(&case.old), rendered(&case.new));
+    let (old_sql, new_sql) = case
+        .sources
+        .clone()
+        .unwrap_or_else(|| (rendered(&case.old), rendered(&case.new)));
     let prelude = match functions(compiler, &old_sql, &new_sql).await {
         Ok(prelude) => prelude,
         Err(outcome) => return Ok(outcome),

@@ -827,6 +827,70 @@ fn a_partition_that_becomes_a_table_is_detached_not_dropped() {
 }
 
 #[test]
+fn a_detached_partitions_names_are_guessed_out_loud() {
+    // The model lists no partition's own indexes: its copy of `logs_at_idx`
+    // is assumed to be `logs_2025_at_idx`, Postgres's name for it.
+    let mut old = schema(vec![logs()]);
+    old.partitions
+        .push(partition("logs", "logs_2025", BOUND_2025));
+    let mut kept = table(
+        "logs_2025",
+        vec![not_null(col("at", "date")), col("line", "text")],
+    );
+    kept.indexes.push(Index {
+        name: "logs_2025_by_day".into(),
+        unique: false,
+        partial: false,
+        definition: "CREATE INDEX logs_2025_by_day ON public.logs_2025 USING btree (at)".into(),
+    });
+    let new = schema(vec![logs(), kept]);
+    let m = plan(&old, &new);
+    let dropped = find(&m, "DROP INDEX IF EXISTS public.logs_2025_at_idx;");
+    assert!(
+        dropped
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("another name")),
+        "{dropped:?}"
+    );
+    // The table may have been attached with its own index, kept as the
+    // copy under its own name.
+    find(
+        &m,
+        "CREATE INDEX IF NOT EXISTS logs_2025_by_day ON public.logs_2025",
+    );
+    let warning = m
+        .warnings
+        .iter()
+        .find(|w| w.code == WarningCode::GuessedNames)
+        .expect("a warning about the guessed names");
+    assert_eq!(warning.object.as_deref(), Some("public.logs_2025"));
+    assert!(
+        warning.message.contains("`logs_2025_at_idx`"),
+        "{warning:?}"
+    );
+
+    // Kept under the guessed name: created unless it is there.
+    let mut same = new.clone();
+    same.entities[1].indexes[0] = Index {
+        name: "logs_2025_at_idx".into(),
+        unique: false,
+        partial: false,
+        definition: "CREATE INDEX logs_2025_at_idx ON public.logs_2025 USING btree (at)".into(),
+    };
+    let m = plan(&old, &same);
+    assert!(
+        find(
+            &m,
+            "CREATE INDEX IF NOT EXISTS logs_2025_at_idx ON public.logs_2025"
+        )
+        .note
+        .is_some()
+    );
+    assert!(sqls(&m).iter().all(|s| !s.starts_with("DROP INDEX")));
+}
+
+#[test]
 fn a_table_that_becomes_a_partition_is_aligned_then_attached() {
     let mut archive = table(
         "logs_2025",

@@ -6,6 +6,13 @@ expression: "plain[0].content"
 -- Review it before applying: romulus compares the schemas, not your data.
 -- 6 statements: 1 deletes data (DESTRUCTIVE), 2 can fail on existing rows
 -- (CAN FAIL), each marked.
+--
+-- Warnings:
+--   - `public.logs_2025` stops being a partition: the model has no names for
+--     its copies of `public.logs`'s keys and indexes, so the migration
+--     assumes the ones Postgres gives (`logs_2025_pkey`, `logs_2025_at_idx`).
+--     Compare with `\d public.logs_2025` on your database: a copy named
+--     otherwise is left as it is.
 
 BEGIN;
 
@@ -38,8 +45,9 @@ ALTER TABLE public.logs ATTACH PARTITION public.logs_2024 FOR VALUES FROM ('2024
 -- Constraints and indexes
 -- --------------------------------------------------------------------------
 
--- The partition's copy of its parent's index, unless the parent's was made ON
--- ONLY.
+-- The partition's copy of its parent's index, which a parent's index made ON
+-- ONLY lacks. Named as Postgres names it: under another name (`\d` the
+-- table), that copy is enough and this one a duplicate.
 CREATE INDEX IF NOT EXISTS logs_2025_at_idx ON public.logs_2025 USING btree (at);
 
 COMMIT;

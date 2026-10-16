@@ -842,6 +842,7 @@ fn random_edits_of_the_corpus_run_as_each_tool_would_run_them() {
                         concurrently: n % 3 == 0,
                     },
                     format: Format::ALL[n % Format::ALL.len()],
+                    sources: None,
                 });
             }
         }

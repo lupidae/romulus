@@ -159,6 +159,9 @@ impl Statement {
     }
 }
 
+/// The note on dropping a detached partition's guessed name.
+const GUESSED_DROP: &str = "Named as Postgres names a partition's copy of its parent's key or index: if yours has another name (`\\d` the table), drop that one instead.";
+
 fn name_of(schema: &str, name: &str) -> Name {
     (schema.to_owned(), name.to_owned())
 }
@@ -270,9 +273,9 @@ pub(crate) struct Planner<'a> {
     keys_checked: Vec<String>,
     /// Partitions detached as tables and tables attached as partitions.
     moves: Moves,
-    /// Planning a detached partition, whose old objects are predicted:
-    /// they are dropped `IF EXISTS`.
-    guessing: bool,
+    /// Planning a detached partition: the names predicted for its keys and
+    /// indexes (`Moves::guessed`), dropped `IF EXISTS`, kept `IF NOT EXISTS`.
+    guessed: BTreeSet<String>,
     /// Planning a table about to be attached: its constraints (the parent's
     /// CHECKs among them) go in before the attach.
     attaching: bool,
@@ -309,7 +312,7 @@ impl<'a> Planner<'a> {
             early_removals: false,
             keys_checked: Vec::new(),
             moves,
-            guessing: false,
+            guessed: BTreeSet::new(),
             attaching: false,
             out: Vec::new(),
             warnings: Vec::new(),
@@ -1644,7 +1647,12 @@ impl<'a> Planner<'a> {
 
     fn alter_table(&mut self, name: &Name, b: &Entity, a: &Entity) {
         let table = table_name(a);
-        self.guessing = self.moves.detached.contains(name);
+        self.guessed = self
+            .moves
+            .guessed
+            .get(name)
+            .map(|g| g.iter().cloned().collect())
+            .unwrap_or_default();
         self.attaching = self.moves.attached.contains(name);
         // Constraints.
         for (_, cb, ca) in pair(&b.constraints, &a.constraints, |c| c.name.clone()) {
@@ -1706,7 +1714,7 @@ impl<'a> Planner<'a> {
         }
         self.security(a, Some(b));
         self.entity_comments(a, Some(b));
-        self.guessing = false;
+        self.guessed.clear();
         self.attaching = false;
     }
 
@@ -1716,15 +1724,19 @@ impl<'a> Planner<'a> {
         } else {
             Phase::DropConstraints
         };
-        let if_exists = if self.guessing { "IF EXISTS " } else { "" };
-        self.push(
+        let guessed = self.guessed.contains(&constraint.name);
+        let statement = self.push(
             phase,
             Kind::DropConstraint,
             format!(
-                "ALTER TABLE {table} DROP CONSTRAINT {if_exists}{};",
+                "ALTER TABLE {table} DROP CONSTRAINT {}{};",
+                if guessed { "IF EXISTS " } else { "" },
                 quote_ident(&constraint.name)
             ),
         );
+        if guessed {
+            statement.noted(GUESSED_DROP);
+        }
     }
 
     /// `hazard`: `can_fail` for a constraint new to a table that has rows
@@ -1780,14 +1792,7 @@ impl<'a> Planner<'a> {
                 && ib.is_none_or(|i| !self.mentions_aside(&i.definition));
             match (ib, ia) {
                 (Some(_), None) => {
-                    self.push(
-                        Phase::DropIndexes,
-                        Kind::DropIndex,
-                        format!(
-                            "DROP INDEX {}{qualified_index};",
-                            if self.guessing { "IF EXISTS " } else { "" }
-                        ),
-                    );
+                    self.drop_index(&index_name, &qualified_index);
                 }
                 (None, Some(ia)) => self.create_index(ia, concurrently, true),
                 (Some(ib), Some(ia)) if self.index_changed(name, ib, ia) => {
@@ -1799,14 +1804,7 @@ impl<'a> Planner<'a> {
                         );
                         statement.stage = Stage::Concurrent;
                     } else {
-                        self.push(
-                            Phase::DropIndexes,
-                            Kind::DropIndex,
-                            format!(
-                                "DROP INDEX {}{qualified_index};",
-                                if self.guessing { "IF EXISTS " } else { "" }
-                            ),
-                        );
+                        self.drop_index(&index_name, &qualified_index);
                     }
                     let rebuilt = same_sql(&ib.definition, &ia.definition)
                         .then(|| self.rebuild_reason(name, &ib.definition))
@@ -1820,7 +1818,7 @@ impl<'a> Planner<'a> {
                 }
                 // A detached partition's copy of its parent's index exists,
                 // unless the parent's was created ON ONLY: make sure.
-                (Some(_), Some(ia)) if self.guessing => {
+                (Some(_), Some(ia)) if self.guessed.contains(&index_name) => {
                     let sql = ia
                         .definition
                         .replacen("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1)
@@ -1830,30 +1828,56 @@ impl<'a> Planner<'a> {
                             1,
                         );
                     self.push(Phase::Indexes, Kind::CreateIndex, format!("{sql};"))
-                        .noted("The partition's copy of its parent's index, unless the parent's was made ON ONLY.");
+                        .noted("The partition's copy of its parent's index, which a parent's index made ON ONLY lacks. Named as Postgres names it: under another name (`\\d` the table), that copy is enough and this one a duplicate.");
                 }
                 _ => {}
             }
         }
     }
 
+    /// A detached partition's guessed name: `IF EXISTS`, and a note.
+    fn drop_index(&mut self, name: &str, qualified_index: &str) {
+        let guessed = self.guessed.contains(name);
+        let statement = self.push(
+            Phase::DropIndexes,
+            Kind::DropIndex,
+            format!(
+                "DROP INDEX {}{qualified_index};",
+                if guessed { "IF EXISTS " } else { "" }
+            ),
+        );
+        if guessed {
+            statement.noted(GUESSED_DROP);
+        }
+    }
+
     fn create_index(&mut self, index: &Index, concurrently: bool, existing_table: bool) {
+        // A detached partition may hold it already: a table attached keeps
+        // its own index as its copy of the parent's, under its own name.
+        let detached = !self.guessed.is_empty();
+        let mut sql = index.definition.clone();
         if concurrently {
-            let sql = index
-                .definition
-                .replacen(" INDEX ", " INDEX CONCURRENTLY ", 1);
-            let statement = self.push(Phase::Indexes, Kind::CreateIndex, format!("{sql};"));
+            sql = sql.replacen(" INDEX ", " INDEX CONCURRENTLY ", 1);
+        }
+        if detached {
+            sql = sql.replacen(
+                " INDEX CONCURRENTLY ",
+                " INDEX CONCURRENTLY IF NOT EXISTS ",
+                1,
+            );
+            if !concurrently {
+                sql = sql.replacen(" INDEX ", " INDEX IF NOT EXISTS ", 1);
+            }
+        }
+        let statement = self.push(Phase::Indexes, Kind::CreateIndex, format!("{sql};"));
+        if concurrently {
             statement.stage = Stage::Concurrent;
             statement.noted("Outside the transaction: CONCURRENTLY does not block writes, and cannot run in one. If it fails, drop the invalid index it leaves and run it again.");
-        } else {
-            let statement = self.push(
-                Phase::Indexes,
-                Kind::CreateIndex,
-                format!("{};", index.definition),
-            );
-            if existing_table && index.unique {
-                statement.can_fail("Fails if existing rows hold duplicates.");
-            }
+        } else if existing_table && index.unique {
+            statement.can_fail("Fails if existing rows hold duplicates.");
+        }
+        if detached && !concurrently && statement.note.is_none() {
+            statement.noted("IF NOT EXISTS: a partition's copy of its parent's index may have this name already (a table attached keeps its own index as its copy).");
         }
     }
 
@@ -2485,6 +2509,23 @@ impl<'a> Planner<'a> {
                     ),
                 )
                 .noted("Kept, rows and all, as a table of its own.");
+                let guessed = self.moves.guessed[name].clone();
+                if !guessed.is_empty() {
+                    let table = qualified(&o.child_schema, &o.child);
+                    let names = guessed
+                        .iter()
+                        .map(|g| format!("`{g}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.warn(
+                        WarningCode::GuessedNames,
+                        Some(table.clone()),
+                        format!(
+                            "`{table}` stops being a partition: the model has no names for its copies of `{}`'s keys and indexes, so the migration assumes the ones Postgres gives ({names}). Compare with `\\d {table}` on your database: a copy named otherwise is left as it is.",
+                            qualified(&o.parent_schema, &o.parent)
+                        ),
+                    );
+                }
                 continue;
             }
             if root_gone.contains(name) || gone.contains(&parent) {

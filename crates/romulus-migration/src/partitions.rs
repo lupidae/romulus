@@ -10,9 +10,11 @@
 //!   predicted from its root: the root's columns, its CHECKs and foreign
 //!   keys under their own names, and its key, unique and exclusion
 //!   constraints and indexes under the names Postgres gives a partition's
-//!   copies (`<partition>_pkey`, `<partition>_<columns>_idx`…). Planning that
-//!   entity against the new table aligns whatever differs after the detach;
-//!   a predicted object dropped is dropped `IF EXISTS`.
+//!   copies (`<partition>_pkey`, `<partition>_<columns>_idx`, numbered past
+//!   the names the schema already holds). The model has no partition's own
+//!   names, so these are guesses ([`Moves::guessed`]): planning that entity
+//!   against the new table aligns whatever differs after the detach, drops
+//!   a guessed name `IF EXISTS`, creates one kept `IF NOT EXISTS`, and warns.
 //! - a table that the new schema has as a partition gets a new entity: the
 //!   table as it was, with the root's columns (`ATTACH` wants the same
 //!   columns, types and `NOT NULL`s) and the root's CHECKs added (it wants
@@ -34,6 +36,9 @@ pub(crate) type Name = (String, String);
 pub(crate) struct Moves {
     pub detached: BTreeSet<Name>,
     pub attached: BTreeSet<Name>,
+    /// Per detached partition, the names of its keys and indexes predicted
+    /// (not read: remus lists none of a partition's own).
+    pub guessed: BTreeMap<Name, Vec<String>>,
 }
 
 fn child(p: &Partition) -> Name {
@@ -75,9 +80,11 @@ pub(crate) fn reconcile(old: &mut Schema, new: &mut Schema) -> Moves {
         if has_entity(new, &name)
             && !has_partition(new, &name)
             && !has_entity(old, &name)
-            && let Some(entity) = root(old, p).map(|r| detached(r, p))
+            && let Some(root) = root(old, p)
         {
+            let (entity, guessed) = detached(root, p, relation_names(old, &p.child_schema));
             predicted.push(entity);
+            moves.guessed.insert(name.clone(), guessed);
             moves.detached.insert(name);
         }
     }
@@ -102,10 +109,35 @@ pub(crate) fn reconcile(old: &mut Schema, new: &mut Schema) -> Moves {
     moves
 }
 
-/// The table a partition is once detached, as far as its root tells.
-fn detached(root: &Entity, p: &Partition) -> Entity {
+/// The names of relations (tables, views, indexes) the model has in
+/// `schema`: Postgres numbers a partition's copy past them.
+fn relation_names(schema: &Schema, namespace: &str) -> BTreeSet<String> {
+    let mut taken = BTreeSet::new();
+    for e in schema.entities.iter().filter(|e| e.schema == namespace) {
+        taken.insert(e.name.clone());
+        taken.extend(e.indexes.iter().map(|i| i.name.clone()));
+        taken.extend(
+            e.constraints
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c.kind,
+                        ConstraintKind::PrimaryKey
+                            | ConstraintKind::Unique
+                            | ConstraintKind::Exclusion
+                    )
+                })
+                .map(|c| c.name.clone()),
+        );
+    }
+    taken
+}
+
+/// The table a partition is once detached, as far as its root tells, and
+/// the names guessed for it.
+fn detached(root: &Entity, p: &Partition, mut taken: BTreeSet<String>) -> (Entity, Vec<String>) {
     let name = p.child.clone();
-    let mut taken: BTreeSet<String> = BTreeSet::new();
+    let mut guessed = Vec::new();
     let mut constraints = Vec::new();
     for c in &root.constraints {
         let renamed = match c.kind {
@@ -115,6 +147,7 @@ fn detached(root: &Entity, p: &Partition) -> Entity {
             // CHECKs and foreign keys keep their names on partitions.
             ConstraintKind::Check | ConstraintKind::ForeignKey => None,
         };
+        guessed.extend(renamed.clone());
         constraints.push(Constraint {
             name: renamed.unwrap_or_else(|| c.name.clone()),
             comment: None,
@@ -127,6 +160,7 @@ fn detached(root: &Entity, p: &Partition) -> Entity {
         .map(|i| {
             let columns = index_columns(&i.definition);
             let index = relation_name(&name, &columns, "idx", &mut taken);
+            guessed.push(index.clone());
             Index {
                 definition: index_on(&i.definition, &index, &qualified(&p.child_schema, &name)),
                 name: index,
@@ -134,7 +168,7 @@ fn detached(root: &Entity, p: &Partition) -> Entity {
             }
         })
         .collect();
-    Entity {
+    let entity = Entity {
         schema: p.child_schema.clone(),
         name,
         kind: if p.partition_key.is_some() {
@@ -160,7 +194,8 @@ fn detached(root: &Entity, p: &Partition) -> Entity {
         constraints,
         indexes,
         policies: Vec::new(),
-    }
+    };
+    (entity, guessed)
 }
 
 /// The table as `ATTACH` wants it: its own constraints, indexes, policies
@@ -320,7 +355,7 @@ fn object_name(name1: &str, name2: &str, label: &str) -> String {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{index_columns, index_on, object_name, relation_name};
+    use super::{index_columns, index_on, object_name, relation_name, relation_names};
 
     #[test]
     fn partition_copies_are_named_like_postgres_names_them() {
@@ -339,6 +374,29 @@ mod tests {
         );
         let long = "a".repeat(70);
         assert_eq!(object_name(&long, "b", "idx").len(), 63);
+    }
+
+    #[test]
+    fn a_copy_is_numbered_past_the_names_its_schema_holds() {
+        let schema = remus_core::Schema::from_json(
+            r#"{"remus_version": "0.2", "database": "d", "server_version": "17", "entities": [
+                {"schema": "public", "name": "logs_2025_at_idx", "kind": "r",
+                 "columns": [], "constraints": [], "indexes": [], "policies": []},
+                {"schema": "other", "name": "logs_2025_pkey", "kind": "r",
+                 "columns": [], "constraints": [], "indexes": [], "policies": []}
+            ]}"#,
+        )
+        .expect("a model");
+        let mut taken = relation_names(&schema, "public");
+        assert_eq!(
+            relation_name("logs_2025", &["at".into()], "idx", &mut taken),
+            "logs_2025_at_idx1"
+        );
+        assert_eq!(
+            relation_name("logs_2025", &[], "pkey", &mut taken),
+            "logs_2025_pkey",
+            "another schema's names are not in the way"
+        );
     }
 
     #[test]

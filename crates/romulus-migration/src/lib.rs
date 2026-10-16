@@ -302,6 +302,9 @@ pub enum WarningCode {
     /// A schema holds nothing the model knows of any more; it is not
     /// dropped (it may hold functions).
     EmptySchema,
+    /// A partition becomes a table: the names of its keys and indexes are
+    /// Postgres's defaults, assumed (the model does not list a partition's).
+    GuessedNames,
 }
 
 /// The migration from `old` to `new`. No statements when

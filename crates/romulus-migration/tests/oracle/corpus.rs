@@ -130,6 +130,7 @@ fn every_corpus_schema_is_built_and_dropped_by_each_tool() {
                     new: model.clone(),
                     options: Options::default(),
                     format,
+                    sources: None,
                 });
             }
             let (next, next_model) = &models[(i + 1) % models.len()];
@@ -141,6 +142,7 @@ fn every_corpus_schema_is_built_and_dropped_by_each_tool() {
                     concurrently: i % 2 == 0,
                 },
                 format: Format::ALL[(i + 3) % Format::ALL.len()],
+                sources: None,
             });
         }
         check_tools(&compiler, cases).await;
