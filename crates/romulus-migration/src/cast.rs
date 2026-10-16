@@ -177,6 +177,20 @@ pub(crate) fn conversion(
             )),
         };
     }
+    // A shorter length: an explicit cast would cut the values silently, the
+    // assignment cast ALTER … TYPE makes without USING refuses them.
+    if a.arrays == b.arrays && shortens(&a, &b) {
+        let limit = b.modifiers.as_deref().unwrap_or("");
+        return Conversion {
+            using: None,
+            lossless: false,
+            via_text: false,
+            rounds: false,
+            note: Some(format!(
+                "Fails on a value longer than {limit}: Postgres refuses it rather than cut it (with no USING). Shorten those values first, or cut them on purpose with your own USING."
+            )),
+        };
+    }
     if a.arrays == b.arrays && (a.family, b.family) == (Family::Timestamp, Family::TimestampTz) {
         return Conversion {
             using: None,
@@ -286,11 +300,30 @@ fn length_widens(from: Option<&str>, to: Option<&str>) -> bool {
     }
 }
 
+/// To a length-limited string or bit string that an assignment cast reaches
+/// (strings from anything; bit strings from bit strings): ALTER … TYPE
+/// without USING checks the length instead of cutting.
+fn shortens(a: &Ty, b: &Ty) -> bool {
+    let limited = b.modifiers.is_some() && !matches!(b.base.as_str(), "name" | "\"char\"");
+    limited
+        && match b.family {
+            Family::Text => true,
+            Family::Bit => a.family == Family::Bit,
+            _ => false,
+        }
+}
+
 /// The cast can change a value rather than reject it: fractions dropped,
-/// precision or scale reduced, a time cut to a date, a time zone dropped.
+/// precision or scale reduced, a time cut to a date, a time zone dropped,
+/// a string cut to `name`'s 63 bytes or `"char"`'s one, a number cut to
+/// its low bits.
 fn rounds(a: &Ty, b: &Ty) -> bool {
     use Family as F;
+    if matches!(b.base.as_str(), "name" | "\"char\"") && a.base != b.base {
+        return true;
+    }
     match (a.family, b.family) {
+        (F::Int(_), F::Bit) => true,
         (F::Numeric | F::Float(_) | F::Money, F::Int(_))
         | (F::Float(8), F::Float(4))
         | (F::Numeric, F::Float(_) | F::Money)
@@ -410,15 +443,27 @@ mod tests {
     fn narrowing_and_crossing_cast_explicitly() {
         assert_eq!(using("bigint", "integer").as_deref(), Some("c::integer"));
         assert_eq!(using("text", "integer").as_deref(), Some("c::integer"));
-        assert_eq!(
-            using("character varying(40)", "character varying(20)").as_deref(),
-            Some("c::character varying(20)")
-        );
         assert_eq!(using("json", "jsonb").as_deref(), Some("c::jsonb"));
         assert!(!conversion("c", "bigint", false, "integer", false).lossless);
-        // name keeps 63 bytes: not every text fits.
+        // name keeps 63 bytes: a longer text is cut, nothing fails.
         let to_name = conversion("c", "text", false, "name", false);
-        assert!(!to_name.lossless && !to_name.rounds);
+        assert!(!to_name.lossless && to_name.rounds);
+        // An explicit cast to a shorter varchar or bit would cut silently:
+        // no USING, so Postgres refuses the long values instead.
+        for (from, to) in [
+            ("text", "character varying(10)"),
+            ("character varying(20)", "character varying(10)"),
+            ("integer", "character varying(3)"),
+            ("bit(8)", "bit(4)"),
+        ] {
+            let c = conversion("c", from, false, to, false);
+            assert!(
+                c.using.is_none() && !c.rounds && !c.lossless,
+                "{from} → {to}: {c:?}"
+            );
+        }
+        // A number to bits keeps the low ones.
+        assert!(conversion("c", "integer", false, "bit(4)", false).rounds);
         // Fewer fractional digits round; fewer integers digits fail.
         assert!(
             conversion(

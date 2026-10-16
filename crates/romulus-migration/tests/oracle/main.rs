@@ -19,10 +19,11 @@
 //! roles and functions. What the compile cannot run is skipped with a
 //! named reason ([`Outcome::Skipped`]) and covered there.
 //!
-//! Needs `ROMULUS_SANDBOX_URL` (`.env`, `just sandbox`); skipped, loudly,
-//! without it, like romulus-sandbox's own tests.
+//! Needs `ROMULUS_SANDBOX_URL` (`.env`, `just sandbox`): skipped, loudly,
+//! without it on a laptop, and failed without it in CI (`CI` set).
 
 mod corpus;
+mod data;
 mod mutate;
 mod scenarios;
 mod tools;
@@ -46,7 +47,9 @@ static COMPILER: OnceCell<Compiler> = OnceCell::const_new();
 
 pub fn admin_url() -> Option<String> {
     let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env"));
-    std::env::var("ROMULUS_SANDBOX_URL").ok()
+    std::env::var("ROMULUS_SANDBOX_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
 }
 
 /// Run a test body on the shared compiler, or skip without a sandbox.
@@ -56,6 +59,12 @@ where
     Fut: Future<Output = ()>,
 {
     let Some(url) = admin_url() else {
+        // In CI a missing sandbox is a failure: a skipped oracle passes
+        // silently, and it is what proves the migrations.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "ROMULUS_SANDBOX_URL is not set in CI: the migration oracle cannot run"
+        );
         #[allow(clippy::print_stderr)]
         {
             eprintln!("SKIPPED: ROMULUS_SANDBOX_URL is not set, the migration oracle did not run");
