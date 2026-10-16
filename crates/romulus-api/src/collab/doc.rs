@@ -3,20 +3,31 @@
 //! docs/MVP.md "The core design":
 //!
 //! ```text
-//! sql:     Y.Text                          canonical DDL
-//! layout:  Y.Map<qualified name, {x, y}>   positions, in graph coordinates
-//! groups:  Y.Map<group id, {name, color, members: qualified names[]}>
-//! meta:    Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`),
-//!          `merged` = the version "Update draft" merged last (`Roots::note_merged`)
+//! sql:       Y.Text                        the schema SQL: canonical in schema mode
+//! migration: Y.Text                        the migration from the base version:
+//!                                          canonical in migration mode
+//! layout:    Y.Map<qualified name, {x, y}> positions, in graph coordinates
+//! groups:    Y.Map<group id, {name, color, members: qualified names[]}>
+//! meta:      Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`),
+//!            `merged` = the version "Update draft" merged last (`Roots::note_merged`),
+//!            `mode` = "schema" | "migration" (absent: schema), written by the
+//!            server only (`Roots::set_mode`; `drafts.mode` is the truth)
 //! ```
+//!
+//! One text is the source at a time (docs/MVP.md "Review round 1", item 2):
+//! in migration mode the schema is derived (compiled from the base version
+//! and the migration) and `sql` waits, unused, until the draft goes back to
+//! schema mode, which rewrites it from that derived schema.
 //!
 //! Map values are plain JSON objects (Yjs `Any`), not nested Y.Maps: a move
 //! or a group edit replaces the whole value, last writer wins per key.
 //!
-//! The server writes to a doc in three places only: the initial content of a
+//! The server writes to a doc in a few places only: the initial content of a
 //! new draft, moving a table's layout and group entries when a rename is
-//! typed in the text (see `room`), and rewriting the SQL as a minimal edit
-//! (Tidy, see `patch`). Everything else comes from clients.
+//! typed in the text (see `room`), rewriting the SQL as a minimal edit
+//! (Tidy, see `patch`), and switching modes (the migration seeded or
+//! cleared, `meta.mode`, in one transaction). Everything else comes from
+//! clients.
 
 use std::collections::BTreeMap;
 
@@ -26,9 +37,13 @@ use yrs::{
     Transact, TransactionMut, Update, types::ToJson, updates::decoder::Decode,
 };
 
-use crate::versions::layout::{TableGroup, TablePosition, VersionLayout};
+use crate::{
+    domain::DraftMode,
+    versions::layout::{TableGroup, TablePosition, VersionLayout},
+};
 
 pub const SQL: &str = "sql";
+pub const MIGRATION: &str = "migration";
 pub const LAYOUT: &str = "layout";
 pub const GROUPS: &str = "groups";
 pub const META: &str = "meta";
@@ -50,6 +65,7 @@ pub fn new_doc() -> Doc {
 #[derive(Clone)]
 pub struct Roots {
     pub sql: TextRef,
+    pub migration: TextRef,
     pub layout: MapRef,
     pub groups: MapRef,
     pub meta: MapRef,
@@ -59,6 +75,7 @@ impl Roots {
     pub fn of(doc: &Doc) -> Self {
         Self {
             sql: doc.get_or_insert_text(SQL),
+            migration: doc.get_or_insert_text(MIGRATION),
             layout: doc.get_or_insert_map(LAYOUT),
             groups: doc.get_or_insert_map(GROUPS),
             meta: doc.get_or_insert_map(META),
@@ -100,6 +117,55 @@ impl Roots {
 
     pub fn sql<T: ReadTxn>(&self, txn: &T) -> String {
         self.sql.get_string(txn)
+    }
+
+    pub fn migration<T: ReadTxn>(&self, txn: &T) -> String {
+        self.migration.get_string(txn)
+    }
+
+    /// The text that is the source in `mode`.
+    pub fn source<T: ReadTxn>(&self, txn: &T, mode: DraftMode) -> String {
+        match mode {
+            DraftMode::Schema => self.sql(txn),
+            DraftMode::Migration => self.migration(txn),
+        }
+    }
+
+    /// The text that is the source in `mode`, to edit.
+    pub fn source_text(&self, mode: DraftMode) -> &TextRef {
+        match mode {
+            DraftMode::Schema => &self.sql,
+            DraftMode::Migration => &self.migration,
+        }
+    }
+
+    /// `meta.mode` as the doc says (absent or unreadable: schema).
+    pub fn mode<T: ReadTxn>(&self, txn: &T) -> DraftMode {
+        self.meta
+            .get(txn, "mode")
+            .and_then(|value| from_any(&value.to_json(txn)))
+            .unwrap_or_default()
+    }
+
+    /// Writes `meta.mode`, if it says otherwise; whether it did.
+    pub fn set_mode(&self, txn: &mut TransactionMut, mode: DraftMode) -> bool {
+        if self.meta.get(txn, "mode").is_some() && self.mode(txn) == mode {
+            return false;
+        }
+        self.meta.insert(txn, "mode", mode.as_str());
+        true
+    }
+
+    /// Replaces a whole text (a mode switch seeding or clearing the
+    /// migration: nobody is editing it then).
+    pub fn replace(text: &TextRef, txn: &mut TransactionMut, with: &str) {
+        let len = text.len(txn);
+        if len > 0 {
+            text.remove_range(txn, 0, len);
+        }
+        if !with.is_empty() {
+            text.insert(txn, 0, with);
+        }
     }
 
     pub fn layout<T: ReadTxn>(&self, txn: &T) -> VersionLayout {
@@ -243,11 +309,28 @@ fn to_any<T: Serialize>(value: &T) -> Any {
 /// update. Written once, by the server, so no two clients ever insert the
 /// same starting text.
 pub fn initial_update(sql: &str, presentation: &VersionLayout) -> Vec<u8> {
+    initial_update_in(DraftMode::Schema, sql, "", presentation)
+}
+
+/// [`initial_update`] of a draft in `mode`, with its migration's text (a
+/// migration draft starts with one inviting to write it).
+pub fn initial_update_in(
+    mode: DraftMode,
+    sql: &str,
+    migration: &str,
+    presentation: &VersionLayout,
+) -> Vec<u8> {
     let doc = new_doc();
     let roots = Roots::of(&doc);
     {
         let mut txn = doc.transact_mut();
         roots.sql.insert(&mut txn, 0, sql);
+        if !migration.is_empty() {
+            roots.migration.insert(&mut txn, 0, migration);
+        }
+        if mode != DraftMode::Schema {
+            roots.set_mode(&mut txn, mode);
+        }
         for (name, position) in &presentation.layout {
             roots
                 .layout

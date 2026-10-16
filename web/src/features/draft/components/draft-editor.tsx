@@ -4,22 +4,25 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
-import { CheckCircleIcon, GitBranchIcon, TableIcon, TrashIcon } from "@/components/icons";
+import { CheckCircleIcon, GitBranchIcon, LockIcon, TableIcon, TrashIcon } from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/components/ui/toaster";
 import { meQuery } from "@/features/auth/queries";
 import { orgKeys, orgQuery } from "@/features/orgs/queries";
 import { canWrite } from "@/features/orgs/roles";
 import type { Schema } from "@/features/schema/model";
+import type { Editor } from "@/features/schema/text/codemirror";
+import type { TextTab } from "@/features/schema/text/schema-text";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
 
 import { draftExtensions, jumpTo, nextConflict, showDiagnostics } from "../collab";
 import { findConflicts } from "../conflicts";
-import { useUpdateDraft } from "../mutations";
-import { type Diagnostic, type Draft, draftKeys, draftQuery } from "../queries";
+import { useSwitchMode, useUpdateDraft } from "../mutations";
+import { type Diagnostic, type Draft, type DraftMode, draftKeys, draftQuery } from "../queries";
 import { names, resetApprovals } from "../review";
 import { type DraftSession, mayEdit, type SessionState } from "../session";
 import { useGraphEdits } from "../use-graph-edits";
@@ -34,6 +37,13 @@ import {
 import { EditorBar } from "./editor-bar";
 import { FirstTable } from "./first-table";
 import { LiveGraph } from "./live-graph";
+import { migrationFileName } from "../migration-file";
+import {
+  GeneratedMigration,
+  PaneNotice,
+  WrittenMigration,
+  WrittenMigrationActions,
+} from "./migration-tab";
 import { PublishDialog } from "./publish-dialog";
 
 const emptySchema = (database: string): Schema => ({
@@ -55,6 +65,7 @@ const WAITING: SessionState["compile"] = {
   stale: true,
   diagnostics: [],
   model: null,
+  sha256: null,
 };
 
 /**
@@ -129,9 +140,41 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
     // Whoever clicked hears it from their own request.
     if (updated.by !== me.name)
       toast.info(`${updated.by} updated the draft to v${updated.version}`, {
-        description: conflictsSentence(updated.conflicts),
+        description:
+          session?.getState().mode === "migration"
+            ? `The migration applies to v${updated.version} now.`
+            : conflictsSentence(updated.conflicts),
       });
-  }, [updated, queryClient, org, db, draftId, me.name]);
+  }, [updated, queryClient, org, db, draftId, me.name, session]);
+  // This tab typed into the text that had just stopped being the source:
+  // the server undid it.
+  const staleEdit = state?.staleEdit ?? null;
+  React.useEffect(() => {
+    if (!staleEdit) return;
+    toast.warning("Your last edit came after a switch and was undone", {
+      description:
+        staleEdit.mode === "migration"
+          ? "The migration is what everyone edits now: make the change there."
+          : "The schema SQL is what everyone edits now: make the change there.",
+    });
+  }, [staleEdit]);
+  // Someone switched modes: the other text is the source now.
+  const modeChanged = state?.modeChanged ?? null;
+  React.useEffect(() => {
+    if (!modeChanged) return;
+    void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
+    void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
+    if (modeChanged.by === me.name) return;
+    if (modeChanged.mode === "migration")
+      toast.info(`${modeChanged.by} is writing the migration by hand`, {
+        description:
+          "The migration is what everyone edits now; the SQL and the graph follow from it.",
+      });
+    else
+      toast.info(`${modeChanged.by} discarded the migration`, {
+        description: "The schema SQL is what everyone edits again.",
+      });
+  }, [modeChanged, queryClient, org, db, draftId, me.name]);
   // The server sees another role than this page thought: a role changed.
   // Catch up.
   const serverRole = state?.role ?? null;
@@ -232,12 +275,29 @@ export function Workspace({
   const layout = useYMap(session?.layout);
   const groups = useYMap(session?.groups);
   const sql = useYText(session?.sql);
+  const migration = useYText(session?.migration);
+  const mode: DraftMode = state?.mode ?? draft.mode;
+  const source = mode === "migration" ? migration : sql;
   const { canUndo, canRedo } = useUndoState(session);
-  const [view, setView] = React.useState<EditorView | null>(null);
+  // One editor per text: the SQL's, the migration's (the one that is the
+  // source is bound to the doc).
+  const [sqlView, setSqlView] = React.useState<EditorView | null>(null);
+  const [migrationView, setMigrationView] = React.useState<EditorView | null>(null);
+  const view = mode === "migration" ? migrationView : sqlView;
+  const migrationEditor = React.useRef<Editor | null>(null);
+  // The text pane's tab: the source's, again after each switch.
+  const [textTab, setTextTab] = React.useState<string>(mode === "migration" ? "migration" : "sql");
+  const [tabMode, setTabMode] = React.useState(mode);
+  if (tabMode !== mode) {
+    setTabMode(mode);
+    setTextTab(mode === "migration" ? "migration" : "sql");
+  }
+  const [switching, setSwitching] = React.useState<DraftMode | null>(null);
+  const switchMode = useSwitchMode(org, db, draft.id);
   const [selected, setSelected] = React.useState<string | null>(null);
   const [picked, setPicked] = React.useState<string[]>([]);
   const [publishing, setPublishing] = React.useState(false);
-  const conflicts = React.useMemo(() => findConflicts(sql), [sql]);
+  const conflicts = React.useMemo(() => findConflicts(source), [source]);
   const update = useUpdateDraft(org, db, draft.id);
 
   const status = state?.status ?? "open";
@@ -254,15 +314,24 @@ export function Workspace({
     session,
     compile,
     edits: state?.edits,
-    sql,
+    sql: source,
     view,
     canEdit,
   });
   const schema = shown ?? emptySchema(db);
 
+  // Bound to the doc while the SQL is the source; a new editor, read-only,
+  // once it is derived (`sqlKey`).
   const sqlExtensions = React.useMemo(
-    () => (session ? draftExtensions(session, setView) : undefined),
-    [session],
+    () => (session && mode === "schema" ? draftExtensions(session, setSqlView) : undefined),
+    [session, mode],
+  );
+  const migrationExtensions = React.useMemo(
+    () =>
+      session && mode === "migration"
+        ? draftExtensions(session, setMigrationView, session.migration)
+        : undefined,
+    [session, mode],
   );
 
   React.useEffect(() => {
@@ -327,7 +396,17 @@ export function Workspace({
     session?.expectRewrite();
     update.mutate(undefined, {
       onSuccess: (result) => {
-        if (result.conflicts > 0) {
+        const errors = result.diagnostics ?? [];
+        if (errors.length > 0) {
+          toast.warning(`Updated to v${result.base_version}`, {
+            description: `The migration no longer applies to v${result.base_version}: fix it before publishing.`,
+          });
+          requestAnimationFrame(() => jump(errors[0]!));
+        } else if (mode === "migration") {
+          toast.success(`Updated to v${result.base_version}`, {
+            description: `The migration applies to v${result.base_version}. Publishing is open again.`,
+          });
+        } else if (result.conflicts > 0) {
           toast.warning(`Updated to v${result.base_version}`, {
             description: conflictsSentence(result.conflicts),
           });
@@ -354,6 +433,109 @@ export function Workspace({
       },
     });
   };
+  const confirmSwitch = async () => {
+    if (!switching) return;
+    try {
+      const switched = await switchMode.mutateAsync(switching);
+      if (switched.mode === "migration")
+        toast.success("You’re writing the migration", {
+          description: "Everyone edits it now; the SQL and the graph follow from it.",
+        });
+      else
+        toast.success("Migration discarded", {
+          description: "The schema SQL is what everyone edits again.",
+        });
+    } catch (error) {
+      const diagnostics =
+        error instanceof ApiError && error.code === "compile_failed"
+          ? ((error.details as { diagnostics?: Diagnostic[] } | undefined)?.diagnostics ?? [])
+          : [];
+      toast.error(
+        switching === "migration"
+          ? "Could not start the migration"
+          : "Could not discard the migration",
+        { description: error instanceof ApiError ? error.message : "Check your connection." },
+      );
+      const first = diagnostics.find((d) => d.severity === "error");
+      if (first) {
+        setSwitching(null);
+        requestAnimationFrame(() => jump(first));
+        return;
+      }
+      throw error;
+    }
+  };
+
+  // The text pane: the source first-class, the other text read-only.
+  const textTabs = React.useMemo<TextTab[]>(() => {
+    if (!session) return [];
+    if (mode === "migration") {
+      return [
+        {
+          id: "migration",
+          label: "Migration",
+          position: "start",
+          render: (active) => (
+            <WrittenMigration
+              text={migration}
+              extensions={migrationExtensions}
+              active={active}
+              canEdit={canEdit}
+              baseVersion={draft.base_version}
+              onEditor={(e) => {
+                migrationEditor.current = e;
+              }}
+            />
+          ),
+          actions: (
+            <WrittenMigrationActions
+              text={migration}
+              fileName={migrationFileName(draft.name)}
+              editor={migrationEditor}
+            />
+          ),
+        },
+      ];
+    }
+    return [
+      {
+        id: "migration",
+        label: "Migration",
+        position: "after-sql",
+        locked: "Generated from the SQL",
+        render: (active) => (
+          <GeneratedMigration
+            org={org}
+            db={db}
+            draft={draft}
+            compile={compile}
+            active={active}
+            canEdit={canEdit}
+            onEdit={() => setSwitching("migration")}
+            onJump={(d) => {
+              setTextTab("sql");
+              requestAnimationFrame(() => jump(d));
+            }}
+            onUpdate={runUpdate}
+            updating={update.isPending}
+          />
+        ),
+      },
+    ];
+    // `jump` and `runUpdate` read the latest state when called.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    session,
+    mode,
+    migration,
+    migrationExtensions,
+    canEdit,
+    draft,
+    compile,
+    org,
+    db,
+    update.isPending,
+  ]);
 
   return (
     <div className="flex h-dvh flex-col bg-background">
@@ -375,6 +557,9 @@ export function Workspace({
         onUndo={() => session?.undo.undo()}
         onRedo={() => session?.undo.redo()}
         sql={sql}
+        mode={mode}
+        migration={migration}
+        onSwitchMode={setSwitching}
         onRewrite={(expected) => session?.expectRewrite(expected)}
         onJump={jump}
         onPublish={() => setPublishing(true)}
@@ -396,15 +581,35 @@ export function Workspace({
         conflicts={conflicts.length}
         conflictsWith={conflicts[0]?.label ?? null}
         onNextConflict={toNextConflict}
+        mode={mode}
       />
       <main className="min-h-0 flex-1">
         {session && state?.synced ? (
           <SchemaViewer
             schema={schema}
             texts={{
-              sql,
+              // Migration mode: the schema the migration makes, as SQL.
+              sql: mode === "migration" ? (state.schemaSql ?? "") : sql,
               json: compile.model ? JSON.stringify(compile.model, null, 2) : undefined,
             }}
+            format={textTab}
+            onFormatChange={setTextTab}
+            textTabs={textTabs}
+            sqlKey={mode}
+            sqlTab={
+              mode === "migration"
+                ? {
+                    locked: "Derived from the migration",
+                    notice: (
+                      <PaneNotice icon={<LockIcon aria-hidden />}>
+                        {state.schemaSql === null
+                          ? "The schema appears here once the migration compiles."
+                          : `Read-only: what the migration makes of ${draft.base_version ? `v${draft.base_version}` : "an empty database"}. Edit the migration to change it.`}
+                      </PaneNotice>
+                    ),
+                  }
+                : undefined
+            }
             layout={layout}
             groups={groups}
             // Reviewers write nothing, but place new tables exactly as editors
@@ -413,7 +618,7 @@ export function Workspace({
               canEdit ? (positions) => session.setPositions(positions) : noLayoutChange
             }
             editable={canEdit}
-            readOnly={!canEdit}
+            readOnly={mode === "migration" || !canEdit}
             sqlExtensions={sqlExtensions}
             selected={selected}
             onSelectedChange={select}
@@ -435,7 +640,11 @@ export function Workspace({
                 <EmptyState
                   icon={<TableIcon />}
                   title="No tables yet"
-                  description="Tables appear here as soon as someone writes them in the SQL."
+                  description={
+                    mode === "migration"
+                      ? "Tables appear here as soon as the migration creates them."
+                      : "Tables appear here as soon as someone writes them in the SQL."
+                  }
                 />
               )
             }
@@ -445,11 +654,34 @@ export function Workspace({
           <SchemaViewerSkeleton />
         )}
       </main>
+      <ConfirmDialog
+        open={switching !== null}
+        onOpenChange={(open) => !open && setSwitching(null)}
+        title={switching === "schema" ? "Discard the migration?" : "Write the migration by hand?"}
+        description={
+          switching === "schema" ? (
+            <>
+              The schema becomes what the migration makes of{" "}
+              {draft.base_version ? `v${draft.base_version}` : "an empty database"}, as SQL. The
+              migration is deleted for everyone.
+            </>
+          ) : (
+            <>
+              The generated migration becomes what everyone edits, and the SQL and the graph follow
+              from it. Going back to editing the SQL later discards the migration.
+            </>
+          )
+        }
+        confirmLabel={switching === "schema" ? "Discard migration" : "Edit migration"}
+        destructive={switching === "schema"}
+        onConfirm={confirmSwitch}
+      />
       {isWriter && (
         <PublishDialog
           org={org}
           db={db}
           draftId={draft.id}
+          draftName={draft.name}
           databaseName={draft.database.name}
           layout={layout}
           groups={groups}
@@ -482,6 +714,7 @@ function Notice({
   conflicts,
   conflictsWith,
   onNextConflict,
+  mode,
 }: {
   org: string;
   db: string;
@@ -491,6 +724,7 @@ function Notice({
   conflicts: number;
   conflictsWith: string | null;
   onNextConflict: () => void;
+  mode: DraftMode;
 }) {
   const strip = "rounded-none border-x-0 border-t-0 px-4 py-2 md:px-5";
   if (state?.tooLarge) {
@@ -631,7 +865,9 @@ function Notice({
           <>
             v{draft.latest_version} was published after this draft started.{" "}
             <span className="font-normal text-muted-foreground">
-              Update the draft to bring v{draft.latest_version} in, then publish.
+              {mode === "migration"
+                ? `Update the draft to apply the migration to v${draft.latest_version}, then publish.`
+                : `Update the draft to bring v${draft.latest_version} in, then publish.`}
             </span>
           </>
         }

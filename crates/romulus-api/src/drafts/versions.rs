@@ -79,7 +79,11 @@ pub struct DraftVersion {
     pub expected_base: Option<Uuid>,
     /// Canonical, its `database` set.
     pub model: Schema,
+    /// SQL that compiles to `model`: the draft's text, or (migration mode)
+    /// the derived schema rendered.
     pub source: String,
+    /// Migration mode: the migration, stored with the version.
+    pub migration_sql: Option<String>,
     pub layout: VersionLayout,
     pub message: Option<String>,
     pub created_by: Uuid,
@@ -113,6 +117,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             expected_base: Some(new.expected_base),
             publishes_draft: Some(new.draft),
             approvals: new.approvals,
+            migration_sql: new.migration_sql,
         },
         false,
     )

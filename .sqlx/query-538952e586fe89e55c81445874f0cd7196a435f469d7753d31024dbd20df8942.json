@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE v.id = $1",
+  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE v.database_id = $1 AND v.removed_at IS NULL AND ($2::int IS NULL OR v.number < $2)\n           ORDER BY v.number DESC LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -135,11 +135,19 @@
             "name": "name"
           }
         }
+      },
+      {
+        "ordinal": 10,
+        "name": "written_migration!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Int4",
+        "Int8"
       ]
     },
     "nullable": [
@@ -149,11 +157,12 @@
       false,
       true,
       false,
-      true,
-      true,
-      true,
-      true
+      false,
+      false,
+      false,
+      false,
+      null
     ]
   },
-  "hash": "795b202dbb0c910e299037ced581a549e135596082753f84bc05f72c5f82f01d"
+  "hash": "538952e586fe89e55c81445874f0cd7196a435f469d7753d31024dbd20df8942"
 }

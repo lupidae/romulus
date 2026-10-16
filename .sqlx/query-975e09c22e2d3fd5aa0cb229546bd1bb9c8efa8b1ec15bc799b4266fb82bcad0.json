@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET mode = $2, base_sql = CASE WHEN $4 THEN $3 ELSE base_sql END,\n                           updated_at = now()\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "draft_mode",
+            "kind": {
+              "Enum": [
+                "schema",
+                "migration"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "975e09c22e2d3fd5aa0cb229546bd1bb9c8efa8b1ec15bc799b4266fb82bcad0"
+}

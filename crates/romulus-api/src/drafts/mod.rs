@@ -7,7 +7,8 @@
 //! - `POST /orgs/{org}/databases/{db}/drafts` [developer]: a new draft from
 //!   the latest version, in one click: named "Draft from vN", its SQL the
 //!   version's source (or `render_sql` of a pushed model), its layout and
-//!   groups copied.
+//!   groups copied. With `{"mode": "migration"}`, "Migration from vN": a
+//!   migration written from scratch ([`mode`]).
 //! - `GET /orgs/{org}/databases/{db}/drafts/{id}` [member];
 //!   `PATCH` [developer]: rename; `DELETE` [developer]: soft delete
 //!   (`status = 'deleted'`; whoever has it open is told and let go).
@@ -27,6 +28,9 @@
 //! - `POST/DELETE …/drafts/{id}/approvals` [member], `POST/DELETE
 //!   …/drafts/{id}/review-request` [developer]: approvals before
 //!   publishing, and "Request review" ([`approvals`]).
+//! - `POST …/drafts/{id}/mode` [developer]: switches between schema mode
+//!   (the SQL is the source) and migration mode (a migration from the base
+//!   version is) ([`mode`]).
 //!
 //! Tables: `drafts`, `draft_compiles` (with `collab`'s `draft_updates`,
 //! `draft_snapshots`), `draft_approvals`, `draft_review_requests`,
@@ -34,7 +38,9 @@
 
 pub mod approvals;
 pub mod migration;
+pub mod mode;
 pub mod publish;
+mod source;
 pub mod tidy;
 pub mod update;
 pub mod versions;
@@ -42,7 +48,6 @@ pub mod versions;
 use axum::{extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::Digest as _;
 use sqlx::PgPool;
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -54,7 +59,7 @@ use crate::{
     auth::{Member, min},
     collab::{Hub, Present, compile, doc},
     databases::{self, DatabaseRef},
-    domain::{DraftStatus, SourceKind},
+    domain::{DraftMode, DraftStatus, SourceKind},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
@@ -71,6 +76,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(update::update))
         .routes(routes!(approvals::approve, approvals::withdraw))
         .routes(routes!(approvals::request_review, approvals::cancel_review))
+        .routes(routes!(mode::switch_mode))
 }
 
 /// A draft, as the database page and the editor show it.
@@ -79,6 +85,8 @@ pub struct Draft {
     pub id: Uuid,
     pub name: String,
     pub status: DraftStatus,
+    /// What it is edited as: the schema SQL, or a migration from its base.
+    pub mode: DraftMode,
     pub database: DraftDatabase,
     /// The version it started from; `null` when the database had none.
     pub base_version: Option<i32>,
@@ -118,6 +126,15 @@ pub struct Person {
     pub name: String,
 }
 
+/// How to start a draft (no body: a schema draft).
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct CreateDraft {
+    /// `migration`: written as a migration from the latest version, from
+    /// scratch. `schema` when absent.
+    #[serde(default)]
+    pub mode: DraftMode,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RenameDraft {
     /// 1 to 200 characters.
@@ -128,6 +145,7 @@ struct Row {
     id: Uuid,
     name: String,
     status: DraftStatus,
+    mode: DraftMode,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     base_version: Option<i32>,
@@ -160,6 +178,7 @@ impl Row {
             id: self.id,
             name: self.name,
             status: self.status,
+            mode: self.mode,
             database: DraftDatabase {
                 id: database.id,
                 slug: database.slug.clone(),
@@ -235,7 +254,8 @@ async fn one(state: &AppState, org_id: Uuid, database: &DatabaseRef, row: Row) -
 async fn find(db: &PgPool, database: &DatabaseRef, id: Uuid) -> ApiResult<Row> {
     sqlx::query_as!(
         Row,
-        r#"SELECT d.id, d.name, d.status AS "status: DraftStatus", d.created_at, d.updated_at,
+        r#"SELECT d.id, d.name, d.status AS "status: DraftStatus", d.mode AS "mode: DraftMode",
+                  d.created_at, d.updated_at,
                   bv.number AS "base_version?", bv.removed_at IS NOT NULL AS "base_removed?",
                   pv.number AS "published_version?",
                   u.id AS "creator_id?", u.name AS "creator_name?"
@@ -287,7 +307,8 @@ async fn list(
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let rows = sqlx::query_as!(
         Row,
-        r#"SELECT d.id, d.name, d.status AS "status: DraftStatus", d.created_at, d.updated_at,
+        r#"SELECT d.id, d.name, d.status AS "status: DraftStatus", d.mode AS "mode: DraftMode",
+                  d.created_at, d.updated_at,
                   bv.number AS "base_version?", bv.removed_at IS NOT NULL AS "base_removed?",
                   pv.number AS "published_version?",
                   u.id AS "creator_id?", u.name AS "creator_name?"
@@ -305,13 +326,15 @@ async fn list(
 }
 
 /// A new draft from the latest version, ready to edit: no form, renamed
-/// later if wanted.
+/// later if wanted. A schema draft by default; with `{"mode": "migration"}`,
+/// a migration from the latest version, written from scratch.
 #[utoipa::path(
     post,
     path = "/orgs/{org}/databases/{db}/drafts",
     operation_id = "create_draft",
     tag = "drafts",
     params(("org" = String, Path), ("db" = String, Path, description = "Database slug")),
+    request_body(content = Option<CreateDraft>, description = "Optional: a schema draft without one"),
     responses(
         (status = 201, body = Draft),
         (status = 403, description = "Reviewers cannot create drafts", body = ErrorBody),
@@ -320,13 +343,15 @@ async fn list(
 )]
 async fn create(
     member: Member<min::Developer>,
-    Path((_, db_slug)): Path<(String, String)>,
+    Path((org, db_slug)): Path<(String, String)>,
     State(state): State<AppState>,
+    body: Option<Json<CreateDraft>>,
 ) -> ApiResult<(StatusCode, Json<Draft>)> {
+    let mode = body.map(|Json(body)| body.mode).unwrap_or_default();
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let base = versions::latest(&state.db, database.id).await?;
 
-    let (name, sql, layout, model) = match &base {
+    let (from, sql, layout, model) = match &base {
         Some(version) => {
             // The version's model is what its SQL compiles to only when the
             // SQL is the source; SQL rendered from a pushed model is compiled
@@ -334,47 +359,64 @@ async fn create(
             let model = (version.source_kind == SourceKind::Sql).then_some(&version.model);
             let sql = version.sql()?;
             (
-                format!("Draft from v{}", version.number),
+                Some(version.number),
                 sql,
                 VersionLayout::from_value(&version.layout),
                 model,
             )
         }
-        None => (
-            "New draft".to_owned(),
-            String::new(),
-            VersionLayout::default(),
-            None,
-        ),
+        None => (None, String::new(), VersionLayout::default(), None),
+    };
+    let name = match (mode, from) {
+        (DraftMode::Schema, Some(n)) => format!("Draft from v{n}"),
+        (DraftMode::Schema, None) => "New draft".to_owned(),
+        (DraftMode::Migration, Some(n)) => format!("Migration from v{n}"),
+        (DraftMode::Migration, None) => "New migration".to_owned(),
+    };
+    // A migration draft starts with a line saying what to write.
+    let migration = match mode {
+        DraftMode::Schema => String::new(),
+        DraftMode::Migration => mode::blank_migration(&format!("{org}/{db_slug}"), from),
+    };
+    let source = match mode {
+        DraftMode::Schema => &sql,
+        DraftMode::Migration => &migration,
     };
 
     let mut tx = state.db.begin().await?;
     let id = sqlx::query_scalar!(
-        "INSERT INTO drafts (database_id, name, base_version_id, created_by)
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO drafts (database_id, name, base_version_id, created_by, mode)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
         database.id,
         name,
         base.as_ref().map(|v| v.id),
         member.user.id,
+        mode as DraftMode,
     )
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query!(
         "INSERT INTO draft_updates (draft_id, update) VALUES ($1, $2)",
         id,
-        doc::initial_update(&sql, &layout),
+        doc::initial_update_in(mode, &sql, &migration, &layout),
     )
     .execute(&mut *tx)
     .await?;
-    // The version's model is what its SQL compiles to: whoever opens the
-    // draft sees the graph at once, before any sandbox run.
+    // The version's model is what its SQL compiles to (and what an empty
+    // migration makes of it): whoever opens the draft sees the graph at
+    // once, before any sandbox run.
     if let Some(model) = model {
-        let tables = serde_json::to_value(compile::created_at(&sql)).map_err(ApiError::internal)?;
+        let tables = match mode {
+            DraftMode::Schema => compile::created_at(&sql),
+            DraftMode::Migration => std::collections::HashMap::new(),
+        };
+        let tables = serde_json::to_value(tables).map_err(ApiError::internal)?;
+        let hash = compile::input_hash(mode, &sql, source);
         sqlx::query!(
             "INSERT INTO draft_compiles (draft_id, source_hash, model, good_model, good_tables)
              VALUES ($1, $2, $3, $3, $4)",
             id,
-            sha2::Sha256::digest(sql.as_bytes()).to_vec(),
+            unhex(&hash),
             model,
             tables,
         )
@@ -382,13 +424,21 @@ async fn create(
         .await?;
     }
     tx.commit().await?;
-    tracing::info!(draft = %id, database = %database.id, "draft created");
+    tracing::info!(draft = %id, database = %database.id, mode = mode.as_str(), "draft created");
 
     let row = find(&state.db, &database, id).await?;
     Ok((
         StatusCode::CREATED,
         Json(one(&state, member.org.id, &database, row).await?),
     ))
+}
+
+/// Hex back to bytes (`draft_compiles.source_hash`).
+fn unhex(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 /// One draft (published ones too: the editor says what became of them).

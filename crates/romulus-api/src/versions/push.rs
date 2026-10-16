@@ -197,6 +197,7 @@ async fn push(
         expected_base: None,
         publishes_draft: None,
         approvals: None,
+        migration_sql: None,
     };
     let database_id = new.database_id;
     Ok(match store(&state.db, new, true).await? {

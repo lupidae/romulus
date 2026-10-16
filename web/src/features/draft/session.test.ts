@@ -15,7 +15,11 @@ const initial: SessionState = {
   statusBy: null,
   publishedVersion: null,
   name: null,
-  compile: { state: "ok", stale: false, diagnostics: [], model: null },
+  mode: "schema",
+  schemaSql: null,
+  modeChanged: null,
+  staleEdit: null,
+  compile: { state: "ok", stale: false, diagnostics: [], model: null, sha256: null },
   versionCreated: null,
   versionsChanged: null,
   review: null,
@@ -339,5 +343,69 @@ describe("groups", () => {
     session.undo.undo();
     expect(session.groups.get("g")?.members).toEqual(["public.users", "public.sessions"]);
     session.destroy();
+  });
+});
+
+describe("migration mode", () => {
+  const blog = parseSchema(blogJson);
+  const users = { schema: "public", name: "users", kind: "r" as const };
+
+  it("appends graph edits to the migration, the SQL left alone", () => {
+    const session = new DraftSession("acme", "draft", {
+      local: {
+        sql: "CREATE TABLE users (id bigint);\n",
+        migration: "-- acme/shop: migration from v1, written by hand.\n",
+        role: "developer",
+        compile: () => ({ model: null, diagnostics: [] }),
+      },
+    });
+    expect(session.getState().mode).toBe("migration");
+    expect(session.source()).toBe(session.migration);
+    session.editSchema({ kind: "renameTable", table: users, to: "members" }, blog);
+    expect(session.migration.toJSON()).toBe(
+      `-- acme/shop: migration from v1, written by hand.\n\n${MARKER}\nALTER TABLE public.users RENAME TO members;\n`,
+    );
+    expect(session.sql.toJSON()).toBe("CREATE TABLE users (id bigint);\n");
+    // One undo takes it back, in the migration too.
+    session.undo.undo();
+    expect(session.migration.toJSON()).toBe("-- acme/shop: migration from v1, written by hand.\n");
+    session.destroy();
+  });
+
+  it("follows the server's switch: the other text is the source, the history gone", () => {
+    const session = new DraftSession("acme", "draft", {
+      local: {
+        sql: "CREATE TABLE users (id bigint);\n",
+        role: "developer",
+        compile: () => ({ model: null, diagnostics: [] }),
+      },
+    });
+    session.editSchema({ kind: "setComment", table: users, comment: "People" }, blog);
+    expect(session.undo.undoStack).toHaveLength(1);
+    // The room switches: the migration seeded and the mode noted, together.
+    const server = new Y.Doc();
+    Y.applyUpdate(server, Y.encodeStateAsUpdate(session.doc));
+    server.transact(() => {
+      server.getText("migration").insert(0, "ALTER TABLE public.users ADD x int;\n");
+      server.getMap("meta").set("mode", "migration");
+    });
+    Y.applyUpdate(session.doc, Y.encodeStateAsUpdate(server, Y.encodeStateVector(session.doc)));
+    expect(session.getState().mode).toBe("migration");
+    expect(session.source().toJSON()).toBe("ALTER TABLE public.users ADD x int;\n");
+    expect(session.undo.undoStack).toHaveLength(0);
+    expect(session.getState().edits).toEqual([]);
+    // Nobody's "Undo history was cleared": the switch says it.
+    expect(session.getState().historyCleared).toBeNull();
+    session.destroy();
+  });
+
+  it("knows who switched modes", () => {
+    const patched = apply(initial, { type: "mode", mode: "migration", by: "Alice" });
+    expect(patched.modeChanged).toEqual({ mode: "migration", by: "Alice" });
+  });
+
+  it("hears when an edit reached the text that is not the source", () => {
+    const patched = apply(initial, { type: "stale_edit", mode: "migration" });
+    expect(patched.staleEdit).toMatchObject({ mode: "migration" });
   });
 });

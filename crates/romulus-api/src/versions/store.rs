@@ -45,6 +45,9 @@ pub struct NewVersion {
     /// The approvals of the draft it publishes: checked again and kept with
     /// it, in the same transaction (`drafts::approvals::freeze`).
     pub approvals: Option<crate::drafts::approvals::Freeze>,
+    /// The migration the version was written as (a draft in migration mode
+    /// publishing it; `versions.migration_sql`).
+    pub migration_sql: Option<String>,
 }
 
 /// Why [`store`] stored nothing.
@@ -181,8 +184,8 @@ pub async fn store(
     let number = last_number + 1;
     let id = sqlx::query_scalar!(
         "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,
-                               message, created_by, created_by_token)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+                               message, created_by, created_by_token, migration_sql)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
         database_id,
         number,
         model,
@@ -193,6 +196,7 @@ pub async fn store(
         new.message,
         new.created_by,
         new.created_by_token,
+        new.migration_sql,
     )
     .fetch_one(&mut *tx)
     .await?;

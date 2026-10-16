@@ -158,6 +158,32 @@ pub enum AuditAction {
     ApprovalsRequiredChanged,
 }
 
+/// What a draft is edited as (`draft_mode`): one source of truth at a time
+/// (docs/MVP.md "Review round 1", item 2).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema,
+)]
+#[sqlx(type_name = "draft_mode", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum DraftMode {
+    /// The schema SQL is the source; its migration is generated.
+    #[default]
+    Schema,
+    /// A migration from the base version is the source, written by hand;
+    /// the schema is what it makes of the base version.
+    Migration,
+}
+
+impl DraftMode {
+    /// The wire name, as the doc's `meta.mode` holds it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Schema => "schema",
+            Self::Migration => "migration",
+        }
+    }
+}
+
 /// What an API token may do (`api_token_scope`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "api_token_scope", rename_all = "snake_case")]

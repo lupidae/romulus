@@ -188,6 +188,47 @@ impl SqlCompiler {
         if let Some(refused) = refused(&sql) {
             return Ok(refused);
         }
+        self.coalesced(key, sql).await
+    }
+
+    /// A draft in migration mode: its base version's SQL (`base`, empty
+    /// without a base version), then its `migration`, compiled as
+    /// [`SqlCompiler::compile_for`] does (coalesced per `key`), with the
+    /// diagnostics located in `migration`
+    /// ([`romulus_sandbox::draft_migration`]). Refused while the migration
+    /// has conflict blocks, like a draft's SQL.
+    pub async fn compile_migration_for(
+        &self,
+        key: &str,
+        base: &str,
+        migration: &str,
+    ) -> Result<Compiled, Rejected> {
+        if let Some(refused) = refused(migration) {
+            return Ok(refused);
+        }
+        let script = romulus_sandbox::draft_migration::script(base, migration);
+        let compiled = self.coalesced(key, script.text.clone()).await?;
+        Ok(Compiled {
+            model: compiled.model,
+            diagnostics: script.relocate(migration, compiled.diagnostics),
+        })
+    }
+
+    /// [`SqlCompiler::compile_migration_for`], not coalesced: publishing,
+    /// updating and switching modes compile what they hold, once.
+    pub async fn compile_migration(&self, base: &str, migration: &str) -> ApiResult<Compiled> {
+        if let Some(refused) = refused(migration) {
+            return Ok(refused);
+        }
+        let script = romulus_sandbox::draft_migration::script(base, migration);
+        let compiled = self.compile(&script.text).await?;
+        Ok(Compiled {
+            model: compiled.model,
+            diagnostics: script.relocate(migration, compiled.diagnostics),
+        })
+    }
+
+    async fn coalesced(&self, key: &str, sql: String) -> Result<Compiled, Rejected> {
         let Backend::Sandbox(sandbox) = &self.0 else {
             return Ok(self.compile(&sql).await?);
         };

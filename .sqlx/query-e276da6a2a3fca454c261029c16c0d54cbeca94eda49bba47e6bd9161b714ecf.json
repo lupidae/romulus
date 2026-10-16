@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT migration_sql, message FROM versions WHERE database_id = $1 AND number = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "migration_sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "migration_sql"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "message"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "e276da6a2a3fca454c261029c16c0d54cbeca94eda49bba47e6bd9161b714ecf"
+}

@@ -3,12 +3,19 @@
 // this client's undo history. Plain TypeScript; React reads it through
 // `use-session.ts`.
 //
-// The doc (docs/MVP.md "The core design"):
-//   sql:    Y.Text                       canonical DDL
-//   layout: Y.Map<qualified name, {x, y}>
-//   groups: Y.Map<group id, {name, color, members}>
-//   meta:   Y.Map: `rewrite` = {count, reason}, bumped by the server in the
-//           same transaction as each rewrite of the SQL (Tidy, Update draft)
+// The doc (docs/MVP.md "The core design", "Review round 1" item 2):
+//   sql:       Y.Text                    the schema SQL: the source in schema mode
+//   migration: Y.Text                    a migration from the base version: the
+//                                        source in migration mode
+//   layout:    Y.Map<qualified name, {x, y}>
+//   groups:    Y.Map<group id, {name, color, members}>
+//   meta:      Y.Map: `rewrite` = {count, reason}, bumped by the server in the
+//              same transaction as each rewrite of the SQL (Tidy, Update draft);
+//              `mode` = "schema" | "migration" (absent: schema), written by
+//              the server only, with the texts it switches
+// One text is the source at a time: in migration mode the schema (its SQL
+// sent with each compile) and the graph are what the migration makes of
+// the base version, and graph edits append to the migration.
 // Awareness carries this client's `cursor` (y-codemirror), `pointer` (graph
 // coordinates) and `selection` (a table); the server stamps `user`.
 
@@ -27,7 +34,7 @@ import { parseSchema, type Schema } from "@/features/schema/model";
 import type { Role } from "@/features/orgs/queries";
 
 import { type EditEntry, KEPT_EDITS, touchedEntities } from "./graph-edits";
-import type { CompileState, Diagnostic, LiveStatus, ServerEvent } from "./queries";
+import type { CompileState, Diagnostic, DraftMode, LiveStatus, ServerEvent } from "./queries";
 import type { Review } from "./review";
 
 /** The server's own messages on the socket (crates/romulus-api/src/collab/protocol.rs). */
@@ -62,6 +69,8 @@ export interface CompileView {
   diagnostics: Diagnostic[];
   /** The last model that compiled: what the graph shows. */
   model: Schema | null;
+  /** SHA-256 of this client's source when the last result is `ok` and about it. */
+  sha256: string | null;
 }
 
 export interface SessionState {
@@ -76,6 +85,14 @@ export interface SessionState {
   publishedVersion: number | null;
   /** A rename made while the draft is open. */
   name: string | null;
+  /** Which text is the source (the doc's `meta.mode`). */
+  mode: DraftMode;
+  /** Migration mode: the schema the migration makes, as SQL (of the last model that compiled). */
+  schemaSql: string | null;
+  /** The last mode switch while this tab was open (someone else's or this tab's). */
+  modeChanged: { mode: DraftMode; by: string } | null;
+  /** This tab's edit reached the text that is not the source (before it saw a switch) and was undone. */
+  staleEdit: { mode: DraftMode; at: number } | null;
   compile: CompileView;
   /** The database got a new version meanwhile: its number. */
   versionCreated: number | null;
@@ -164,6 +181,10 @@ export function eventPatch(
       return {
         updated: { version: event.version, by: event.by, conflicts: event.conflicts },
       };
+    case "mode":
+      return { modeChanged: { mode: event.mode, by: event.by } };
+    case "stale_edit":
+      return { staleEdit: { mode: event.mode, at: Date.now() } };
   }
 }
 
@@ -224,6 +245,8 @@ export interface DraftSessionOptions {
 /** A draft without a server: its content, and what stands in for the compile. */
 export interface LocalDraft {
   sql: string;
+  /** Migration mode: the migration, then the source (`compile` gets it). */
+  migration?: string;
   layout?: Layout;
   groups?: Record<string, Group>;
   role: Role;
@@ -250,6 +273,7 @@ export class DraftSession {
   readonly key = ++sessions;
   readonly doc = new Y.Doc();
   readonly sql: Y.Text;
+  readonly migration: Y.Text;
   readonly layout: Y.Map<Position>;
   readonly groups: Y.Map<Group>;
   /** Notes from the server about the doc (see `onMeta`). */
@@ -257,7 +281,7 @@ export class DraftSession {
   /** Null for a local draft. */
   readonly provider: WebsocketProvider | null;
   readonly awareness: Awareness;
-  /** One per client, over the text, the layout and the groups; local origins only. */
+  /** One per client, over the texts, the layout and the groups; local origins only. */
   readonly undo: Y.UndoManager;
 
   private state: SessionState = {
@@ -268,7 +292,11 @@ export class DraftSession {
     statusBy: null,
     publishedVersion: null,
     name: null,
-    compile: { state: "waiting", stale: true, diagnostics: [], model: null },
+    mode: "schema",
+    schemaSql: null,
+    modeChanged: null,
+    staleEdit: null,
+    compile: { state: "waiting", stale: true, diagnostics: [], model: null, sha256: null },
     versionCreated: null,
     versionsChanged: null,
     review: null,
@@ -296,11 +324,12 @@ export class DraftSession {
 
   constructor(org: string, draftId: string, options: DraftSessionOptions = {}) {
     this.sql = this.doc.getText("sql");
+    this.migration = this.doc.getText("migration");
     this.layout = this.doc.getMap("layout");
     this.groups = this.doc.getMap("groups");
     this.meta = this.doc.getMap("meta");
     this.meta.observe(this.onMeta);
-    this.undo = new Y.UndoManager([this.sql, this.layout, this.groups], {
+    this.undo = new Y.UndoManager([this.sql, this.migration, this.layout, this.groups], {
       trackedOrigins: new Set([LOCAL]),
     });
 
@@ -309,6 +338,7 @@ export class DraftSession {
       this.awareness = new Awareness(this.doc);
       this.startLocal(options.local);
       this.sql.observe(this.onText);
+      this.migration.observe(this.onText);
       return;
     }
     const origin = options.origin ?? window.location.origin.replace(/^http/, "ws");
@@ -364,6 +394,12 @@ export class DraftSession {
     window.addEventListener("offline", this.onNetwork);
 
     this.sql.observe(this.onText);
+    this.migration.observe(this.onText);
+  }
+
+  /** The text that is the source now: the SQL, or the migration. */
+  source(): Y.Text {
+    return this.state.mode === "migration" ? this.migration : this.sql;
   }
 
   // ---- State -------------------------------------------------------------------
@@ -403,6 +439,10 @@ export class DraftSession {
   private startLocal(local: LocalDraft) {
     this.doc.transact(() => {
       this.sql.insert(0, local.sql);
+      if (local.migration !== undefined) {
+        this.migration.insert(0, local.migration);
+        this.meta.set("mode", "migration");
+      }
       for (const [key, p] of Object.entries(local.layout ?? {})) this.layout.set(key, p);
       for (const [id, g] of Object.entries(local.groups ?? {})) this.groups.set(id, g);
     });
@@ -415,21 +455,23 @@ export class DraftSession {
     });
     let timer = 0;
     const compile = async () => {
-      const sql = this.sql.toJSON();
-      const { model, diagnostics } = local.compile(sql);
+      const source = this.source().toJSON();
+      const { model, diagnostics } = local.compile(source);
       const event: ServerEvent = {
         type: "compile",
         state: model ? "ok" : "failed",
-        sha256: await sha256(sql),
+        sha256: await sha256(source),
         diagnostics,
         model: model as Record<string, never> | null,
       };
       if (!this.destroyed) this.onEvent(event);
     };
-    this.sql.observe(() => {
+    const schedule = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => void compile(), 300);
-    });
+    };
+    this.sql.observe(schedule);
+    this.migration.observe(schedule);
     void compile();
   }
 
@@ -457,7 +499,12 @@ export class DraftSession {
       }
     }
     this.lastCompile = event;
-    this.set({ compile: { ...this.state.compile, state: event.state, model } });
+    this.set({
+      compile: { ...this.state.compile, state: event.state, model },
+      ...(event.schema_sql != null && this.state.mode === "migration"
+        ? { schemaSql: event.schema_sql }
+        : {}),
+    });
     void this.checkCompile();
   }
 
@@ -471,10 +518,11 @@ export class DraftSession {
     const event = this.lastCompile;
     if (!event) return;
     const seq = ++this.compiles;
-    const text = this.sql.toJSON();
+    const source = this.source();
+    const text = source.toJSON();
     const matches = !!event.sha256 && event.sha256 === (await sha256(text));
     if (this.destroyed || seq !== this.compiles || this.lastCompile !== event) return;
-    const current = matches && this.sql.toJSON() === text;
+    const current = matches && this.source() === source && source.toJSON() === text;
     this.set({
       compile: {
         ...this.state.compile,
@@ -482,13 +530,16 @@ export class DraftSession {
         // A result for another text than this client's: one for this text follows.
         stale: event.state === "pending" || (event.state !== "unavailable" && !current),
         diagnostics: current ? event.diagnostics : this.state.compile.diagnostics,
+        sha256: current && event.state === "ok" ? event.sha256! : null,
       },
     });
   }
 
-  private onText = () => {
+  private onText = (event: Y.YTextEvent) => {
+    // The other text: not the source, nothing to compile.
+    if (event.target !== this.source()) return;
     if (!this.state.compile.stale && this.state.compile.state !== "unavailable") {
-      this.set({ compile: { ...this.state.compile, stale: true } });
+      this.set({ compile: { ...this.state.compile, stale: true, sha256: null } });
     }
     window.clearTimeout(this.recheck);
     this.recheck = window.setTimeout(() => void this.checkCompile(), 600);
@@ -633,6 +684,7 @@ export class DraftSession {
    * a tab that syncs it later.
    */
   private onMeta = (event: Y.YMapEvent<unknown>) => {
+    if (event.keysChanged.has("mode")) this.onMode();
     if (event.transaction.local || !event.keysChanged.has("rewrite")) return;
     const note = this.meta.get("rewrite") as { count?: unknown; reason?: unknown } | undefined;
     const had = this.undo.undoStack.length + this.undo.redoStack.length > 0;
@@ -653,6 +705,26 @@ export class DraftSession {
   };
 
   /**
+   * The doc's mode changed (a switch, or the doc arriving): the other text
+   * is the source now. The undo history goes, silently (the switch is told
+   * apart): undoing typing in a text that is no longer the source would do
+   * nothing anyone sees, and a graph edit's statements were in the old one.
+   */
+  private onMode() {
+    const mode: DraftMode = this.meta.get("mode") === "migration" ? "migration" : "schema";
+    if (mode === this.state.mode) return;
+    this.undo.clear();
+    this.undoItems.clear();
+    this.set({
+      mode,
+      edits: [],
+      schemaSql: mode === "migration" ? this.state.schemaSql : null,
+      compile: { ...this.state.compile, stale: true, sha256: null, diagnostics: [] },
+    });
+    void this.checkCompile();
+  }
+
+  /**
    * A schema edit from the graph (docs/MVP.md "Schema edits from the graph
    * append SQL"): its statements appended under the marker, and the layout
    * change that goes with it (a renamed table's entries move, a new table is
@@ -661,7 +733,9 @@ export class DraftSession {
    */
   editSchema(edit: GraphEdit, model: Schema, position?: Position): EditEntry {
     const statements = sqlFor(edit);
-    const append = appendTo(this.sql.toJSON(), statements);
+    // In migration mode the migration takes the statements: they are a migration's.
+    const text = this.source();
+    const append = appendTo(text.toJSON(), statements);
     const change = layoutChange(
       edit,
       position && { x: Math.round(position.x), y: Math.round(position.y) },
@@ -669,7 +743,7 @@ export class DraftSession {
     // Its own step in the history, whatever came just before or after.
     this.undo.stopCapturing();
     this.doc.transact(() => {
-      this.sql.insert(append.at, append.insert);
+      text.insert(append.at, append.insert);
       this.moveLayout(change);
     }, LOCAL);
     this.undo.stopCapturing();
@@ -700,14 +774,15 @@ export class DraftSession {
       this.undo.undo();
       return;
     }
-    const text = this.sql.toJSON();
+    const source = this.source();
+    const text = source.toJSON();
     const at = text.lastIndexOf(entry.sql);
     if (at < 0) return;
     const end = at + entry.sql.length + (text[at + entry.sql.length] === "\n" ? 1 : 0);
     const change = layoutChange(entry.edit);
     this.undo.stopCapturing();
     this.doc.transact(() => {
-      this.sql.delete(at, end - at);
+      source.delete(at, end - at);
       if (change.rename) this.moveLayout({ rename: [change.rename[1], change.rename[0]] });
     }, LOCAL);
     this.undo.stopCapturing();
@@ -739,6 +814,7 @@ export class DraftSession {
     window.removeEventListener("online", this.onNetwork);
     window.removeEventListener("offline", this.onNetwork);
     this.sql.unobserve(this.onText);
+    this.migration.unobserve(this.onText);
     this.meta.unobserve(this.onMeta);
     this.listeners.clear();
     this.undo.destroy();

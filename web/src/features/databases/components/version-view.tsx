@@ -46,6 +46,7 @@ import {
 } from "../queries";
 import { RemoveVersionDialog } from "./remove-version-dialog";
 import { Byline, OriginBadge } from "./version-meta";
+import { WrittenMigrationButton } from "./written-migration";
 
 interface VersionViewProps {
   org: string;
@@ -223,6 +224,7 @@ function VersionStrip({
       )}
       <div className="ml-auto flex items-center gap-1">
         {version && <MigrationButton version={version} />}
+        {version && <WrittenMigrationButton org={org} database={database} version={version} />}
         <CompareWith org={org} db={db} number={number} latest={latest} previous={older} />
         {admin && version && (
           <Menu>

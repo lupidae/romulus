@@ -19,6 +19,11 @@
 //! - [`render_sql`] renders a model as SQL (remus-sql, reordered where it
 //!   would not compile back), for drafts started from a version pushed as
 //!   remus JSON.
+//! - [`draft_migration::script`] is what a draft written as a migration
+//!   compiles: its base version's SQL, then the migration, with what a
+//!   schema cannot hold (data, `BEGIN`/`COMMIT`, `CONCURRENTLY`) blanked
+//!   in place; [`draft_migration::Script::relocate`] puts the diagnostics
+//!   back in the migration.
 //! - [`merge::merge`] is "Update draft": the statement-level three-way merge
 //!   of a draft with a newer version, conflicts as blocks the compile
 //!   refuses ([`merge::conflict_diagnostics`]).
@@ -56,6 +61,7 @@ pub mod allowlist;
 pub mod catalog;
 mod compiler;
 pub mod diagnostic;
+pub mod draft_migration;
 pub mod import;
 pub mod key;
 pub mod merge;

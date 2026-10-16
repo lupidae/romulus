@@ -4,6 +4,7 @@ import * as React from "react";
 import { ApiError } from "@/api/client";
 import {
   ArrowLeftIcon,
+  DatabaseScriptIcon,
   EditPencilIcon,
   MoreHorizIcon,
   RedoIcon,
@@ -13,6 +14,7 @@ import {
   WifiOffIcon,
 } from "@/components/icons";
 import { AvatarStack } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -32,7 +34,7 @@ import { cn } from "@/lib/utils";
 import type { Role } from "@/features/orgs/queries";
 
 import { useDeleteDraft, useRenameDraft, useTidyDraft } from "../mutations";
-import type { Diagnostic, Draft } from "../queries";
+import type { Diagnostic, Draft, DraftMode } from "../queries";
 import { type Review, reviewing } from "../review";
 import type { CompileView, Connection, Peer } from "../session";
 import { CompileStatus } from "./compile-status";
@@ -59,6 +61,12 @@ interface EditorBarProps {
   onRedo: () => void;
   /** The SQL now (Tidy says what it would lose). */
   sql: string;
+  /** What the draft is edited as. */
+  mode: DraftMode;
+  /** The migration now (migration mode: what an approval is of). */
+  migration: string;
+  /** Asks to switch modes (a confirm follows). */
+  onSwitchMode: (mode: DraftMode) => void;
   /** Tidy is being asked for (true), or it failed or changed nothing (false). */
   onRewrite?: (expected: boolean) => void;
   onJump: (diagnostic: Diagnostic) => void;
@@ -120,6 +128,16 @@ export function EditorBar(props: EditorBarProps) {
           editing={renaming}
           onEditingChange={setRenaming}
         />
+        {props.mode === "migration" && (
+          <Tooltip
+            content={`Edited as a migration from ${draft.base_version ? `v${draft.base_version}` : "an empty database"}: the SQL and the graph follow from it`}
+          >
+            <Badge variant="outline" className="shrink-0 max-md:hidden">
+              <DatabaseScriptIcon aria-hidden />
+              Migration
+            </Badge>
+          </Tooltip>
+        )}
       </nav>
 
       <div className="flex min-w-0 shrink items-center">
@@ -165,11 +183,36 @@ export function EditorBar(props: EditorBarProps) {
               </MenuTrigger>
             </Tooltip>
             <MenuContent align="end">
-              <MenuItem onSelect={() => setTidying(true)} disabled={!props.canEdit || hasErrors}>
-                <SparksIcon />
-                Tidy SQL…
-                {hasErrors && <MenuShortcut>Fix errors first</MenuShortcut>}
-              </MenuItem>
+              {props.mode === "schema" ? (
+                <>
+                  <MenuItem
+                    onSelect={() => setTidying(true)}
+                    disabled={!props.canEdit || hasErrors}
+                  >
+                    <SparksIcon />
+                    Tidy SQL…
+                    {hasErrors && <MenuShortcut>Fix errors first</MenuShortcut>}
+                  </MenuItem>
+                  <MenuItem
+                    onSelect={() => props.onSwitchMode("migration")}
+                    disabled={!props.canEdit || hasErrors}
+                  >
+                    <DatabaseScriptIcon />
+                    Edit migration…
+                    {hasErrors && <MenuShortcut>Fix errors first</MenuShortcut>}
+                  </MenuItem>
+                </>
+              ) : (
+                <MenuItem
+                  onSelect={() => props.onSwitchMode("schema")}
+                  disabled={!props.canEdit || hasErrors}
+                >
+                  <TrashIcon />
+                  Discard migration…
+                  {hasErrors && <MenuShortcut>Fix errors first</MenuShortcut>}
+                </MenuItem>
+              )}
+              <MenuSeparator />
               <MenuItem onSelect={() => setRenaming(true)}>
                 <EditPencilIcon />
                 Rename draft
@@ -191,7 +234,8 @@ export function EditorBar(props: EditorBarProps) {
             meId={meId}
             role={props.role}
             open={props.liveOpen}
-            sql={props.sql}
+            // What an approval is of: the text that is the source.
+            sql={props.mode === "migration" ? props.migration : props.sql}
           />
         )}
         {isWriter && open && (

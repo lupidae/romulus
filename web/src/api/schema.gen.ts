@@ -365,7 +365,8 @@ export interface paths {
     put?: never;
     /**
      * A new draft from the latest version, ready to edit: no form, renamed
-     *     later if wanted.
+     *     later if wanted. A schema draft by default; with `{"mode": "migration"}`,
+     *     a migration from the latest version, written from scratch.
      */
     post: operations["create_draft"];
     delete?: never;
@@ -422,6 +423,23 @@ export interface paths {
     get: operations["draft_migration"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/mode": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Switches the draft between schema mode and migration mode. */
+    post: operations["switch_draft_mode"];
     delete?: never;
     options?: never;
     head?: never;
@@ -637,6 +655,26 @@ export interface paths {
     };
     /** One version: its model, source, layout and author. */
     get: operations["get_version"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/migration": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The migration a version was written as (a draft in migration mode
+     *     published it), to read again or download.
+     */
+    get: operations["get_written_migration"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1018,7 +1056,8 @@ export interface components {
       | "timeout"
       | "unavailable"
       | "provided_by_extension"
-      | "conflict";
+      | "conflict"
+      | "not_run";
     /**
      * @description A change to one column.
      *
@@ -1194,6 +1233,14 @@ export interface components {
        *     not one of the organization's own pages.
        */
       slug: string;
+    };
+    /** @description How to start a draft (no body: a schema draft). */
+    CreateDraft: {
+      /**
+       * @description `migration`: written as a migration from the latest version, from
+       *     scratch. `schema` when absent.
+       */
+      mode?: components["schemas"]["DraftMode"];
     };
     CreateInvitation: {
       email: string;
@@ -1377,6 +1424,8 @@ export interface components {
        * @description The database's newest version now.
        */
       latest_version?: number | null;
+      /** @description What it is edited as: the schema SQL, or a migration from its base. */
+      mode: components["schemas"]["DraftMode"];
       name: string;
       /**
        * Format: int32
@@ -1410,6 +1459,12 @@ export interface components {
       name: string;
       slug: string;
     };
+    /**
+     * @description What a draft is edited as (`draft_mode`): one source of truth at a time
+     *     (docs/MVP.md "Review round 1", item 2).
+     * @enum {string}
+     */
+    DraftMode: "schema" | "migration";
     /** @description Where a draft's review stands, as the drafts list shows it. */
     DraftReview: {
       /**
@@ -2245,6 +2300,10 @@ export interface components {
       diff?: components["schemas"]["SchemaDiff"] | null;
       /** Format: int32 */
       latest_version?: number | null;
+      /** @description Migration mode: the migration the version will keep. */
+      migration?: string | null;
+      /** @description What the draft is edited as: its SQL, or a migration from its base. */
+      mode: components["schemas"]["DraftMode"];
       /** @description The model the version would have. */
       model?: Record<string, never> | null;
       /**
@@ -2252,7 +2311,11 @@ export interface components {
        * @description The number the new version would get.
        */
       number: number;
-      /** @description SHA-256 of the SQL previewed: send it back to publish exactly this. */
+      /**
+       * @description What was previewed (`compile::input_hash`: the SQL; in migration
+       *     mode the migration and the base it applies to): send it back to
+       *     publish exactly this.
+       */
       sha256: string;
       /** @description Someone published since the draft started: "Update draft" first. */
       stale: boolean;
@@ -2405,6 +2468,11 @@ export interface components {
            */
           model?: Record<string, never> | null;
           /**
+           * @description In migration mode, with `model`: the schema it is, as SQL
+           *     (read-only: the migration is the source). Absent otherwise.
+           */
+          schema_sql?: string | null;
+          /**
            * @description Hex SHA-256 of the SQL compiled. A client whose text hashes the
            *     same can place `diagnostics` as they are; otherwise a newer
            *     compile is on its way.
@@ -2413,6 +2481,17 @@ export interface components {
           state: components["schemas"]["CompileState"];
           /** @enum {string} */
           type: "compile";
+        }
+      | {
+          by: string;
+          mode: components["schemas"]["DraftMode"];
+          /** @enum {string} */
+          type: "mode";
+        }
+      | {
+          mode: components["schemas"]["DraftMode"];
+          /** @enum {string} */
+          type: "stale_edit";
         }
       | {
           /** @description Who published or deleted it. */
@@ -2615,6 +2694,10 @@ export interface components {
       /** @description `"3 tables added, 1 changed; 1 enum changed"`, or `"no changes"`. */
       text: string;
     };
+    SwitchMode: {
+      /** @description The mode to switch to. */
+      mode: components["schemas"]["DraftMode"];
+    };
     TableGroup: {
       /**
        * @description A color name (`stone`, `red`, `amber`, `green`, `teal`, `blue`,
@@ -2679,6 +2762,11 @@ export interface components {
        * @description Conflict blocks in its SQL now: publishing waits until none is left.
        */
       conflicts: number;
+      /**
+       * @description Migration mode: the migration's errors on the new base, located in
+       *     it (absent when it still applies, and in schema mode).
+       */
+      diagnostics?: components["schemas"]["Diagnostic"][];
     };
     UploadSql: {
       /** @description What changed, in a line (at most 1000 characters). */
@@ -2727,6 +2815,11 @@ export interface components {
        */
       source: string;
       source_kind: components["schemas"]["SourceKind"];
+      /**
+       * @description Published from a draft in migration mode: the migration it was
+       *     written as is at `…/versions/{number}/migration`.
+       */
+      written_migration: boolean;
     };
     /** @description `from` compared with `to`. */
     VersionDiff: {
@@ -2809,6 +2902,11 @@ export interface components {
       number: number;
       origin: components["schemas"]["VersionOrigin"];
       source_kind: components["schemas"]["SourceKind"];
+      /**
+       * @description Published from a draft in migration mode: the migration it was
+       *     written as is at `…/versions/{number}/migration`.
+       */
+      written_migration: boolean;
     };
     /** @description A version's model in every format the viewer shows. */
     VersionTexts: {
@@ -2820,6 +2918,23 @@ export interface components {
        * @description The source for SQL versions; rendered from the model for pushed JSON
        *     and imported migrations.
        */
+      sql: string;
+    };
+    /**
+     * @description The migration a version was written as, in a draft in migration mode:
+     *     from the version before it (nothing, for a first version) to it.
+     */
+    WrittenMigration: {
+      /** @description What it downloads as: `v5_add_invoices.sql`. */
+      file_name: string;
+      /**
+       * Format: int32
+       * @description The version it migrates from; `null` for a first version.
+       */
+      from?: number | null;
+      /** Format: int32 */
+      number: number;
+      /** @description The migration, as written (data statements included). */
       sql: string;
     };
   };
@@ -3933,7 +4048,12 @@ export interface operations {
       };
       cookie?: never;
     };
-    requestBody?: never;
+    /** @description Optional: a schema draft without one */
+    requestBody?: {
+      content: {
+        "application/json": components["schemas"]["CreateDraft"] | null;
+      };
+    };
     responses: {
       201: {
         headers: {
@@ -4229,8 +4349,9 @@ export interface operations {
          */
         version?: string;
         /**
-         * @description SHA-256 of the SQL the person reviewed (the publish preview's, or a
-         *     live compile's): the migration of exactly that text, or 409
+         * @description What the person reviewed (the publish preview's `sha256`, or a live
+         *     compile's SHA-256 of the SQL; in migration mode it covers the base
+         *     too: `compile::input_hash`): the migration of exactly that, or 409
          *     `draft_changed`. Required: a migration is never of a text unseen.
          */
         sha256: string;
@@ -4281,6 +4402,85 @@ export interface operations {
       };
       /** @description `compile_failed`: the SQL has errors (`details.diagnostics`) */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The compiler is unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  switch_draft_mode: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SwitchMode"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Draft"];
+        };
+      };
+      /** @description Reviewers cannot switch modes */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_changed` (it kept changing: try again), `draft_busy` (being published or updated), `draft_published` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `compile_failed` (`details.diagnostics`): the SQL has errors, so there is no migration to start from; or the migration does not apply to the current base, so there is no schema to go back to. `unrepresentable` (`details.objects`): no SQL romulus can keep compiles back to the schema the migration made */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
         headers: {
           [name: string]: unknown;
         };
@@ -4406,8 +4606,17 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description The SQL does not compile (`details.diagnostics`) */
+      /** @description `compile_failed`: the SQL does not compile (`details.diagnostics`); `unrepresentable`: in migration mode, no SQL romulus can keep compiles back to the schema (`details.objects`) */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited`: the checks publishing compiles (migration mode) count against the compile limits */
+      429: {
         headers: {
           [name: string]: unknown;
         };
@@ -4551,7 +4760,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published) */
+      /** @description `draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published), `migration_mode` (the draft is edited as a migration) */
       409: {
         headers: {
           [name: string]: unknown;
@@ -5259,6 +5468,41 @@ export interface operations {
           "application/json": components["schemas"]["VersionDetail"];
         };
       };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_written_migration: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The version's number */
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WrittenMigration"];
+        };
+      };
+      /** @description No such version, or it was not written as a migration */
       404: {
         headers: {
           [name: string]: unknown;

@@ -31,7 +31,7 @@ use yrs::{
 };
 
 use super::compile::CompileState;
-use crate::domain::Role;
+use crate::domain::{DraftMode, Role};
 
 /// The tag of [`ServerEvent`] messages.
 pub const MESSAGE_EVENT: u8 = 100;
@@ -119,7 +119,18 @@ pub enum ServerEvent {
         /// previous one when absent.
         #[schema(value_type = Option<Object>)]
         model: Option<Arc<serde_json::Value>>,
+        /// In migration mode, with `model`: the schema it is, as SQL
+        /// (read-only: the migration is the source). Absent otherwise.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[schema(value_type = Option<String>)]
+        schema_sql: Option<Arc<str>>,
     },
+    /// The draft switched modes (docs/MVP.md "Review round 1", item 2):
+    /// the doc's `meta.mode` changed in the same transaction as its texts.
+    Mode { mode: DraftMode, by: String },
+    /// To one connection: its last edit changed the text that is not the
+    /// source in `mode` (sent before it saw a switch), and was undone.
+    StaleEdit { mode: DraftMode },
     /// The draft's status changed (publishing started, failed or
     /// succeeded; the draft was deleted).
     Status {

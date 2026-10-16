@@ -17,9 +17,19 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DatabaseScriptIcon, NetworkRightIcon, PageIcon } from "@/components/icons";
+import {
+  CheckIcon,
+  CopyIcon,
+  DatabaseScriptIcon,
+  DownloadIcon,
+  NetworkRightIcon,
+  PageIcon,
+} from "@/components/icons";
+import { toast } from "@/components/ui/toaster";
 import { MigrationView } from "@/features/migration/components/migration-view";
 import { draftMigrationQuery } from "@/features/migration/queries";
+import { save } from "@/features/migration/zip";
+import { CodeView } from "@/features/schema/text/code-view";
 import { type ChangeStatus, changeOf, parseStatusMap } from "@/features/schema/diff";
 import { SchemaGraph } from "@/features/schema/graph/schema-graph";
 import type { Groups, Layout } from "@/features/schema/layout";
@@ -27,6 +37,7 @@ import { StatusBadge } from "@/features/schema/graph/status";
 import { parseSchema } from "@/features/schema/model";
 import { modKey } from "@/lib/platform";
 
+import { migrationFileName } from "../migration-file";
 import { usePublishDraft } from "../mutations";
 import { type Diagnostic, draftKeys, type PublishPreview, publishPreviewQuery } from "../queries";
 import { useApprovalGate } from "../use-approval-gate";
@@ -35,6 +46,8 @@ interface PublishDialogProps {
   org: string;
   db: string;
   draftId: string;
+  /** What a written migration downloads as. */
+  draftName: string;
   databaseName: string;
   /** The draft's positions and groups: the diff is drawn where its tables are. */
   layout: Layout;
@@ -99,6 +112,7 @@ function PublishBody({
   org,
   db,
   draftId,
+  draftName,
   databaseName,
   layout,
   groups,
@@ -155,8 +169,9 @@ function PublishBody({
       <DialogHeader>
         <DialogTitle>Publish v{number}</DialogTitle>
         <DialogDescription>
-          Creates v{number} of {databaseName} from this draft. The draft then closes, and everyone
-          in it is told.
+          Creates v{number} of {databaseName} from this draft
+          {data?.mode === "migration" ? ", with the migration it was written as" : ""}. The draft
+          then closes, and everyone in it is told.
         </DialogDescription>
       </DialogHeader>
 
@@ -207,7 +222,7 @@ function PublishBody({
                     onJump(d);
                   }}
                 >
-                  Show in SQL
+                  {data?.mode === "migration" ? "Show in the migration" : "Show in SQL"}
                 </Button>
               </li>
             ))}
@@ -219,6 +234,7 @@ function PublishBody({
           changes={changes}
           layout={layout}
           groups={groups}
+          fileName={migrationFileName(draftName)}
           migration={(choice) =>
             draftMigrationQuery(org, db, draftId, data!.sha256, choice, () => {
               // The draft moved since the preview: show what is true now.
@@ -271,12 +287,14 @@ function Changes({
   changes,
   layout,
   groups,
+  fileName,
   migration,
 }: {
   preview: PublishPreview;
   changes: Change[];
   layout: Layout;
   groups: Groups;
+  fileName: string;
   /** The draft's migration, for a tool. */
   migration: React.ComponentProps<typeof MigrationView>["query"];
 }) {
@@ -380,8 +398,56 @@ function Changes({
         value="migration"
         className="mt-0 h-[50dvh] min-h-80 overflow-hidden rounded-lg border border-border"
       >
-        <MigrationView query={migration} primary={false} />
+        {preview.mode === "migration" ? (
+          <WrittenMigrationPreview text={preview.migration ?? ""} fileName={fileName} />
+        ) : (
+          <MigrationView query={migration} primary={false} />
+        )}
       </TabsContent>
     </Tabs>
+  );
+}
+
+/** The migration a migration-mode draft was written as: what the version keeps. */
+function WrittenMigrationPreview({ text, fileName }: { text: string; fileName: string }) {
+  const [copied, setCopied] = React.useState(false);
+  React.useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-card">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+          Written by hand in this draft. The version keeps it: download it again from its page.
+        </p>
+        <Button
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard.writeText(text).then(
+              () => setCopied(true),
+              () => toast.error("Could not copy", { description: "Select the text and copy it." }),
+            );
+          }}
+          aria-label={copied ? "Copied" : "Copy the migration"}
+        >
+          {copied ? <CheckIcon className="text-success" /> : <CopyIcon />}
+          {copied ? "Copied" : "Copy"}
+        </Button>
+        <Button size="sm" onClick={() => save(fileName, text)}>
+          <DownloadIcon />
+          Download
+        </Button>
+      </div>
+      <CodeView
+        doc={text}
+        language="sql"
+        label="The migration, as written"
+        readOnly
+        active
+        className="min-h-0 flex-1"
+      />
+    </div>
   );
 }

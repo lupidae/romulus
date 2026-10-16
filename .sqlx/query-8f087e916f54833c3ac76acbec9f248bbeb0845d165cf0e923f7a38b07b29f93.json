@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mode AS \"mode: DraftMode\" FROM drafts WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mode: DraftMode",
+        "type_info": {
+          "Custom": {
+            "name": "draft_mode",
+            "kind": {
+              "Enum": [
+                "schema",
+                "migration"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "mode"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8f087e916f54833c3ac76acbec9f248bbeb0845d165cf0e923f7a38b07b29f93"
+}

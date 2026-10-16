@@ -536,6 +536,62 @@ Two features, built in this order:
      to schema mode is allowed only by discarding the hand-written migration (explicit
      confirm). Publishing a migration-mode draft stores the derived schema as the version
      plus the migration text alongside it (downloadable later).
+   Built (task R1-MIG); what the build decided on top:
+   - **The doc's `meta.mode` is the truth; `drafts.mode` follows it.** Only rooms write
+     `meta.mode`, in the Yjs transaction that seeds (or clears) the doc's `migration` Y.Text;
+     then the room's writer stores `drafts.mode`, and a lost write of it is repaired from the
+     doc at the next load. An update from a client changing `meta.mode` is overruled (written
+     back); one changing the text that is not the source (a tab that had not seen a switch)
+     is undone, and that tab told (`stale_edit`). In migration mode `sql` waits, unused.
+   - **A switch is computed from the room's base**, carried with the text in the room's
+     content: a seed computed before "Update draft" moved the base is refused, and computed
+     again on the new base.
+   - **The compile is the drafts' one, on base + migration**
+     (`romulus_sandbox::draft_migration`): the base version's SQL, `SET search_path TO
+     "$user", public`, then the migration, through the drafts' allowlist (not the import
+     mode's); errors are relocated into the migration (one in the base's part sits at the
+     migration's start, saying so). What a schema cannot hold is blanked in place and noted
+     (`Code::NotRun`), never run: data statements (a backfill, the generator's `setval`; a
+     `set_config` says the statements after it are checked without that setting),
+     `BEGIN`/`COMMIT`, and the `CONCURRENTLY` keyword. `DO`, functions, `COPY`… are refused
+     as in any draft. `draft_compiles.source_hash` hashes base and migration together; a
+     base and migration over the size limit say the base counts.
+   - **Never a source that says less than its model.** A schema derived from a migration is
+     kept (by its version, or by the draft going back to schema mode) as canonical SQL only
+     when that compiles back to the same model, as Tidy checks; otherwise as the base's SQL
+     then what of the migration runs (`draft_migration::faithful_sql`), checked the same
+     way. When neither compiles back, nothing is stored: 422 `unrepresentable`, naming what
+     would come out differently. Canonical SQL has gaps (foreign tables, `NOT VALID`
+     checks), and a lossy source would lose those objects at the next draft, then at its
+     publish. Each of these checks is a compile, counted against the compile limits.
+   - **The derived schema SQL comes with each compile** (`schema_sql` in the compile event,
+     `drafts::tidy::canonical_sql` of the model): results never live in the doc.
+   - **Edit migration** seeds `romulus_migration::editable` (the generated statements with
+     their headings, hazard notes and warnings, no transaction, short lines for the pane);
+     it needs SQL that compiles. **Discard migration** needs a migration that applies to the
+     current base (after an Update, an older model would revert what the new base brought;
+     emptied, the migration is the base): the schema it makes becomes the SQL, the smallest
+     edit of what `sql` held, as canonical SQL with `drafts.base_sql` the base rendered the
+     same way when both compile back (an Update merges like with like), else as the base's
+     SQL then the migration, relative to the base's own text. A switch clears every
+     client's undo history (silently: the switch is announced, `ServerEvent::Mode`).
+   - **"New migration"** (beside "New draft") starts in migration mode with a two-line
+     comment saying what to write; named "Migration from vN".
+   - **Update draft in migration mode** re-applies the migration, as written, on the latest
+     version: the layout merges as in schema mode, the base moves, and the answer carries
+     the migration's errors on the new base (`diagnostics`); the people in the draft fix the
+     migration. No statement merge.
+   - **Publishing** stores the derived schema (`source` as above, `source_kind` `sql`, origin
+     `draft`) and the migration in `versions.migration_sql` (only from drafts). What was
+     reviewed is the migration on its base (`compile::input_hash`): after an Update, the same
+     text is another review (409 `draft_changed`). Approvals (item 4) are of the same thing:
+     a person approves the migration as they see it, the approval is kept against it on its
+     base, and an Update outdates it.
+     `GET …/versions/{n}/migration` serves it (`v5_<message>.sql`); the version page has a
+     "Migration" button, the diff page's migration view links it for N−1 → N.
+   - The schema-mode Migration tab is the draft migration endpoint, fetched per compile
+     (the compile event's SHA-256), blocked with a reason while the SQL has errors, the
+     compiler is away or the draft is stale; Tidy answers 409 `migration_mode`.
 3. **Removing a version** (admins only): soft — hidden from history, diffs and imports;
    numbers never reused; restorable for 30 days; audit entry (who, when, why). Drafts based
    on it are re-based onto the previous version (they show "Update draft").

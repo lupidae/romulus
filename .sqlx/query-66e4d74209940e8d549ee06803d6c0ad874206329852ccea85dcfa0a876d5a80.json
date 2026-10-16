@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.removed_at AS \"removed_at!\", v.removal_reason AS \"reason!\",\n                  v.removed_at + make_interval(days => $3) AS \"restorable_until!\",\n                  v.removed_at > now() - make_interval(days => $3) AS \"restorable!\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  r.id AS \"remover_id?\", r.name AS \"remover_name?\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN users r ON r.id = v.removed_by\n           WHERE v.database_id = $1 AND v.removed_at IS NOT NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.removed_at DESC, v.number DESC",
+  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.removed_at AS \"removed_at!\", v.removal_reason AS \"reason!\",\n                  v.removed_at + make_interval(days => $3) AS \"restorable_until!\",\n                  v.removed_at > now() - make_interval(days => $3) AS \"restorable!\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  r.id AS \"remover_id?\", r.name AS \"remover_name?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN users r ON r.id = v.removed_by\n           WHERE v.database_id = $1 AND v.removed_at IS NOT NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.removed_at DESC, v.number DESC",
   "describe": {
     "columns": [
       {
@@ -191,6 +191,12 @@
             "name": "name"
           }
         }
+      },
+      {
+        "ordinal": 16,
+        "name": "written_migration!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -216,8 +222,9 @@
       false,
       false,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "203d616ced943bc0a7d70cdbf93c7ff8c4d8985edefdf7b4c36e132631ddc3c7"
+  "hash": "66e4d74209940e8d549ee06803d6c0ad874206329852ccea85dcfa0a876d5a80"
 }

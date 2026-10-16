@@ -318,7 +318,8 @@ Made in the skeleton (S0):
 ```
 src/routes/              TanStack file routes (only route + page code); -prefixed files are ignored
 src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field, Select
-                         (SelectItem `description`), Dialog, ConfirmDialog, Popover, Sheet, Menu,
+                         (SelectItem `description`), Dialog, ConfirmDialog, Popover, Sheet, Menu
+                         (MenuItem `description`),
                          Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
                          EmptyState, Skeleton, Tooltip, Kbd, Alert, Card, Separator, Spinner,
                          Sidebar* (items take `icon`/`label`; a rail inside SidebarRail),
@@ -339,7 +340,7 @@ src/features/schema/graph/editing/  the graph's editing UI (menus, inline names,
                          foreign key drag, new table); on when SchemaGraph gets `editor`
 src/features/databases/  databases, versions, API tokens: queries, mutations, the upload dialog
                          (useOpenUpload), VersionView, DraftsSlot (where drafts list, above the
-                         history)
+                         history), WrittenMigrationButton (a version's written migration)
 src/features/imports/    the migration import page (ImportFlow: drop, review, progress, result),
                          the files picked (files.ts), the API calls and NDJSON progress (api.ts),
                          MigrationButton (an imported version's migration file)
@@ -665,6 +666,28 @@ side (list with presence, one-click create, rename, soft delete, publish).
   changes (a pre-rewrite undo would delete characters the rewrite reused),
   and tell the person ("Undo history was cleared by Tidy"; `reason`
   `update` has its own copy).
+- **Two modes** (docs/MVP.md "Review round 1" item 2, `drafts::mode`, `DraftMode`):
+  schema mode (the `sql` Y.Text is the source) and migration mode (the doc's
+  `migration` Y.Text is; the schema is what it makes of the base version). The room
+  holds the mode (the doc's `meta.mode`, which only rooms write; `drafts.mode` follows,
+  repaired at load) and the base version, id and SQL (`Command::Updated` brings new
+  ones; `Content::base_version`/`base_sql`); edits of the inactive text are undone
+  (`stale_edit`). Migration-mode compiles go through `SqlCompiler::compile_migration_for`
+  (`romulus_sandbox::draft_migration`: base, then the migration, data/`BEGIN`/
+  `CONCURRENTLY` blanked, errors relocated) and send the derived SQL as `schema_sql`.
+  What is reviewed (publish preview, draft migration endpoint) is
+  `publish::reviewed` = `compile::input_hash(mode, base, source)`. `POST
+  …/drafts/{id}/mode` switches (`Hub::switch_mode`: guarded by text and base, one
+  transaction, then `Job::Mode`); `POST …/drafts` with `{"mode": "migration"}` starts
+  one; publishing stores `versions.migration_sql` (`GET …/versions/{n}/migration`) and a
+  source that compiles back to the model (`drafts::source::Checks`: canonical, else
+  `faithful_sql`, each verified and charged to the compile limits; neither: 422
+  `unrepresentable`); approvals are kept against the reviewed hash too
+  (`check_approval` answers it); Update re-applies the migration (`update::rebase`).
+  Web: `DraftSession.source()`, graph edits append to it; `migration-tab.tsx` (the
+  generated tab, the written one); `SchemaText` takes `tabs` / `sqlTab` / `sqlKey`.
+  Tests: `tests/api/draft_modes.rs` (`mode_compiler`), `tests/sandbox/draft_migration.rs`,
+  `e2e/migration-mode.spec.ts`.
 - **Duplicate markers**: two editors making their first graph edit before
   seeing each other's append two markers; the room removes all but the first
   (`doc::extra_markers`, a server edit) before each compile of an open draft.

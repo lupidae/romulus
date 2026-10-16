@@ -48,6 +48,7 @@ const draft: Draft = {
   id: "dev-draft",
   name: "Draft from v3",
   status: "open",
+  mode: "schema",
   database: { id: "dev-db", slug: "blog", name: "blog" },
   base_version: 3,
   latest_version: 3,

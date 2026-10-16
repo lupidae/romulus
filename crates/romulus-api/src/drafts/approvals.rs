@@ -126,8 +126,9 @@ pub(super) async fn approve(
     Json(body): Json<ApproveDraft>,
 ) -> ApiResult<Json<DraftReview>> {
     let sha256 = body.sha256.trim().to_ascii_lowercase();
-    let digest =
-        unhex(&sha256).ok_or_else(|| invalid("sha256", "The SHA-256 of the SQL, in hex."))?;
+    if unhex(&sha256).is_none() {
+        return Err(invalid("sha256", "The SHA-256 of the SQL, in hex."));
+    }
     if required(&state.db, member.org.id).await? == 0 {
         return Err(ApiError::Conflict {
             code: "approvals_off",
@@ -146,13 +147,18 @@ pub(super) async fn approve(
     if editors_unknown && member.role.can_write() {
         return Err(unknown_editors());
     }
-    match state
+    // What the approval is of: the text the person saw, on its base.
+    let (sha256, digest) = match state
         .collab
         .check_approval(id, member.user.id, sha256.clone())
         .await
         .map_err(hub_error)?
     {
-        Ok(()) => {}
+        Ok(reviewed) => {
+            let digest = unhex(&reviewed)
+                .ok_or_else(|| ApiError::Internal("a reviewed hash that is not hex".into()))?;
+            (reviewed, digest)
+        }
         Err(ApprovalError::Editor) => {
             return Err(ApiError::Denied {
                 code: "edited_draft",
@@ -173,7 +179,7 @@ pub(super) async fn approve(
                 message: "This draft is being published or updated. Try again in a moment.".into(),
             });
         }
-    }
+    };
     // An edit landing between the check and here leaves an approval of the
     // text before it, which simply does not count: it is of another text.
     // The draft row is locked as a publish locks it: never an approval of a
@@ -518,7 +524,7 @@ pub(super) async fn gate(
         org_id: member.org.id,
         draft,
         draft_name,
-        sha256: unhex(&crate::collab::compile::sha256_hex(&content.sql)).unwrap_or_default(),
+        sha256: unhex(&super::publish::reviewed(content)).unwrap_or_default(),
         approvers: content.approved_by.clone(),
         required,
         override_reason,

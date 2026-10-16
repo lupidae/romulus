@@ -47,6 +47,13 @@ export interface MigrationViewProps {
   query: (choice: MigrationChoice) => MigrationQuery;
   /** Download is the view's primary action, unless the view sits in a dialog that has its own. */
   primary?: boolean;
+  /**
+   * Why there is no migration to show now (the draft's SQL has errors…):
+   * shown instead of the files, the toolbar kept. Nothing is fetched meanwhile.
+   */
+  blocked?: React.ReactNode;
+  /** A newer migration is on its way (the text changed): the last one stays, marked as updating. */
+  busy?: boolean;
   className?: string;
 }
 
@@ -62,7 +69,13 @@ const FIRST_WARNINGS = 2;
  * per browser. Self-contained (no router): the diff page and a draft's
  * publish dialog both render it.
  */
-export function MigrationView({ query, primary = true, className }: MigrationViewProps) {
+export function MigrationView({
+  query,
+  primary = true,
+  blocked,
+  busy = false,
+  className,
+}: MigrationViewProps) {
   const [format, setFormat] = usePreference("romulus:migration-tool", "plain", isTool);
   const [concurrently, setConcurrently] = usePreference(
     "romulus:migration-concurrently",
@@ -87,8 +100,9 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
     ...query({ format, concurrently, version: numbered ? version : undefined }),
     // Another tool keeps the last files on screen while the new ones load.
     placeholderData: keepPreviousData,
+    enabled: !blocked,
   });
-  const data = migration.data;
+  const data = blocked ? undefined : migration.data;
   const uid = React.useId();
 
   const [fileIndex, setFileIndex] = React.useState(0);
@@ -159,7 +173,7 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
 
   const statements = data?.statements.length ?? 0;
   const loading = migration.isPending;
-  const switching = migration.isFetching && migration.isPlaceholderData;
+  const switching = (migration.isFetching && migration.isPlaceholderData) || (busy && !!data);
 
   return (
     // Scrolls as a whole when the warnings and the toolbar leave the SQL too
@@ -310,7 +324,9 @@ export function MigrationView({ query, primary = true, className }: MigrationVie
         </span>
       </div>
 
-      {migration.isError ? (
+      {blocked ? (
+        blocked
+      ) : migration.isError ? (
         <div className="p-3">
           <Alert
             variant="destructive"

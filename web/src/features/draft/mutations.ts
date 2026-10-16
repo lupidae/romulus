@@ -3,14 +3,19 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, succeed, unwrap } from "@/api/client";
 import { databaseKeys } from "@/features/databases/queries";
 
-import { type Draft, draftKeys } from "./queries";
+import { type Draft, type DraftMode, draftKeys } from "./queries";
 
-/** One click: a draft from the latest version, ready to open. */
+/** One click: a draft from the latest version, ready to open (a migration, written from scratch, when asked). */
 export function useCreateDraft(org: string, db: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () =>
-      unwrap(api.POST("/api/orgs/{org}/databases/{db}/drafts", { params: { path: { org, db } } })),
+    mutationFn: (mode: DraftMode = "schema") =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/drafts", {
+          params: { path: { org, db } },
+          body: mode === "schema" ? undefined : { mode },
+        }),
+      ),
     onSuccess: (draft) => {
       queryClient.setQueryData(draftKeys.one(org, db, draft.id), draft);
       queryClient.setQueryData<Draft[]>(draftKeys.list(org, db), (drafts) =>
@@ -170,5 +175,26 @@ export function useReviewRequest(org: string, db: string, id: string) {
       return unwrap(on ? api.POST(path, options) : api.DELETE(path, options));
     },
     onSettled: () => reviewMoved(queryClient, org, db, id),
+  });
+}
+
+/**
+ * Switches the draft between schema mode and migration mode, on the server:
+ * everyone in it sees the switch arrive in the doc.
+ */
+export function useSwitchMode(org: string, db: string, id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: DraftMode) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/mode", {
+          params: { path: { org, db, id } },
+          body: { mode },
+        }),
+      ),
+    onSuccess: (draft) => {
+      queryClient.setQueryData(draftKeys.one(org, db, id), draft);
+      void queryClient.invalidateQueries({ queryKey: draftKeys.list(org, db), exact: true });
+    },
   });
 }

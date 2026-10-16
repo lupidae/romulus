@@ -9,6 +9,7 @@
 
 mod concurrency;
 mod corpus;
+mod draft_migration;
 mod errors;
 mod fixtures;
 pub mod import;

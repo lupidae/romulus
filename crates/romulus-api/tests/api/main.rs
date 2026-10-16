@@ -10,6 +10,7 @@ mod collab;
 mod csrf;
 mod databases;
 mod diff;
+mod draft_modes;
 mod drafts;
 mod harness;
 mod health;

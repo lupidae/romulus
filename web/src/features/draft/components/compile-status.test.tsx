@@ -26,6 +26,7 @@ const view = (patch: Partial<CompileView>): CompileView => ({
   stale: false,
   diagnostics: [],
   model: null,
+  sha256: null,
   ...patch,
 });
 

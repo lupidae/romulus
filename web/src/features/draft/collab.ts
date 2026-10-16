@@ -1,4 +1,5 @@
-// The SQL editor of a draft: CodeMirror bound to the doc's `sql` Y.Text
+// The source editor of a draft: CodeMirror bound to the doc's `sql` Y.Text
+// (or, in migration mode, its `migration`)
 // (y-codemirror.next), with everyone's carets and selections, one undo
 // history shared with the graph (the session's Y.UndoManager), the
 // compile's diagnostics, and "Update draft"'s conflict blocks with their
@@ -286,24 +287,29 @@ const seedGuard = (ytext: Y.Text) =>
   });
 
 /**
- * The extensions of a draft's SQL editor. Create once per session.
- * `onView` hears of the editor view when it exists (and null when it goes):
- * diagnostics and jumps need it.
+ * The extensions of a draft's source editor: its SQL, or (migration mode)
+ * its migration. Create once per editor. `onView` hears of the editor view
+ * when it exists (and null when it goes): diagnostics and jumps need it.
  */
 export function draftExtensions(
   session: DraftSession,
   onView: (view: EditorView | null) => void,
+  text: Y.Text = session.sql,
 ): Extension[] {
   return [
-    yCollab(session.sql, session.awareness, { undoManager: session.undo }),
-    seedGuard(session.sql),
+    yCollab(text, session.awareness, { undoManager: session.undo }),
+    seedGuard(text),
     Prec.high(keymap.of(yUndoManagerKeymap)),
     lintGutter(),
     conflictField,
     flashed,
     // The SQL pane is narrow next to the graph: long lines wrap.
     EditorView.lineWrapping,
-    placeholder("No SQL yet. CREATE TABLE statements written here become tables in the graph."),
+    placeholder(
+      text === session.migration
+        ? "No migration yet. ALTER TABLE, CREATE TABLE… written here change the schema and the graph."
+        : "No SQL yet. CREATE TABLE statements written here become tables in the graph.",
+    ),
     theme,
     ViewPlugin.define((view) => {
       onView(view);

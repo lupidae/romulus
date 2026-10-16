@@ -16,6 +16,7 @@ export type CompileReport = components["schemas"]["CompileReport"];
 export type Diagnostic = components["schemas"]["Diagnostic"];
 export type RemovedVersion = components["schemas"]["RemovedVersion"];
 export type AuditEvent = components["schemas"]["AuditEvent"];
+export type WrittenMigration = components["schemas"]["WrittenMigration"];
 
 export const databaseKeys = {
   list: (org: string) => ["orgs", org, "databases"] as const,
@@ -31,6 +32,8 @@ export const databaseKeys = {
     ["versions", databaseId, number, { org, db }] as const,
   texts: (org: string, db: string, databaseId: string, number: number) =>
     ["versions", databaseId, number, "texts", { org, db }] as const,
+  writtenMigration: (org: string, db: string, databaseId: string, number: number) =>
+    ["versions", databaseId, number, "written-migration", { org, db }] as const,
 };
 
 const path = (org: string, db: string) => ({ params: { path: { org, db } } });
@@ -86,6 +89,24 @@ export const versionTextsQuery = (org: string, db: string, databaseId: string, n
     queryFn: () =>
       unwrap(
         api.GET("/api/orgs/{org}/databases/{db}/versions/{number}/texts", {
+          params: { path: { org, db, number } },
+        }),
+      ),
+    staleTime: Infinity,
+  });
+
+/** The migration a version was written as, in a draft in migration mode (`written_migration`). */
+export const writtenMigrationQuery = (
+  org: string,
+  db: string,
+  databaseId: string,
+  number: number,
+) =>
+  queryOptions({
+    queryKey: databaseKeys.writtenMigration(org, db, databaseId, number),
+    queryFn: () =>
+      unwrap(
+        api.GET("/api/orgs/{org}/databases/{db}/versions/{number}/migration", {
           params: { path: { org, db, number } },
         }),
       ),

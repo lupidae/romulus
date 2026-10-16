@@ -23,6 +23,13 @@
 //! blocks remain (a newer version came out meanwhile) rewrites the blocks it
 //! concerns. A draft whose SQL does not parse is not merged (422
 //! `draft_has_errors`): the merge works on statements.
+//!
+//! **Migration mode** has nothing to merge: the migration is re-applied to
+//! the latest version as written ([`rebase`]). The layout merges as above,
+//! the base moves, and the migration is compiled on the new base; if it no
+//! longer applies (the latest version already has a column it adds, say),
+//! the answer carries its errors, located in the migration, and the draft
+//! shows them like any other: the people in it fix the migration.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -31,10 +38,11 @@ use std::{
 
 use axum::extract::State;
 use romulus_sandbox::{
+    Diagnostic,
     merge::{Input, MergeError, Merged, conflicts, merge},
     render_sql,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize as _, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -48,19 +56,20 @@ use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
     collab::{
+        Base,
         compile::sha256_hex,
         patch,
         room::{Content, FreezeError, RewriteError, UpdateTicket},
     },
     databases,
-    domain::{DraftStatus, Schema},
+    domain::{DraftMode, DraftStatus, Schema},
     error::ErrorBody,
     extract::{Json, Path},
     versions::layout::{TableGroup, TablePosition, VersionLayout},
 };
 
 /// What "Update draft" did.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct UpdatedDraft {
     /// The version the draft is based on now (`null`: the database has
     /// none).
@@ -69,6 +78,10 @@ pub struct UpdatedDraft {
     pub conflicts: u32,
     /// Whether anything changed (already on the latest version: nothing).
     pub changed: bool,
+    /// Migration mode: the migration's errors on the new base, located in
+    /// it (absent when it still applies, and in schema mode).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Brings the latest version into the draft: see the module documentation.
@@ -100,20 +113,7 @@ pub(super) async fn update(
         return up_to_date(&state, database.id, id, draft.base_version_id).await;
     }
 
-    let (content, ticket) = match state
-        .collab
-        .freeze_to_update(id, &member.user.name)
-        .await
-        .map_err(hub_error)?
-    {
-        Ok(frozen) => frozen,
-        Err(FreezeError::NotOpen(_)) => {
-            return Err(ApiError::Conflict {
-                code: "draft_busy",
-                message: "Someone is publishing or updating this draft right now.".into(),
-            });
-        }
-    };
+    let (content, ticket) = freeze(&state, id, &member.user.name).await?;
     let frozen = Frozen {
         hub: &state.collab,
         draft: id,
@@ -130,6 +130,22 @@ pub(super) async fn update(
         drop(frozen);
         return up_to_date(&state, database.id, id, draft.base_version_id).await;
     };
+    if content.mode == DraftMode::Migration {
+        return rebase(
+            &state,
+            Rebase {
+                database_id: database.id,
+                id,
+                ticket,
+                base_version_id: draft.base_version_id,
+                by: &member.user.name,
+            },
+            frozen,
+            latest,
+            content,
+        )
+        .await;
+    }
     let base_of = |version: Option<Uuid>| version_of(&state, database.id, version);
     // Where the text stands: an update that rewrote it but failed before
     // moving the base left that base pending, and its rewrite noted in the
@@ -173,14 +189,72 @@ pub(super) async fn update(
         .map_err(ApiError::internal)?;
 
     // The text is written: the base moves, nothing is pending any more.
+    move_base(
+        &state,
+        id,
+        latest.id,
+        Some(&ancestor),
+        draft.base_version_id,
+    )
+    .await?;
+    let base_sql = sql_of(Arc::clone(&latest)).await?;
+    state.collab.updated(
+        id,
+        latest.number,
+        &member.user.name,
+        conflicts,
+        Base {
+            id: latest.id,
+            sql: base_sql,
+        },
+    );
+    drop(frozen);
+    tracing::info!(draft = %id, version = latest.number, conflicts, "draft updated");
+    Ok(Json(UpdatedDraft {
+        base_version: Some(latest.number),
+        conflicts,
+        changed,
+        diagnostics: Vec::new(),
+    }))
+}
+
+/// Freezes the draft for this update (409 `draft_busy` while someone else
+/// publishes or updates it): its content, and the ticket that lets the
+/// update rewrite it.
+async fn freeze(state: &AppState, id: Uuid, by: &str) -> ApiResult<(Content, UpdateTicket)> {
+    match state
+        .collab
+        .freeze_to_update(id, by)
+        .await
+        .map_err(hub_error)?
+    {
+        Ok(frozen) => Ok(frozen),
+        Err(FreezeError::NotOpen(_)) => Err(ApiError::Conflict {
+            code: "draft_busy",
+            message: "Someone is publishing or updating this draft right now.".into(),
+        }),
+    }
+}
+
+/// Moves the draft's base to `to` (from `from`, still its base), with the
+/// text it is relative to now (`None`: the base version's); nothing is
+/// pending any more. 409 `draft_not_open` when it was deleted or published
+/// meanwhile.
+async fn move_base(
+    state: &AppState,
+    id: Uuid,
+    to: Uuid,
+    base_sql: Option<&str>,
+    from: Option<Uuid>,
+) -> ApiResult<()> {
     let moved = sqlx::query!(
         "UPDATE drafts SET base_version_id = $2, base_sql = $3, updated_at = now(),
                            pending_base_version_id = NULL, pending_base_sql = NULL
          WHERE id = $1 AND status = 'open' AND base_version_id IS NOT DISTINCT FROM $4",
         id,
-        latest.id,
-        ancestor,
-        draft.base_version_id,
+        to,
+        base_sql,
+        from,
     )
     .execute(&state.db)
     .await?;
@@ -190,15 +264,95 @@ pub(super) async fn update(
             message: "This draft was deleted or published meanwhile.".into(),
         });
     }
+    Ok(())
+}
+
+/// A version's SQL as a draft has it, off the async workers (a pushed model
+/// is rendered).
+async fn sql_of(version: Arc<Version>) -> ApiResult<Arc<str>> {
+    let sql = tokio::task::spawn_blocking(move || version.sql())
+        .await
+        .map_err(ApiError::internal)??;
+    Ok(sql.into())
+}
+
+/// Who and what a migration-mode update is about.
+struct Rebase<'a> {
+    database_id: Uuid,
+    id: Uuid,
+    ticket: UpdateTicket,
+    /// The base the draft had when it was frozen.
+    base_version_id: Option<Uuid>,
+    by: &'a str,
+}
+
+/// "Update draft" in migration mode: see the module documentation.
+async fn rebase(
+    state: &AppState,
+    rebase: Rebase<'_>,
+    frozen: Frozen<'_>,
+    latest: Version,
+    content: Content,
+) -> ApiResult<Json<UpdatedDraft>> {
+    let Rebase {
+        database_id,
+        id,
+        ticket,
+        base_version_id,
+        by,
+    } = rebase;
+    let base_layout = version_of(state, database_id, base_version_id)
+        .await?
+        .map(|base| VersionLayout::from_value(&base.layout))
+        .unwrap_or_default();
+    let theirs = VersionLayout::from_value(&latest.layout);
+    let (layout, groups) = merge_layout(&base_layout, &theirs, &content.layout);
     state
         .collab
-        .updated(id, latest.number, &member.user.name, conflicts);
+        .merge_layout(id, ticket, layout, groups)
+        .await
+        .map_err(hub_error)?
+        .map_err(ApiError::internal)?;
+    // No text is rewritten: the base moves, nothing is pending.
+    move_base(state, id, latest.id, None, base_version_id).await?;
+    let latest = Arc::new(latest);
+    let base_sql = sql_of(Arc::clone(&latest)).await?;
+    state.collab.updated(
+        id,
+        latest.number,
+        by,
+        0,
+        Base {
+            id: latest.id,
+            sql: Arc::clone(&base_sql),
+        },
+    );
     drop(frozen);
-    tracing::info!(draft = %id, version = latest.number, conflicts, "draft updated");
+    // Whether the migration still applies: its errors, to fix in it. The
+    // compiler being unavailable is the room's to say (its compile follows).
+    let diagnostics = match state
+        .collab
+        .compiler()
+        .compile_migration(&base_sql, &content.migration)
+        .await
+    {
+        Ok(compiled) if compiled.model.is_none() => compiled
+            .diagnostics
+            .into_iter()
+            .filter(Diagnostic::is_error)
+            .collect(),
+        Ok(_) => Vec::new(),
+        Err(err) => {
+            tracing::warn!(draft = %id, error = %err, "update: cannot check the migration");
+            Vec::new()
+        }
+    };
+    tracing::info!(draft = %id, version = latest.number, errors = diagnostics.len(), "migration draft rebased");
     Ok(Json(UpdatedDraft {
         base_version: Some(latest.number),
-        conflicts,
-        changed,
+        conflicts: 0,
+        changed: true,
+        diagnostics,
     }))
 }
 
@@ -284,7 +438,9 @@ async fn rewrite(
                 content = state.collab.content(id).await.map_err(hub_error)?;
             }
             Err(RewriteError::Changed) => break,
-            Err(err @ RewriteError::NotOpen(_)) => return Err(ApiError::internal(err)),
+            Err(err @ (RewriteError::NotOpen(_) | RewriteError::Mode(_))) => {
+                return Err(ApiError::internal(err));
+            }
         }
     }
     Err(ApiError::Conflict {
@@ -351,8 +507,9 @@ async fn up_to_date(
     };
     Ok(Json(UpdatedDraft {
         base_version,
-        conflicts: count(&content.sql),
+        conflicts: count(content.source()),
         changed: false,
+        diagnostics: Vec::new(),
     }))
 }
 

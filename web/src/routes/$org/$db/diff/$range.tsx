@@ -8,7 +8,8 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { databaseQuery, versionsQuery } from "@/features/databases/queries";
+import { WrittenMigrationButton } from "@/features/databases/components/written-migration";
+import { databaseQuery, versionQuery, versionsQuery } from "@/features/databases/queries";
 import type { ChangeFilter } from "@/features/diff/changes";
 import { CompareBar } from "@/features/diff/components/compare-bar";
 import { DiffSkeleton } from "@/features/diff/components/diff-skeleton";
@@ -87,6 +88,9 @@ function Compare() {
     ...diffQuery(org, db, database.id, from, to),
     enabled: !missing && view === "changes",
   });
+  // One step forward: the newer version may have been written as a migration.
+  const step = !missing && view === "migration" && to === from + 1;
+  const target = useQuery({ ...versionQuery(org, db, database.id, to), enabled: step });
   const setView = (next: View) =>
     void navigate({
       search: (s) => ({ ...s, view: next === "migration" ? "migration" : undefined }),
@@ -143,11 +147,29 @@ function Compare() {
     body = <NoSuchComparison />;
   } else if (view === "migration") {
     body = (
-      <MigrationView
-        // A new pair is a new view: its own file tab and scroll.
-        key={rangeParam(from, to)}
-        query={(choice) => versionMigrationQuery(org, db, database.id, from, to, choice)}
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        {step && target.data?.written_migration && (
+          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/60 px-3 py-1.5 text-sm text-muted-foreground">
+            <DatabaseScriptIcon aria-hidden className="size-3.5 shrink-0" />
+            <p className="min-w-0 flex-1">
+              v{to} was written as a migration in its draft. This one is generated from the two
+              schemas.
+            </p>
+            <WrittenMigrationButton
+              org={org}
+              database={database}
+              version={target.data}
+              label="Open the written migration"
+            />
+          </div>
+        )}
+        <MigrationView
+          // A new pair is a new view: its own file tab and scroll.
+          key={rangeParam(from, to)}
+          query={(choice) => versionMigrationQuery(org, db, database.id, from, to, choice)}
+          className="min-h-0 flex-1"
+        />
+      </div>
     );
   } else if (diff.error) {
     body =

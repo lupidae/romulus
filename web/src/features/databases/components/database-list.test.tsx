@@ -46,6 +46,7 @@ describe("DatabaseList", () => {
               origin: "push",
               source_kind: "remus_json",
               message: null,
+              written_migration: false,
               created_at: new Date().toISOString(),
               author: { kind: "token", id: "t", name: "GitHub Actions" },
             }),

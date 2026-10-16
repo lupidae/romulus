@@ -54,6 +54,7 @@ const VERSIONS: VersionSummary[] = [
     message: "Reactions and subscriptions",
     created_at: new Date(Date.now() - 3_600_000).toISOString(),
     author: { kind: "token", id: "t1", name: "CI" },
+    written_migration: false,
   },
   {
     id: "v1",
@@ -63,6 +64,7 @@ const VERSIONS: VersionSummary[] = [
     message: "First cut",
     created_at: new Date(Date.now() - 86_400_000 * 3).toISOString(),
     author: { kind: "user", id: "u-alice", name: "Alice Martin" },
+    written_migration: false,
   },
 ];
 

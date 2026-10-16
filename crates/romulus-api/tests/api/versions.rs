@@ -363,6 +363,7 @@ fn new_version(database_id: Uuid, tables: &[&str]) -> NewVersion {
         expected_base: None,
         publishes_draft: None,
         approvals: None,
+        migration_sql: None,
     }
 }
 

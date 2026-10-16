@@ -467,6 +467,7 @@ mod tests {
             message: Some("From CI".into()),
             created_at: chrono::DateTime::UNIX_EPOCH,
             author: None,
+            written_migration: false,
         };
         let content = DiffContent {
             diff: romulus_diff::diff(&model(&["a"]), &model(&["a", "b"])),

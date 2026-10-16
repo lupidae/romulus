@@ -64,10 +64,16 @@ use self::{
         ReviewChange, RewriteError, Settings, Shared, UpdateTicket,
     },
 };
-use crate::AppState;
+use crate::{AppState, domain::DraftMode};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(socket::connect))
+}
+
+/// A draft's base version, as a room holds it: its id and SQL.
+pub struct Base {
+    pub id: Uuid,
+    pub sql: Arc<str>,
 }
 
 /// Someone who has a draft open right now.
@@ -343,17 +349,56 @@ impl Hub {
         self.0.tell(draft, Command::Unfreeze);
     }
 
-    /// "Update draft" moved the draft's base to `version`: everyone hears it
-    /// (before the unfreeze).
-    pub fn updated(&self, draft: Uuid, version: i32, by: &str, conflicts: u32) {
+    /// "Update draft" moved the draft's base to `version`, whose SQL is
+    /// `base` (a migration applies to it now): everyone hears it (before
+    /// the unfreeze).
+    pub fn updated(&self, draft: Uuid, version: i32, by: &str, conflicts: u32, base: Base) {
         self.0.tell(
             draft,
             Command::Updated {
                 version,
                 by: by.to_owned(),
                 conflicts,
+                base: Some((base.id, base.sql)),
             },
         );
+    }
+
+    /// Switches the draft to `to` mode if its source is still the text whose
+    /// SHA-256 is `from` and its base still `base` (`Content::base_version`:
+    /// what the seed was computed from): to migration mode with `seed` as
+    /// the migration, or back to schema mode with `seed` as the SQL (the
+    /// migration cleared, `drafts.base_sql` as `base_sql` says). Everyone sees it at once, in one transaction; answered once
+    /// written (`drafts.mode` too). `false` when the draft was in that mode
+    /// already. On [`RewriteError::Changed`], read the content again.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one switch, all of it the command"
+    )]
+    pub async fn switch_mode(
+        &self,
+        draft: Uuid,
+        to: DraftMode,
+        from: String,
+        base: Option<Uuid>,
+        seed: String,
+        base_sql: store::BaseSql,
+        by: &str,
+    ) -> Result<Result<bool, RewriteError>, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::SwitchMode {
+                to,
+                from,
+                base,
+                seed,
+                base_sql,
+                by: by.to_owned(),
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
     }
 
     pub fn published(&self, draft: Uuid, version: i32, by: &str) {
@@ -441,15 +486,17 @@ impl Hub {
         }
     }
 
-    /// Whether `user_id` may approve the draft's SQL as it is now, the text
-    /// hashing to `sha256` (loading the draft if needed). The approval is
-    /// then the caller's to write, and to announce ([`Hub::approved`]).
+    /// Whether `user_id` may approve the draft's source as it is now, the
+    /// text hashing to `sha256` (loading the draft if needed); with what the
+    /// approval is of (the source on its base: `compile::input_hash`). The
+    /// approval is then the caller's to write, and to announce
+    /// ([`Hub::approved`]).
     pub async fn check_approval(
         &self,
         draft: Uuid,
         user_id: Uuid,
         sha256: String,
-    ) -> Result<Result<(), ApprovalError>, HubError> {
+    ) -> Result<Result<String, ApprovalError>, HubError> {
         let (reply, wait) = oneshot::channel();
         self.0.send(
             draft,

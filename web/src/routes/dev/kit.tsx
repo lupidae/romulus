@@ -670,6 +670,26 @@ function Overlays() {
             </MenuContent>
           </Menu>
         </Specimen>
+        <Specimen label="Menu with descriptions">
+          <Menu>
+            <MenuTrigger asChild>
+              <Button>
+                New
+                <MoreHorizIcon />
+              </Button>
+            </MenuTrigger>
+            <MenuContent align="start" className="w-72">
+              <MenuItem description="Edit the schema as SQL and in the graph.">
+                <GitBranchIcon />
+                New draft
+              </MenuItem>
+              <MenuItem description="Write the ALTER statements by hand; the schema follows.">
+                <EditPencilIcon />
+                New migration
+              </MenuItem>
+            </MenuContent>
+          </Menu>
+        </Specimen>
         <Specimen label="Dialog">
           <Dialog>
             <DialogTrigger asChild>

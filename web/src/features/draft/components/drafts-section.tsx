@@ -5,7 +5,9 @@ import * as React from "react";
 import { ApiError } from "@/api/client";
 import {
   CheckCircleIcon,
+  DatabaseScriptIcon,
   GitBranchIcon,
+  NavArrowDownIcon,
   NavArrowRightIcon,
   PlusIcon,
   SendDiagonalIcon,
@@ -15,20 +17,23 @@ import { AvatarStack } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { orgQuery } from "@/features/orgs/queries";
 import { canWrite } from "@/features/orgs/roles";
 import { fromNow } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 import { useCreateDraft } from "../mutations";
 import { presenceLine } from "../presence";
-import { type Draft, draftsQuery } from "../queries";
+import { type Draft, type DraftMode, draftsQuery } from "../queries";
 
 /**
  * "New draft": one click, no dialog. The draft starts from the latest
- * version and the editor opens straight away.
+ * version and the editor opens straight away. Beside it, "New migration":
+ * the same, written as a migration from scratch.
  */
 export function NewDraftButton({
   org,
@@ -44,29 +49,64 @@ export function NewDraftButton({
 }) {
   const create = useCreateDraft(org, db);
   const navigate = useNavigate();
+  const start = (mode: DraftMode) =>
+    create.mutate(mode, {
+      onSuccess: (draft) =>
+        void navigate({
+          to: "/$org/$db/drafts/$draft",
+          params: { org, db, draft: draft.id },
+        }),
+      onError: (error) =>
+        toast.error(
+          mode === "migration" ? "Could not start a migration" : "Could not start a draft",
+          {
+            description: error instanceof ApiError ? error.message : "Check your connection.",
+          },
+        ),
+    });
   return (
-    <Button
-      variant={variant}
-      loading={create.isPending}
-      aria-label={compact ? "New draft" : undefined}
-      className={compact ? "max-sm:px-2.5" : undefined}
-      onClick={() =>
-        create.mutate(undefined, {
-          onSuccess: (draft) =>
-            void navigate({
-              to: "/$org/$db/drafts/$draft",
-              params: { org, db, draft: draft.id },
-            }),
-          onError: (error) =>
-            toast.error("Could not start a draft", {
-              description: error instanceof ApiError ? error.message : "Check your connection.",
-            }),
-        })
-      }
-    >
-      <PlusIcon />
-      <span className={compact ? "max-sm:hidden" : undefined}>New draft</span>
-    </Button>
+    <div role="group" aria-label="New draft" className="inline-flex">
+      <Button
+        variant={variant}
+        loading={create.isPending && create.variables !== "migration"}
+        disabled={create.isPending}
+        aria-label={compact ? "New draft" : undefined}
+        className={cn("rounded-r-none", compact && "max-sm:px-2.5")}
+        onClick={() => start("schema")}
+      >
+        <PlusIcon />
+        <span className={compact ? "max-sm:hidden" : undefined}>New draft</span>
+      </Button>
+      <Menu>
+        <MenuTrigger asChild>
+          <Button
+            variant={variant}
+            loading={create.isPending && create.variables === "migration"}
+            disabled={create.isPending}
+            aria-label="More ways to start a draft"
+            className="-ml-px rounded-l-none px-2"
+          >
+            <NavArrowDownIcon />
+          </Button>
+        </MenuTrigger>
+        <MenuContent align="end" className="w-72">
+          <MenuItem
+            onSelect={() => start("schema")}
+            description="Edit the schema as SQL and in the graph."
+          >
+            <GitBranchIcon />
+            New draft
+          </MenuItem>
+          <MenuItem
+            onSelect={() => start("migration")}
+            description="Write the ALTER statements by hand; the schema follows."
+          >
+            <DatabaseScriptIcon />
+            New migration
+          </MenuItem>
+        </MenuContent>
+      </Menu>
+    </div>
   );
 }
 
@@ -183,6 +223,12 @@ function DraftRow({ org, db, draft }: { org: string; db: string; draft: Draft })
       <div className="grid min-w-0 flex-1 gap-0.5">
         <p className="flex min-w-0 items-center gap-2">
           <span className="truncate text-base font-medium text-foreground">{draft.name}</span>
+          {draft.mode === "migration" && (
+            <Badge variant="neutral">
+              <DatabaseScriptIcon aria-hidden />
+              Migration
+            </Badge>
+          )}
           {draft.stale ? (
             <Badge variant="warning">
               {draft.base_removed

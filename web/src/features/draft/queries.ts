@@ -10,6 +10,8 @@ export type Diagnostic = components["schemas"]["Diagnostic"];
 export type ServerEvent = components["schemas"]["ServerEvent"];
 export type LiveStatus = components["schemas"]["LiveStatus"];
 export type CompileState = components["schemas"]["CompileState"];
+export type DraftMode = components["schemas"]["DraftMode"];
+export type WrittenMigration = components["schemas"]["WrittenMigration"];
 
 export const draftKeys = {
   list: (org: string, db: string) => ["drafts", org, db] as const,

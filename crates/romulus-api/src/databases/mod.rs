@@ -170,6 +170,7 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                   v.message AS "v_message?", v.created_at AS "v_created_at?",
                   u.id AS "user_id?", u.name AS "user_name?",
                   t.id AS "token_id?", t.name AS "token_name?",
+                  v.written_migration AS "v_written_migration?",
                   greatest(d.updated_at, v.created_at) AS "last_activity_at!",
                   d.last_version_number + 1 AS "next_number!", n.live AS "versions!",
                   CASE WHEN n.live < coalesce(v.number, 0) THEN ARRAY(
@@ -181,7 +182,8 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                   ) ELSE '{}' END AS "missing!"
            FROM databases d
            LEFT JOIN LATERAL (
-               SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token
+               SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token,
+                      migration_sql IS NOT NULL AS written_migration
                FROM versions WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1
            ) v ON true
            CROSS JOIN LATERAL (
@@ -220,6 +222,7 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                             r.token_id,
                             r.token_name,
                         ),
+                        written_migration: r.v_written_migration.unwrap_or(false),
                     })
                 }
                 _ => None,

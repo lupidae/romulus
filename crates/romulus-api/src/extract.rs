@@ -19,7 +19,7 @@
 
 use axum::{
     extract::{
-        FromRequest, FromRequestParts,
+        FromRequest, FromRequestParts, OptionalFromRequest, Request,
         rejection::{BytesRejection, JsonRejection, PathRejection, QueryRejection},
     },
     http::StatusCode,
@@ -33,6 +33,21 @@ use crate::ApiError;
 #[derive(Debug, Clone, Copy, Default, FromRequest)]
 #[from_request(via(axum::Json), rejection(ApiError))]
 pub struct Json<T>(pub T);
+
+/// An optional JSON body (`Option<Json<T>>`): `None` without a
+/// `Content-Type`, the same rejections as [`Json`] otherwise.
+impl<T, S> OptionalFromRequest<S> for Json<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
+        let json = <axum::Json<T> as OptionalFromRequest<S>>::from_request(req, state).await?;
+        Ok(json.map(|axum::Json(value)| Self(value)))
+    }
+}
 
 impl<T: Serialize> IntoResponse for Json<T> {
     fn into_response(self) -> Response {

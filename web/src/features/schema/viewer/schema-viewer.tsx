@@ -13,8 +13,8 @@ import { graphOf } from "../graph/graph-of";
 import { SchemaGraph } from "../graph/schema-graph";
 import type { Groups, Layout } from "../layout";
 import { qualifiedName, type RelationRef, type Schema } from "../model";
-import type { SchemaTexts, TextFormat } from "../text/formats";
-import { SchemaText } from "../text/schema-text";
+import type { SchemaTexts } from "../text/formats";
+import { SchemaText, type TextTab } from "../text/schema-text";
 import type { SqlStatement } from "../text/statements";
 import { type HiddenPane, LayoutMenu } from "./layout-menu";
 import { DEFAULT_RATIO, MAX_RATIO, MIN_RATIO, Split } from "./split";
@@ -41,8 +41,15 @@ export interface SchemaViewerProps {
   /** Qualified name of the selected table; leave undefined to let the viewer own it. */
   selected?: string | null;
   onSelectedChange?: (key: string | null) => void;
-  format?: TextFormat;
-  onFormatChange?: (format: TextFormat) => void;
+  /** The text pane's tab: a format, or one of `textTabs`. */
+  format?: string;
+  onFormatChange?: (format: string) => void;
+  /** The text pane's own tabs (a draft's migration). */
+  textTabs?: TextTab[];
+  /** The SQL tab's label, and why it is read-only (see `SchemaText`). */
+  sqlTab?: { label?: string; locked?: string; notice?: ReactNode };
+  /** A new value remounts the SQL editor. */
+  sqlKey?: string;
   /** Where view preferences (split, hidden pane) are remembered, per browser. */
   storageKey?: string;
   /** Rendered inside the graph's flow (remote cursors…). */
@@ -84,6 +91,9 @@ export function SchemaViewer({
   onSelectedChange,
   format,
   onFormatChange,
+  textTabs,
+  sqlTab,
+  sqlKey,
   storageKey = "romulus:schema-viewer",
   graphChildren,
   graphControls,
@@ -196,6 +206,9 @@ export function SchemaViewer({
       onSelectedChange={(ref) => select(ref ? qualifiedName(ref) : null)}
       format={format}
       onFormatChange={onFormatChange}
+      tabs={textTabs}
+      sqlTab={sqlTab}
+      sqlKey={sqlKey}
       readOnly={readOnly}
       sqlExtensions={sqlExtensions}
       multiSchema={graph.multiSchema}

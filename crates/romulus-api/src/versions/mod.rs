@@ -12,6 +12,9 @@
 //! - `GET …/versions/{number}` [member]: the model, source, layout and
 //!   author; `GET …/versions/{number}/texts` [member]: the model as SQL
 //!   (the source itself for SQL versions), JSON, DBML and Mermaid.
+//! - `GET …/versions/{number}/migration` [member]: the migration it was
+//!   written as, for a version published from a draft in migration mode
+//!   (`versions.migration_sql`; 404 for others).
 //!
 //! Machine API, authenticated by an API token ([`push`]):
 //! - `POST /databases/{database_id}/versions`: remus push, JSON or SQL; an
@@ -79,6 +82,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(check))
         .routes(routes!(get))
         .routes(routes!(texts))
+        .routes(routes!(written_migration))
         .merge(diff::router())
         .merge(migration::router())
         .merge(push::router())
@@ -123,6 +127,9 @@ pub struct VersionSummary {
     pub created_at: DateTime<Utc>,
     /// `null` once the person's account or the token is gone.
     pub author: Option<Author>,
+    /// Published from a draft in migration mode: the migration it was
+    /// written as is at `…/versions/{number}/migration`.
+    pub written_migration: bool,
 }
 
 /// One version, whole.
@@ -149,6 +156,9 @@ pub struct VersionDetail {
     /// Who approved the draft it was published from, when the organization
     /// required approvals (`drafts::approvals::freeze`); oldest first.
     pub approvals: Vec<VersionApproval>,
+    /// Published from a draft in migration mode: the migration it was
+    /// written as is at `…/versions/{number}/migration`.
+    pub written_migration: bool,
 }
 
 /// An approval of the draft a version was published from, as it was then.
@@ -158,6 +168,19 @@ pub struct VersionApproval {
     pub user_id: Option<Uuid>,
     pub name: String,
     pub at: DateTime<Utc>,
+}
+
+/// The migration a version was written as, in a draft in migration mode:
+/// from the version before it (nothing, for a first version) to it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct WrittenMigration {
+    pub number: i32,
+    /// The version it migrates from; `null` for a first version.
+    pub from: Option<i32>,
+    /// The migration, as written (data statements included).
+    pub sql: String,
+    /// What it downloads as: `v5_add_invoices.sql`.
+    pub file_name: String,
 }
 
 /// The migration an imported version came from.
@@ -249,6 +272,7 @@ struct SummaryRow {
     user_name: Option<String>,
     token_id: Option<Uuid>,
     token_name: Option<String>,
+    written_migration: bool,
 }
 
 impl From<SummaryRow> for VersionSummary {
@@ -261,6 +285,7 @@ impl From<SummaryRow> for VersionSummary {
             message: r.message,
             created_at: r.created_at,
             author: Author::from_columns(r.user_id, r.user_name, r.token_id, r.token_name),
+            written_migration: r.written_migration,
         }
     }
 }
@@ -277,7 +302,8 @@ async fn page(
         SummaryRow,
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
-                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
+                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
+                  v.migration_sql IS NOT NULL AS "written_migration!"
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -297,7 +323,8 @@ async fn summary(db: &PgPool, id: Uuid) -> ApiResult<VersionSummary> {
         SummaryRow,
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
-                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
+                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
+                  v.migration_sql IS NOT NULL AS "written_migration!"
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -321,7 +348,8 @@ pub(crate) async fn detail(
                   v.model, v.source, v.layout,
                   u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
                   m.migration_id AS "migration_id?", m.path AS "migration_path?",
-                  m.format AS "migration_format?: MigrationFormat", m.skipped AS "migration_skipped?"
+                  m.format AS "migration_format?: MigrationFormat", m.skipped AS "migration_skipped?",
+                  v.migration_sql IS NOT NULL AS "written_migration!"
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -365,6 +393,7 @@ pub(crate) async fn detail(
             _ => None,
         },
         approvals,
+        written_migration: row.written_migration,
     })
 }
 
@@ -523,6 +552,7 @@ async fn upload(
         expected_base: None,
         publishes_draft: None,
         approvals: None,
+        migration_sql: None,
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.
@@ -686,4 +716,55 @@ async fn texts(
     .await
     .map_err(ApiError::internal)?;
     Ok(Json(texts))
+}
+
+/// The migration a version was written as (a draft in migration mode
+/// published it), to read again or download.
+#[utoipa::path(
+    get,
+    path = "/orgs/{org}/databases/{db}/versions/{number}/migration",
+    operation_id = "get_written_migration",
+    tag = "versions",
+    params(
+        ("org" = String, Path, description = "The organization's slug"),
+        ("db" = String, Path, description = "The database's slug"),
+        ("number" = i32, Path, description = "The version's number"),
+    ),
+    responses(
+        (status = 200, body = WrittenMigration),
+        (status = 404, description = "No such version, or it was not written as a migration", body = ErrorBody),
+    )
+)]
+async fn written_migration(
+    member: Member,
+    State(db): State<PgPool>,
+    Path((_, slug, number)): Path<(String, String, i32)>,
+) -> ApiResult<Json<WrittenMigration>> {
+    let database = databases::find(&db, member.org.id, &slug).await?;
+    let row = sqlx::query!(
+        "SELECT migration_sql, message FROM versions WHERE database_id = $1 AND number = $2",
+        database.id,
+        number,
+    )
+    .fetch_optional(&db)
+    .await?
+    .ok_or_else(|| {
+        ApiError::not_found(format!("There is no version {number} of this database."))
+    })?;
+    let sql = row.migration_sql.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "v{number} was not written as a migration: compare it with v{} for the migration romulus generates.",
+            number - 1
+        ))
+    })?;
+    let name = row
+        .message
+        .as_deref()
+        .map_or_else(|| "migration".to_owned(), romulus_migration::slug);
+    Ok(Json(WrittenMigration {
+        number,
+        from: (number > 1).then_some(number - 1),
+        sql,
+        file_name: format!("v{number}_{name}.sql"),
+    }))
 }

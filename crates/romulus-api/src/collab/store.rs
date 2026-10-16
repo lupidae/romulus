@@ -17,13 +17,17 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use super::{protocol::ReviewRequest, review};
-use crate::domain::DraftStatus;
+use crate::domain::{DraftMode, DraftStatus, Schema, SourceKind};
 
 /// What loading a draft finds.
 pub struct Loaded {
     pub database_id: Uuid,
     pub org_id: Uuid,
     pub status: DraftStatus,
+    pub mode: DraftMode,
+    /// The version the draft is based on, if any: what its migration
+    /// applies to in migration mode.
+    pub base: Option<Base>,
     /// Its database is deleted (its drafts are then deleted too).
     pub database_deleted: bool,
     /// The snapshot, then every update after it, in order.
@@ -36,6 +40,30 @@ pub struct Loaded {
     /// Editors, approvals (of members only), the review request, and the
     /// organization's setting.
     pub review: review::Review,
+}
+
+/// A draft's base version, as its migration mode compiles on top of it.
+pub struct Base {
+    pub id: Uuid,
+    pub source: String,
+    pub source_kind: SourceKind,
+    pub model: Value,
+}
+
+impl Base {
+    /// Its SQL as a draft has it (`drafts::versions::Version::sql`): the
+    /// source, or the model rendered. Takes a moment for a large model: off
+    /// the async workers.
+    pub fn sql(&self) -> String {
+        match self.source_kind {
+            SourceKind::Sql => self.source.clone(),
+            SourceKind::RemusJson | SourceKind::Migration => {
+                <Schema as serde::Deserialize>::deserialize(&self.model)
+                    .map(|model| romulus_sandbox::render_sql(&model))
+                    .unwrap_or_default()
+            }
+        }
+    }
 }
 
 /// A `draft_compiles` row.
@@ -55,11 +83,14 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
         .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .await?;
     let Some(draft) = sqlx::query!(
-        r#"SELECT d.database_id, d.status AS "status: DraftStatus",
+        r#"SELECT d.database_id, d.status AS "status: DraftStatus", d.mode AS "mode: DraftMode",
                   b.deleted_at IS NOT NULL AS "database_deleted!", b.org_id, o.approvals_required,
-                  d.editors_unknown
+                  d.editors_unknown,
+                  v.id AS "base_id?", v.source AS "base_source?", v.source_kind AS "base_kind?: SourceKind",
+                  v.model AS "base_model?"
            FROM drafts d JOIN databases b ON b.id = d.database_id
            JOIN organizations o ON o.id = b.org_id
+           LEFT JOIN versions v ON v.id = d.base_version_id
            WHERE d.id = $1"#,
         draft_id,
     )
@@ -108,10 +139,26 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
         .into_iter()
         .chain(rows.into_iter().map(|row| row.update))
         .collect();
+    let base = match (
+        draft.base_id,
+        draft.base_source,
+        draft.base_kind,
+        draft.base_model,
+    ) {
+        (Some(id), Some(source), Some(source_kind), Some(model)) => Some(Base {
+            id,
+            source,
+            source_kind,
+            model,
+        }),
+        _ => None,
+    };
     Ok(Some(Loaded {
         database_id: draft.database_id,
         org_id: draft.org_id,
         status: draft.status,
+        mode: draft.mode,
+        base,
         database_deleted: draft.database_deleted,
         updates,
         last_update_id,
@@ -282,8 +329,53 @@ pub async fn save_compile(
     Ok(())
 }
 
+/// What a mode switch does to `drafts.base_sql` (what the SQL is relative
+/// to, for "Update draft").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseSql {
+    /// Left as it is (the SQL does not change).
+    Keep,
+    /// NULL: the base version's own text.
+    Version,
+    /// This text.
+    Text(String),
+}
+
+/// The draft's mode, as `drafts.mode`, written after the doc's switch (the
+/// room is its one writer once the draft exists), and `base_sql` as the
+/// switch says.
+pub async fn save_mode(
+    db: &PgPool,
+    draft_id: Uuid,
+    mode: DraftMode,
+    base_sql: &BaseSql,
+) -> Result<(), sqlx::Error> {
+    let (set, text) = match base_sql {
+        BaseSql::Keep => (false, None),
+        BaseSql::Version => (true, None),
+        BaseSql::Text(text) => (true, Some(text.as_str())),
+    };
+    sqlx::query!(
+        "UPDATE drafts SET mode = $2, base_sql = CASE WHEN $4 THEN $3 ELSE base_sql END,
+                           updated_at = now()
+         WHERE id = $1",
+        draft_id,
+        mode as DraftMode,
+        text,
+        set,
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 pub enum Job {
     Append(Vec<u8>),
+    /// After a mode switch's update: `drafts.mode` and `base_sql`.
+    Mode {
+        mode: DraftMode,
+        base_sql: BaseSql,
+    },
     /// The doc's whole state: becomes the snapshot.
     Compact(Vec<u8>),
     Compile(Box<CompileRow>),
@@ -350,6 +442,16 @@ async fn run(
             Job::Compact(state) => {
                 if retry("compact", draft_id, || {
                     compact(&db, draft_id, &state, last_id)
+                })
+                .await
+                .is_none()
+                {
+                    let _ = failed.send(());
+                }
+            }
+            Job::Mode { mode, base_sql } => {
+                if retry("save the mode", draft_id, || {
+                    save_mode(&db, draft_id, mode, &base_sql)
                 })
                 .await
                 .is_none()

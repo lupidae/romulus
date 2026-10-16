@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT d.id, d.name, d.status AS \"status: DraftStatus\", d.created_at, d.updated_at,\n                  bv.number AS \"base_version?\", bv.removed_at IS NOT NULL AS \"base_removed?\",\n                  pv.number AS \"published_version?\",\n                  u.id AS \"creator_id?\", u.name AS \"creator_name?\"\n           FROM drafts d\n           LEFT JOIN versions bv ON bv.id = d.base_version_id\n           LEFT JOIN versions pv ON pv.id = d.published_version_id\n           LEFT JOIN users u ON u.id = d.created_by\n           WHERE d.id = $1 AND d.database_id = $2 AND d.status <> 'deleted'",
+  "query": "SELECT d.id, d.name, d.status AS \"status: DraftStatus\", d.mode AS \"mode: DraftMode\",\n                  d.created_at, d.updated_at,\n                  bv.number AS \"base_version?\", bv.removed_at IS NOT NULL AS \"base_removed?\",\n                  pv.number AS \"published_version?\",\n                  u.id AS \"creator_id?\", u.name AS \"creator_name?\"\n           FROM drafts d\n           LEFT JOIN versions bv ON bv.id = d.base_version_id\n           LEFT JOIN versions pv ON pv.id = d.published_version_id\n           LEFT JOIN users u ON u.id = d.created_by\n           WHERE d.id = $1 AND d.database_id = $2 AND d.status <> 'deleted'",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,27 @@
       },
       {
         "ordinal": 3,
+        "name": "mode: DraftMode",
+        "type_info": {
+          "Custom": {
+            "name": "draft_mode",
+            "kind": {
+              "Enum": [
+                "schema",
+                "migration"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "mode"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -59,7 +80,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -70,7 +91,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "base_version?",
         "type_info": "Int4",
         "origin": {
@@ -81,13 +102,13 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "base_removed?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "published_version?",
         "type_info": "Int4",
         "origin": {
@@ -98,7 +119,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "creator_id?",
         "type_info": "Uuid",
         "origin": {
@@ -109,7 +130,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "creator_name?",
         "type_info": "Text",
         "origin": {
@@ -132,6 +153,7 @@
       false,
       false,
       false,
+      false,
       true,
       null,
       true,
@@ -139,5 +161,5 @@
       true
     ]
   },
-  "hash": "ab51afac06239df1443fa021d4c2504f6687e8d13d6e9a2c09f9d6ed5812c129"
+  "hash": "367079757fd566dba6d6f2c09caad12d2da14b0f2079fd6a93fd14765e64eaa2"
 }

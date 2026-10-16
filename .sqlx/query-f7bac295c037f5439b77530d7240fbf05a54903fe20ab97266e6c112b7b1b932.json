@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT migration_sql FROM versions WHERE database_id = $1 AND number = 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "migration_sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "migration_sql"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "f7bac295c037f5439b77530d7240fbf05a54903fe20ab97266e6c112b7b1b932"
+}

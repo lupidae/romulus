@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 pub use crate::compile::{Compiled, Rejected, SqlCompiler};
+use crate::domain::DraftMode;
 
 /// Hex SHA-256 of a text: how compile results name the text they are about.
 pub fn sha256_hex(text: &str) -> String {
@@ -21,6 +22,32 @@ pub fn sha256_hex(text: &str) -> String {
             let _ = write!(hex, "{byte:02x}");
             hex
         })
+}
+
+/// Hex SHA-256 of what a compile is of, as `draft_compiles.source_hash`
+/// keeps it: the source text in schema mode; in migration mode the base
+/// version's SQL and the migration (one migration on another base is
+/// another compile). Clients only ever see [`sha256_hex`] of the text they
+/// edit.
+pub fn input_hash(mode: DraftMode, base: &str, source: &str) -> String {
+    use std::fmt::Write as _;
+    match mode {
+        DraftMode::Schema => sha256_hex(source),
+        DraftMode::Migration => {
+            let mut hasher = Sha256::new();
+            hasher.update(b"migration\0");
+            hasher.update((base.len() as u64).to_be_bytes());
+            hasher.update(base.as_bytes());
+            hasher.update(source.as_bytes());
+            hasher
+                .finalize()
+                .iter()
+                .fold(String::with_capacity(64), |mut hex, byte| {
+                    let _ = write!(hex, "{byte:02x}");
+                    hex
+                })
+        }
+    }
 }
 
 /// Where each relation the graph draws (tables, views, materialized views,
@@ -93,6 +120,19 @@ mod tests {
         assert_eq!(
             sha256_hex(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn a_migration_is_hashed_with_its_base() {
+        assert_eq!(input_hash(DraftMode::Schema, "base", "x"), sha256_hex("x"));
+        let migration = input_hash(DraftMode::Migration, "base", "x");
+        assert_ne!(migration, sha256_hex("x"));
+        assert_ne!(migration, input_hash(DraftMode::Migration, "other", "x"));
+        // The base and the migration never run into each other.
+        assert_ne!(
+            input_hash(DraftMode::Migration, "ab", "c"),
+            input_hash(DraftMode::Migration, "a", "bc")
         );
     }
 

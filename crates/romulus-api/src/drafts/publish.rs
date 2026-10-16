@@ -16,6 +16,13 @@
 //!    unless someone published since the draft started (409 `stale_base`:
 //!    "Update draft" comes first), and marks the draft published.
 //!
+//! In migration mode the text is the migration: the version stores the
+//! schema it derives (its model, and as `source` SQL that compiles back to
+//! it: `drafts::source`) and the migration itself
+//! (`versions.migration_sql`). What is reviewed is the source *on its
+//! base* (`compile::input_hash`): after "Update draft" moved the base, the
+//! same migration is another review.
+//!
 //! Any failure unfreezes the draft, and the clients send back what they
 //! typed while it was frozen.
 
@@ -29,18 +36,18 @@ use uuid::Uuid;
 
 use super::{
     approvals::{self, PublishApprovals},
-    find, latest_number, not_open, versions,
+    find, latest_number, not_open, source, versions,
 };
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
     collab::{
         Hub, HubError,
-        compile::sha256_hex,
+        compile::input_hash,
         room::{Content, FreezeError},
     },
     databases::{self, DatabaseRef},
-    domain::{DraftStatus, Schema},
+    domain::{DraftMode, DraftStatus, Schema},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
@@ -55,8 +62,14 @@ pub struct PublishPreview {
     pub latest_version: Option<i32>,
     /// Someone published since the draft started: "Update draft" first.
     pub stale: bool,
-    /// SHA-256 of the SQL previewed: send it back to publish exactly this.
+    /// What the draft is edited as: its SQL, or a migration from its base.
+    pub mode: DraftMode,
+    /// What was previewed (`compile::input_hash`: the SQL; in migration
+    /// mode the migration and the base it applies to): send it back to
+    /// publish exactly this.
     pub sha256: String,
+    /// Migration mode: the migration the version will keep.
+    pub migration: Option<String>,
     /// Errors that prevent publishing (then no diff), then notes.
     pub diagnostics: Vec<Diagnostic>,
     /// What changes against the base version (against nothing when there is
@@ -117,7 +130,7 @@ pub(super) async fn preview(
     }
     let latest = latest_number(&state.db, database.id).await?;
     let content = state.collab.content(id).await.map_err(hub_error)?;
-    let sha256 = sha256_hex(&content.sql);
+    let sha256 = reviewed(&content);
     let approvals = approvals::status(&state.db, member.org.id, member.role, &content).await?;
     let number = crate::versions::next_number(&state.db, database.id).await?;
 
@@ -144,7 +157,9 @@ pub(super) async fn preview(
         base_version: row.base_version,
         latest_version: latest,
         stale: row.base_version != latest,
+        mode: content.mode,
         sha256,
+        migration: (content.mode == DraftMode::Migration).then(|| content.migration.clone()),
         diagnostics,
         diff,
         base_model,
@@ -168,7 +183,8 @@ pub(super) async fn preview(
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`draft_changed` (review again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)", body = ErrorBody),
-        (status = 422, description = "The SQL does not compile (`details.diagnostics`)", body = ErrorBody),
+        (status = 422, description = "`compile_failed`: the SQL does not compile (`details.diagnostics`); `unrepresentable`: in migration mode, no SQL romulus can keep compiles back to the schema (`details.objects`)", body = ErrorBody),
+        (status = 429, description = "`rate_limited`: the checks publishing compiles (migration mode) count against the compile limits", body = ErrorBody),
         (status = 503, description = "The compiler is unavailable", body = ErrorBody),
     )
 )]
@@ -228,7 +244,7 @@ pub(super) async fn publish(
         done: false,
     };
 
-    if sha256_hex(&content.sql) != body.sha256 {
+    if reviewed(&content) != body.sha256 {
         return Err(ApiError::Conflict {
             code: "draft_changed",
             message: "The draft changed while you were reviewing it. Review the changes again."
@@ -246,6 +262,13 @@ pub(super) async fn publish(
             });
         }
     };
+    let checks = source::Checks {
+        hub: &state.collab,
+        limits: &state.limits,
+        user: member.user.id,
+        database: database.id,
+    };
+    let source = version_source(&checks, &content, &model).await?;
     database.slug.clone_into(&mut model.database);
     let created = match store(
         &state,
@@ -253,7 +276,7 @@ pub(super) async fn publish(
         id,
         draft.base_version_id,
         &content,
-        model,
+        (model, source),
         message,
         member.user.id,
         approvals,
@@ -293,11 +316,12 @@ async fn store(
     draft: Uuid,
     base: Option<Uuid>,
     content: &Content,
-    model: Schema,
+    (model, source): (Schema, String),
     message: Option<&str>,
     by: Uuid,
     approvals: Option<approvals::Freeze>,
 ) -> ApiResult<versions::Created> {
+    let migration_sql = (content.mode == DraftMode::Migration).then(|| content.migration.clone());
     let stored = versions::create_version(
         &state.db,
         versions::DraftVersion {
@@ -306,7 +330,8 @@ async fn store(
             expected_base: base,
             layout: content.layout.clone(),
             model,
-            source: content.sql.clone(),
+            source,
+            migration_sql,
             message: message.map(str::to_owned),
             created_by: by,
             approvals,
@@ -337,8 +362,9 @@ async fn published_as(db: &sqlx::PgPool, draft: Uuid) -> ApiResult<Option<versio
     .await?)
 }
 
-/// The model of the content's SQL (the last compile's when it was of that
-/// very text), or the diagnostics that prevent one.
+/// The model of the content's source (the last compile's when it was of
+/// that very text): its SQL, or its base version then its migration; or the
+/// diagnostics that prevent one.
 pub(super) async fn compiled(
     hub: &Hub,
     content: &Content,
@@ -347,8 +373,38 @@ pub(super) async fn compiled(
         let model = Schema::deserialize(&**model).map_err(ApiError::internal)?;
         return Ok((Some(model), Vec::new()));
     }
-    let compiled = hub.compiler().compile_draft(&content.sql).await?;
+    let compiled = match content.mode {
+        DraftMode::Schema => hub.compiler().compile_draft(&content.sql).await?,
+        DraftMode::Migration => {
+            hub.compiler()
+                .compile_migration(&content.base_sql, &content.migration)
+                .await?
+        }
+    };
     Ok((compiled.model, compiled.diagnostics))
+}
+
+/// The SQL the version keeps: the draft's text, or (migration mode) SQL
+/// that compiles back to the schema the migration made (`drafts::source`).
+async fn version_source(
+    checks: &source::Checks<'_>,
+    content: &Content,
+    model: &Schema,
+) -> ApiResult<String> {
+    match content.mode {
+        DraftMode::Schema => Ok(content.sql.clone()),
+        DraftMode::Migration => {
+            checks
+                .schema_source(model, &content.base_sql, &content.migration)
+                .await
+        }
+    }
+}
+
+/// What a person reviews of a draft, as the preview names it: its source,
+/// on its base in migration mode (`compile::input_hash`).
+pub(super) fn reviewed(content: &Content) -> String {
+    input_hash(content.mode, &content.base_sql, content.source())
 }
 
 /// A frozen draft: unfrozen when dropped, unless it was published.
@@ -381,7 +437,7 @@ impl Drop for Frozen<'_> {
 }
 
 /// A schema with nothing in it, for a first version's diff.
-fn empty_like(model: &Schema) -> Schema {
+pub(super) fn empty_like(model: &Schema) -> Schema {
     let mut empty = model.clone();
     empty.entities.clear();
     empty.enums.clear();

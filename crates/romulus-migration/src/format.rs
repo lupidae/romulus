@@ -234,6 +234,41 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
     files
 }
 
+/// The migration as one text to edit by hand: what a draft switching to
+/// migration mode starts from. A short header, the warnings, then the
+/// statements with their headings and comments, without the transaction
+/// the tools add (the draft's compile runs it in one of its own).
+pub fn editable(up: &Migration, meta: &Meta) -> String {
+    // Edited in a pane beside the graph: short lines, headings without
+    // rules.
+    let mut out = Writer {
+        width: 56,
+        compact: true,
+        ..Writer::new()
+    };
+    out.line(&format!(
+        "-- {}: migration from {}, written by hand.",
+        meta.database, meta.from
+    ));
+    if up.statements.is_empty() {
+        out.line(&format!(
+            "-- Write what changes {} here (ALTER TABLE …):",
+            meta.from
+        ));
+        out.line("-- the schema and the graph follow from it.");
+    } else {
+        out.line(&format!(
+            "-- Started from romulus's generated migration ({}):",
+            meta.date
+        ));
+        out.line("-- edit it freely, the schema and the graph follow.");
+    }
+    warnings(&mut out, up);
+    out.blank();
+    body(&mut out, &up.statements.iter().collect::<Vec<_>>(), false);
+    out.file(String::new(), FileRole::Up).content
+}
+
 /// The statements split into the migrations a per-file-transaction tool
 /// needs, in the order they run up (down runs them backwards).
 fn split<'m>(up: &'m Migration, down: &'m Migration, with_down: bool) -> Vec<Unit<'m>> {
@@ -544,6 +579,15 @@ fn body(out: &mut Writer, statements: &[&Statement], transaction: bool) {
 }
 
 fn heading(out: &mut Writer, section: Section, destroys: bool) {
+    if out.compact {
+        if section == Section::Removals && destroys {
+            out.comment("Removals. DESTRUCTIVE: what follows deletes data. Back up first.");
+        } else {
+            out.line(&format!("-- {}", section.title()));
+        }
+        out.blank();
+        return;
+    }
     let rule = format!("-- {}", "-".repeat(74));
     out.line(&rule);
     if section == Section::Removals && destroys {
@@ -596,6 +640,10 @@ struct Writer {
     text: String,
     lines: u32,
     marks: Vec<Mark>,
+    /// Comments wrap before this many columns (after `-- `).
+    width: usize,
+    /// Headings without their rules.
+    compact: bool,
 }
 
 impl Writer {
@@ -604,6 +652,8 @@ impl Writer {
             text: String::new(),
             lines: 0,
             marks: Vec::new(),
+            width: 75,
+            compact: false,
         }
     }
 
@@ -626,14 +676,14 @@ impl Writer {
 
     /// `text` as `--` lines of at most 78 columns.
     fn comment(&mut self, text: &str) {
-        for line in wrap(text, 75) {
+        for line in wrap(text, self.width) {
             self.line(&format!("-- {line}"));
         }
     }
 
     /// A bulleted comment: `--   - text`, continued under the text.
     fn comment_item(&mut self, text: &str) {
-        for (i, line) in wrap(text, 71).into_iter().enumerate() {
+        for (i, line) in wrap(text, self.width - 4).into_iter().enumerate() {
             let bullet = if i == 0 { "- " } else { "  " };
             self.line(&format!("--   {bullet}{line}"));
         }

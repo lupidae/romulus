@@ -32,7 +32,7 @@ use crate::{
     auth::{Member, min},
     collab::{compile::sha256_hex, patch, protocol::LiveStatus, room::RewriteError},
     databases,
-    domain::{DraftStatus, Schema},
+    domain::{DraftMode, DraftStatus, Schema},
     error::ErrorBody,
     extract::{Json, Path},
 };
@@ -83,7 +83,7 @@ pub fn canonical_sql(model: &Schema) -> String {
         (status = 200, body = Tidied),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published)", body = ErrorBody),
+        (status = 409, description = "`draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published), `migration_mode` (the draft is edited as a migration)", body = ErrorBody),
         (status = 422, description = "`compile_failed` (the SQL has errors, `details.diagnostics`), `tidy_unsafe` (the canonical form would change the schema)", body = ErrorBody),
         (status = 429, body = ErrorBody),
         (status = 503, description = "The compiler is unavailable", body = ErrorBody),
@@ -104,6 +104,9 @@ pub(super) async fn tidy(
 
     for _ in 0..ATTEMPTS {
         let content = state.collab.content(id).await.map_err(hub_error)?;
+        if content.mode != DraftMode::Schema {
+            return Err(migration_mode());
+        }
         let model = match compiled(&state.collab, &content).await? {
             (Some(model), _) => model,
             (None, diagnostics) => {
@@ -158,6 +161,7 @@ pub(super) async fn tidy(
             }
             Err(RewriteError::Changed) => {}
             Err(RewriteError::NotOpen(status)) => return Err(closed(status)),
+            Err(RewriteError::Mode(_)) => return Err(migration_mode()),
         }
     }
     Err(ApiError::Conflict {
@@ -165,6 +169,14 @@ pub(super) async fn tidy(
         message: "The SQL kept changing while it was being tidied. Try again when typing pauses."
             .into(),
     })
+}
+
+/// 409 `migration_mode`: the migration is the source, the SQL is derived.
+fn migration_mode() -> ApiError {
+    ApiError::Conflict {
+        code: "migration_mode",
+        message: "This draft is edited as a migration: its schema SQL is derived, there is nothing to tidy.".into(),
+    }
 }
 
 fn closed(status: LiveStatus) -> ApiError {

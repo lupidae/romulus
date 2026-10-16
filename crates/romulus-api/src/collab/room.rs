@@ -10,7 +10,15 @@
 //! - **Persistence**: applied updates are batched, merged and appended to
 //!   `draft_updates`; after [`Settings::compact_after`] rows, or when the
 //!   room unloads, the doc's state replaces the snapshot.
-//! - **Compile on type**: a change to `sql` schedules a compile
+//! - **Modes**: the source is the doc's `sql` (schema mode) or its
+//!   `migration` (migration mode), compiled after the base version's SQL
+//!   (`SqlCompiler::compile_migration_for`), the schema then derived and
+//!   sent as SQL with each compile. A switch ([`Command::SwitchMode`])
+//!   seeds or clears the migration, rewrites `sql` when going back, and
+//!   notes the mode in `meta.mode`, in one transaction; then `drafts.mode`
+//!   is written, by this room's writer. `meta.mode` is the server's to
+//!   write: an update changing it is answered by writing it back.
+//! - **Compile on type**: a change to the source schedules a compile
 //!   ([`Settings::debounce`] after the last change, at most
 //!   [`Settings::max_wait`] after the first); its result goes to everyone
 //!   and to `draft_compiles`. A rename typed in the text moves the table's
@@ -46,7 +54,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -59,7 +67,7 @@ use tokio::{
 };
 use uuid::Uuid;
 use yrs::{
-    Doc, ReadTxn, StateVector, Transact, TransactionMut, Update,
+    Doc, Observable, ReadTxn, StateVector, Transact, TransactionMut, Update,
     sync::{
         Message, SyncMessage,
         awareness::{AwarenessUpdate, AwarenessUpdateEntry},
@@ -75,10 +83,11 @@ use super::{
     patch,
     protocol::{self, LiveStatus, ReviewRequest, ServerEvent},
     review::{Approval, ApprovalError, Review},
-    store::{self, CompileRow, Job, Loaded, Writer},
+    store::{self, BaseSql, CompileRow, Job, Loaded, Writer},
 };
 use crate::{
-    domain::DraftStatus,
+    domain::{DraftMode, DraftStatus},
+    drafts::tidy::canonical_sql,
     versions::layout::{TableGroup, TablePosition, VersionLayout},
 };
 
@@ -259,15 +268,34 @@ pub mod close {
 /// The draft's content at one moment.
 #[derive(Debug, Clone)]
 pub struct Content {
+    pub mode: DraftMode,
+    /// The schema SQL: the source in schema mode (unused in migration mode).
     pub sql: String,
+    /// The migration: the source in migration mode.
+    pub migration: String,
+    /// The base version (`None`: the database had none), and its SQL (empty
+    /// without one): what the migration applies to. They move together.
+    pub base_version: Option<Uuid>,
+    pub base_sql: Arc<str>,
     pub layout: VersionLayout,
-    /// The model of exactly this SQL, when the last compile was of it and
-    /// succeeded (publishing then needs no compile of its own).
+    /// The model of exactly this source (and base), when the last compile
+    /// was of it and succeeded (publishing then needs no compile of its
+    /// own).
     pub model: Option<Arc<Value>>,
     /// The version "Update draft" last merged into the text (`meta.merged`).
     pub merged: Option<i32>,
     /// Who approved exactly this SQL without having edited it (`review`).
     pub approved_by: Vec<Uuid>,
+}
+
+impl Content {
+    /// The text that is the source: the SQL, or the migration.
+    pub fn source(&self) -> &str {
+        match self.mode {
+            DraftMode::Schema => &self.sql,
+            DraftMode::Migration => &self.migration,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -281,6 +309,9 @@ pub enum FreezeError {
 pub enum RewriteError {
     #[error("the draft is not open ({0:?})")]
     NotOpen(LiveStatus),
+    /// The SQL is not the source (migration mode): nothing to rewrite.
+    #[error("the draft is in {0:?} mode")]
+    Mode(DraftMode),
     /// Someone edited it since the changes were computed: compute again.
     #[error("the SQL changed meanwhile")]
     Changed,
@@ -356,7 +387,9 @@ pub enum Command {
     CheckApproval {
         user_id: Uuid,
         sha256: String,
-        reply: oneshot::Sender<Result<(), ApprovalError>>,
+        /// With what the approval is of: the source on its base
+        /// (`compile::input_hash`), what approvals are kept and counted by.
+        reply: oneshot::Sender<Result<String, ApprovalError>>,
     },
     Review(ReviewChange),
     /// Replace the SQL with `changes`, computed against the text whose
@@ -372,11 +405,29 @@ pub enum Command {
         merged: Option<i32>,
         reply: oneshot::Sender<Result<bool, RewriteError>>,
     },
-    /// The draft was updated to a newer version (its base moved).
+    /// The draft was updated to a newer version (its base moved): `base` is
+    /// that version and its SQL (what a migration applies to now).
     Updated {
         version: i32,
         by: String,
         conflicts: u32,
+        base: Option<(Uuid, Arc<str>)>,
+    },
+    /// Switch the draft to `to` mode, if its source is still the text
+    /// whose SHA-256 is `from` and its base still `base` (the seed was
+    /// computed from both): the migration becomes `seed` (to migration
+    /// mode), or the schema SQL does (back to schema mode, the migration
+    /// cleared, `drafts.base_sql` as `base_sql` says). Answered
+    /// once the switch is written; `false` when already in that mode
+    /// (handled by the loop).
+    SwitchMode {
+        to: DraftMode,
+        from: String,
+        base: Option<Uuid>,
+        seed: String,
+        base_sql: BaseSql,
+        by: String,
+        reply: oneshot::Sender<Result<bool, RewriteError>>,
     },
     Shutdown,
 }
@@ -427,8 +478,14 @@ struct ClientState {
 
 /// A compile, finished.
 struct CompileDone {
-    /// Of the SQL compiled.
+    /// The mode it compiled the source of.
+    mode: DraftMode,
+    /// Of the source compiled (what clients compare with their text).
     sha256: String,
+    /// What it compiled (`compile::input_hash`).
+    input: String,
+    /// In migration mode, the schema the model is, as SQL.
+    schema_sql: Option<Arc<str>>,
     /// Where it creates each relation (`compile::created_at`).
     tables: HashMap<String, usize>,
     result: Result<Compiled, Rejected>,
@@ -438,6 +495,8 @@ struct CompileDone {
 struct LastCompile {
     state: CompileState,
     sha256: Option<String>,
+    /// `compile::input_hash` of what it compiled.
+    input: Option<String>,
     diagnostics: Value,
 }
 
@@ -451,6 +510,19 @@ struct Room {
     doc: Doc,
     roots: Roots,
     status: LiveStatus,
+    /// Which text is the source (the doc's `meta.mode`; `drafts.mode`
+    /// follows it).
+    mode: DraftMode,
+    /// The base version, and its SQL (empty without one), for migration
+    /// mode.
+    base_version: Option<Uuid>,
+    base_sql: Arc<str>,
+    /// The text that is not the source, as it must stay: an edit of it (a
+    /// tab that had not seen a switch) is undone.
+    inactive: String,
+    /// Set when a transaction changes `sql` / `migration` (observers).
+    touched_sql: Arc<AtomicBool>,
+    touched_migration: Arc<AtomicBool>,
     conns: HashMap<ConnId, Conn>,
     clients: HashMap<u64, ClientState>,
 
@@ -472,8 +544,9 @@ struct Room {
     flush_at: Option<Instant>,
     rows_since_snapshot: usize,
 
-    /// The SQL as of the last update applied.
-    sql: String,
+    /// The source text (the SQL, or the migration) as of the last update
+    /// applied.
+    source: String,
     /// Changed since the last compile started: (first change, last change).
     dirty: Option<(Instant, Instant)>,
     retry_at: Option<Instant>,
@@ -484,6 +557,8 @@ struct Room {
     last_compile: Option<LastCompile>,
     good_model: Option<Arc<Value>>,
     good_tables: HashMap<String, usize>,
+    /// In migration mode: `good_model` as SQL, for whoever joins.
+    schema_sql: Option<Arc<str>>,
 
     review: Review,
     /// The approvals that counted when everyone last heard (an edit that
@@ -503,7 +578,7 @@ pub async fn run(
     mut commands: mpsc::UnboundedReceiver<Command>,
     mut data: mpsc::Receiver<Data>,
 ) {
-    let loaded = match store::load(&hub.db, id).await {
+    let mut loaded = match store::load(&hub.db, id).await {
         Ok(Some(loaded)) => loaded,
         Ok(None) => {
             tracing::warn!(draft = %id, "collab: no such draft");
@@ -516,7 +591,17 @@ pub async fn run(
             return;
         }
     };
-    let mut room = match Room::new(hub, id, shared, loaded) {
+    // The base's SQL once, off the async workers (a pushed model is rendered).
+    let base = loaded.base.take();
+    let base_version = base.as_ref().map(|base| base.id);
+    let base_sql: Arc<str> = match base {
+        Some(base) => tokio::task::spawn_blocking(move || base.sql())
+            .await
+            .unwrap_or_default()
+            .into(),
+        None => "".into(),
+    };
+    let mut room = match Room::new(hub, id, shared, loaded, (base_version, base_sql)) {
         Ok(room) => room,
         Err((hub, err)) => {
             tracing::error!(draft = %id, error = %err, "collab: the stored doc does not decode");
@@ -537,27 +622,11 @@ pub async fn run(
             .map(|since| since + room.settings.idle_unload);
         tokio::select! {
             biased;
-            command = commands.recv() => match command {
-                Some(Command::Shutdown) | None => {
-                    room.close_all(close::RESTART, "the server is restarting");
-                    room.persist().await;
-                    room.hub.remove(id, generation);
+            command = commands.recv() => {
+                if !room.command(command.unwrap_or(Command::Shutdown), generation).await {
                     return;
                 }
-                Some(Command::MergeLayout { ticket, layout, groups, reply }) => {
-                    // Only the update that froze the room, while it is.
-                    if room.status == LiveStatus::Updating && room.update == Some(ticket) {
-                        room.server_edit(|roots, txn| roots.apply_layout(txn, &layout, &groups));
-                        // Written before the draft's base moves.
-                        room.flush_pending();
-                        room.writer.flush().await;
-                        let _ = reply.send(Ok(()));
-                    } else {
-                        let _ = reply.send(Err(RewriteError::NotOpen(room.status)));
-                    }
-                }
-                Some(command) => room.handle(command),
-            },
+            }
             Some(Data { conn, messages }) = data.recv() => {
                 for message in messages {
                     room.incoming(conn, message);
@@ -571,13 +640,65 @@ pub async fn run(
                 room.persist().await;
                 // Someone came back while we were writing: stay.
                 if let Some(command) = room.hub.unload(id, generation, &mut commands) {
-                    room.handle(command);
+                    if !room.command(command, generation).await {
+                        return;
+                    }
                 } else {
                     tracing::debug!(draft = %id, "collab: room unloaded");
                     return;
                 }
             }
         }
+    }
+}
+
+impl Room {
+    /// Runs a command, those that wait on writes included (a switch, an
+    /// update's layout); false once the room has stopped (shutdown).
+    async fn command(&mut self, command: Command, generation: u64) -> bool {
+        match command {
+            Command::Shutdown => {
+                self.close_all(close::RESTART, "the server is restarting");
+                self.persist().await;
+                self.hub.remove(self.id, generation);
+                return false;
+            }
+            Command::SwitchMode {
+                to,
+                from,
+                base,
+                seed,
+                base_sql,
+                by,
+                reply,
+            } => {
+                let switched = self.switch_mode(to, (&from, base), &seed, base_sql, by);
+                // Written (the doc, then drafts.mode) before answering: the
+                // caller reads the draft back.
+                self.flush_pending();
+                self.writer.flush().await;
+                let _ = reply.send(switched);
+            }
+            Command::MergeLayout {
+                ticket,
+                layout,
+                groups,
+                reply,
+            } => {
+                // Only the update that froze the room, while it is.
+                if self.status == LiveStatus::Updating && self.update == Some(ticket) {
+                    self.server_edit(|roots, txn| roots.apply_layout(txn, &layout, &groups));
+                    // Written before the draft's base moves.
+                    self.flush_pending();
+                    self.writer.flush().await;
+                    let _ = reply.send(Ok(()));
+                } else {
+                    let _ = reply.send(Err(RewriteError::NotOpen(self.status)));
+                }
+            }
+            command => self.handle(command),
+        }
+        true
     }
 }
 
@@ -594,6 +715,7 @@ impl Room {
         id: Uuid,
         shared: Arc<Shared>,
         loaded: Loaded,
+        (base_version, base_sql): (Option<Uuid>, Arc<str>),
     ) -> Result<Self, (Arc<HubInner>, yrs::encoding::read::Error)> {
         let doc = doc::new_doc();
         let roots = Roots::of(&doc);
@@ -610,7 +732,12 @@ impl Room {
                 }
             }
         }
-        let sql = roots.sql(&doc.transact());
+        // The doc's note of the mode wins: only rooms write it, in the
+        // transaction of the switch; `drafts.mode` is written after, and a
+        // write of it that was lost is repaired below.
+        let mode = roots.mode(&doc.transact());
+        let source = roots.source(&doc.transact(), mode);
+        let inactive = roots.source(&doc.transact(), other(mode));
         // A database deleted while this loaded: its drafts are deleted too.
         let database_deleted = hub.attach(loaded.database_id, &shared);
         let status = match loaded.status {
@@ -623,7 +750,8 @@ impl Room {
         let doc_bytes = loaded.updates.iter().map(Vec::len).sum();
         let (failed, failures) = mpsc::unbounded_channel();
 
-        let sha256 = sha256_hex(&sql);
+        let sha256 = sha256_hex(&source);
+        let input = compile::input_hash(mode, &base_sql, &source);
         let mut room = Self {
             id,
             settings: hub.settings.clone(),
@@ -639,12 +767,18 @@ impl Room {
             doc,
             roots,
             status,
+            mode,
+            base_version,
+            base_sql,
+            inactive,
+            touched_sql: Arc::new(AtomicBool::new(false)),
+            touched_migration: Arc::new(AtomicBool::new(false)),
             conns: HashMap::new(),
             clients: HashMap::new(),
             pending: Vec::new(),
             flush_at: None,
             rows_since_snapshot: loaded.rows_since_snapshot,
-            sql,
+            source,
             dirty: None,
             retry_at: None,
             results: mpsc::unbounded_channel(),
@@ -653,6 +787,7 @@ impl Room {
             good_tables: HashMap::new(),
             review: loaded.review,
             review_shown: None,
+            schema_sql: None,
             idle_since: Some(Instant::now()),
         };
         room.share_review(false);
@@ -662,7 +797,7 @@ impl Room {
                 .good_tables
                 .and_then(|tables| serde_json::from_value(tables).ok())
                 .unwrap_or_default();
-            if hex(&saved.source_hash) == sha256 {
+            if hex(&saved.source_hash) == input {
                 room.last_compile = Some(LastCompile {
                     state: if saved.model.is_some() {
                         CompileState::Ok
@@ -670,6 +805,7 @@ impl Room {
                         CompileState::Failed
                     },
                     sha256: Some(sha256),
+                    input: Some(input),
                     diagnostics: saved.errors.unwrap_or_else(|| Value::Array(Vec::new())),
                 });
             }
@@ -678,10 +814,45 @@ impl Room {
             let now = Instant::now();
             room.dirty = Some((now, now));
         }
+        // In migration mode the derived SQL comes with the next compile
+        // (none is stored): whoever joins before it sees the model.
+        if room.mode == DraftMode::Migration && room.last_compile.is_some() {
+            room.last_compile = None;
+            let now = Instant::now();
+            room.dirty = Some((now, now));
+        }
+        room.repair_mode(loaded.mode);
+        room.watch_texts();
         if room.rows_since_snapshot >= room.settings.compact_after {
             room.compact();
         }
         Ok(room)
+    }
+
+    /// `drafts.mode` said `column` but the doc says otherwise: a write of
+    /// it after a switch was lost. The doc is right (only rooms write its
+    /// mode, in the switch's transaction).
+    fn repair_mode(&mut self, column: DraftMode) {
+        if column == self.mode {
+            return;
+        }
+        tracing::warn!(draft = %self.id, doc = self.mode.as_str(), column = column.as_str(), "collab: drafts.mode lagged the doc; repaired");
+        self.writer.send(Job::Mode {
+            mode: self.mode,
+            base_sql: BaseSql::Keep,
+        });
+    }
+
+    /// Notes each change of a text, for [`Room::apply`] to tell an edit of
+    /// the one that is not the source.
+    fn watch_texts(&self) {
+        for (text, flag) in [
+            (&self.roots.sql, &self.touched_sql),
+            (&self.roots.migration, &self.touched_migration),
+        ] {
+            let flag = Arc::clone(flag);
+            text.observe("room", move |_, _| flag.store(true, Ordering::Relaxed));
+        }
     }
 
     fn handle(&mut self, command: Command) {
@@ -749,7 +920,11 @@ impl Room {
                 version,
                 by,
                 conflicts,
+                base,
             } => {
+                if let Some((id, sql)) = base {
+                    self.rebase(id, sql);
+                }
                 self.broadcast_event(
                     &ServerEvent::Updated {
                         version,
@@ -781,8 +956,8 @@ impl Room {
             } => {
                 let _ = reply.send(self.rewrite(&from, &changes, reason, ticket, merged));
             }
-            // Handled by the loop.
-            Command::Shutdown | Command::MergeLayout { .. } => {}
+            // Handled by `Room::command`.
+            Command::Shutdown | Command::MergeLayout { .. } | Command::SwitchMode { .. } => {}
         }
     }
 
@@ -974,6 +1149,11 @@ impl Room {
                 return;
             }
         }
+        let touched = Arc::clone(match self.mode {
+            DraftMode::Schema => &self.touched_migration,
+            DraftMode::Migration => &self.touched_sql,
+        });
+        touched.store(false, Ordering::Relaxed);
         {
             let mut txn = self.doc.transact_mut();
             if let Err(err) = txn.apply_update(update) {
@@ -984,7 +1164,15 @@ impl Room {
         self.doc_bytes += bytes.len();
         self.broadcast(&protocol::update(bytes.to_vec()), Some(conn));
         self.queue_write(bytes);
-        if self.sql_may_have_changed() {
+        if touched.load(Ordering::Relaxed) {
+            self.undo_inactive_edit(conn);
+        }
+        // `meta.mode` is the server's: a client changing it is overruled.
+        if self.roots.mode(&self.doc.transact()) != self.mode {
+            let mode = self.mode;
+            self.server_edit(|roots, txn| roots.set_mode(txn, mode));
+        }
+        if self.source_may_have_changed() {
             self.edited_by(user_id);
         }
     }
@@ -1075,6 +1263,9 @@ impl Room {
         if !allowed {
             return Err(RewriteError::NotOpen(self.status));
         }
+        if self.mode != DraftMode::Schema {
+            return Err(RewriteError::Mode(self.mode));
+        }
         let current = self.roots.sql(&self.doc.transact());
         if sha256_hex(&current) != from {
             return Err(RewriteError::Changed);
@@ -1090,37 +1281,137 @@ impl Room {
             }
             edited
         });
-        if self.sql_may_have_changed() {
+        if self.source_may_have_changed() {
             self.share_review(false);
         }
         Ok(edited)
     }
 
+    /// A client's update changed the text that is not the source (a tab
+    /// that had not seen the switch yet): undone for everyone, and that
+    /// client told.
+    fn undo_inactive_edit(&mut self, conn: ConnId) {
+        let text = other(self.mode);
+        let current = self.roots.source(&self.doc.transact(), text);
+        if current == self.inactive {
+            return;
+        }
+        tracing::info!(draft = %self.id, conn, "collab: undid an edit of the text that is not the source");
+        let changes = patch::changes(&current, &self.inactive);
+        self.server_edit(|roots, txn| {
+            patch::apply(roots.source_text(text), txn, &current, &changes)
+        });
+        self.send(
+            conn,
+            protocol::event(&ServerEvent::StaleEdit { mode: self.mode }),
+        );
+    }
+
+    /// Switches modes (see [`Command::SwitchMode`]); the caller flushes.
+    fn switch_mode(
+        &mut self,
+        to: DraftMode,
+        (from, base): (&str, Option<Uuid>),
+        seed: &str,
+        base_sql: BaseSql,
+        by: String,
+    ) -> Result<bool, RewriteError> {
+        if self.status != LiveStatus::Open {
+            return Err(RewriteError::NotOpen(self.status));
+        }
+        if self.mode == to {
+            return Ok(false);
+        }
+        let current = self.roots.source(&self.doc.transact(), self.mode);
+        if sha256_hex(&current) != from || self.base_version != base {
+            return Err(RewriteError::Changed);
+        }
+        match to {
+            DraftMode::Migration => self.server_edit(|roots, txn| {
+                Roots::replace(&roots.migration, txn, seed);
+                roots.set_mode(txn, to);
+                true
+            }),
+            DraftMode::Schema => {
+                // The SQL as it was before migration mode, rewritten as the
+                // smallest edit into the schema the migration made.
+                let sql = self.roots.sql(&self.doc.transact());
+                let changes = patch::changes(&sql, seed);
+                self.server_edit(|roots, txn| {
+                    patch::apply(&roots.sql, txn, &sql, &changes);
+                    Roots::replace(&roots.migration, txn, "");
+                    roots.set_mode(txn, to);
+                    true
+                });
+                self.schema_sql = None;
+            }
+        }
+        tracing::info!(draft = %self.id, mode = to.as_str(), "collab: switched modes");
+        self.mode = to;
+        self.source = self.roots.source(&self.doc.transact(), to);
+        self.inactive = self.roots.source(&self.doc.transact(), other(to));
+        // The doc first, then the column: a lost column write is undone at
+        // the next load (the doc follows the column).
+        self.flush_pending();
+        self.writer.send(Job::Mode { mode: to, base_sql });
+        self.last_compile = None;
+        self.deferred_renames.clear();
+        let now = Instant::now();
+        self.dirty = Some((now, now));
+        self.broadcast_event(&ServerEvent::Mode { mode: to, by }, None);
+        // Approvals were of the other text.
+        self.share_review(false);
+        Ok(true)
+    }
+
+    /// The draft's base moved ("Update draft"): a migration applies to the
+    /// new one, compiled again.
+    fn rebase(&mut self, id: Uuid, base: Arc<str>) {
+        self.base_version = Some(id);
+        if *base == *self.base_sql {
+            return;
+        }
+        self.base_sql = base;
+        if self.mode == DraftMode::Migration {
+            self.last_compile = None;
+            let now = Instant::now();
+            self.dirty = Some((now, now));
+            // Approvals were of the migration on the old base.
+            self.share_review(false);
+        }
+    }
+
     fn content(&self) -> Content {
         let txn = self.doc.transact();
-        let sql = self.roots.sql(&txn);
+        let source = self.roots.source(&txn, self.mode);
+        let input = compile::input_hash(self.mode, &self.base_sql, &source);
         let compiled_now = self.last_compile.as_ref().is_some_and(|last| {
-            last.state == CompileState::Ok && last.sha256.as_deref() == Some(&sha256_hex(&sql))
+            last.state == CompileState::Ok && last.input.as_deref() == Some(&input)
         });
         Content {
+            mode: self.mode,
             layout: self.roots.layout(&txn),
             model: compiled_now.then(|| self.good_model.clone()).flatten(),
             merged: self.roots.merged(&txn),
-            approved_by: self.review.approved_by(&sha256_hex(&sql)),
-            sql,
+            approved_by: self.review.approved_by(&input),
+            sql: self.roots.sql(&txn),
+            migration: self.roots.migration(&txn),
+            base_version: self.base_version,
+            base_sql: Arc::clone(&self.base_sql),
         }
     }
 
     // ---- Review ---------------------------------------------------------------
 
-    /// The hash approvals are compared with: the SQL's, when there is any
-    /// approval to compare (hashing a large text for nothing on every
+    /// The hash approvals are compared with: what is reviewed (the source;
+    /// in migration mode on its base, `compile::input_hash`), when there is
+    /// any approval to compare (hashing a large text for nothing on every
     /// keystroke is not free).
     fn sha256_for_review(&self) -> String {
         if self.review.approvals.is_empty() {
             String::new()
         } else {
-            sha256_hex(&self.sql)
+            compile::input_hash(self.mode, &self.base_sql, &self.source)
         }
     }
 
@@ -1165,18 +1456,22 @@ impl Room {
         self.share_review(true);
     }
 
-    fn check_approval(&self, user_id: Uuid, sha256: &str) -> Result<(), ApprovalError> {
+    /// Whether `user_id` may approve the source as it is now, the text
+    /// hashing to `sha256` (what the person saw); with what their approval
+    /// is then of: that text on its base (`compile::input_hash`), so that
+    /// in migration mode an "Update draft" outdates it.
+    fn check_approval(&self, user_id: Uuid, sha256: &str) -> Result<String, ApprovalError> {
         if self.status != LiveStatus::Open {
             return Err(ApprovalError::NotOpen);
         }
         if self.review.editors.contains(&user_id) {
             return Err(ApprovalError::Editor);
         }
-        let current = self.roots.sql(&self.doc.transact());
+        let current = self.roots.source(&self.doc.transact(), self.mode);
         if sha256_hex(&current) != sha256 {
             return Err(ApprovalError::Changed);
         }
-        Ok(())
+        Ok(compile::input_hash(self.mode, &self.base_sql, &current))
     }
 
     // ---- Awareness ----------------------------------------------------------
@@ -1332,12 +1627,12 @@ impl Room {
     // ---- Compiling ------------------------------------------------------------
 
     /// Whether it did.
-    fn sql_may_have_changed(&mut self) -> bool {
-        let sql = self.roots.sql(&self.doc.transact());
-        if sql == self.sql {
+    fn source_may_have_changed(&mut self) -> bool {
+        let source = self.roots.source(&self.doc.transact(), self.mode);
+        if source == self.source {
             return false;
         }
-        self.sql = sql;
+        self.source = source;
         let now = Instant::now();
         self.dirty = Some(self.dirty.map_or((now, now), |(first, _)| (first, now)));
         true
@@ -1362,14 +1657,48 @@ impl Room {
         if self.status == LiveStatus::Open {
             self.collapse_markers();
         }
-        let (compiler, id, sql) = (self.compiler.clone(), self.id, self.sql.clone());
+        let (compiler, key, source) = (
+            self.compiler.clone(),
+            self.id.to_string(),
+            self.source.clone(),
+        );
+        let (mode, base) = (self.mode, Arc::clone(&self.base_sql));
         let results = self.results.0.clone();
         tokio::spawn(async move {
-            let sha256 = sha256_hex(&sql);
-            let tables = compile::created_at(&sql);
-            let result = compiler.compile_for(&id.to_string(), sql).await;
+            let sha256 = sha256_hex(&source);
+            let input = compile::input_hash(mode, &base, &source);
+            let (tables, result) = match mode {
+                DraftMode::Schema => (
+                    compile::created_at(&source),
+                    compiler.compile_for(&key, source).await,
+                ),
+                // Renames typed in a migration are `ALTER … RENAME`: the
+                // statement-index rule does not apply.
+                DraftMode::Migration => (
+                    HashMap::new(),
+                    compiler.compile_migration_for(&key, &base, &source).await,
+                ),
+            };
+            let schema_sql = match (&result, mode) {
+                (
+                    Ok(Compiled {
+                        model: Some(model), ..
+                    }),
+                    DraftMode::Migration,
+                ) => {
+                    let model = model.clone();
+                    tokio::task::spawn_blocking(move || canonical_sql(&model))
+                        .await
+                        .ok()
+                        .map(Arc::from)
+                }
+                _ => None,
+            };
             let _ = results.send(CompileDone {
+                mode,
                 sha256,
+                input,
+                schema_sql,
                 tables,
                 result,
             });
@@ -1379,7 +1708,7 @@ impl Room {
     /// Removes the graph edits markers after the first (see the module
     /// documentation). Not a rewrite: the characters removed are markers.
     fn collapse_markers(&mut self) {
-        let extra = doc::extra_markers(&self.sql);
+        let extra = doc::extra_markers(&self.source);
         if extra.is_empty() {
             return;
         }
@@ -1390,43 +1719,38 @@ impl Room {
                 insert: String::new(),
             })
             .collect();
-        let current = self.sql.clone();
-        self.server_edit(|roots, txn| patch::apply(&roots.sql, txn, &current, &changes));
-        self.sql = self.roots.sql(&self.doc.transact());
+        let (current, mode) = (self.source.clone(), self.mode);
+        self.server_edit(|roots, txn| {
+            patch::apply(roots.source_text(mode), txn, &current, &changes)
+        });
+        self.source = self.roots.source(&self.doc.transact(), mode);
         self.share_review(false);
     }
 
     fn compiled(&mut self, done: CompileDone) {
         let CompileDone {
+            mode,
             sha256,
+            input,
+            schema_sql,
             tables,
             result,
         } = done;
+        // Of the other text: the draft switched modes since it started.
+        if mode != self.mode {
+            return;
+        }
         let compiled = match result {
             Ok(compiled) => compiled,
             Err(Rejected::Superseded) => return,
             Err(Rejected::Api(err)) => {
                 tracing::warn!(draft = %self.id, reason = %err, "collab: cannot compile");
-                self.retry_at = Some(Instant::now() + self.settings.retry_unavailable);
-                self.last_compile = Some(LastCompile {
-                    state: CompileState::Unavailable,
-                    sha256: None,
-                    diagnostics: Value::Array(Vec::new()),
-                });
-                self.broadcast_event(
-                    &ServerEvent::Compile {
-                        state: CompileState::Unavailable,
-                        sha256: None,
-                        diagnostics: Vec::new(),
-                        model: None,
-                    },
-                    None,
-                );
+                self.compiler_unavailable();
                 return;
             }
         };
         let diagnostics = serde_json::to_value(&compiled.diagnostics).unwrap_or_default();
-        let source_hash = unhex(&sha256);
+        let source_hash = unhex(&input);
         if let Some(model) = compiled.model {
             let renames = compile::renames(&self.good_tables, &tables);
             match self.status {
@@ -1444,6 +1768,7 @@ impl Room {
             let model = Arc::new(serde_json::to_value(&model).unwrap_or_default());
             self.good_model = Some(Arc::clone(&model));
             self.good_tables = tables;
+            self.schema_sql.clone_from(&schema_sql);
             self.writer.send(Job::Compile(Box::new(CompileRow {
                 source_hash,
                 model: Some(Arc::clone(&model)),
@@ -1456,12 +1781,14 @@ impl Room {
                     sha256: Some(sha256.clone()),
                     diagnostics: compiled.diagnostics,
                     model: Some(model),
+                    schema_sql,
                 },
                 None,
             );
             self.last_compile = Some(LastCompile {
                 state: CompileState::Ok,
                 sha256: Some(sha256),
+                input: Some(input),
                 diagnostics,
             });
         } else {
@@ -1477,15 +1804,39 @@ impl Room {
                     sha256: Some(sha256.clone()),
                     diagnostics: compiled.diagnostics,
                     model: None,
+                    schema_sql: None,
                 },
                 None,
             );
             self.last_compile = Some(LastCompile {
                 state: CompileState::Failed,
                 sha256: Some(sha256),
+                input: Some(input),
                 diagnostics,
             });
         }
+    }
+
+    /// The compiler could not compile: everyone hears it, and it is tried
+    /// again in a while.
+    fn compiler_unavailable(&mut self) {
+        self.retry_at = Some(Instant::now() + self.settings.retry_unavailable);
+        self.last_compile = Some(LastCompile {
+            state: CompileState::Unavailable,
+            sha256: None,
+            input: None,
+            diagnostics: Value::Array(Vec::new()),
+        });
+        self.broadcast_event(
+            &ServerEvent::Compile {
+                state: CompileState::Unavailable,
+                sha256: None,
+                diagnostics: Vec::new(),
+                model: None,
+                schema_sql: None,
+            },
+            None,
+        );
     }
 
     /// The compile event for someone joining: the last result, with the
@@ -1501,6 +1852,7 @@ impl Room {
             "sha256": last.and_then(|l| l.sha256.clone()),
             "diagnostics": last.map_or(Value::Array(Vec::new()), |l| l.diagnostics.clone()),
             "model": self.good_model.as_deref(),
+            "schema_sql": self.schema_sql.as_deref().filter(|_| self.mode == DraftMode::Migration),
         });
         let json = serde_json::to_vec(&event).unwrap_or_default();
         Some(
@@ -1510,6 +1862,14 @@ impl Room {
             ))
             .into(),
         )
+    }
+}
+
+/// The mode whose text is the other one.
+fn other(mode: DraftMode) -> DraftMode {
+    match mode {
+        DraftMode::Schema => DraftMode::Migration,
+        DraftMode::Migration => DraftMode::Schema,
     }
 }
 

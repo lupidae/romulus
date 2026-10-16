@@ -13,7 +13,7 @@ use remus_core::{
 
 use crate::{
     FileRole, Format, Hazard, Kind, Meta, Migration, Options, Section, Stage, Statement,
-    WarningCode, archive_name, files, migration,
+    WarningCode, archive_name, editable, files, migration,
 };
 
 fn schema(entities: Vec<Entity>) -> Schema {
@@ -1220,5 +1220,46 @@ fn a_prisma_concurrent_index_stands_alone_without_claiming_a_transaction() {
         concurrent.matches(';').count(),
         1,
         "one statement: {concurrent}"
+    );
+}
+
+#[test]
+fn the_editable_text_has_the_statements_and_no_transaction() {
+    let old = schema(vec![users()]);
+    let mut new = old.clone();
+    new.entities[0].columns.push(not_null(col("name", "text")));
+    let up = migration(&old, &new, &Options::default());
+    let text = editable(&up, &meta());
+    assert!(
+        text.starts_with(
+            "-- acme/app: migration from v4, written by hand.\n\
+             -- Started from romulus's generated migration (2026-10-16):\n\
+             -- edit it freely, the schema and the graph follow.\n"
+        ),
+        "{text}"
+    );
+    // Narrow: it is edited beside the graph.
+    assert!(
+        text.lines()
+            .filter(|l| l.starts_with("--"))
+            .all(|l| l.chars().count() <= 60),
+        "{text}"
+    );
+    assert!(text.contains("-- Tables and columns\n"), "{text}");
+    for statement in &up.statements {
+        assert!(text.contains(&statement.sql), "{text}");
+    }
+    assert!(
+        !text.contains("BEGIN;") && !text.contains("COMMIT;"),
+        "{text}"
+    );
+    assert!(text.ends_with(";\n"), "{text:?}");
+    // Nothing to migrate yet: an invitation to write it.
+    let empty = editable(&migration(&old, &old, &Options::default()), &meta());
+    assert_eq!(
+        empty,
+        "-- acme/app: migration from v4, written by hand.\n\
+         -- Write what changes v4 here (ALTER TABLE …):\n\
+         -- the schema and the graph follow from it.\n"
     );
 }

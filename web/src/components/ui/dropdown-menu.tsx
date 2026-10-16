@@ -47,22 +47,42 @@ export function MenuContent({
   );
 }
 
+/**
+ * An action. `description` adds a muted line under the label, aligned with
+ * it (put the icon first): for menus whose choices need a word of
+ * explanation ("New draft" / "New migration").
+ */
 export function MenuItem({
   className,
   variant = "default",
+  description,
+  children,
   ...props
-}: React.ComponentProps<typeof MenuPrimitive.Item> & { variant?: "default" | "destructive" }) {
+}: React.ComponentProps<typeof MenuPrimitive.Item> & {
+  variant?: "default" | "destructive";
+  description?: React.ReactNode;
+}) {
   return (
     <MenuPrimitive.Item
       data-slot="menu-item"
       className={cn(
         item,
+        description && "h-auto items-start py-1.5",
         variant === "destructive" &&
           "text-destructive data-highlighted:bg-destructive/10 data-highlighted:text-destructive [&_svg]:text-destructive",
         className,
       )}
       {...props}
-    />
+    >
+      {description ? (
+        <span className="grid min-w-0 gap-0.5">
+          <span className="flex items-center gap-2">{children}</span>
+          <span className="pl-6 text-xs text-muted-foreground">{description}</span>
+        </span>
+      ) : (
+        children
+      )}
+    </MenuPrimitive.Item>
   );
 }
 

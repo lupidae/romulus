@@ -69,6 +69,10 @@ pub enum Code {
     /// The text still has a conflict block from "Update draft" (or a stray
     /// marker line): nothing compiles until it is resolved.
     Conflict,
+    /// Info: a statement of a draft's migration that the compile does not
+    /// run (data, transaction control): it cannot change the schema, and
+    /// stays in the migration ([`crate::draft_migration`]).
+    NotRun,
 }
 
 impl Diagnostic {

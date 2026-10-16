@@ -199,6 +199,15 @@ impl Client {
         self.roots.sql(&self.doc.transact())
     }
 
+    pub fn migration(&self) -> String {
+        self.roots.migration(&self.doc.transact())
+    }
+
+    /// The doc's `meta.mode`, as the server wrote it.
+    pub fn mode(&self) -> romulus_api::domain::DraftMode {
+        self.roots.mode(&self.doc.transact())
+    }
+
     pub fn last_event(&self, kind: &str) -> Option<&Value> {
         self.events.iter().rev().find(|e| e["type"] == kind)
     }

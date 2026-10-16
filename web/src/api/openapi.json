@@ -1508,7 +1508,7 @@
         "tags": [
           "drafts"
         ],
-        "summary": "A new draft from the latest version, ready to edit: no form, renamed\nlater if wanted.",
+        "summary": "A new draft from the latest version, ready to edit: no form, renamed\nlater if wanted. A schema draft by default; with `{\"mode\": \"migration\"}`,\na migration from the latest version, written from scratch.",
         "operationId": "create_draft",
         "parameters": [
           {
@@ -1529,6 +1529,23 @@
             }
           }
         ],
+        "requestBody": {
+          "description": "Optional: a schema draft without one",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CreateDraft"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "content": {
@@ -2008,7 +2025,7 @@
           {
             "name": "sha256",
             "in": "query",
-            "description": "SHA-256 of the SQL the person reviewed (the publish preview's, or a\nlive compile's): the migration of exactly that text, or 409\n`draft_changed`. Required: a migration is never of a text unseen.",
+            "description": "What the person reviewed (the publish preview's `sha256`, or a live\ncompile's SHA-256 of the SQL; in migration mode it covers the base\ntoo: `compile::input_hash`): the migration of exactly that, or 409\n`draft_changed`. Required: a migration is never of a text unseen.",
             "required": true,
             "schema": {
               "type": "string"
@@ -2056,6 +2073,121 @@
           },
           "422": {
             "description": "`compile_failed`: the SQL has errors (`details.diagnostics`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The compiler is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/mode": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Switches the draft between schema mode and migration mode.",
+        "operationId": "switch_draft_mode",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchMode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Draft"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reviewers cannot switch modes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_changed` (it kept changing: try again), `draft_busy` (being published or updated), `draft_published`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`compile_failed` (`details.diagnostics`): the SQL has errors, so there is no migration to start from; or the migration does not apply to the current base, so there is no schema to go back to. `unrepresentable` (`details.objects`): no SQL romulus can keep compiles back to the schema the migration made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
             "content": {
               "application/json": {
                 "schema": {
@@ -2243,7 +2375,17 @@
             }
           },
           "422": {
-            "description": "The SQL does not compile (`details.diagnostics`)",
+            "description": "`compile_failed`: the SQL does not compile (`details.diagnostics`); `unrepresentable`: in migration mode, no SQL romulus can keep compiles back to the schema (`details.objects`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: the checks publishing compiles (migration mode) count against the compile limits",
             "content": {
               "application/json": {
                 "schema": {
@@ -2467,7 +2609,7 @@
             }
           },
           "409": {
-            "description": "`draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published)",
+            "description": "`draft_changed` (it kept changing: try again), `draft_published`, `draft_busy` (being published), `migration_mode` (the draft is edited as a migration)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3549,6 +3691,66 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/migration": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "The migration a version was written as (a draft in migration mode\npublished it), to read again or download.",
+        "operationId": "get_written_migration",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The version's number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WrittenMigration"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such version, or it was not written as a migration",
             "content": {
               "application/json": {
                 "schema": {
@@ -4706,7 +4908,8 @@
           "timeout",
           "unavailable",
           "provided_by_extension",
-          "conflict"
+          "conflict",
+          "not_run"
         ]
       },
       "ColumnChange": {
@@ -5315,6 +5518,16 @@
           }
         }
       },
+      "CreateDraft": {
+        "type": "object",
+        "description": "How to start a draft (no body: a schema draft).",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode",
+            "description": "`migration`: written as a migration from the latest version, from\nscratch. `schema` when absent."
+          }
+        }
+      },
       "CreateInvitation": {
         "type": "object",
         "required": [
@@ -5769,6 +5982,7 @@
           "id",
           "name",
           "status",
+          "mode",
           "database",
           "next_version",
           "stale",
@@ -5820,6 +6034,10 @@
             ],
             "format": "int32",
             "description": "The database's newest version now."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode",
+            "description": "What it is edited as: the schema SQL, or a migration from its base."
           },
           "name": {
             "type": "string"
@@ -5881,6 +6099,14 @@
             "type": "string"
           }
         }
+      },
+      "DraftMode": {
+        "type": "string",
+        "description": "What a draft is edited as (`draft_mode`): one source of truth at a time\n(docs/MVP.md \"Review round 1\", item 2).",
+        "enum": [
+          "schema",
+          "migration"
+        ]
       },
       "DraftReview": {
         "type": "object",
@@ -7993,6 +8219,7 @@
         "required": [
           "number",
           "stale",
+          "mode",
           "sha256",
           "diagnostics",
           "approvals"
@@ -8041,6 +8268,17 @@
             ],
             "format": "int32"
           },
+          "migration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Migration mode: the migration the version will keep."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode",
+            "description": "What the draft is edited as: its SQL, or a migration from its base."
+          },
           "model": {
             "type": [
               "object",
@@ -8055,7 +8293,7 @@
           },
           "sha256": {
             "type": "string",
-            "description": "SHA-256 of the SQL previewed: send it back to publish exactly this."
+            "description": "What was previewed (`compile::input_hash`: the SQL; in migration\nmode the migration and the base it applies to): send it back to\npublish exactly this."
           },
           "stale": {
             "type": "boolean",
@@ -8416,6 +8654,13 @@
                 ],
                 "description": "The model when `ok`. When `failed`, the last model that compiled,\nsent only on joining (others already have it); keep showing the\nprevious one when absent."
               },
+              "schema_sql": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "In migration mode, with `model`: the schema it is, as SQL\n(read-only: the migration is the source). Absent otherwise."
+              },
               "sha256": {
                 "type": [
                   "string",
@@ -8430,6 +8675,48 @@
                 "type": "string",
                 "enum": [
                   "compile"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The draft switched modes (docs/MVP.md \"Review round 1\", item 2):\nthe doc's `meta.mode` changed in the same transaction as its texts.",
+            "required": [
+              "mode",
+              "by",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/DraftMode"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "To one connection: its last edit changed the text that is not the\nsource in `mode` (sent before it saw a switch), and was undone.",
+            "required": [
+              "mode",
+              "type"
+            ],
+            "properties": {
+              "mode": {
+                "$ref": "#/components/schemas/DraftMode"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stale_edit"
                 ]
               }
             }
@@ -8932,6 +9219,18 @@
           }
         }
       },
+      "SwitchMode": {
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode",
+            "description": "The mode to switch to."
+          }
+        }
+      },
       "TableGroup": {
         "type": "object",
         "required": [
@@ -9087,6 +9386,13 @@
             "format": "int32",
             "description": "Conflict blocks in its SQL now: publishing waits until none is left.",
             "minimum": 0
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "description": "Migration mode: the migration's errors on the new base, located in\nit (absent when it still applies, and in schema mode)."
           }
         }
       },
@@ -9146,7 +9452,8 @@
           "model",
           "source",
           "layout",
-          "approvals"
+          "approvals",
+          "written_migration"
         ],
         "properties": {
           "approvals": {
@@ -9212,6 +9519,10 @@
           },
           "source_kind": {
             "$ref": "#/components/schemas/SourceKind"
+          },
+          "written_migration": {
+            "type": "boolean",
+            "description": "Published from a draft in migration mode: the migration it was\nwritten as is at `…/versions/{number}/migration`."
           }
         }
       },
@@ -9352,7 +9663,8 @@
           "number",
           "origin",
           "source_kind",
-          "created_at"
+          "created_at",
+          "written_migration"
         ],
         "properties": {
           "author": {
@@ -9391,6 +9703,10 @@
           },
           "source_kind": {
             "$ref": "#/components/schemas/SourceKind"
+          },
+          "written_migration": {
+            "type": "boolean",
+            "description": "Published from a draft in migration mode: the migration it was\nwritten as is at `…/versions/{number}/migration`."
           }
         }
       },
@@ -9417,6 +9733,37 @@
           "sql": {
             "type": "string",
             "description": "The source for SQL versions; rendered from the model for pushed JSON\nand imported migrations."
+          }
+        }
+      },
+      "WrittenMigration": {
+        "type": "object",
+        "description": "The migration a version was written as, in a draft in migration mode:\nfrom the version before it (nothing, for a first version) to it.",
+        "required": [
+          "number",
+          "sql",
+          "file_name"
+        ],
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "What it downloads as: `v5_add_invoices.sql`."
+          },
+          "from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version it migrates from; `null` for a first version."
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "sql": {
+            "type": "string",
+            "description": "The migration, as written (data statements included)."
           }
         }
       }

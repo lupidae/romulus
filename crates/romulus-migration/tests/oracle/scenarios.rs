@@ -132,3 +132,67 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
         check_tools(&compiler, cases).await;
     });
 }
+
+/// What a draft switching to migration mode starts from
+/// (`romulus_migration::editable`: headings, notes, no transaction), compiled
+/// as the draft compiles it (`romulus_sandbox::draft_migration`: the old
+/// schema's SQL, then the migration, `setval` not run), is the new schema.
+#[test]
+fn every_scenario_s_editable_migration_compiles_as_a_draft_does() {
+    with_compiler(|compiler| async move {
+        for (name, old, new) in scenarios() {
+            if name.starts_with("extension_moved") {
+                continue; // the compile role cannot move an extension
+            }
+            let old = compile(&compiler, &old)
+                .await
+                .expect("the old schema compiles");
+            let new = compile(&compiler, &new)
+                .await
+                .expect("the new schema compiles");
+            let m = migration(&old, &new, &Options::default());
+            let meta = Meta {
+                database: "acme/app".to_owned(),
+                from: "v1".to_owned(),
+                to: "v2".to_owned(),
+                date: "2026-10-16".to_owned(),
+                version: String::new(),
+                name: String::new(),
+            };
+            let text = romulus_migration::editable(&m, &meta);
+            let script =
+                romulus_sandbox::draft_migration::script(&romulus_sandbox::render_sql(&old), &text);
+            let compilation = compiler
+                .compile(&script.text)
+                .await
+                .expect("the sandbox runs");
+            let diagnostics = script.relocate(&text, compilation.diagnostics.clone());
+            let Some(result) = compilation.model else {
+                // A function the schemas call without defining it is guessed
+                // per text: the oracle skips those pairs too.
+                if !compilation.stubs.is_empty() {
+                    continue;
+                }
+                panic!(
+                    "{name}: the editable migration does not compile:\n{diagnostics:#?}\n{text}"
+                );
+            };
+            let reordered = m
+                .warnings
+                .iter()
+                .any(|w| w.code == romulus_migration::WarningCode::ColumnOrder);
+            let diff = romulus_diff::diff(&result, &new);
+            assert!(
+                diff.is_empty() || reordered || !compilation.stubs.is_empty(),
+                "{name}: not the new schema: {:?}",
+                diff.lines().collect::<Vec<_>>()
+            );
+            // Every note is about a statement of the migration (setval).
+            for note in diagnostics.iter().filter(|d| !d.is_error()) {
+                if let Some(span) = note.span {
+                    assert!(span.end <= text.len(), "{name}: {note:?}");
+                }
+            }
+        }
+    });
+}

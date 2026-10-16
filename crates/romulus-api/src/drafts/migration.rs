@@ -21,13 +21,12 @@ use uuid::Uuid;
 
 use super::{
     find, latest_number, not_open,
-    publish::{compiled, hub_error},
+    publish::{self, compiled, hub_error},
     versions::stale_base,
 };
 use crate::{
     ApiError, ApiResult, AppState,
     auth::Member,
-    collab::compile::sha256_hex,
     databases,
     domain::DraftStatus,
     error::ErrorBody,
@@ -41,8 +40,9 @@ use crate::{
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct Reviewed {
-    /// SHA-256 of the SQL the person reviewed (the publish preview's, or a
-    /// live compile's): the migration of exactly that text, or 409
+    /// What the person reviewed (the publish preview's `sha256`, or a live
+    /// compile's SHA-256 of the SQL; in migration mode it covers the base
+    /// too: `compile::input_hash`): the migration of exactly that, or 409
     /// `draft_changed`. Required: a migration is never of a text unseen.
     pub sha256: String,
 }
@@ -88,7 +88,7 @@ pub(super) async fn draft_migration(
         return Err(stale_base(latest));
     }
     let content = state.collab.content(id).await.map_err(hub_error)?;
-    if reviewed.sha256 != sha256_hex(&content.sql) {
+    if reviewed.sha256 != publish::reviewed(&content) {
         return Err(ApiError::Conflict {
             code: "draft_changed",
             message: "The draft changed since you reviewed it. Review the changes again.".into(),
