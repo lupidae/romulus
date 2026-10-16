@@ -2483,6 +2483,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "romulus-migration"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "insta",
+ "remus-core",
+ "romulus-diff",
+ "romulus-sandbox",
+ "serde",
+ "serde_json",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
 name = "romulus-sandbox"
 version = "0.1.0"
 dependencies = [

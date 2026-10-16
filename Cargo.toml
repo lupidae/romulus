@@ -17,6 +17,7 @@ remus-sql = "0.2.0"
 remus-dbml = "0.2.0"
 remus-mermaid = "0.2.0"
 romulus-diff = { path = "crates/romulus-diff" }
+romulus-migration = { path = "crates/romulus-migration" }
 romulus-sandbox = { path = "crates/romulus-sandbox" }
 
 axum = { version = "0.8.9", features = ["macros"] }
