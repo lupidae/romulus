@@ -472,6 +472,9 @@ Two features, built in this order:
      `models_too_large`).
    - Flyway placeholders (`${name}`) are not substituted: a migration using
      one fails where it is used, with a hint saying so.
+   - A migration generated from an imported version is named by what the
+     imported one says it does (`import::description`: `add_x` for
+     `V3.1__add_x.sql`), never by its file name.
    - A push-scope token learns what it sent, read back (the plan, what is
      skipped, Postgres's errors replaying it on the imported history), the
      numbers its migrations get or got, whether the database has versions
