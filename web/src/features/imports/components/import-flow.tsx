@@ -427,6 +427,8 @@ function Review({
                 <RefreshDoubleIcon />
                 Try again
               </>
+            ) : preview.new === 0 ? (
+              "Nothing to import"
             ) : preview.new === 1 ? (
               "Import 1 migration"
             ) : (
