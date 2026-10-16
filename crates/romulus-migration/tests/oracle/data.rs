@@ -184,8 +184,7 @@ fn hazards_are_what_happens_to_rows() {
                     let got: String = sqlx::query(*query)
                         .fetch_one(&mut db)
                         .await
-                        .map(|row| row.get(0))
-                        .unwrap_or_else(|e| e.to_string());
+                        .map_or_else(|e| e.to_string(), |row| row.get(0));
                     if got == *value {
                         Ok(())
                     } else {

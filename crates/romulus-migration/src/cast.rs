@@ -323,8 +323,8 @@ fn rounds(a: &Ty, b: &Ty) -> bool {
         return true;
     }
     match (a.family, b.family) {
-        (F::Int(_), F::Bit) => true,
-        (F::Numeric | F::Float(_) | F::Money, F::Int(_))
+        (F::Int(_), F::Bit)
+        | (F::Numeric | F::Float(_) | F::Money, F::Int(_))
         | (F::Float(8), F::Float(4))
         | (F::Numeric, F::Float(_) | F::Money)
         | (F::Timestamp, F::Date | F::Time | F::TimeTz)
