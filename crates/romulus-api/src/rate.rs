@@ -93,6 +93,10 @@ pub struct Limits {
     /// Migration imports per database: each replays a whole history in
     /// the sandbox.
     pub imports: Limiter<Uuid>,
+    /// Import previews per database: each reads, unzips and parses up to
+    /// 64 MiB on the API. Apart from `imports`, so that looking at the
+    /// files a few times never costs the import itself.
+    pub import_previews: Limiter<Uuid>,
 }
 
 impl Default for Limits {
@@ -102,6 +106,7 @@ impl Default for Limits {
             compile: Limiter::new(30, Duration::from_secs(2)),
             database_compiles: Limiter::new(60, Duration::from_secs(1)),
             imports: Limiter::new(6, Duration::from_secs(30)),
+            import_previews: Limiter::new(6, Duration::from_secs(5)),
         }
     }
 }

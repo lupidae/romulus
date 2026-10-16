@@ -1395,6 +1395,10 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          event: "queued";
+        }
+      | {
+          /** @enum {string} */
           event: "checked";
         }
       | {
@@ -1681,7 +1685,8 @@ export interface components {
       errors: components["schemas"]["ImportError"][];
       /**
        * @description The tool's version (`20240101120000`, `1.2`, `blog.0002_post_slug`),
-       *     or the path for plain folders: what later imports match on.
+       *     or the file name without `.sql` for plain folders: what later
+       *     imports match on.
        */
       id: string;
       /**
@@ -2189,7 +2194,7 @@ export interface components {
     /** @description The migration an imported version came from. */
     VersionMigration: {
       format: components["schemas"]["MigrationFormat"];
-      /** @description The tool's version of it, or its path for plain folders. */
+      /** @description The tool's version of it, or its file name for plain folders. */
       id: string;
       /** @description The file, relative to the folder imported. */
       path: string;

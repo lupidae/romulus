@@ -800,3 +800,150 @@ async fn zip_bombs_spread_over_many_zips_are_refused(db: PgPool) {
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
     assert_eq!(versions(&db, id).await, []);
 }
+
+/// What the database stores with limits (ids, paths, names) is checked
+/// before anything replays, in the preview and the import.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn names_too_long_to_store_are_refused_before_the_replay(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let token = api_token(&db, id, TokenScope::Push).await;
+    let app = TestApp::compiling(db.clone());
+
+    let long_name = format!("{}.sql", "a".repeat(501));
+    let files = [(long_name.as_str(), "CREATE TABLE a (id int);")];
+    let preview = web(
+        &app,
+        &team.developer,
+        &team.path("/databases/app/imports/preview"),
+        &files,
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(preview["problem"]["code"], "invalid_migrations");
+    let message = preview["problem"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("migration id is longer than 500 characters"),
+        "{message}"
+    );
+    let refused = web(
+        &app,
+        &team.developer,
+        &team.path("/databases/app/imports"),
+        &files,
+        None,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.code(), "invalid_migrations");
+
+    // A deep path, a short id.
+    let deep = format!("{}/1_a.sql", "d".repeat(1000));
+    let refused = web(
+        &app,
+        &team.developer,
+        &team.path("/databases/app/imports"),
+        &[
+            (deep.as_str(), "CREATE TABLE a (id int);"),
+            ("elsewhere/2_b.sql", "CREATE TABLE b (id int);"),
+        ],
+        None,
+    )
+    .await;
+    assert_eq!(refused.code(), "invalid_migrations");
+    assert!(
+        refused.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("path is longer than 1000 characters")
+    );
+
+    // A single SQL text named by `filename`.
+    let refused = ci(
+        &app,
+        id,
+        &token,
+        &format!("?filename={}.sql", "b".repeat(600)),
+        "application/sql",
+        b"CREATE TABLE b (id int);".to_vec(),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.code(), "invalid_migrations");
+    assert_eq!(versions(&db, id).await, []);
+}
+
+/// Previews read and parse everything sent: limited per database, apart
+/// from the imports themselves.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn previews_are_rate_limited_apart_from_imports(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    database(&db, team.org, "app").await;
+    let app = TestApp::compiling(db.clone());
+    let path = team.path("/databases/app/imports/preview");
+    let preview = || web(&app, &team.developer, &path, HISTORY, None);
+    for _ in 0..6 {
+        assert_eq!(preview().await.status, StatusCode::OK);
+    }
+    let limited = preview().await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.code(), "rate_limited");
+    let imported = web(
+        &app,
+        &team.developer,
+        &team.path("/databases/app/imports"),
+        HISTORY,
+        None,
+    )
+    .await;
+    assert_eq!(imported.status, StatusCode::CREATED, "{}", imported.json());
+}
+
+/// One import replays at a time: another one waits for its turn, and its
+/// progress says so.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_import_waits_for_its_turn_and_says_so(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    database(&db, team.org, "app").await;
+    let app = TestApp::compiling(db.clone());
+    // Another organization's import has the turn.
+    let held = app.state.imports.take(Uuid::from_u128(7)).ok();
+    let turns = &app.state.imports;
+    let release = async move {
+        while turns.waiting() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        drop(held);
+    };
+    let path = team.path("/databases/app/imports");
+    let request = web(
+        &app,
+        &team.developer,
+        &path,
+        HISTORY,
+        Some("application/x-ndjson"),
+    );
+    let (streamed, ()) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::join!(request, release)
+    })
+    .await
+    .expect("the import ran once the turn was free");
+    let kinds: Vec<String> = std::str::from_utf8(&streamed.body)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["event"].to_string())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "\"planned\"",
+            "\"queued\"",
+            "\"checked\"",
+            "\"replayed\"",
+            "\"replayed\"",
+            "\"replayed\"",
+            "\"done\""
+        ]
+    );
+}

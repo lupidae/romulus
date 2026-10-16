@@ -43,6 +43,8 @@ type Phase =
       step: "importing";
       picked: Picked;
       preview: ImportPreview;
+      /** Waiting for other imports to finish (one replays at a time). */
+      queued: boolean;
       checked: boolean;
       replayed: Map<number, string>;
     }
@@ -128,19 +130,22 @@ export function ImportFlow({
 
   const start = (picked: Picked, preview: ImportPreview) => {
     const replayed = new Map<number, string>();
-    setPhase({ step: "importing", picked, preview, checked: false, replayed });
+    setPhase({ step: "importing", picked, preview, queued: false, checked: false, replayed });
     run.mutate(
       {
         picked,
         opts: options,
         onEvent: (event) => {
-          if (event.event === "checked") {
-            setPhase((p) => (p.step === "importing" ? { ...p, checked: true } : p));
+          if (event.event === "queued") {
+            setPhase((p) => (p.step === "importing" ? { ...p, queued: true } : p));
+          } else if (event.event === "checked") {
+            setPhase((p) => (p.step === "importing" ? { ...p, queued: false, checked: true } : p));
           } else if (event.event === "replayed") {
             setPhase((p) =>
               p.step === "importing"
                 ? {
                     ...p,
+                    queued: false,
                     checked: true,
                     replayed: new Map(p.replayed).set(event.index, event.changes),
                   }
@@ -478,11 +483,13 @@ function SummaryBar({
   if (phase.step === "importing") {
     const done = phase.replayed.size;
     const total = preview.new;
-    const label = !phase.checked
-      ? `Checking ${total === 1 ? "the migration" : `all ${total} migrations`} in the sandbox…`
-      : done < total
-        ? `Reading version ${done + 1} of ${total}…`
-        : "Saving the versions…";
+    const label = phase.queued
+      ? "Waiting for other imports to finish…"
+      : !phase.checked
+        ? `Checking ${total === 1 ? "the migration" : `all ${total} migrations`} in the sandbox…`
+        : done < total
+          ? `Reading version ${done + 1} of ${total}…`
+          : "Saving the versions…";
     return (
       <div className="grid gap-2 border-b border-border px-4 py-3">
         <p className="text-sm font-medium text-foreground" aria-live="polite">

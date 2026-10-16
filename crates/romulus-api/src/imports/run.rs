@@ -6,11 +6,7 @@
 //! stores (importing again then creates nothing). Its progress goes to the
 //! client as NDJSON when asked for (`Accept: application/x-ndjson`).
 
-use std::{
-    convert::Infallible,
-    sync::{Arc, Mutex, PoisonError},
-    time::Instant,
-};
+use std::{convert::Infallible, time::Instant};
 
 use axum::{
     body::{Body, Bytes},
@@ -27,6 +23,7 @@ use uuid::Uuid;
 use super::{
     IgnoredFile, ImportOptions, SkippedStatement,
     plan::{self, ImportPreview, MigrationStatus, Planned},
+    turns::Place,
 };
 use crate::{
     ApiError, ApiResult, AppState,
@@ -91,6 +88,9 @@ pub struct ImportReport {
 pub enum ImportEvent {
     /// The files, planned: what will be replayed.
     Planned { preview: ImportPreview },
+    /// Other imports are replaying: this one waits for its turn
+    /// (organizations take turns).
+    Queued,
     /// Every migration ran once in the sandbox: they replay; versions come
     /// next, one per migration.
     Checked,
@@ -110,26 +110,33 @@ pub enum ImportEvent {
     Failed { error: ErrorBody },
 }
 
+/// The database imported into.
+pub struct Target {
+    /// Whose turn the replay waits for.
+    pub org_id: Uuid,
+    pub database_id: Uuid,
+    /// The models' `database`.
+    pub slug: String,
+}
+
 /// Plan, refuse what cannot be imported, then run (see the module
 /// documentation).
 pub async fn start(
     state: AppState,
-    database_id: Uuid,
-    slug: String,
+    target: Target,
     author: Author,
     files: Vec<romulus_sandbox::import::SourceFile>,
     options: ImportOptions,
     stream: bool,
 ) -> ApiResult<Response> {
     let started = Instant::now();
-    let planned = plan::plan(&state.db, database_id, files, &options).await?;
+    let planned = plan::plan(&state.db, target.database_id, files, &options).await?;
     if let Some(refusal) = plan::refusal(&planned, &options) {
         return Err(refusal);
     }
     let job = Job {
         state,
-        database_id,
-        slug,
+        target,
         author,
         options,
         planned,
@@ -171,8 +178,7 @@ pub async fn start(
 
 struct Job {
     state: AppState,
-    database_id: Uuid,
-    slug: String,
+    target: Target,
     author: Author,
     options: ImportOptions,
     planned: Planned,
@@ -199,7 +205,7 @@ impl Job {
             });
         }
         if let Err(err) = &outcome {
-            tracing::info!(database = %self.database_id, code = err.code(), "import refused");
+            tracing::info!(database = %self.target.database_id, code = err.code(), "import refused");
         }
         outcome
     }
@@ -259,7 +265,7 @@ impl Job {
         let stored = store_import(
             &self.state.db,
             NewImport {
-                database_id: self.database_id,
+                database_id: self.target.database_id,
                 format: planned.format,
                 created_by,
                 created_by_token,
@@ -271,7 +277,9 @@ impl Job {
         .await?;
         if let Some((_, last)) = stored.last() {
             // Open drafts of the database learn their base moved.
-            self.state.collab.version_created(self.database_id, *last);
+            self.state
+                .collab
+                .version_created(self.target.database_id, *last);
         }
         let numbers: Vec<i32> = stored.iter().map(|(_, n)| *n).collect();
         Ok(self.report(ImportStatus::Created, &numbers, &changes, &skipped))
@@ -287,49 +295,32 @@ impl Job {
         events: Option<&Events>,
     ) -> ApiResult<Replayed> {
         let planned = &self.planned;
+        // One import replays at a time; organizations take turns.
+        let _turn = match self.state.imports.take(self.target.org_id)? {
+            Place::Now(turn) => turn,
+            Place::Waiting(wait) => {
+                if let Some(events) = events {
+                    let _ = events.send(ImportEvent::Queued);
+                }
+                wait.turn().await?
+            }
+        };
         // Models arrive as they are read; each is compared with the one
-        // before it (the latest version for the first).
-        let first_number = planned.preview.first_number.unwrap_or(1);
-        let previous = planned
-            .latest
-            .as_ref()
-            .and_then(|(_, model)| Schema::deserialize(model).ok());
-        let progress = Arc::new(Mutex::new(Progress {
-            previous,
-            models: Vec::with_capacity(new.len()),
-            changes: Vec::with_capacity(new.len()),
-        }));
-        let sink = Arc::clone(&progress);
+        // before it, off the async workers.
+        let (models, received) = mpsc::unbounded_channel();
+        let compared = self.compare(received, events.cloned());
         let sender = events.cloned();
-        let indexes = planned.new.clone();
-        let slug = self.slug.clone();
         let replay = self
             .state
             .compiler
-            .replay(texts, from, move |event| {
-                let mut progress = sink.lock().unwrap_or_else(PoisonError::into_inner);
-                match event {
-                    ReplayEvent::Checked => {
-                        if let Some(sender) = &sender {
-                            let _ = sender.send(ImportEvent::Checked);
-                        }
+            .replay(texts, from, move |event| match event {
+                ReplayEvent::Checked => {
+                    if let Some(sender) = &sender {
+                        let _ = sender.send(ImportEvent::Checked);
                     }
-                    ReplayEvent::Replayed { index, model } => {
-                        let mut model = *model;
-                        slug.clone_into(&mut model.database);
-                        let k = index - from;
-                        let changes = changes(progress.previous.as_ref(), &model);
-                        if let Some(sender) = &sender {
-                            let _ = sender.send(ImportEvent::Replayed {
-                                index: indexes[k],
-                                number: first_number + i32::try_from(k).unwrap_or(i32::MAX),
-                                changes: changes.clone(),
-                            });
-                        }
-                        progress.previous = Some(model.clone());
-                        progress.models.push(model);
-                        progress.changes.push(changes);
-                    }
+                }
+                ReplayEvent::Replayed { index, model } => {
+                    let _ = models.send((index - from, model));
                 }
             })
             .await?;
@@ -362,9 +353,8 @@ impl Job {
                 errors,
             ));
         }
-        let Progress {
-            models, changes, ..
-        } = std::mem::take(&mut *progress.lock().unwrap_or_else(PoisonError::into_inner));
+        // The replay is over: its sink is dropped, the comparisons end.
+        let Progress { models, changes } = compared.await.map_err(ApiError::internal)?;
         if models.len() != new.len() {
             return Err(ApiError::Internal(
                 format!(
@@ -379,6 +369,47 @@ impl Job {
             models,
             changes,
             skipped,
+        })
+    }
+
+    /// What each model read changes against the one before it (the latest
+    /// version for the first), on a blocking thread: a diff of large
+    /// models takes a while. Ends with the replay (its sink dropped).
+    fn compare(
+        &self,
+        mut received: mpsc::UnboundedReceiver<(usize, Box<Schema>)>,
+        sender: Option<Events>,
+    ) -> tokio::task::JoinHandle<Progress> {
+        let planned = &self.planned;
+        let first_number = planned.preview.first_number.unwrap_or(1);
+        let mut previous = planned
+            .latest
+            .as_ref()
+            .and_then(|(_, model)| Schema::deserialize(model).ok());
+        let indexes = planned.new.clone();
+        let slug = self.target.slug.clone();
+        let expected = indexes.len();
+        tokio::task::spawn_blocking(move || {
+            let mut progress = Progress {
+                models: Vec::with_capacity(expected),
+                changes: Vec::with_capacity(expected),
+            };
+            while let Some((k, model)) = received.blocking_recv() {
+                let mut model = *model;
+                slug.clone_into(&mut model.database);
+                let changes = changes(previous.as_ref(), &model);
+                if let Some(sender) = &sender {
+                    let _ = sender.send(ImportEvent::Replayed {
+                        index: indexes[k],
+                        number: first_number + i32::try_from(k).unwrap_or(i32::MAX),
+                        changes: changes.clone(),
+                    });
+                }
+                previous = Some(model.clone());
+                progress.models.push(model);
+                progress.changes.push(changes);
+            }
+            progress
         })
     }
 
@@ -432,9 +463,7 @@ struct Replayed {
     skipped: Vec<Vec<SkippedStatement>>,
 }
 
-#[derive(Default)]
 struct Progress {
-    previous: Option<Schema>,
     models: Vec<Schema>,
     changes: Vec<String>,
 }

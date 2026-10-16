@@ -25,17 +25,29 @@
 //! `append`, `dry_run`, `filename` ([`ImportOptions`]).
 //!
 //! Imports are idempotent: a migration is matched by its id (the tool's
-//! version, or the path for plain folders) with the ones the database
+//! version, or the file name for plain folders) with the ones the database
 //! already imported (`version_migrations`); importing the same files again
 //! creates nothing, new migrations after them are appended, a changed one
 //! (another checksum) or a new one sorted before an imported one is
 //! refused. A database with versions that were not imported refuses an
 //! import unless `append=true`.
 //!
+//! One import replays at a time; organizations take turns ([`Turns`]).
+//!
+//! What a push-scope token learns (kept to about what a push answers):
+//! what it sent, read back (the plan, what is skipped, Postgres's errors
+//! replaying it on top of the imported history, which may name the
+//! history's objects), the version numbers its migrations get or got,
+//! whether the database has versions that were not imported
+//! (`has_versions`), and each new version's change counts against the one
+//! before. Never the history's SQL or models, nor other versions'
+//! messages.
+//!
 //! Tables: `versions`, `version_migrations` (one row per imported version).
 
 mod plan;
 mod run;
+mod turns;
 pub mod upload;
 
 use axum::{
@@ -54,6 +66,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 pub use self::{
     plan::{ImportPreview, MigrationStatus, PlannedMigration},
     run::{ImportEvent, ImportReport, ImportStatus, ImportedMigration},
+    turns::Turns,
 };
 use crate::{
     ApiResult, AppState,
@@ -183,6 +196,7 @@ async fn preview(
 ) -> ApiResult<Json<ImportPreview>> {
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     state.limits.compile.check(member.user.id)?;
+    state.limits.import_previews.check(database.id)?;
     let files = upload::files(&headers, body, options.filename.as_deref()).await?;
     let planned = plan::plan(&state.db, database.id, files, &options).await?;
     Ok(Json(planned.preview))
@@ -237,16 +251,12 @@ async fn import(
     state.limits.imports.check(database.id)?;
     let files = upload::files(&headers, body, options.filename.as_deref()).await?;
     let author = run::Author::User(member.user.id);
-    run::start(
-        state,
-        database.id,
-        database.slug,
-        author,
-        files,
-        options,
-        streams(&headers),
-    )
-    .await
+    let target = run::Target {
+        org_id: member.org.id,
+        database_id: database.id,
+        slug: database.slug,
+    };
+    run::start(state, target, author, files, options, streams(&headers)).await
 }
 
 /// Imports migration files as versions, from CI: the API token's database.
@@ -295,17 +305,19 @@ async fn import_with_token(
     state.limits.push.check(token.token_id)?;
     state.limits.imports.check(token.database_id)?;
     let files = upload::files(&headers, body, options.filename.as_deref()).await?;
-    let author = run::Author::Token(token.token_id);
-    run::start(
-        state,
-        token.database_id,
-        token.database_slug,
-        author,
-        files,
-        options,
-        streams(&headers),
+    let org_id = sqlx::query_scalar!(
+        "SELECT org_id FROM databases WHERE id = $1",
+        token.database_id
     )
-    .await
+    .fetch_one(&state.db)
+    .await?;
+    let author = run::Author::Token(token.token_id);
+    let target = run::Target {
+        org_id,
+        database_id: token.database_id,
+        slug: token.database_slug,
+    };
+    run::start(state, target, author, files, options, streams(&headers)).await
 }
 
 /// The client asked for the progress as it happens.

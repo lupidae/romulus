@@ -8,6 +8,7 @@ use crate::{
     auth::{events::SessionEvents, oidc::Oidc},
     collab::Hub,
     compile::SqlCompiler,
+    imports::Turns,
     orgs::events::MembershipEvents,
     rate::Limits,
     versions::diff::DiffCache,
@@ -35,6 +36,8 @@ pub struct AppState {
     pub collab: Hub,
     /// Diffs between versions, computed once (versions never change).
     pub diffs: Arc<DiffCache>,
+    /// Migration imports waiting for the sandbox, organizations in turn.
+    pub imports: Turns,
 }
 
 impl AppState {
@@ -50,6 +53,7 @@ impl AppState {
             compiler: SqlCompiler::unavailable(),
             limits: Arc::new(Limits::default()),
             diffs: Arc::new(DiffCache::default()),
+            imports: Turns::default(),
         }
     }
 

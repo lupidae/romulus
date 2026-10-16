@@ -5476,6 +5476,21 @@
           },
           {
             "type": "object",
+            "description": "Other imports are replaying: this one waits for its turn\n(organizations take turns).",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "queued"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Every migration ran once in the sandbox: they replay; versions come\nnext, one per migration.",
             "required": [
               "event"
@@ -6239,7 +6254,7 @@
           },
           "id": {
             "type": "string",
-            "description": "The tool's version (`20240101120000`, `1.2`, `blog.0002_post_slug`),\nor the path for plain folders: what later imports match on."
+            "description": "The tool's version (`20240101120000`, `1.2`, `blog.0002_post_slug`),\nor the file name without `.sql` for plain folders: what later\nimports match on."
           },
           "line": {
             "type": "integer",
@@ -7518,7 +7533,7 @@
           },
           "id": {
             "type": "string",
-            "description": "The tool's version of it, or its path for plain folders."
+            "description": "The tool's version of it, or its file name for plain folders."
           },
           "path": {
             "type": "string",

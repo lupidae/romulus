@@ -139,7 +139,7 @@ pub struct VersionDetail {
 /// The migration an imported version came from.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct VersionMigration {
-    /// The tool's version of it, or its path for plain folders.
+    /// The tool's version of it, or its file name for plain folders.
     pub id: String,
     /// The file, relative to the folder imported.
     pub path: String,

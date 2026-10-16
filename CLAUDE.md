@@ -276,7 +276,7 @@ Made in the skeleton (S0):
   `guessed_names` warning).
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
-  compiles; per database for imports), 429 `rate_limited` with `Retry-After`. Handlers that must decide
+  compiles; per database for imports and, apart, their previews), 429 `rate_limited` with `Retry-After`. Handlers that must decide
   before reading a large body take `axum::body::Body` and read it with
   `extract::read_body(headers, body, limit)` (413 in the API's format).
 - **CSRF** is global middleware: every non-GET request needs
@@ -492,7 +492,11 @@ skipped). docs/MVP.md "Next: migration files" has the decisions.
   (`details: ImportFailure`, lines in the file) or the stream's `failed`
   event. Versions are stored by `versions::store::store_import`, all or none,
   numbered under the databases row lock. The job runs in its own task: a
-  client leaving does not stop it.
+  client leaving does not stop it. Before the sandbox it waits for its turn
+  (`state.imports`, `imports::Turns`: organizations round-robin, a
+  `queued` event); ids, paths and names over what the tables store are
+  refused before the replay (`invalid_migrations`). Guarded statements
+  unwrapped from `DO` blocks ignore exactly their block's conditions.
 - **Tests**: `tests/sandbox/import.rs` (replay, hostile inputs),
   `tests/sandbox/fixtures.rs` (one history in every format, real Alembic,
   Django and Rails exports in `tests/migrations/`), `tests/api/imports.rs`

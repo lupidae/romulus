@@ -17,6 +17,15 @@ use crate::{ApiError, ApiResult, compile::Diagnostic, domain::MigrationFormat, e
 pub const MAX_NEW: usize = 500;
 /// Migrations one import replays, already imported ones included.
 pub const MAX_REPLAYED: usize = 2_000;
+/// Flyway substitutes `${name}` placeholders when it migrates; an import
+/// replays the files as they are.
+const FLYWAY_PLACEHOLDER: &str = "Flyway placeholders (${…}) are not substituted on import: write their values in the migration, then import again.";
+
+/// What `version_migrations` and `versions` store, at most (characters):
+/// checked before the replay, not by the insert after it.
+const MAX_ID: usize = 500;
+const MAX_PATH: usize = 1_000;
+const MAX_MESSAGE: usize = 1_000;
 
 /// Where a migration stands against the database's imports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -37,7 +46,8 @@ pub enum MigrationStatus {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlannedMigration {
     /// The tool's version (`20240101120000`, `1.2`, `blog.0002_post_slug`),
-    /// or the path for plain folders: what later imports match on.
+    /// or the file name without `.sql` for plain folders: what later
+    /// imports match on.
     pub id: String,
     /// The version's message: the file (or folder) name.
     pub name: String,
@@ -218,7 +228,21 @@ fn build(plan: Plan, history: Vec<Existing>, others: bool, latest: Option<i32>) 
                     analysis
                         .errors
                         .iter()
-                        .map(|d| located(d, migration))
+                        .map(|d| {
+                            let mut error = located(d, migration);
+                            if format == import::Format::Flyway
+                                && error.hint.is_none()
+                                && d.span.is_some_and(|s| {
+                                    migration
+                                        .sql
+                                        .get(s.start..)
+                                        .is_some_and(|at| at.starts_with("${"))
+                                })
+                            {
+                                error.hint = Some(FLYWAY_PLACEHOLDER.to_owned());
+                            }
+                            error
+                        })
                         .collect(),
                 )
             } else {
@@ -298,11 +322,62 @@ fn problem(preview: &ImportPreview, replayed: usize) -> Option<ApiError> {
             details: None,
         });
     }
+    if let Some(message) = migrations
+        .iter()
+        .filter(|m| m.status == MigrationStatus::New)
+        .find_map(unstorable)
+    {
+        return Some(ApiError::Unprocessable {
+            code: "invalid_migrations",
+            message,
+            details: None,
+        });
+    }
     let (index, broken) = migrations
         .iter()
         .enumerate()
         .find(|(_, m)| m.status == MigrationStatus::New && !m.errors.is_empty())?;
     Some(failed(index, broken, broken.errors.clone()))
+}
+
+/// Why a migration's id, file or name cannot be stored as they are.
+fn unstorable(m: &PlannedMigration) -> Option<String> {
+    let path = shortened(&m.path);
+    let fields = [
+        ("migration id", &m.id, MAX_ID),
+        ("path", &m.path, MAX_PATH),
+        ("name", &m.name, MAX_MESSAGE),
+    ];
+    fields.into_iter().find_map(|(what, value, max)| {
+        if value.contains('\0') {
+            Some(format!("{path}: its {what} contains a NUL character."))
+        } else if value.trim().is_empty() {
+            Some(format!("{path}: its {what} is empty."))
+        } else if value.chars().count() > max {
+            Some(format!(
+                "{path}: its {what} is longer than {max} characters. Shorten it to import it."
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+/// A path short enough for a message.
+fn shortened(path: &str) -> String {
+    const SHOWN: usize = 80;
+    if path.chars().count() <= SHOWN {
+        return path.to_owned();
+    }
+    let tail: String = path
+        .chars()
+        .rev()
+        .take(SHOWN - 1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("…{tail}")
 }
 
 /// 422 `import_failed`: the import stops at this migration.
@@ -375,6 +450,27 @@ mod tests {
             .iter()
             .map(|m| m.status)
             .collect()
+    }
+
+    #[test]
+    fn a_flyway_placeholder_is_named_where_it_fails() {
+        let files = vec![
+            SourceFile::new("V1__a.sql", "CREATE TABLE a (s text DEFAULT '${kept}');"),
+            SourceFile::new("V2__b.sql", "CREATE SCHEMA ${schema};"),
+        ];
+        let planned = build(plan(files, None).unwrap(), Vec::new(), false, None);
+        let [a, b] = planned.preview.migrations.as_slice() else {
+            panic!("two migrations");
+        };
+        assert!(a.errors.is_empty());
+        assert_eq!(b.errors[0].line, Some(1));
+        assert!(
+            b.errors[0]
+                .hint
+                .as_deref()
+                .unwrap()
+                .contains("placeholders")
+        );
     }
 
     #[test]

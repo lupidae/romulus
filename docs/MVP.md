@@ -437,21 +437,34 @@ Two features, built in this order:
      is only DDL guarded by an `IF [NOT] EXISTS` on the catalogs or an
      `EXCEPTION WHEN duplicate_…/undefined_…` handler: Active Record 7.1+
      writes every `create_enum` that way and Drizzle its foreign keys.
-     Guarded statements run in a fixed wrapper ignoring "already exists" /
-     "does not exist"; the block's own code (its condition) never runs. Any
+     Guarded statements run in a fixed wrapper ignoring exactly what the
+     block ignored (its handler's conditions; "already exists" for an
+     `IF NOT EXISTS`, "does not exist" for an `IF EXISTS`), so a Drizzle
+     foreign key to a missing table still fails; the block's own code (its
+     condition) never runs. Any
      other `DO` block is skipped and reported, and a later "does not exist"
      error names it.
    - Each migration starts with `search_path` reset (a fresh session).
    - A migration is matched across imports by its id (the tool's version, the
-     path for plain folders) and the sha256 of its up SQL: the same files
+     file name without `.sql` for plain folders, so picking another folder or a
+     few files matches the same ids; two files of one name are refused) and the sha256 of its up SQL: the same files
      create nothing, new ones after the imported ones append, a changed one
      or a new one sorted before imported ones is refused (409). The up SQL is
      the version's `source` (`source_kind = 'migration'`, so its SQL tab and a
      draft from it render the model); `version_migrations` keeps the id,
      file, format, checksum and what was skipped.
    - At most 500 new migrations (2 000 replayed) and 16 MiB of SQL per import;
-     one import replays at a time. The web streams progress (NDJSON); the CI
-     endpoint answers the report (requests to `…/imports` get 15 minutes).
+     one import replays at a time, organizations taking turns (two waiting
+     per organization, 16 in all, 10 minutes at most; the progress says
+     "queued"). The web streams progress (NDJSON); the CI endpoint answers
+     the report (requests to `…/imports` get 15 minutes).
+   - Flyway placeholders (`${name}`) are not substituted: a migration using
+     one fails where it is used, with a hint saying so.
+   - A push-scope token learns what it sent, read back (the plan, what is
+     skipped, Postgres's errors replaying it on the imported history), the
+     numbers its migrations get or got, whether the database has versions
+     that were not imported, and each new version's change counts: about
+     what a push answers. Never the history's SQL or models.
 2. **Generate a migration from a diff.** From a draft (before publishing) or any
    two versions, produce a ready-to-review migration (`ALTER …` statements in
    dependency order, with destructive changes flagged) in the formats above
