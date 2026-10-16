@@ -424,6 +424,34 @@ Two features, built in this order:
    folder or zip) and from CI (an endpoint taking the files with the same bearer
    token as push), and refuses a database that already has versions unless asked
    to append.
+   Built (task MI); what the build decided on top:
+   - **Function bodies never run.** Import mode creates the functions,
+     procedures and triggers migrations define (later DDL needs them), but
+     always with a fixed PL/pgSQL stub body of romulus's, whatever the
+     language: the sandbox's trusted extensions install as a superuser, and a
+     function of the import's could capture one of their calls. Trigger
+     `WHEN` conditions are dropped, rules do nothing, `CREATE TABLE … AS`
+     runs `WITH NO DATA`. Operators, casts, aggregates, languages and foreign
+     data are skipped and reported.
+   - **DDL wrapped in a `DO` block is unwrapped**, not skipped, when the block
+     is only DDL guarded by an `IF [NOT] EXISTS` on the catalogs or an
+     `EXCEPTION WHEN duplicate_…/undefined_…` handler: Active Record 7.1+
+     writes every `create_enum` that way and Drizzle its foreign keys.
+     Guarded statements run in a fixed wrapper ignoring "already exists" /
+     "does not exist"; the block's own code (its condition) never runs. Any
+     other `DO` block is skipped and reported, and a later "does not exist"
+     error names it.
+   - Each migration starts with `search_path` reset (a fresh session).
+   - A migration is matched across imports by its id (the tool's version, the
+     path for plain folders) and the sha256 of its up SQL: the same files
+     create nothing, new ones after the imported ones append, a changed one
+     or a new one sorted before imported ones is refused (409). The up SQL is
+     the version's `source` (`source_kind = 'migration'`, so its SQL tab and a
+     draft from it render the model); `version_migrations` keeps the id,
+     file, format, checksum and what was skipped.
+   - At most 500 new migrations (2 000 replayed) and 16 MiB of SQL per import;
+     one import replays at a time. The web streams progress (NDJSON); the CI
+     endpoint answers the report (requests to `…/imports` get 15 minutes).
 2. **Generate a migration from a diff.** From a draft (before publishing) or any
    two versions, produce a ready-to-review migration (`ALTER …` statements in
    dependency order, with destructive changes flagged) in the formats above

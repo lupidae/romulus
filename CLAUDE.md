@@ -21,6 +21,7 @@ deploy/zitadel/       the provisioner that sets Zitadel up on `just up` (and on 
 deploy/preview/       the preview at romulus.lupidae.com: compose, deploy.sh, cloudflare.sh; README = runbook
 Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
+scripts/export-migrations/  alembic.sh, django.sh, rails.sh: run in a user's project, print the SQL to import
 docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner, mail (Mailpit)
 .superset/            workspace setup/teardown (Superset worktrees boot configured)
 ```
@@ -275,7 +276,7 @@ Made in the skeleton (S0):
   `guessed_names` warning).
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
-  compiles), 429 `rate_limited` with `Retry-After`. Handlers that must decide
+  compiles; per database for imports), 429 `rate_limited` with `Retry-After`. Handlers that must decide
   before reading a large body take `axum::body::Body` and read it with
   `extract::read_body(headers, body, limit)` (413 in the API's format).
 - **CSRF** is global middleware: every non-GET request needs
@@ -337,6 +338,9 @@ src/features/schema/graph/editing/  the graph's editing UI (menus, inline names,
 src/features/databases/  databases, versions, API tokens: queries, mutations, the upload dialog
                          (useOpenUpload), VersionView, DraftsSlot (where drafts list, above the
                          history)
+src/features/imports/    the migration import page (ImportFlow: drop, review, progress, result),
+                         the files picked (files.ts), the API calls and NDJSON progress (api.ts),
+                         MigrationButton (an imported version's migration file)
 src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; no router, no
                          queries: reuse it wherever two models are compared), CompareBar,
                          diffQuery; /app/<org>/<db>/diff/<from>...<to>, /app/dev/diff shows it
@@ -454,6 +458,45 @@ from `Compiler::check_admin`. Tests use `SqlCompiler::from_fn`.
 - Known remus gaps (documented on `render_sql`): `NOT VALID` CHECKs come back
   validated, stand-alone range types are not modelled; its other workarounds
   go away with the remus release fixing remus#16.
+
+## Migration imports (`imports`, `romulus_sandbox::import`)
+
+A folder of migrations becomes the history, one version per migration
+(origin `import`, `source_kind = 'migration'`, message = file name, source =
+the up SQL, a `version_migrations` row: id, path, format, checksum, what was
+skipped). docs/MVP.md "Next: migration files" has the decisions.
+
+- **Pure part** (`romulus_sandbox::import`): `plan(files, format)` detects the
+  `Format` (wire names shared with migration generation: `plain`, `sqlx`,
+  `flyway`, `prisma`, `dbmate`, `golang_migrate`, `node_pg_migrate`, `alembic`,
+  `django`, `rails`), orders, keeps up sections (blanking the rest, so lines
+  stay the file's) and lists ignored files; `analyze(sql)` classifies
+  statements (`statements.rs`: skipped and reported, stripped, rewritten,
+  kept) and unwraps DDL-only `DO` blocks (`plpgsql.rs`). Exported files
+  (Alembic, Django, Rails) are split on their headers (`export.rs`).
+- **Replay** (`Compiler::replay(migrations, from, on_event)`): one session,
+  one transaction, rolled back; the whole script once (stub corrections),
+  then a migration at a time with a model read from `from` on (earlier ones
+  are already versions). Import mode of the allowlist (`check_import`) lets
+  through only what the rewrites produce: functions are ALWAYS stub bodies
+  (a test asserts no import body reaches the script; never relax it: trusted
+  extensions install as superuser). Remus's introspection empties
+  `search_path`: the replay resets it after each read.
+- **API** (`imports`): preview (static, no sandbox), import (org-scoped,
+  NDJSON progress with `Accept: application/x-ndjson`, else the report) and
+  `POST /api/databases/{database_id}/imports` (bearer `push`). Bodies:
+  multipart (file name = path), zip, or one SQL text (`?filename=`).
+  Refusals before the replay are ordinary errors (`has_versions`,
+  `migration_changed`, `migration_out_of_order`, `too_many_migrations`,
+  `import_failed` for a syntax error); a replay failure is 422 `import_failed`
+  (`details: ImportFailure`, lines in the file) or the stream's `failed`
+  event. Versions are stored by `versions::store::store_import`, all or none,
+  numbered under the databases row lock. The job runs in its own task: a
+  client leaving does not stop it.
+- **Tests**: `tests/sandbox/import.rs` (replay, hostile inputs),
+  `tests/sandbox/fixtures.rs` (one history in every format, real Alembic,
+  Django and Rails exports in `tests/migrations/`), `tests/api/imports.rs`
+  (the fake compiler: `TestApp::compiling`), `e2e/imports.spec.ts`.
 
 ## Drafts and the collab server (`drafts`, `collab`)
 

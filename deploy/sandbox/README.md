@@ -78,7 +78,12 @@ acceptable because:
 - the scripts are fixed by this image (pinned packages), never user-supplied;
 - the SQL cannot create functions, operators, casts or temporary objects
   that such a script could pick up from the search path, and every compile
-  is rolled back, so nothing from one compile is there for the next;
+  is rolled back, so nothing from one compile is there for the next. A
+  migration import (`Compiler::replay`) does create the functions,
+  procedures and triggers its migrations define, but always with a fixed
+  stub body of romulus's (`BEGIN RETURN NULL; END`): a script capturing one
+  of their calls runs nothing of the import's; operators, casts and
+  aggregates are skipped;
 - none of them reaches outside the database: the contrib ones are already
   trusted upstream (pgcrypto, uuid-ossp, citext, hstore, pg_trgm, ltree…),
   pgvector is types, functions and index methods, PostGIS and

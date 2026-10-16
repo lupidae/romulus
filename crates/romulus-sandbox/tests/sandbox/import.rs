@@ -448,3 +448,38 @@ fn an_unguarded_unwrapped_statement_still_fails_like_postgres_would() {
         assert_eq!(failure.diagnostics[0].sqlstate.as_deref(), Some("42P07"));
     });
 }
+
+/// A long history: one model read per migration, in one session. Bounded
+/// by the API at 500 new migrations per import; this keeps an eye on the
+/// cost of each step.
+#[test]
+fn a_long_history_replays_in_bounded_time() {
+    with_compiler(|compiler| async move {
+        let migrations: Vec<String> = (0..300)
+            .map(|k| match k % 3 {
+                0 => format!(
+                    "CREATE TABLE t{k} (id bigint PRIMARY KEY, name text NOT NULL, created_at timestamptz DEFAULT now());"
+                ),
+                1 => format!("ALTER TABLE t{} ADD COLUMN note text;\nCREATE INDEX ON t{} (name);", k - 1, k - 1),
+                _ => format!(
+                    "ALTER TABLE t{} ADD COLUMN parent bigint REFERENCES t{} (id);\nINSERT INTO t{} (id, name) VALUES (1, 'x');",
+                    k - 2,
+                    k - 2,
+                    k - 2
+                ),
+            })
+            .collect();
+        let texts: Vec<&str> = migrations.iter().map(String::as_str).collect();
+        let started = std::time::Instant::now();
+        let (replay, models) = replay(compiler, &texts, 0).await;
+        let elapsed = started.elapsed();
+        assert!(replay.failure.is_none(), "{:?}", replay.failure);
+        assert_eq!(models.len(), 300);
+        assert_eq!(models[299].1.entities.len(), 100);
+        assert!(elapsed < std::time::Duration::from_secs(120), "took {elapsed:?}");
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("300 migrations replayed in {elapsed:?} ({} ms)", replay.duration_ms);
+        }
+    });
+}
