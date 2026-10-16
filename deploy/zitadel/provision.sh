@@ -228,8 +228,8 @@ done
 # Accounts lock after $LOCKOUT_ATTEMPTS failed attempts (password or OTP);
 # `provision.sh unlock` (or the console) unlocks them.
 if [ -n "$LOCKOUT_ATTEMPTS" ]; then
-    # INSTANCE-0Rf4s is "has not been changed".
-    TOLERATE=INSTANCE-0Rf4s api PUT /admin/v1/policies/lockout "$(jq -cn --argjson n "$LOCKOUT_ATTEMPTS" \
+    # INSTANCE-0psjF is "has not been changed".
+    TOLERATE=INSTANCE-0psjF api PUT /admin/v1/policies/password/lockout "$(jq -cn --argjson n "$LOCKOUT_ATTEMPTS" \
         '{maxPasswordAttempts: $n, maxOtpAttempts: $n}')" >/dev/null
 fi
 
