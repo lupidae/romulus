@@ -455,8 +455,9 @@ Two features, built in this order:
      file, format, checksum and what was skipped.
    - At most 500 new migrations (2 000 replayed) and 16 MiB of SQL per import;
      one import replays at a time, organizations taking turns (two waiting
-     per organization, 16 in all, 10 minutes at most; the progress says
-     "queued"). The web streams progress (NDJSON); the CI endpoint answers
+     per organization, one once half of the 16 places are taken, 10 minutes
+     at most; the progress says "queued"; a queued import keeps its place
+     when the page is left, like a running one finishes). The web streams progress (NDJSON); the CI endpoint answers
      the report (requests to `…/imports` get 15 minutes).
    - Flyway placeholders (`${name}`) are not substituted: a migration using
      one fails where it is used, with a hint saying so.

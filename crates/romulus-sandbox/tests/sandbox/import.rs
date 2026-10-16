@@ -587,3 +587,29 @@ fn an_import_holding_too_many_locks_stops_there() {
         },
     );
 }
+
+/// One migration of thousands of statements is checked as it runs: the
+/// replay stops after its first part over the budget, not at its end.
+#[test]
+fn a_huge_migration_is_stopped_partway_by_the_lock_budget() {
+    crate::with_own_compiler(
+        |url| romulus_sandbox::SandboxConfig {
+            max_import_locks: 200,
+            ..crate::config(url, "romulus_test_locks_within")
+        },
+        |compiler| async move {
+            let migration = (0..1000)
+                .map(|k| format!("CREATE TABLE t{k} (id bigint PRIMARY KEY, x text);"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (replay, models) = replay(&compiler, &[migration.as_str()], 0).await;
+            let failure = replay.failure.expect("over the budget");
+            assert_eq!(failure.index, 0);
+            let d = &failure.diagnostics[0];
+            assert_eq!(d.code, Code::TooLarge);
+            // The 200th statement ends the first part: line 200 of 1000.
+            assert_eq!(d.span.map(|s| s.from.line), Some(200), "{d:?}");
+            assert_eq!(models.len(), 0);
+        },
+    );
+}

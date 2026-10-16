@@ -5,10 +5,14 @@
 //! organization importing over and over holds the others back by one
 //! import at most.
 //!
-//! At most [`PER_ORG`] imports of an organization, and [`WAITING`] in all,
-//! wait; more are refused (503 `unavailable`), and so is a wait past
-//! [`MAX_WAIT`]. A waiter that gives up (its client left) loses its place;
-//! a turn handed to it passes on.
+//! At most [`PER_ORG`] imports of an organization wait, one once half of
+//! the [`WAITING`] places are taken, and [`WAITING`] in all; more are
+//! refused (503 `unavailable`), and so is a wait past [`MAX_WAIT`].
+//!
+//! An import keeps its place when its client leaves: the job runs to the
+//! end on its own (`run::start` spawns it), like one already replaying, so
+//! leaving the page never loses an import. Only a place given up (the wait
+//! timed out) stops counting; a turn handed to it passes on.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -21,7 +25,8 @@ use uuid::Uuid;
 
 use crate::ApiError;
 
-/// Imports of one organization waiting, at most.
+/// Imports of one organization waiting, at most (one once the queue is
+/// half full, so that a few organizations cannot take every place).
 const PER_ORG: usize = 2;
 /// Imports waiting, at most.
 const WAITING: usize = 16;
@@ -75,14 +80,16 @@ impl Turns {
         }
         let mine = state.waiting.get(&org).map_or(0, VecDeque::len);
         let all: usize = state.waiting.values().map(VecDeque::len).sum();
-        if mine >= PER_ORG || all >= WAITING {
+        let share = if all >= WAITING / 2 { 1 } else { PER_ORG };
+        if all >= WAITING {
             return Err(ApiError::Unavailable(
-                if mine >= PER_ORG {
-                    "Other imports of this organization are waiting to run. Try again when they are done."
-                } else {
-                    "Too many imports are waiting to run. Try again in a few minutes."
-                }
-                .into(),
+                "Too many imports are waiting to run. Try again in a few minutes.".into(),
+            ));
+        }
+        if mine >= share {
+            return Err(ApiError::Unavailable(
+                "Another import of this organization is waiting to run. Try again when it is done."
+                    .into(),
             ));
         }
         let (send, receive) = oneshot::channel();
@@ -247,6 +254,29 @@ mod tests {
         assert!(matches!(turns.take(b), Ok(Place::Waiting(_))));
     }
 
+    #[test]
+    fn once_half_full_an_organization_waits_with_one_import_at_most() {
+        let turns = Turns::default();
+        let _running = now(&turns, Uuid::from_u128(100));
+        // Four organizations take two places each: half the queue.
+        let _waits: Vec<Wait> = (1..=4)
+            .flat_map(|org| [Uuid::from_u128(org); 2])
+            .map(|org| wait(&turns, org))
+            .collect();
+        assert_eq!(turns.waiting(), WAITING / 2);
+        let late = Uuid::from_u128(5);
+        let _one = wait(&turns, late);
+        assert!(matches!(turns.take(late), Err(ApiError::Unavailable(_))));
+        // The other places go one per organization.
+        let _others: Vec<Wait> = (6..=12).map(|org| wait(&turns, Uuid::from_u128(org))).collect();
+        assert_eq!(turns.waiting(), WAITING);
+        assert!(matches!(
+            turns.take(Uuid::from_u128(13)),
+            Err(ApiError::Unavailable(_))
+        ));
+    }
+
+    /// A place given up (its wait timed out) no longer counts.
     #[test]
     fn a_waiter_that_left_loses_its_place() {
         let turns = Turns::default();

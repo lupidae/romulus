@@ -112,10 +112,11 @@ pub struct SandboxConfig {
     pub replay_timeout: Duration,
     /// The SQL an import replays, all migrations together. Default 16 MiB.
     pub max_import_bytes: usize,
-    /// Locks an import's session may hold after a migration (everything it
-    /// creates or changes stays locked until the replay ends, in the lock
-    /// table every compile shares): past it, the import stops with an
-    /// error. Default 40 000, a third of the sandbox's table.
+    /// Locks an import's session may hold (everything it creates or
+    /// changes stays locked until the replay ends, in the lock table every
+    /// compile shares), checked every 200 statements and after each
+    /// migration: past it, the import stops with an error. Default 40 000,
+    /// a third of the sandbox's table.
     pub max_import_locks: usize,
     /// Statements an import replays. Default 20 000: everything they touch
     /// stays locked until the replay ends, in a lock table every compile

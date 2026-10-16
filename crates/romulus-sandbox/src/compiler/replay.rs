@@ -332,31 +332,45 @@ impl Inner {
         };
 
         let max_locks = self.config.max_import_locks;
-        let too_many_locks = |k: usize, locks: i64| {
-            let d = Diagnostic::error(
+        // Where phase 1 stopped over the budget: migration `k`, after
+        // statement `last`.
+        let too_many_locks = |k: usize, last: Option<usize>, locks: i64| {
+            let mut d = Diagnostic::error(
                 Code::TooLarge,
                 format!(
-                    "after this migration the import holds {locks} locks; it may hold at most {max_locks}"
+                    "the import holds {locks} locks by this point; it may hold at most {max_locks}"
                 ),
             )
             .with_hint("Everything an import creates or changes stays locked until it ends, in a lock table every compile shares: this history touches too many objects to be replayed.");
+            if let Some(statement) = last.and_then(|i| parsed.statements.get(i)) {
+                d = d.with_span(statement.span).with_statement(statement.index);
+            }
+            let d = joined.localize(k, &migrations[k], parsed, d);
             Replay::failed(skipped.to_vec(), k, vec![d])
         };
 
-        // Phase 1: the whole script, a migration at a time (the lock budget
-        // is checked between them), correcting stubs.
+        // Phase 1: the whole script, in parts of at most `LOCK_CHECK_EVERY`
+        // statements within each migration (the lock budget is checked
+        // after each part), correcting stubs. Phase 2 runs the same script,
+        // and locks only accumulate in a transaction: what phase 1 checked
+        // holds for it.
         let mut overrides = Overrides::default();
         let mut round = 0;
         let mut connection_retries = 0;
         let prepared = loop {
             let prepared = prepare_with(&joined.text, parsed, &self.catalog, &overrides, edits);
             let starts = migration_starts(joined, parsed, &prepared);
-            let each: Vec<Step> = (0..migrations.len())
-                .map(|k| Step {
-                    range: starts[k]..starts[k + 1],
-                    introspect: None,
-                })
-                .collect();
+            let mut each = Vec::new();
+            let mut part_of = Vec::new();
+            for k in 0..migrations.len() {
+                for (range, last) in parts(joined, parsed, &prepared, &starts, k) {
+                    each.push(Step {
+                        range,
+                        introspect: None,
+                    });
+                    part_of.push((k, last));
+                }
+            }
             match slot
                 .replay(
                     &self.options,
@@ -370,7 +384,10 @@ impl Inner {
                 .await
             {
                 Ok(Ran::All) => break prepared,
-                Ok(Ran::TooManyLocks { step, locks }) => return Ok(too_many_locks(step, locks)),
+                Ok(Ran::TooManyLocks { step, locks }) => {
+                    let (k, last) = part_of[step];
+                    return Ok(too_many_locks(k, last, locks));
+                }
                 Err(AttemptError::Sql(failure)) => {
                     let failed_stub = failure
                         .failure
@@ -474,7 +491,9 @@ impl Inner {
         match ran {
             Ok(Ran::All) => {}
             Ok(Ran::TooManyLocks { step, locks }) => {
-                return Ok(too_many_locks(step_migration[step], locks));
+                // Cannot happen after phase 1 (the same script); kept as
+                // a stop all the same.
+                return Ok(too_many_locks(step_migration[step], None, locks));
             }
             Err(AttemptError::Sql(failure)) => return Ok(fail(&failure, &prepared)),
             Err(AttemptError::Connection { error, .. }) => {
@@ -511,6 +530,41 @@ impl Inner {
 }
 
 /// Where each migration's part of the script starts, plus the end.
+/// Statements run between two checks of the lock budget, at most: a
+/// migration of thousands of statements is checked as it runs, not only
+/// after it.
+const LOCK_CHECK_EVERY: usize = 200;
+
+/// Migration `k`'s part of the script cut before every
+/// [`LOCK_CHECK_EVERY`]-th statement, with the last statement of each part.
+fn parts(
+    joined: &Joined,
+    parsed: &ParsedSql,
+    prepared: &Prepared,
+    starts: &[usize],
+    k: usize,
+) -> Vec<(Range<usize>, Option<usize>)> {
+    let (start, end) = (starts[k], starts[k + 1]);
+    let statements: Vec<usize> = statements_in(joined, parsed, k).collect();
+    let mut out = Vec::new();
+    let mut from = start;
+    for chunk in statements.chunks(LOCK_CHECK_EVERY) {
+        let last = chunk.last().copied();
+        let next = statements
+            .get(out.len() * LOCK_CHECK_EVERY + chunk.len())
+            .map_or(end, |&i| prepared.statement_starts[i].clamp(from, end));
+        out.push((from..next, last));
+        from = next;
+    }
+    match out.last_mut() {
+        // The rest of the migration's script (its search path reset) with
+        // the last part.
+        Some((range, _)) => range.end = end,
+        None => out.push((start..end, None)),
+    }
+    out
+}
+
 fn migration_starts(joined: &Joined, parsed: &ParsedSql, prepared: &Prepared) -> Vec<usize> {
     let mut starts = Vec::with_capacity(joined.ranges.len() + 1);
     for (k, range) in joined.ranges.iter().enumerate() {

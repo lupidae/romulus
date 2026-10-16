@@ -48,7 +48,10 @@ schemas and the catalog probe (every extension at once) fit, and one compile
 cannot starve the others; the allowlist refuses creating an extension twice
 (each PostGIS install locks thousands of objects). Past the table, compiles
 fail with `out of shared memory` until the greedy one ends, which the
-compile deadline bounds.
+compile deadline bounds. A migration import holds its locks for the whole
+replay: it counts them every 200 statements and stops past
+`max_import_locks` (40 000), and installs an extension at most twice
+(`CASCADE` included).
 
 Running it elsewhere (production):
 

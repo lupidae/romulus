@@ -32,7 +32,9 @@
 //! refused. A database with versions that were not imported refuses an
 //! import unless `append=true`.
 //!
-//! One import replays at a time; organizations take turns ([`Turns`]).
+//! One import replays at a time; organizations take turns ([`Turns`]). A
+//! queued import keeps its place when its client leaves (the job runs on
+//! its own, as once it replays).
 //!
 //! What a push-scope token learns (kept to about what a push answers):
 //! what it sent, read back (the plan, what is skipped, Postgres's errors

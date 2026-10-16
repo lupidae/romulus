@@ -177,14 +177,33 @@ pub struct Plan {
 pub enum PlanError {
     #[error("no migration found: {0}")]
     Empty(String),
-    #[error("two migrations have the version {id}: {first} and {second}")]
+    #[error("{}", duplicate_message(*format, id, first, second))]
     Duplicate {
+        format: Format,
         id: String,
         first: String,
         second: String,
     },
     #[error("{path}: {message}")]
     Malformed { path: String, message: String },
+}
+
+/// Two migrations with one id, and how to resolve it.
+fn duplicate_message(format: Format, id: &str, first: &str, second: &str) -> String {
+    match format {
+        Format::Tool(Tool::Plain) => format!(
+            "two files are named {id}: {first} and {second}. Plain migrations are known by their \
+             file name, so it must be unique: rename one, or import only the folder you mean"
+        ),
+        Format::Tool(Tool::Prisma) => format!(
+            "two migration folders are named {id}: {first} and {second}. Import only the \
+             prisma/migrations folder you mean"
+        ),
+        _ => format!(
+            "two migrations have the version {id}: {first} and {second}. Each version must be \
+             unique: renumber one, or import only the folder you mean"
+        ),
+    }
 }
 
 /// Paths that are never migrations, whatever the format: macOS and editor
@@ -650,6 +669,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
     for candidate in &candidates {
         if let Some(first) = seen.insert(&candidate.id, &candidate.path) {
             return Err(PlanError::Duplicate {
+                format,
                 id: candidate.id.clone(),
                 first: first.to_owned(),
                 second: candidate.path.clone(),
@@ -955,11 +975,19 @@ mod tests {
         assert_eq!(
             plan(twice, Some(Format::Tool(Tool::Plain))),
             Err(PlanError::Duplicate {
+                format: Format::Tool(Tool::Plain),
                 id: "01_init".to_owned(),
                 first: "2024/01_init.sql".to_owned(),
                 second: "2025/01_init.sql".to_owned(),
             })
         );
+        let message = plan(
+            files(&[("2024/01_init.sql", "x"), ("2025/01_init.sql", "y")]),
+            Some(Format::Tool(Tool::Plain)),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(message.contains("rename one, or import only the folder you mean"), "{message}");
     }
 
     #[test]
