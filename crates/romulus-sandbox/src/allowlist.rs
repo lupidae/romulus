@@ -927,7 +927,7 @@ fn check_identifiers(sql: &str, tokens: &[Token], out: &mut Vec<Problem>) {
 
 /// `INSERT`, `CREATE FUNCTION`, `COMMENT ON DATABASE`…: the leading
 /// keywords of a statement, upper-cased, for messages.
-fn label(sql: &str, tokens: &[Token]) -> String {
+pub(crate) fn label(sql: &str, tokens: &[Token]) -> String {
     const MODIFIERS: &[&str] = &[
         "OR",
         "REPLACE",

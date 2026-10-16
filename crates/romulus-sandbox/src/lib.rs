@@ -56,6 +56,7 @@ pub mod allowlist;
 pub mod catalog;
 mod compiler;
 pub mod diagnostic;
+pub mod import;
 pub mod key;
 pub mod merge;
 mod names;
