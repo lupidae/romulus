@@ -363,3 +363,227 @@ fn conflict_markers_read_as_the_shared_vectors_say() {
         );
     }
 }
+
+// ---- Second review (#13 re-review) ----
+
+#[test]
+fn n01_theirs_removes_index_ours_alters_table() {
+    let base = "CREATE TABLE t (a int);\nCREATE INDEX t_a ON t (a);\n";
+    let ours =
+        "CREATE TABLE t (a int);\nCREATE INDEX t_a ON t (a);\nALTER TABLE t ADD COLUMN c int;\n";
+    let theirs = "CREATE TABLE t (a int);\n";
+    let r = m(base, ours, theirs);
+    assert!(
+        r.conflicts == 1 || !r.text.contains("CREATE INDEX"),
+        "theirs' index drop lost"
+    );
+}
+
+#[test]
+fn n02_theirs_removes_alter_column_ours_comments() {
+    let base = "CREATE TABLE t (a int);\nALTER TABLE t ADD COLUMN b int;\n";
+    let ours =
+        "CREATE TABLE t (a int);\nALTER TABLE t ADD COLUMN b int;\nCOMMENT ON COLUMN t.a IS 'x';\n";
+    let theirs = "CREATE TABLE t (a int);\n";
+    let r = m(base, ours, theirs);
+    assert!(
+        r.conflicts == 1 || !r.text.contains("ADD COLUMN b"),
+        "theirs' column drop lost"
+    );
+}
+
+#[test]
+fn n03_theirs_removes_column_inline_ours_adds_index() {
+    let base = "CREATE TABLE t (a int, b int);\nCREATE INDEX t_a ON t (a);\n";
+    let ours =
+        "CREATE TABLE t (a int, b int);\nCREATE INDEX t_a ON t (a);\nCREATE INDEX t_b ON t (b);\n";
+    let theirs = "CREATE TABLE t (a int);\nCREATE INDEX t_a ON t (a);\n";
+    let r = m(base, ours, theirs);
+    assert_eq!(r.conflicts, 1, "an index on a column theirs dropped");
+    // And the other way round: ours dropped the column, theirs indexed it.
+    let r = m(base, theirs, ours);
+    assert_eq!(r.conflicts, 1, "an index on a column ours dropped");
+}
+
+#[test]
+fn n04_marker_in_block_comment_and_crlf() {
+    let sql = "/*\n-- <<<<<<< yours\n*/\nCREATE TABLE a (id int);\n";
+    assert!(conflict_diagnostics(sql).is_empty(), "block comment");
+    let sql = "CREATE TABLE a (id int);\r\n-- <<<<<<< yours\r\nCREATE TABLE b (id int);\r\n-- ======= v2\r\nCREATE TABLE b (id bigint);\r\n-- >>>>>>> v2\r\n";
+    let (b, s) = conflicts(sql);
+    assert_eq!((b.len(), s.len()), (1, 0), "CRLF line breaks");
+}
+
+#[test]
+fn n05_marker_after_statement_without_semicolon_last() {
+    // At the top level, after a statement that lost its `;`: still a marker
+    // (stray here), as the web app reads it too.
+    let sql = "CREATE TABLE a (id int)\n-- >>>>>>> v2\n";
+    assert_eq!(conflict_diagnostics(sql).len(), 1);
+}
+
+#[test]
+fn n06_theirs_drops_table_ours_unrelated_fk_elsewhere_unchanged() {
+    // ours did not touch orders at all; theirs dropped it: no conflict.
+    let ours = format!("{BASE}\nCREATE TABLE x (id int);\n");
+    let theirs = "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text NOT NULL\n);\n";
+    let r = m(BASE, &ours, theirs);
+    assert_eq!(r.conflicts, 0);
+    assert!(!r.text.contains("orders"));
+}
+
+#[test]
+fn n07_both_drop_same_table() {
+    let theirs = "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text NOT NULL\n);\n";
+    let ours = format!("{theirs}\nCREATE INDEX u_e ON users (email);\n");
+    let r = m(BASE, &ours, theirs);
+    assert_eq!(r.conflicts, 0);
+}
+
+#[test]
+fn n08_theirs_drops_users_ours_fk_to_users_new_table() {
+    let ours =
+        format!("{BASE}\nCREATE TABLE notes (id int, user_id bigint REFERENCES users (id));\n");
+    let theirs =
+        "CREATE TABLE orders (\n    id bigint PRIMARY KEY,\n    user_id bigint NOT NULL\n);\n";
+    let r = m(BASE, &ours, theirs);
+    assert!(r.conflicts >= 1);
+}
+
+#[test]
+fn p01_theirs_removes_alter_ours_adds_alter() {
+    let base = "CREATE TABLE t (a int);\nALTER TABLE t ADD COLUMN b int;\n";
+    let ours = "CREATE TABLE t (a int);\nALTER TABLE t ADD COLUMN b int;\nALTER TABLE t ADD COLUMN c int;\n";
+    let theirs = "CREATE TABLE t (a int);\n";
+    let r = m(base, ours, theirs);
+    assert!(
+        r.conflicts == 1 || !r.text.contains("ADD COLUMN b"),
+        "theirs' column drop lost"
+    );
+}
+
+#[test]
+fn p02_theirs_removes_enum_label_ours_adds() {
+    let base = "CREATE TYPE mood AS ENUM ('ok', 'sad');\nALTER TYPE mood ADD VALUE 'meh';\n";
+    let ours = "CREATE TYPE mood AS ENUM ('ok', 'sad');\nALTER TYPE mood ADD VALUE 'meh';\nALTER TYPE mood ADD VALUE 'x';\n";
+    let theirs = "CREATE TYPE mood AS ENUM ('ok', 'sad');\n";
+    let r = m(base, ours, theirs);
+    assert!(
+        r.conflicts == 1 || !r.text.contains("'meh'"),
+        "theirs' label removal lost"
+    );
+}
+
+#[test]
+fn p03_theirs_drops_column_ours_sets_default() {
+    let base = "CREATE TABLE t (a int, b int);\n";
+    let ours = "CREATE TABLE t (a int, b int);\nALTER TABLE t ALTER COLUMN b SET DEFAULT 1;\n";
+    let theirs = "CREATE TABLE t (a int);\n";
+    let r = m(base, ours, theirs);
+    assert_eq!(r.conflicts, 1);
+}
+
+#[test]
+fn q01_retry_after_failed_base_move_with_conflict() {
+    let ours = BASE.replace(
+        "email text NOT NULL\n",
+        "email text NOT NULL,\n    name text\n",
+    );
+    let v2 = format!(
+        "{}\nCREATE TABLE extra (id int);\n",
+        BASE.replace(
+            "email text NOT NULL\n",
+            "email text NOT NULL,\n    name varchar(40)\n"
+        )
+    );
+    let first = m(BASE, &ours, &v2);
+    assert_eq!(first.conflicts, 1);
+    // base did not move: ancestor still BASE, ours = merged text
+    let again = m(BASE, &first.text, &v2);
+    assert_eq!(again.text, first.text);
+    assert_eq!(again.conflicts, 1);
+}
+
+#[test]
+fn q02_retry_after_failed_base_move_partial_and_drop() {
+    let ours = format!("{BASE}\nCREATE TABLE mine (id int);\n");
+    let theirs = "CREATE TABLE users (\n    id bigint PRIMARY KEY,\n    email text NOT NULL,\n    plan text\n);\n";
+    let first = m(BASE, &ours, theirs);
+    let again = m(BASE, &first.text, theirs);
+    assert_eq!(again.text, first.text);
+}
+
+#[test]
+fn q03_retry_ours_kept_theirs_and_edited_more_meanwhile() {
+    // The first update rewrote the text but the base did not move; then
+    // someone edited the statement theirs changed. Merged again against the
+    // old ancestor, the edit looks like a conflict: the update keeps the
+    // pending base and ancestor on the draft, and the doc notes the version
+    // its rewrite merged (`drafts::update`). From those, the retry is this
+    // merge: relative to the first one's ancestor and theirs, nothing to do.
+    let ours = BASE.to_string();
+    let theirs = BASE.replace(
+        "email text NOT NULL\n",
+        "email text NOT NULL,\n    plan text\n",
+    );
+    let first = m(BASE, &ours, &theirs);
+    let edited = first
+        .text
+        .replace("plan text\n", "plan text,\n    nick text\n");
+    let again = merge(&Input {
+        ancestor: &first.ancestor,
+        ours: &edited,
+        theirs: &theirs,
+        base_model_sql: &theirs,
+        theirs_model_sql: &theirs,
+        ours_model_sql: None,
+        label: "v2",
+    })
+    .unwrap();
+    assert_eq!(again.conflicts, 0);
+    assert_eq!(again.text, edited);
+}
+
+/// The columns a statement uses: a drop of one on one side conflicts with
+/// the other side's index, foreign key or constraint on it.
+#[test]
+fn indexes_and_constraints_depend_on_their_columns() {
+    let base = "CREATE TABLE t (a int, b int, c int);\n";
+    let theirs = "CREATE TABLE t (a int, c int);\n"; // b dropped
+    for (case, added) in [
+        (
+            "an expression index",
+            "CREATE INDEX t_lower ON t (lower(b::text));",
+        ),
+        (
+            "a partial index",
+            "CREATE INDEX t_part ON t (a) WHERE b > 0;",
+        ),
+        (
+            "an included column",
+            "CREATE INDEX t_inc ON t (a) INCLUDE (b);",
+        ),
+        (
+            "a check",
+            "ALTER TABLE t ADD CONSTRAINT t_b_check CHECK (b > 0);",
+        ),
+        (
+            "a unique key",
+            "ALTER TABLE t ADD CONSTRAINT t_b_key UNIQUE (b);",
+        ),
+        (
+            "a foreign key",
+            "ALTER TABLE t ADD CONSTRAINT t_b_fkey FOREIGN KEY (b) REFERENCES t (a);",
+        ),
+    ] {
+        let ours = format!("{base}{added}\n");
+        assert_eq!(m(base, &ours, theirs).conflicts, 1, "{case}");
+    }
+    // A foreign key to a column theirs dropped, on another table.
+    let ours = format!("{base}CREATE TABLE u (x int REFERENCES t (b));\n");
+    assert_eq!(m(base, &ours, theirs).conflicts, 1, "a referenced column");
+    // Nothing on b: no conflict.
+    let ours = format!("{base}CREATE INDEX t_ac ON t (a, c) WHERE c > 0;\n");
+    let r = m(base, &ours, theirs);
+    assert_eq!(r.conflicts, 0, "{}", r.text);
+}

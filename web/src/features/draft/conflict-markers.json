@@ -16,14 +16,26 @@
     "name": "both can be kept, yours empty, at the end with no line break",
     "sql": "-- <<<<<<< yours (both can be kept)\n-- ======= v12\nCOMMENT ON TABLE a IS 'x';\n-- >>>>>>> v12",
     "blocks": [
-      { "yours": "", "theirs": "COMMENT ON TABLE a IS 'x';", "label": "v12", "both": true }
+      {
+        "yours": "",
+        "theirs": "COMMENT ON TABLE a IS 'x';",
+        "label": "v12",
+        "both": true
+      }
     ],
     "stray": []
   },
   {
     "name": "indented markers",
     "sql": "  -- <<<<<<< yours\nCREATE TABLE a (id int);\n  -- ======= v2\n  -- >>>>>>> v2\n",
-    "blocks": [{ "yours": "CREATE TABLE a (id int);", "theirs": "", "label": "v2", "both": false }],
+    "blocks": [
+      {
+        "yours": "CREATE TABLE a (id int);",
+        "theirs": "",
+        "label": "v2",
+        "both": false
+      }
+    ],
     "stray": []
   },
   {
@@ -95,7 +107,14 @@
   {
     "name": "a block started twice",
     "sql": "-- <<<<<<< yours\n-- <<<<<<< yours\nCREATE TABLE a (id int);\n-- ======= v2\n-- >>>>>>> v2\n",
-    "blocks": [{ "yours": "CREATE TABLE a (id int);", "theirs": "", "label": "v2", "both": false }],
+    "blocks": [
+      {
+        "yours": "CREATE TABLE a (id int);",
+        "theirs": "",
+        "label": "v2",
+        "both": false
+      }
+    ],
     "stray": ["-- <<<<<<< yours"]
   },
   {
@@ -103,5 +122,55 @@
     "sql": "-- <<<<<<< yours\nCREATE TABLE a (id int);\n-- >>>>>>> v2\n",
     "blocks": [],
     "stray": ["-- <<<<<<< yours", "-- >>>>>>> v2"]
+  },
+  {
+    "name": "a marker after a last statement that has no ';'",
+    "sql": "CREATE TABLE a (id int)\n-- >>>>>>> v2\n",
+    "blocks": [],
+    "stray": ["-- >>>>>>> v2"]
+  },
+  {
+    "name": "a block whose yours side lost its ';'",
+    "sql": "-- <<<<<<< yours\nCREATE TABLE b (id int)\n-- ======= v2\nCREATE TABLE b (id bigint);\n-- >>>>>>> v2\n",
+    "blocks": [
+      {
+        "yours": "CREATE TABLE b (id int)",
+        "theirs": "CREATE TABLE b (id bigint);",
+        "label": "v2",
+        "both": false
+      }
+    ],
+    "stray": []
+  },
+  {
+    "name": "a marker in a BEGIN ATOMIC body",
+    "sql": "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1;\n-- >>>>>>> v2\nEND;\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "a marker in a CASE expression",
+    "sql": "CREATE VIEW v AS SELECT CASE WHEN true\n-- ======= v2\nTHEN 1 END AS x;\n",
+    "blocks": [],
+    "stray": []
+  },
+  {
+    "name": "an escaped quote in an E string, then a marker",
+    "sql": "SELECT E'\\'';\n-- >>>>>>> v2\n",
+    "blocks": [],
+    "stray": ["-- >>>>>>> v2"]
+  },
+  {
+    "name": "CRLF line breaks",
+    "sql": "CREATE TABLE a (id int);\r\n-- <<<<<<< yours\r\nCREATE TABLE b (id int);\r\n-- ======= v2\r\nCREATE TABLE b (id bigint);\r\n-- >>>>>>> v2\r\n",
+    "blocks": [
+      {
+        "yours": "CREATE TABLE b (id int);\r",
+        "theirs": "CREATE TABLE b (id bigint);\r",
+        "label": "v2",
+        "both": false
+      }
+    ],
+    "stray": []
   }
 ]

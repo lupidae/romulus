@@ -74,8 +74,8 @@ use pg_query::{
 
 use crate::{
     diagnostic::{Code, Diagnostic},
-    key::{Action, Key, ObjectKind},
-    names::{QualifiedName, quote_ident},
+    key::{Action, Key, ObjectKind, column_refs},
+    names::{QualifiedName, quote_ident, strings},
     parse::{ParsedSql, Statement, parse},
     source::LineIndex,
 };
@@ -152,25 +152,42 @@ pub fn conflicts(sql: &str) -> (Vec<Conflict>, Vec<Range<usize>>) {
     conflicts_in(sql, &parse(sql))
 }
 
-/// The conflict blocks of a parsed text. A marker is a `--` comment that
-/// starts its line, outside every statement (so never in a string, a
-/// dollar-quoted body or a statement's own comments), reading exactly as
-/// the merge writes it ([`Marker::read`]); a block is yours, theirs and
-/// end markers in that order, the last two with one label. Markers out of
-/// that order are stray.
+/// The conflict blocks of a parsed text. A marker is a `--` comment alone
+/// on its line, at the text's top level, reading exactly as the merge
+/// writes it ([`Marker::read`]). Top level, by the scanner's tokens: never
+/// in a string, a quoted name, a dollar-quoted body or a block comment,
+/// never inside parentheses or a `BEGIN ATOMIC` or `CASE` … `END`. (Not
+/// "outside every statement": a block whose yours side lost its `;` is one
+/// broken statement, and still a block.) A block is yours, theirs and end
+/// markers in that order, the last two with one label; markers out of that
+/// order are stray. The web app reads blocks by the same rules
+/// (`web/src/features/draft/conflicts.ts`; both run the vectors of
+/// `conflict-markers.json`).
 pub(crate) fn conflicts_in(sql: &str, parsed: &ParsedSql) -> (Vec<Conflict>, Vec<Range<usize>>) {
     let mut markers: Vec<(Line, Marker)> = Vec::new();
+    // Open parentheses, and BEGIN ATOMIC or CASE not ended yet.
+    let (mut parens, mut bodies) = (0usize, 0usize);
+    let mut previous = None;
     for token in &parsed.tokens {
-        if token.kind != TokenKind::SqlComment {
-            continue;
+        match token.kind {
+            TokenKind::SqlComment => {}
+            TokenKind::CComment => continue,
+            kind => {
+                match kind {
+                    TokenKind::Ascii40 => parens += 1,
+                    TokenKind::Ascii41 => parens = parens.saturating_sub(1),
+                    TokenKind::Atomic if previous == Some(TokenKind::BeginP) => bodies += 1,
+                    TokenKind::Case => bodies += 1,
+                    TokenKind::EndP => bodies = bodies.saturating_sub(1),
+                    _ => {}
+                }
+                previous = Some(kind);
+                continue;
+            }
         }
         let line_start = sql[..token.start].rfind('\n').map_or(0, |n| n + 1);
         let alone = sql[line_start..token.start].trim().is_empty();
-        let inside = parsed
-            .statements
-            .iter()
-            .any(|s| s.span.start < token.start && token.start < s.span.end);
-        if !alone || inside {
+        if !alone || parens > 0 || bodies > 0 {
             continue;
         }
         let end = sql[token.start..]
@@ -760,46 +777,97 @@ fn references(stmt: &Statement, links: &Links) -> Vec<Atom> {
             out.push(renamed);
         }
     }
-    let table = |rv: &RangeVar| {
-        let (schema, name) = QualifiedName::from_range_var(rv).resolve(&stmt.search_path);
-        object(ObjectKind::Table, &[schema, name])
+    let resolve = |rv: &RangeVar| QualifiedName::from_range_var(rv).resolve(&stmt.search_path);
+    let table = |(schema, name): &(String, String)| {
+        object(ObjectKind::Table, &[schema.clone(), name.clone()])
     };
-    // The elements that can hold a foreign key: columns and constraints.
-    let elements: Vec<&NodeEnum> = match stmt.node() {
+    let columns = |(schema, name): &(String, String), columns: Vec<String>| -> Vec<Atom> {
+        columns
+            .into_iter()
+            .map(|c| object(ObjectKind::Column, &[schema.clone(), name.clone(), c]))
+            .collect()
+    };
+    // The table the statement is on, and the elements that can hold a
+    // constraint: columns and constraints.
+    let (on, elements): (Option<(String, String)>, Vec<&NodeEnum>) = match stmt.node() {
         NodeEnum::IndexStmt(s) => {
-            out.extend(s.relation.as_ref().map(table));
-            Vec::new()
+            let on = s.relation.as_ref().map(resolve);
+            if let Some(on) = &on {
+                // An index uses its columns, those of its expressions and
+                // those of its predicate.
+                let mut used = Vec::new();
+                for elem in s.index_params.iter().chain(&s.index_including_params) {
+                    if let Some(NodeEnum::IndexElem(elem)) = elem.node.as_ref() {
+                        if !elem.name.is_empty() {
+                            used.push(elem.name.clone());
+                        }
+                        if let Some(expr) = &elem.expr {
+                            used.extend(column_refs(expr));
+                        }
+                    }
+                }
+                if let Some(predicate) = &s.where_clause {
+                    used.extend(column_refs(predicate));
+                }
+                out.push(table(on));
+                out.extend(columns(on, used));
+            }
+            (on, Vec::new())
         }
-        NodeEnum::CreateStmt(s) => s
-            .table_elts
-            .iter()
-            .filter_map(|e| e.node.as_ref())
-            .collect(),
-        NodeEnum::AlterTableStmt(s) => s
-            .cmds
-            .iter()
-            .filter_map(|cmd| match cmd.node.as_ref()? {
-                NodeEnum::AlterTableCmd(cmd) => cmd.def.as_ref()?.node.as_ref(),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
+        NodeEnum::CreateStmt(s) => (
+            s.relation.as_ref().map(resolve),
+            s.table_elts
+                .iter()
+                .filter_map(|e| e.node.as_ref())
+                .collect(),
+        ),
+        NodeEnum::AlterTableStmt(s) => (
+            s.relation.as_ref().map(resolve),
+            s.cmds
+                .iter()
+                .filter_map(|cmd| match cmd.node.as_ref()? {
+                    NodeEnum::AlterTableCmd(cmd) => cmd.def.as_ref()?.node.as_ref(),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        _ => (None, Vec::new()),
     };
-    let mut constraints: Vec<&Constraint> = Vec::new();
+    // A constraint uses its columns (keys, a check's), a foreign key its
+    // own and those it references.
     for element in elements {
-        match element {
-            NodeEnum::ColumnDef(column) => constraints.extend(column_constraints(column)),
-            NodeEnum::Constraint(c) => constraints.push(c),
-            _ => {}
+        let (own, constraints): (Option<String>, Vec<&Constraint>) = match element {
+            NodeEnum::ColumnDef(column) => (
+                Some(column.colname.clone()),
+                column_constraints(column).collect(),
+            ),
+            NodeEnum::Constraint(c) => (None, vec![&**c]),
+            _ => continue,
+        };
+        for c in constraints {
+            let mut used: Vec<String> = own.iter().cloned().collect();
+            match c.contype() {
+                ConstrType::ConstrForeign => {
+                    used.extend(strings(&c.fk_attrs));
+                    if let Some(target) = c.pktable.as_ref().map(resolve) {
+                        out.push(table(&target));
+                        out.extend(columns(&target, strings(&c.pk_attrs)));
+                    }
+                }
+                ConstrType::ConstrPrimary | ConstrType::ConstrUnique => {
+                    used.extend(strings(&c.keys));
+                    used.extend(strings(&c.including));
+                }
+                _ => {}
+            }
+            if let Some(expr) = &c.raw_expr {
+                used.extend(column_refs(expr));
+            }
+            if let Some(on) = &on {
+                out.extend(columns(on, used));
+            }
         }
     }
-    out.extend(
-        constraints
-            .into_iter()
-            .filter(|c| c.contype() == ConstrType::ConstrForeign)
-            .filter_map(|c| c.pktable.as_ref())
-            .map(table),
-    );
     // What it defines is not something it depends on.
     out.retain(|a| !links.defines.contains(a));
     out.sort();

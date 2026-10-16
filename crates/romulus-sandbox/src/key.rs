@@ -1335,7 +1335,7 @@ fn exclusion_columns(c: &Constraint) -> Vec<String> {
 }
 
 /// The distinct columns an expression mentions, in order.
-fn column_refs(node: &Node) -> Vec<String> {
+pub(crate) fn column_refs(node: &Node) -> Vec<String> {
     let Ok(value) = serde_json::to_value(node) else {
         return Vec::new();
     };

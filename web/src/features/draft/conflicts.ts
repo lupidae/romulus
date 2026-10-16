@@ -46,40 +46,47 @@ interface Line extends Range {
 }
 
 const identifierChar = /[\p{L}\p{N}_$]/u;
+/** A word (keyword or name) starting here. */
+const wordAt = /^[\p{L}_][\p{L}\p{N}_$]*/u;
 
 /**
- * The lines that may hold a marker: those that start outside any string,
- * quoted name, dollar-quoted body, block comment and statement (after a
- * statement's `;`, before the next one's first token). The server reads
- * the same with Postgres's scanner and parser; the shared vectors
+ * The lines that may hold a marker: those that start at the text's top
+ * level, outside any string, quoted name, dollar-quoted body and block
+ * comment, any parentheses, and any `BEGIN ATOMIC` or `CASE` … `END`. The
+ * server reads the same from Postgres's scanner tokens
+ * (`romulus_sandbox::merge::conflicts_in`); the shared vectors
  * (`conflict-markers.json`) keep the two in step.
  */
 function candidateLines(text: string): Line[] {
   const out: Line[] = [];
   let state: "code" | "single" | "escaped" | "double" | "dollar" | "block" | "line" = "code";
   let tag = "";
-  let depth = 0;
-  let inStatement = false;
+  let comments = 0;
+  let parens = 0;
+  let bodies = 0;
+  // The last token outside comments: a word (upper case) or a character.
+  let previous = "";
   let lineStart = 0;
-  let lineOpen = true; // the current line started in code, outside a statement
+  let lineOpen = true; // the current line started at the top level
   for (let i = 0; i <= text.length; i++) {
     const c = text[i];
     if (c === "\n" || i === text.length) {
       if (lineOpen) out.push({ from: lineStart, to: i, next: Math.min(i + 1, text.length) });
       if (state === "line") state = "code";
       lineStart = i + 1;
-      lineOpen = state === "code" && !inStatement;
+      lineOpen = state === "code" && parens === 0 && bodies === 0;
       continue;
     }
     switch (state) {
       case "code": {
         const next = text[i + 1];
+        const word = identifierChar.test(text[i - 1] ?? "") ? null : wordAt.exec(text.slice(i));
         if (c === "-" && next === "-") {
           state = "line";
           i++;
         } else if (c === "/" && next === "*") {
           state = "block";
-          depth = 1;
+          comments = 1;
           i++;
         } else if (c === "'") {
           const prefix = text[i - 1];
@@ -87,10 +94,10 @@ function candidateLines(text: string): Line[] {
             (prefix === "E" || prefix === "e") && !identifierChar.test(text[i - 2] ?? "")
               ? "escaped"
               : "single";
-          inStatement = true;
+          previous = c;
         } else if (c === '"') {
           state = "double";
-          inStatement = true;
+          previous = c;
         } else if (c === "$" && !identifierChar.test(text[i - 1] ?? "")) {
           const open = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text.slice(i));
           if (open) {
@@ -98,11 +105,21 @@ function candidateLines(text: string): Line[] {
             tag = open[0];
             i += tag.length - 1;
           }
-          inStatement = true;
-        } else if (c === ";") {
-          inStatement = false;
+          previous = c;
+        } else if (word) {
+          const upper = word[0].toUpperCase();
+          if ((upper === "ATOMIC" && previous === "BEGIN") || upper === "CASE") bodies++;
+          else if (upper === "END") bodies = Math.max(0, bodies - 1);
+          previous = upper;
+          i += word[0].length - 1;
+        } else if (c === "(") {
+          parens++;
+          previous = c;
+        } else if (c === ")") {
+          parens = Math.max(0, parens - 1);
+          previous = c;
         } else if (!/\s/.test(c ?? "")) {
-          inStatement = true;
+          previous = c ?? "";
         }
         break;
       }
@@ -133,12 +150,12 @@ function candidateLines(text: string): Line[] {
         break;
       case "block":
         if (c === "/" && text[i + 1] === "*") {
-          depth++;
+          comments++;
           i++;
         } else if (c === "*" && text[i + 1] === "/") {
-          depth--;
+          comments--;
           i++;
-          if (depth === 0) state = "code";
+          if (comments === 0) state = "code";
         }
         break;
       case "line":
