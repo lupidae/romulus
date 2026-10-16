@@ -73,7 +73,7 @@ export function MigrationList({
 
   // A long run of migrations imported already folds into one row: what is
   // new is what this import is about.
-  const imported = migrations.findIndex((m) => m.status !== "imported");
+  const imported = migrations.findIndex((m) => m.status !== "imported" && m.status !== "removed");
   const run = imported === -1 ? migrations.length : imported;
   const [unfolded, setUnfolded] = React.useState(false);
   const folded = run >= FOLD_FROM && !unfolded;
@@ -138,8 +138,8 @@ function Row({
   const skipped = migration.skipped;
   const errors = failure?.errors ?? migration.errors;
   const detailsId = React.useId();
-  const shown = migration.status !== "imported";
-  const dim = migration.status === "imported";
+  const shown = migration.status !== "imported" && migration.status !== "removed";
+  const dim = migration.status === "imported" || migration.status === "removed";
   const toggle = shown && skipped.length > 0 && (
     <Button
       variant="ghost"
@@ -250,6 +250,12 @@ function StatusBadge({ migration }: { migration: PlannedMigration }) {
       return <Badge variant="destructive">Changed</Badge>;
     case "out_of_order":
       return <Badge variant="destructive">Out of order</Badge>;
+    case "removed":
+      return (
+        <Badge variant="neutral" title="Its version was removed in romulus: this import skips it.">
+          Removed in romulus
+        </Badge>
+      );
   }
 }
 

@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT status AS \"status: DraftStatus\" FROM drafts WHERE id = $1 FOR SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status: DraftStatus",
+        "type_info": {
+          "Custom": {
+            "name": "draft_status",
+            "kind": {
+              "Enum": [
+                "open",
+                "published",
+                "deleted"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f0806087a69c38a2f63dbf69687956a7a10cc2e1d016daa09936a0aa449110d4"
+}

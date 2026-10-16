@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO audit_events (org_id, database_id, action, actor_id, version_number, reason, details)\n         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "query": "INSERT INTO audit_events (org_id, database_id, action, actor_id, actor_name, version_number, reason, details)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -15,12 +15,15 @@
                 "version_removed",
                 "version_restored",
                 "version_purged",
-                "approvals_overridden"
+                "version_published",
+                "approvals_overridden",
+                "approvals_required_changed"
               ]
             }
           }
         },
         "Uuid",
+        "Text",
         "Int4",
         "Text",
         "Jsonb"
@@ -28,5 +31,5 @@
     },
     "nullable": []
   },
-  "hash": "55d9ea5e4671992910ecaf88a865ca80fa81e2eb8a9d04a64eeb991e6769ce43"
+  "hash": "4db96e0ea3a3aa4d133ff27d5be071b18508779d158f72c03a810d66fddba6f5"
 }

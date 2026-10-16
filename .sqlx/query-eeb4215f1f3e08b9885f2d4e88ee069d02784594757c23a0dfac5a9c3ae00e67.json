@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO purged_migrations (database_id, migration_id, path, checksum, number)\n         SELECT database_id, migration_id, path, checksum, $2 FROM version_migrations WHERE version_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eeb4215f1f3e08b9885f2d4e88ee069d02784594757c23a0dfac5a9c3ae00e67"
+}

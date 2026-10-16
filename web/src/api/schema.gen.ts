@@ -874,7 +874,36 @@ export interface components {
      * @description What an audit event records (`audit_action`).
      * @enum {string}
      */
-    AuditAction: "version_removed" | "version_restored" | "version_purged" | "approvals_overridden";
+    AuditAction:
+      | "version_removed"
+      | "version_restored"
+      | "version_purged"
+      | "version_published"
+      | "approvals_overridden"
+      | "approvals_required_changed";
+    /**
+     * @description Who did something: their name now, or as it was once their account is
+     *     gone.
+     */
+    AuditActor: {
+      /**
+       * Format: uuid
+       * @description `null` once their account is gone.
+       */
+      id?: string | null;
+      name: string;
+    };
+    /** @description One approval, as it was when the draft was published. */
+    AuditApprover: {
+      /** Format: date-time */
+      at: string;
+      name: string;
+      /**
+       * Format: uuid
+       * @description `null` once their account is gone.
+       */
+      user_id?: string | null;
+    };
     /**
      * @description What an event says beyond who, when and which version; the fields its
      *     action has.
@@ -885,21 +914,30 @@ export interface components {
        * @description The approvals it had, and how many the organization required.
        */
       approvals?: number | null;
+      /** @description Who approved the text published, when. */
+      approved_by?: components["schemas"]["AuditApprover"][] | null;
       /**
        * Format: uuid
        * @description The draft published (approvals overridden).
        */
       draft_id?: string | null;
       draft_name?: string | null;
+      /**
+       * Format: int32
+       * @description The approvals required before and after a change.
+       */
+      from?: number | null;
       /** @description The version's message (versions removed, restored, purged). */
       message?: string | null;
       /** Format: int32 */
       required?: number | null;
+      /** Format: int32 */
+      to?: number | null;
     };
     /** @description One event of the log. */
     AuditEvent: {
       action: components["schemas"]["AuditAction"];
-      actor?: components["schemas"]["Person"] | null;
+      actor?: components["schemas"]["AuditActor"] | null;
       /** Format: date-time */
       created_at: string;
       details: components["schemas"]["AuditDetails"];
@@ -1948,7 +1986,7 @@ export interface components {
      * @description Where a migration stands against the database's imports.
      * @enum {string}
      */
-    MigrationStatus: "new" | "imported" | "changed" | "out_of_order";
+    MigrationStatus: "new" | "imported" | "changed" | "out_of_order" | "removed";
     /** @enum {string} */
     MigrationTool: "plain" | "sqlx" | "flyway" | "prisma" | "dbmate" | "golang_migrate";
     /** @description Something about the migration as a whole that a reviewer must know. */
@@ -2089,7 +2127,7 @@ export interface components {
       status: components["schemas"]["MigrationStatus"];
       /**
        * Format: int32
-       * @description The version it became, when imported already.
+       * @description The version it became, when imported already (or removed since).
        */
       version?: number | null;
     };
@@ -2421,6 +2459,11 @@ export interface components {
           approvals: components["schemas"]["ReviewApproval"][];
           /** @description Who changed the SQL: they cannot approve it. */
           editors: string[];
+          /**
+           * @description Edited before romulus recorded editors: only reviewers (who never
+           *     could edit) may approve it.
+           */
+          editors_unknown: boolean;
           /** @description Approvals of an earlier text: an edit since reset them. */
           outdated: components["schemas"]["ReviewApproval"][];
           requested?: components["schemas"]["ReviewRequest"] | null;
@@ -2643,8 +2686,24 @@ export interface components {
       /** @description The schema as SQL DDL, at most 1 MiB. */
       sql: string;
     };
+    /** @description An approval of the draft a version was published from, as it was then. */
+    VersionApproval: {
+      /** Format: date-time */
+      at: string;
+      name: string;
+      /**
+       * Format: uuid
+       * @description `null` once their account is gone.
+       */
+      user_id?: string | null;
+    };
     /** @description One version, whole. */
     VersionDetail: {
+      /**
+       * @description Who approved the draft it was published from, when the organization
+       *     required approvals (`drafts::approvals::freeze`); oldest first.
+       */
+      approvals: components["schemas"]["VersionApproval"][];
       author?: components["schemas"]["Author"] | null;
       /** Format: date-time */
       created_at: string;
@@ -4066,7 +4125,7 @@ export interface operations {
           "application/json": components["schemas"]["DraftReview"];
         };
       };
-      /** @description `edited_draft`: they edited it, someone else approves */
+      /** @description `edited_draft`: they edited it, someone else approves; `editors_unknown`: a developer or admin, on a draft whose editors are unknown */
       403: {
         headers: {
           [name: string]: unknown;
@@ -4125,6 +4184,15 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_published`: its approvals are the version's now */
+      409: {
         headers: {
           [name: string]: unknown;
         };
@@ -5307,7 +5375,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `version_not_removed`, `restore_expired` (removed more than 30 days ago), `migration_imported_again` (its migration was imported again since) */
+      /** @description `version_not_removed`, `restore_expired` (removed more than 30 days ago) */
       409: {
         headers: {
           [name: string]: unknown;

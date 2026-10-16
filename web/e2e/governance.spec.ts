@@ -172,4 +172,12 @@ test("a reviewer approves, an edit resets it, and publishing waits for approvals
   await publish.getByRole("button", { name: "Publish v3" }).click();
   await expect(carol.page).toHaveURL(new RegExp(`/${slug}/shop$`));
   await expect(carol.page.getByText("3 versions", { exact: true })).toBeVisible();
+
+  // Who approved stays with the version, and in the activity.
+  await expect(carol.page.getByText("Approved by Bob")).toBeVisible();
+  await carol.page.goto(`./${slug}/shop/settings`);
+  const activity = carol.page.getByRole("list", { name: "Activity" });
+  await expect(activity).toContainText("Carol published v3 with 1 approval");
+  await expect(activity).toContainText("Approved by Bob");
+  await expect(activity).toContainText("changed the approvals publishing needs: none → 1 approval");
 });

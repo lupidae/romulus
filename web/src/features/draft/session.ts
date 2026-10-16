@@ -150,7 +150,13 @@ export function eventPatch(
       };
     case "review": {
       const { type: _type, ...review } = event;
-      return { review };
+      return {
+        review: {
+          ...review,
+          requested: review.requested ?? null,
+          editors_unknown: review.editors_unknown ?? false,
+        },
+      };
     }
     case "save_failed":
       return { saveFailed: true };

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import {
+  CheckCircleIcon,
   CheckIcon,
   ClockIcon,
   EyeClosedIcon,
@@ -25,6 +26,7 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import { CompareWith } from "@/features/diff/components/compare-with";
 import { MigrationButton } from "@/features/imports/components/migration-dialog";
+import { names } from "@/features/draft/review";
 import { orgQuery } from "@/features/orgs/queries";
 import { canManageMembers } from "@/features/orgs/roles";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
@@ -201,6 +203,12 @@ function VersionStrip({
         <div className="hidden min-w-0 flex-1 items-center gap-3 text-sm md:flex">
           <OriginBadge origin={version.origin} />
           <Byline author={version.author} at={version.created_at} />
+          {version.approvals.length > 0 && (
+            <span className="hidden max-w-64 min-w-0 shrink items-center gap-1 text-sm text-muted-foreground lg:inline-flex">
+              <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-success" />
+              <span className="truncate">Approved by {names(version.approvals)}</span>
+            </span>
+          )}
           {version.message && (
             <span
               className="hidden min-w-0 truncate text-foreground lg:inline"

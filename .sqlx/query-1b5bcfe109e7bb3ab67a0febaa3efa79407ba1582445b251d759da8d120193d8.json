@@ -1,21 +1,23 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) AS \"n!\" FROM audit_events",
+  "query": "SELECT count(*) AS \"count!\" FROM version_migrations WHERE database_id = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "n!",
+        "name": "count!",
         "type_info": "Int8",
         "origin": "Expression"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid"
+      ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "3cfcf6b2874f4f86a5df1aca05bf9c1ec914d345c5d88ef93bba05b9f86b6a1d"
+  "hash": "1b5bcfe109e7bb3ab67a0febaa3efa79407ba1582445b251d759da8d120193d8"
 }

@@ -1,10 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT model, layout FROM versions WHERE database_id = $1 AND removed_at IS NULL\n         ORDER BY number DESC LIMIT 1",
+  "query": "SELECT id, model, layout FROM versions WHERE database_id = $1 AND removed_at IS NULL\n         ORDER BY number DESC LIMIT 1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
         "name": "model",
         "type_info": "Jsonb",
         "origin": {
@@ -15,7 +26,7 @@
         }
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "layout",
         "type_info": "Jsonb",
         "origin": {
@@ -33,8 +44,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "94ba8c8eaf580687cb829cbeb1ee3f2c2f14974eaafc56cc93d44e150bd3f597"
+  "hash": "99bd8f127767ab32c8589842f3263254840ef9103fb4311ec3f16eb0eaa5c51c"
 }

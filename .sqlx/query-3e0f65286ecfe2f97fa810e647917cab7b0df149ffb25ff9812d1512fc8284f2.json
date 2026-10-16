@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(*) FROM version_migrations WHERE database_id = $1) AS \"imported!\",\n                  (SELECT count(*) FROM versions WHERE database_id = $1 AND removed_at IS NOT NULL) AS \"removed!\",\n                  (SELECT last_version_number FROM databases WHERE id = $1) AS last_number,\n                  (SELECT id FROM versions WHERE database_id = $1 AND removed_at IS NULL\n                   ORDER BY number DESC LIMIT 1) AS latest",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "imported!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "removed!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_number",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "latest",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "3e0f65286ecfe2f97fa810e647917cab7b0df149ffb25ff9812d1512fc8284f2"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT approvals_required FROM organizations WHERE id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approvals_required",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "approvals_required"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4c88ba2d2ba2b358321860e918b0292130ce619d9b75a130da5455e6afb6c827"
+}

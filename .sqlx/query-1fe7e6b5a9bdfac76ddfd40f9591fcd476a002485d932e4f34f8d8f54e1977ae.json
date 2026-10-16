@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE versions DISABLE TRIGGER versions_are_immutable",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "1fe7e6b5a9bdfac76ddfd40f9591fcd476a002485d932e4f34f8d8f54e1977ae"
+}

@@ -15,7 +15,15 @@ const bob = { user_id: "bob", name: "Bob", at: "2026-10-16T10:00:00Z" };
 const carol = { user_id: "carol", name: "Carol", at: "2026-10-16T10:05:00Z" };
 
 function review(patch: Partial<Review> = {}): Review {
-  return { required: 2, approvals: [], outdated: [], editors: [], requested: null, ...patch };
+  return {
+    required: 2,
+    approvals: [],
+    outdated: [],
+    editors: [],
+    requested: null,
+    editors_unknown: false,
+    ...patch,
+  };
 }
 
 describe("review", () => {
@@ -37,6 +45,10 @@ describe("review", () => {
     expect(standing(r, "alice", "developer")).toBe("editor");
     expect(standing(r, "bob", "reviewer")).toBe("approved");
     expect(standing(r, "carol", "reviewer")).toBe("can_approve");
+    // Editors unknown: only reviewers, who never could edit, approve.
+    const old = review({ editors_unknown: true });
+    expect(standing(old, "carol", "developer")).toBe("unknown");
+    expect(standing(old, "dan", "reviewer")).toBe("can_approve");
   });
 
   it("tells a reset by an edit from a withdrawal", () => {

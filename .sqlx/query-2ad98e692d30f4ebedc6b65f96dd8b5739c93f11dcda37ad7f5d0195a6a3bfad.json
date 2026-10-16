@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT d.database_id, d.status AS \"status: DraftStatus\",\n                  b.deleted_at IS NOT NULL AS \"database_deleted!\", b.org_id, o.approvals_required\n           FROM drafts d JOIN databases b ON b.id = d.database_id\n           JOIN organizations o ON o.id = b.org_id\n           WHERE d.id = $1",
+  "query": "SELECT d.database_id, d.status AS \"status: DraftStatus\",\n                  b.deleted_at IS NOT NULL AS \"database_deleted!\", b.org_id, o.approvals_required,\n                  d.editors_unknown\n           FROM drafts d JOIN databases b ON b.id = d.database_id\n           JOIN organizations o ON o.id = b.org_id\n           WHERE d.id = $1",
   "describe": {
     "columns": [
       {
@@ -63,6 +63,17 @@
             "name": "approvals_required"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "editors_unknown",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "editors_unknown"
+          }
+        }
       }
     ],
     "parameters": {
@@ -75,8 +86,9 @@
       false,
       null,
       false,
+      false,
       false
     ]
   },
-  "hash": "744e4bdf6a5f90154b433978c1b7fda6ee8c1962a205aa1135369c8c3afcc07a"
+  "hash": "2ad98e692d30f4ebedc6b65f96dd8b5739c93f11dcda37ad7f5d0195a6a3bfad"
 }

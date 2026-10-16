@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT editors_unknown FROM drafts WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "editors_unknown",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "editors_unknown"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e931a53cff7c17cf614422b8bca1acb9a7d40de4803cbb938d939c8a0c1f12db"
+}

@@ -522,16 +522,24 @@ docs/MVP.md "Review round 1" items 3 and 4 have the decisions.
   `wasRemoved` in `features/databases/queries.ts`), never `latest.number`
   as a count. Restorable for `RESTORE_DAYS`, purged by `removal::purger`.
 - **Audit log** (`audit`): `audit::record(tx, &Entry)` in the transaction
-  of what it records (`NewVersion::audit` for a version being stored);
-  `audit_events` refuses updates and deletes.
+  of what it records, with the actor's name as it is (kept);
+  `audit_events` refuses updates, deletes and truncates. Org-level events
+  (`database_id` NULL) show in every database's Activity.
 - **Approvals** (`drafts::approvals`, `collab::review`): the room tracks
   editors (first update changing `sql` → `draft_editors`) and approvals
   (rows in `draft_approvals`, each with the SHA-256 of the text approved),
   sends `ServerEvent::Review`, and answers `Content::approved_by` for the
-  frozen text; publishing calls `approvals::gate`. Approving checks with
-  the room first (`Hub::check_approval`), then writes, then
-  `Hub::approved`. Web: `features/draft/review.ts`, `ReviewControl` in the
-  editor bar, `useApprovalGate` in the publish dialog.
+  frozen text; publishing calls `approvals::gate`, whose `Freeze` goes to
+  `versions::store` (`NewVersion::approvals`), which checks it again under
+  the draft row lock and keeps it (`version_approvals` + an audit event).
+  Approving checks with the room first (`Hub::check_approval`), then
+  writes (draft row locked, open only), then `Hub::approved`. Web:
+  `features/draft/review.ts`, `ReviewControl` in the editor bar,
+  `useApprovalGate` in the publish dialog.
+- **Imports and removed versions**: `imports::plan` matches removed (and
+  purged, `purged_migrations`) imported migrations as `Removed`: skipped,
+  no order on new ones; `Planned::replayed_history` still replays removed
+  ones whose SQL is kept.
 
 ## Drafts and the collab server (`drafts`, `collab`)
 

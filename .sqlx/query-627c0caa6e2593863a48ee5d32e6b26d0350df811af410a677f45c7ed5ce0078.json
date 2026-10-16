@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE drafts SET editors_unknown = true WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "627c0caa6e2593863a48ee5d32e6b26d0350df811af410a677f45c7ed5ce0078"
+}

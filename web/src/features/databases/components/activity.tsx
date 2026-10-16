@@ -2,7 +2,9 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 
 import {
   ActivityIcon,
+  CheckCircleIcon,
   EyeClosedIcon,
+  SettingsIcon,
   ShieldCheckIcon,
   TrashIcon,
   UndoIcon,
@@ -13,6 +15,8 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, timeAgo } from "@/lib/time";
+
+import { names } from "@/features/draft/review";
 
 import { activityQuery, type AuditEvent } from "../queries";
 
@@ -29,7 +33,8 @@ export function Activity({ org, db }: { org: string; db: string }) {
         <div className="grid gap-0.5">
           <CardTitle>Activity</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Removed and restored versions, and drafts published without their approvals.
+            Removed and restored versions, drafts published and who approved them, and the approvals
+            publishing needs.
           </p>
         </div>
       </CardHeader>
@@ -68,7 +73,7 @@ export function Activity({ org, db }: { org: string; db: string }) {
           className="py-8"
           icon={<ActivityIcon />}
           title="Nothing to account for yet"
-          description="Removing a version, restoring one, or publishing a draft without its approvals is recorded here."
+          description="Removing or restoring a version, publishing a draft that needed approvals, and changing how many it needs are recorded here."
         />
       ) : (
         <>
@@ -99,8 +104,14 @@ const icons = {
   version_removed: EyeClosedIcon,
   version_restored: UndoIcon,
   version_purged: TrashIcon,
+  version_published: CheckCircleIcon,
   approvals_overridden: ShieldCheckIcon,
+  approvals_required_changed: SettingsIcon,
 } as const;
+
+function approvalsCount(n: number | null | undefined): string {
+  return n === 0 ? "none" : n === 1 ? "1 approval" : `${n ?? "?"} approvals`;
+}
 
 /** The event as a sentence: who did what to which version. */
 function sentence(event: AuditEvent): string {
@@ -114,8 +125,12 @@ function sentence(event: AuditEvent): string {
       return `${who} restored ${v}`;
     case "version_purged":
       return `${v} was deleted for good, 30 days after its removal`;
+    case "version_published":
+      return `${who} published ${v} with ${approvalsCount(details.approvals)} (${details.required ?? "?"} required)`;
     case "approvals_overridden":
       return `${who} published ${v} without its approvals (${details.approvals ?? 0} of ${details.required ?? "?"})`;
+    case "approvals_required_changed":
+      return `${who} changed the approvals publishing needs: ${approvalsCount(details.from)} → ${approvalsCount(details.to)}`;
   }
 }
 
@@ -130,6 +145,12 @@ function Event({ event }: { event: AuditEvent }) {
         {(details.message || details.draft_name) && (
           <p className="truncate text-sm text-muted-foreground">
             {details.draft_name ? `From the draft “${details.draft_name}”` : details.message}
+          </p>
+        )}
+        {details.approved_by && details.approved_by.length > 0 && (
+          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+            <CheckCircleIcon aria-hidden className="size-3.5 shrink-0 text-success" />
+            Approved by {names(details.approved_by)}
           </p>
         )}
         {event.reason && <p className="text-sm text-foreground">“{event.reason}”</p>}

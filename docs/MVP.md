@@ -542,9 +542,12 @@ Two features, built in this order:
    Built (task R1-GOV): the version row stays while removed (`removed_at`, `removed_by`,
    `removal_reason`: the one change the immutability trigger allows) and every read of
    versions is of live ones: the latest version (a push's "unchanged", a new draft's start,
-   the database page), the history, diffs, migrations, the machine API. Imports do not see
-   a removed version: removing what an import created and importing again creates it
-   again (a restore is then refused, `migration_imported_again`). Numbers come from
+   the database page), the history, diffs, migrations, the machine API. An imported version
+   removed is removed on purpose: later imports of the same files skip its migration
+   ("removed in romulus", even once purged: `purged_migrations` remembers it), it puts no
+   order on new migrations, and it still replays (the database ran it) while its SQL is
+   kept. An import whose latest version is removed or restored meanwhile is refused (import
+   again). Numbers come from
    `databases.last_version_number`, so a removed or purged version's number is never given
    again; the history skips the gap. The purge (hourly) deletes versions removed more than
    30 days ago, with the drafts published as them; one an open draft is still based on
@@ -552,8 +555,11 @@ Two features, built in this order:
    draft whose base was removed is stale: "Update draft" merges the latest version left
    into it, from the removed version's text; with no version left it keeps its text,
    relative to nothing. Removals, restores and purges are **audit events**
-   (`audit_events`, append only, written in the transaction of what they record), listed
-   with the approvals overridden in the database's settings ("Activity", developers).
+   (`audit_events`, append only, no truncate, written in the transaction of what they
+   record, the actor's name kept as it was), listed in the database's settings
+   ("Activity", developers) with the publishes of drafts that needed approvals and the
+   organization's changes of how many. Reverting the migration is refused while removed or
+   purged versions exist (it would bring them back, or give a purged number again).
 4. **Approvals** (org setting, N = 0 disables): publishing a draft needs N approvals from
    members other than the draft's editors (developers and reviewers may approve; reviewers
    gain an Approve button, nothing else). Any edit after an approval resets approvals. CI
@@ -564,10 +570,16 @@ Two features, built in this order:
    the text they approved). An editor is whoever sent an update that changed the SQL
    (moving tables does not count; a server rewrite, Tidy or "Update draft", resets
    approvals but makes nobody an editor), recorded by the collab room, which is the
-   authority: publishing asks it who approved the frozen text. N is 0 to 10. Admins
-   publish without the approvals by giving a reason, stored with the version in one
-   transaction. "Request review" is a state the drafts list shows (no notification yet);
-   approvals can be withdrawn.
+   authority: publishing asks it who approved the frozen text. N is 0 to 10, and each change
+   is an audit event (from, to, who). Admins publish without the approvals by giving a
+   reason. Publishing freezes the approvals: checked again in the transaction storing the
+   version, the draft row locked (withdrawn meanwhile, or its author gone from the
+   organization: refused), kept with the version (`version_approvals`, immutable) and in
+   the audit log (never purged); approving and withdrawing lock the draft row and only
+   change an open draft's approvals. Drafts open before editors were recorded
+   (`editors_unknown`) are approved by reviewers only, who never could edit. "Request
+   review" is a state the drafts list shows (no notification yet); approvals can be
+   withdrawn while the draft is open.
 5. **Groups**: a better editing UX (create from selection, rename inline, color, add/remove
    tables by drag or menu, delete), and dragging a group moves all its tables (one Yjs
    transaction, one undo step).

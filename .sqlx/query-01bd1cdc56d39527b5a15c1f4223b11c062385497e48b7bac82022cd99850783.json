@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM version_approvals",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "01bd1cdc56d39527b5a15c1f4223b11c062385497e48b7bac82022cd99850783"
+}

@@ -7,7 +7,7 @@ import type { Role } from "@/features/orgs/queries";
 
 import type { ServerEvent } from "./queries";
 
-export type Review = Omit<Extract<ServerEvent, { type: "review" }>, "type">;
+export type Review = Required<Omit<Extract<ServerEvent, { type: "review" }>, "type">>;
 export type ReviewApproval = components["schemas"]["ReviewApproval"];
 
 /** Approvals are asked for at all (the organization's setting). */
@@ -25,10 +25,13 @@ export function standing(
   review: Review,
   meId: string,
   role: Role | null,
-): "approved" | "can_approve" | "editor" | "none" {
+): "approved" | "can_approve" | "editor" | "unknown" | "none" {
   if (review.editors.includes(meId)) return "editor";
   if (review.approvals.some((a) => a.user_id === meId)) return "approved";
-  return role ? "can_approve" : "none";
+  if (!role) return "none";
+  // Edited before romulus recorded editors: developers and admins may have.
+  if (review.editors_unknown && role !== "reviewer") return "unknown";
+  return "can_approve";
 }
 
 /** "1 of 2 approvals", "2 of 2 approvals". */

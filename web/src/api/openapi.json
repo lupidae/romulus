@@ -1831,7 +1831,7 @@
             }
           },
           "403": {
-            "description": "`edited_draft`: they edited it, someone else approves",
+            "description": "`edited_draft`: they edited it, someone else approves; `editors_unknown`: a developer or admin, on a draft whose editors are unknown",
             "content": {
               "application/json": {
                 "schema": {
@@ -1915,6 +1915,16 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_published`: its approvals are the version's now",
             "content": {
               "application/json": {
                 "schema": {
@@ -3716,7 +3726,7 @@
             }
           },
           "409": {
-            "description": "`version_not_removed`, `restore_expired` (removed more than 30 days ago), `migration_imported_again` (its migration was imported again since)",
+            "description": "`version_not_removed`, `restore_expired` (removed more than 30 days ago)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4395,8 +4405,55 @@
           "version_removed",
           "version_restored",
           "version_purged",
-          "approvals_overridden"
+          "version_published",
+          "approvals_overridden",
+          "approvals_required_changed"
         ]
+      },
+      "AuditActor": {
+        "type": "object",
+        "description": "Who did something: their name now, or as it was once their account is\ngone.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once their account is gone."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditApprover": {
+        "type": "object",
+        "description": "One approval, as it was when the draft was published.",
+        "required": [
+          "name",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once their account is gone."
+          }
+        }
       },
       "AuditDetails": {
         "type": "object",
@@ -4409,6 +4466,16 @@
             ],
             "format": "int32",
             "description": "The approvals it had, and how many the organization required."
+          },
+          "approved_by": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AuditApprover"
+            },
+            "description": "Who approved the text published, when."
           },
           "draft_id": {
             "type": [
@@ -4424,6 +4491,14 @@
               "null"
             ]
           },
+          "from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The approvals required before and after a change."
+          },
           "message": {
             "type": [
               "string",
@@ -4432,6 +4507,13 @@
             "description": "The version's message (versions removed, restored, purged)."
           },
           "required": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "to": {
             "type": [
               "integer",
               "null"
@@ -4456,8 +4538,8 @@
           "actor": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/Person",
-                "description": "Who did it; `null` for what romulus did itself (the purge), or once\ntheir account is gone."
+                "$ref": "#/components/schemas/AuditActor",
+                "description": "Who did it; `null` for what romulus did itself (the purge)."
               },
               {
                 "type": "null"
@@ -7260,7 +7342,8 @@
           "new",
           "imported",
           "changed",
-          "out_of_order"
+          "out_of_order",
+          "removed"
         ]
       },
       "MigrationTool": {
@@ -7609,7 +7692,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "The version it became, when imported already."
+            "description": "The version it became, when imported already (or removed since)."
           }
         }
       },
@@ -8480,6 +8563,7 @@
               "approvals",
               "outdated",
               "editors",
+              "editors_unknown",
               "type"
             ],
             "properties": {
@@ -8497,6 +8581,10 @@
                   "format": "uuid"
                 },
                 "description": "Who changed the SQL: they cannot approve it."
+              },
+              "editors_unknown": {
+                "type": "boolean",
+                "description": "Edited before romulus recorded editors: only reviewers (who never\ncould edit) may approve it."
               },
               "outdated": {
                 "type": "array",
@@ -9021,6 +9109,31 @@
           }
         }
       },
+      "VersionApproval": {
+        "type": "object",
+        "description": "An approval of the draft a version was published from, as it was then.",
+        "required": [
+          "name",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once their account is gone."
+          }
+        }
+      },
       "VersionDetail": {
         "type": "object",
         "description": "One version, whole.",
@@ -9032,9 +9145,17 @@
           "created_at",
           "model",
           "source",
-          "layout"
+          "layout",
+          "approvals"
         ],
         "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VersionApproval"
+            },
+            "description": "Who approved the draft it was published from, when the organization\nrequired approvals (`drafts::approvals::freeze`); oldest first."
+          },
           "author": {
             "oneOf": [
               {

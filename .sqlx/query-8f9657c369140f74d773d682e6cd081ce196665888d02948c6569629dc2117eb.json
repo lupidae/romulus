@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT e.id, e.action AS \"action: AuditAction\", e.version_number, e.reason, e.details,\n                  e.created_at, u.id AS \"actor_id?\", u.name AS \"actor_name?\"\n           FROM audit_events e\n           LEFT JOIN users u ON u.id = e.actor_id\n           WHERE e.database_id = $1 AND ($2::uuid IS NULL OR e.id < $2)\n           ORDER BY e.id DESC LIMIT $3",
+  "query": "SELECT e.id, e.action AS \"action: AuditAction\", e.version_number, e.reason, e.details,\n                  e.created_at, u.id AS \"actor_id?\", coalesce(u.name, e.actor_name) AS actor_name\n           FROM audit_events e\n           LEFT JOIN users u ON u.id = e.actor_id\n           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.org_id = $4))\n             AND ($2::uuid IS NULL OR e.id < $2)\n           ORDER BY e.id DESC LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -25,7 +25,9 @@
                 "version_removed",
                 "version_restored",
                 "version_purged",
-                "approvals_overridden"
+                "version_published",
+                "approvals_overridden",
+                "approvals_required_changed"
               ]
             }
           }
@@ -94,21 +96,17 @@
       },
       {
         "ordinal": 7,
-        "name": "actor_name?",
+        "name": "actor_name",
         "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "users",
-            "name": "name"
-          }
-        }
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
         "Uuid",
-        "Int8"
+        "Int8",
+        "Uuid"
       ]
     },
     "nullable": [
@@ -119,8 +117,8 @@
       false,
       false,
       false,
-      false
+      null
     ]
   },
-  "hash": "5c06c9f33c9b11c6edd33f306e74893cc4393c7060d9251b3143e407e7986efb"
+  "hash": "8f9657c369140f74d773d682e6cd081ce196665888d02948c6569629dc2117eb"
 }

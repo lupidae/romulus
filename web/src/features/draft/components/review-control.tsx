@@ -196,6 +196,11 @@ function ReviewPopover({
               You edited the SQL: someone else approves it.
             </p>
           )}
+          {mine === "unknown" && (
+            <p className="mr-auto text-sm text-muted-foreground">
+              This draft was edited before romulus recorded who edits: a reviewer approves it.
+            </p>
+          )}
           {mine === "approved" && (
             <>
               <p className="mr-auto flex items-center gap-1.5 text-sm text-success">
