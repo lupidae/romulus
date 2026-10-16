@@ -272,3 +272,155 @@ async fn blocking<T: Send + 'static>(
         .await
         .map_err(ApiError::internal)
 }
+
+/// One version of an import, about to be stored.
+pub struct ImportedVersion {
+    /// Canonical, with its `database` set.
+    pub model: Schema,
+    /// The migration's up SQL.
+    pub source: String,
+    /// The file (or folder) name.
+    pub message: String,
+    pub migration_id: String,
+    pub path: String,
+    /// sha256 of `source`.
+    pub checksum: Vec<u8>,
+    /// What was not replayed (`imports::SkippedStatement[]`).
+    pub skipped: serde_json::Value,
+}
+
+/// An import's versions, stored together or not at all.
+pub struct NewImport {
+    pub database_id: Uuid,
+    pub format: crate::domain::MigrationFormat,
+    pub created_by: Option<Uuid>,
+    pub created_by_token: Option<Uuid>,
+    /// Versions that were not imported may precede these.
+    pub append: bool,
+    /// How many migrations the database had imported when the import was
+    /// planned: another import storing meanwhile makes this one stale.
+    pub imported_before: usize,
+    pub versions: Vec<ImportedVersion>,
+}
+
+/// Stores an import's versions in one transaction, numbered after the
+/// latest version under the same lock as [`store`], each inheriting the
+/// previous one's layout (pruned to its model). Refuses with 409
+/// `concurrent_import` when another import stored migrations since this one
+/// was planned, and `has_versions` when versions that were not imported
+/// exist and `append` is false. Returns each version's (id, number).
+pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)>, StoreError> {
+    let database_id = new.database_id;
+    let NewImport {
+        format,
+        created_by,
+        created_by_token,
+        append,
+        imported_before,
+        versions,
+        ..
+    } = new;
+    // Serialising hundreds of models: off the async workers, before the lock.
+    let versions = blocking(move || {
+        versions
+            .into_iter()
+            .map(|v| {
+                let json = serde_json::to_value(&v.model).map_err(ApiError::internal)?;
+                Ok::<_, ApiError>((v, json))
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await??;
+
+    let mut tx = db.begin().await?;
+    sqlx::query_scalar!(
+        "SELECT id FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
+        database_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(no_such_database)?;
+    let imported = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!" FROM version_migrations WHERE database_id = $1"#,
+        database_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if usize::try_from(imported).unwrap_or(usize::MAX) != imported_before {
+        return Err(StoreError::Api(ApiError::Conflict {
+            code: "concurrent_import",
+            message: "Another import of this database finished meanwhile. Import again: what it added is skipped."
+                .into(),
+        }));
+    }
+    if !append {
+        let others = sqlx::query_scalar!(
+            r#"SELECT EXISTS (SELECT 1 FROM versions WHERE database_id = $1 AND origin <> 'import') AS "exists!""#,
+            database_id,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if others {
+            return Err(StoreError::Api(ApiError::Conflict {
+                code: "has_versions",
+                message: "This database has versions that were not imported. Import with append=true to add the migrations after them."
+                    .into(),
+            }));
+        }
+    }
+    let latest = latest(&mut *tx, database_id).await?;
+    let mut number = latest.as_ref().map_or(0, |l| l.number);
+    let mut layout = latest
+        .map(|l| VersionLayout::from_value(&l.layout))
+        .unwrap_or_default();
+
+    let mut stored = Vec::with_capacity(versions.len());
+    for (version, model) in versions {
+        number += 1;
+        layout = layout.pruned(&version.model);
+        let layout_json = serde_json::to_value(&layout).map_err(ApiError::internal)?;
+        let message: String = version.message.chars().take(1000).collect();
+        let id = sqlx::query_scalar!(
+            "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,
+                                   message, created_by, created_by_token)
+             VALUES ($1, $2, $3, $4, 'migration', 'import', $5, $6, $7, $8) RETURNING id",
+            database_id,
+            number,
+            model,
+            version.source,
+            layout_json,
+            message.trim(),
+            created_by,
+            created_by_token,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let inserted = sqlx::query!(
+            "INSERT INTO version_migrations (version_id, database_id, migration_id, path, format, checksum, skipped)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            id,
+            database_id,
+            version.migration_id,
+            version.path,
+            format as crate::domain::MigrationFormat,
+            version.checksum,
+            version.skipped,
+        )
+        .execute(&mut *tx)
+        .await;
+        if let Err(err) = inserted {
+            if crate::db::is_unique_violation(&err) {
+                return Err(StoreError::Api(ApiError::Conflict {
+                    code: "concurrent_import",
+                    message: "Another import of this database stored these migrations meanwhile."
+                        .into(),
+                }));
+            }
+            return Err(err.into());
+        }
+        stored.push((id, number));
+    }
+    tx.commit().await?;
+    tracing::info!(database = %database_id, versions = stored.len(), last = number, "migrations imported");
+    Ok(stored)
+}

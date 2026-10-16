@@ -57,7 +57,7 @@ use crate::{
     auth::{Member, min},
     compile::{self, Diagnostic, SqlCompiler},
     databases,
-    domain::{SourceKind, VersionOrigin},
+    domain::{MigrationFormat, SourceKind, VersionOrigin},
     error::ErrorBody,
     extract::{Json, Path, Query},
     orgs::invalid,
@@ -126,11 +126,27 @@ pub struct VersionDetail {
     /// The remus model (`remus_core::Schema` as JSON), canonical.
     #[schema(value_type = Object)]
     pub model: serde_json::Value,
-    /// What was uploaded or pushed, verbatim: SQL, or remus JSON.
+    /// What was uploaded or pushed, verbatim: SQL, remus JSON, or the
+    /// migration's up SQL for imports.
     pub source: String,
     /// Table positions and groups, keyed by qualified name (empty until a
     /// draft arranges them).
     pub layout: VersionLayout,
+    /// The migration file it was imported from (origin `import` only).
+    pub migration: Option<VersionMigration>,
+}
+
+/// The migration an imported version came from.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct VersionMigration {
+    /// The tool's version of it, or its path for plain folders.
+    pub id: String,
+    /// The file, relative to the folder imported.
+    pub path: String,
+    pub format: MigrationFormat,
+    /// What was not replayed (`SkippedStatement[]`, lines in `path`).
+    #[schema(value_type = Vec<crate::imports::SkippedStatement>)]
+    pub skipped: serde_json::Value,
 }
 
 /// A version's model in every format the viewer shows.
@@ -278,10 +294,13 @@ pub(crate) async fn detail(
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
                   v.model, v.source, v.layout,
-                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?"
+                  u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
+                  m.migration_id AS "migration_id?", m.path AS "migration_path?",
+                  m.format AS "migration_format?: MigrationFormat", m.skipped AS "migration_skipped?"
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
+           LEFT JOIN version_migrations m ON m.version_id = v.id
            WHERE v.database_id = $1 AND ($2::int IS NULL OR v.number = $2)
            ORDER BY v.number DESC LIMIT 1"#,
         database_id,
@@ -304,6 +323,15 @@ pub(crate) async fn detail(
         model: row.model,
         source: row.source,
         layout: VersionLayout::from_value(&row.layout),
+        migration: match (row.migration_id, row.migration_path, row.migration_format) {
+            (Some(id), Some(path), Some(format)) => Some(VersionMigration {
+                id,
+                path,
+                format,
+                skipped: row.migration_skipped.unwrap_or_default(),
+            }),
+            _ => None,
+        },
     })
 }
 
@@ -506,7 +534,7 @@ async fn check(
 }
 
 /// A model with nothing in it: what a first version is compared with.
-fn empty(like: &Schema) -> Schema {
+pub(crate) fn empty(like: &Schema) -> Schema {
     let mut empty = like.clone();
     empty.entities.clear();
     empty.enums.clear();

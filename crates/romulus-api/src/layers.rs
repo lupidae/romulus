@@ -61,7 +61,11 @@ pub(crate) fn with_limits(router: Router, body_limit: usize, timeout: Duration) 
 
 /// The request timeout: a 503 `timeout` past it. Imports get
 /// [`IMPORT_TIMEOUT`].
-async fn deadline(State(timeout): State<Duration>, request: Request<axum::body::Body>, next: Next) -> Response {
+async fn deadline(
+    State(timeout): State<Duration>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
     let import = request.method() == Method::POST && request.uri().path().ends_with("/imports");
     let limit = if import {
         timeout.max(IMPORT_TIMEOUT)
@@ -151,7 +155,7 @@ fn panic_response(panic: &(dyn Any + Send)) -> Response {
 mod tests {
     use axum::{
         body::Body,
-        http::{Method, Request},
+        http::{Method, Request, StatusCode},
         routing::{get, post},
     };
     use serde::Deserialize;

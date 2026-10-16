@@ -29,7 +29,9 @@ use std::{
 };
 
 use remus_core::emit::DiagramOptions;
-pub use romulus_sandbox::{Code, Diagnostic, LineIndex, Position, Severity, Span};
+pub use romulus_sandbox::{
+    Code, Diagnostic, LineIndex, Position, Replay, ReplayEvent, ReplayFailure, Severity, Span,
+};
 use romulus_sandbox::{Compiler, SandboxConfig, SandboxError};
 use utoipa_axum::router::OpenApiRouter;
 
@@ -205,6 +207,50 @@ impl SqlCompiler {
         }
     }
 
+    /// A migration import's replay (`romulus_sandbox::Compiler::replay`):
+    /// the migrations from an empty database, a model after each one from
+    /// `from` on, sent through `on_event`. Without a sandbox (tests), the
+    /// function compiles each migration's replayed text alone (its errors)
+    /// and the texts so far joined (the model).
+    pub async fn replay(
+        &self,
+        migrations: Vec<String>,
+        from: usize,
+        mut on_event: impl FnMut(ReplayEvent) + Send + 'static,
+    ) -> ApiResult<Replay> {
+        match &self.0 {
+            Backend::None => Err(unavailable()),
+            Backend::Sandbox(sandbox) => {
+                let compiler = sandbox.ready.get().ok_or_else(|| {
+                    ApiError::Unavailable(
+                        "The SQL compiler is starting. Try again in a moment.".into(),
+                    )
+                })?;
+                compiler
+                    .replay(migrations, from, on_event)
+                    .await
+                    .map_err(|err| {
+                        tracing::warn!(error = %Chain(&err), "sandbox import replay failed");
+                        match err {
+                            SandboxError::Busy(_) => ApiError::Unavailable(
+                                "The SQL compiler is busy with another import. Try again in a minute."
+                                    .into(),
+                            ),
+                            _ => unavailable(),
+                        }
+                    })
+            }
+            Backend::Function(compile) => {
+                let compile = Arc::clone(compile);
+                tokio::task::spawn_blocking(move || {
+                    replay_with(&*compile, &migrations, from, &mut on_event)
+                })
+                .await
+                .map_err(ApiError::internal)
+            }
+        }
+    }
+
     /// For `/api/health`: whether compiles can run now, asked of the
     /// sandbox at most every [`HEALTH_TTL`]. A sandbox compiler that lost
     /// its prefix to another process (`PrefixInUse`) has stopped compiling
@@ -245,6 +291,58 @@ impl SqlCompiler {
         {
             compiler.close().await;
         }
+    }
+}
+
+/// [`SqlCompiler::replay`] with a function for a compiler (tests).
+fn replay_with(
+    compile: &CompileFn,
+    migrations: &[String],
+    from: usize,
+    on_event: &mut (dyn FnMut(ReplayEvent) + Send),
+) -> Replay {
+    let analyses: Vec<_> = migrations
+        .iter()
+        .map(|m| romulus_sandbox::import::analyze(m))
+        .collect();
+    let skipped: Vec<_> = analyses.iter().map(|a| a.skipped.clone()).collect();
+    let failed = |index: usize, diagnostics: Vec<Diagnostic>| Replay {
+        skipped: skipped.clone(),
+        notes: vec![Vec::new(); migrations.len()],
+        stubs: Vec::new(),
+        failure: Some(ReplayFailure { index, diagnostics }),
+        duration_ms: 0,
+    };
+    let mut models = Vec::new();
+    for (k, analysis) in analyses.iter().enumerate() {
+        if !analysis.errors.is_empty() {
+            return failed(k, analysis.errors.clone());
+        }
+        let alone = compile(&analysis.sql);
+        if alone.model.is_none() && !analysis.sql.trim().is_empty() {
+            return failed(k, alone.diagnostics);
+        }
+        if k >= from {
+            let so_far: Vec<&str> = analyses[..=k].iter().map(|a| a.sql.as_str()).collect();
+            let Some(model) = compile(&so_far.join("\n;\n")).model else {
+                return failed(k, Vec::new());
+            };
+            models.push((k, model.canonical()));
+        }
+    }
+    on_event(ReplayEvent::Checked);
+    for (index, model) in models {
+        on_event(ReplayEvent::Replayed {
+            index,
+            model: Box::new(model),
+        });
+    }
+    Replay {
+        notes: vec![Vec::new(); migrations.len()],
+        skipped,
+        stubs: Vec::new(),
+        failure: None,
+        duration_ms: 0,
     }
 }
 

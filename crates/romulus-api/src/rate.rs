@@ -90,6 +90,9 @@ pub struct Limits {
     /// SQL compiles per database, whoever asks (people, and every API token
     /// of it, which cost nothing to create).
     pub database_compiles: Limiter<Uuid>,
+    /// Migration imports per database: each replays a whole history in
+    /// the sandbox.
+    pub imports: Limiter<Uuid>,
 }
 
 impl Default for Limits {
@@ -98,6 +101,7 @@ impl Default for Limits {
             push: Limiter::new(20, Duration::from_secs(3)),
             compile: Limiter::new(30, Duration::from_secs(2)),
             database_compiles: Limiter::new(60, Duration::from_secs(1)),
+            imports: Limiter::new(6, Duration::from_secs(30)),
         }
     }
 }

@@ -355,9 +355,9 @@ mod tests {
             kept.replace_range(range.clone(), "");
         }
         assert_eq!(kept, format!("A;\n\n{m}\nX;\nY;\nZ;\n"));
-        assert_eq!(extra_markers(&format!("A;\n\n{m}\nX;\n")), []);
+        assert!(extra_markers(&format!("A;\n\n{m}\nX;\n")).is_empty());
         // Only whole lines count.
-        assert_eq!(extra_markers(&format!("{m}\n-- not {m}\n")), []);
+        assert!(extra_markers(&format!("{m}\n-- not {m}\n")).is_empty());
     }
 
     #[test]

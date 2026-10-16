@@ -13,7 +13,7 @@ use crate::{db, extract::Json};
 ///
 /// `code` is stable and machine-readable (the web app switches on it);
 /// `message` is for people and may change.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ErrorBody {
     /// e.g. `not_found`, `validation`, `csrf`, `last_admin`.
     pub code: String,
@@ -202,26 +202,34 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let status = self.status();
-        let details = match &self {
+impl ApiError {
+    /// The JSON body this error answers with, for an error carried inside
+    /// another answer (an import's progress stream, a preview's problem).
+    pub fn body(&self) -> ErrorBody {
+        let details = match self {
             Self::Validation { details, .. } | Self::Unprocessable { details, .. } => {
                 details.clone()
             }
             _ => None,
         };
-        let message = if let Self::Internal(cause) = &self {
+        let message = if let Self::Internal(cause) = self {
             tracing::error!(error = %Chain(cause.as_ref()), "internal error");
             "Something went wrong on our side.".to_owned()
         } else {
             self.to_string()
         };
-        let body = ErrorBody {
+        ErrorBody {
             code: self.code().to_owned(),
             message,
             details,
-        };
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = self.status();
+        let body = self.body();
         let mut response = (status, Json(body)).into_response();
         if let Self::RateLimited { retry_after } = &self {
             let seconds = whole_seconds(*retry_after);

@@ -510,7 +510,13 @@ impl Compiler {
         let inner = Arc::clone(&self.inner);
         tokio::spawn(async move {
             let closed = || SandboxError::Unavailable("the compiler is closed".into());
-            let _import = inner.imports.acquire().await.map_err(|_| closed())?;
+            // Another import may hold the sandbox for minutes: wait as for
+            // a pool database, then say it is busy.
+            let wait = inner.config.acquire_timeout;
+            let _import = tokio::time::timeout(wait, inner.imports.acquire())
+                .await
+                .map_err(|_| SandboxError::Busy(wait))?
+                .map_err(|_| closed())?;
             let _upload = inner.uploads.acquire().await.map_err(|_| closed())?;
             inner.replay(migrations, from, &mut on_event).await
         })
