@@ -456,7 +456,9 @@ function GraphCanvas({
     );
   }, [graph, schemaColors, diff, canEdit]);
 
-  const nodeCache = useRef(new Map<string, TableFlowNode>());
+  const nodeCache = useRef({ graph, nodes: new Map<string, TableFlowNode>() });
+  // A new model makes every entry miss (new `data`): start over with it.
+  if (nodeCache.current.graph !== graph) nodeCache.current = { graph, nodes: new Map() };
   const nodes = useMemo(() => {
     const out: (TableFlowNode | GroupFlowNode | AreaLabelFlowNode)[] = [];
     const sizes = new Map<string, { width: number; height: number }>();
@@ -470,7 +472,7 @@ function GraphCanvas({
       const zIndex = nodeState[table.key]?.partitions || nodeState[table.key]?.allColumns ? 2 : 1;
       // A table that did not change keeps its node object: React Flow then
       // skips it, so a drag frame costs the tables it moves, not all 300.
-      const kept = nodeCache.current.get(table.key);
+      const kept = nodeCache.current.nodes.get(table.key);
       if (
         kept &&
         kept.position.x === position.x &&
@@ -502,7 +504,7 @@ function GraphCanvas({
         // Unfolded partitions overlap what is below: draw them on top.
         zIndex,
       };
-      nodeCache.current.set(table.key, node);
+      nodeCache.current.nodes.set(table.key, node);
       tables.push(node);
     }
     // Groups behind their tables, sized to the members placed so far. Without
@@ -670,7 +672,7 @@ function GraphCanvas({
     lastRouted.current = { graph, nodeState, rects: routedRects, routes };
     return routes;
   }, [graph, routedRects, nodeState]);
-  const edgeCache = useRef(new Map<string, RelationFlowEdge>());
+  const edgeCache = useRef({ graph, edges: new Map<string, RelationFlowEdge>() });
   const routeReuse = useRef(
     new Map<
       string,
@@ -710,6 +712,10 @@ function GraphCanvas({
     // Routes made for this frame are kept for the next: the frame of a drop
     // draws what the last drag frame drew, with the same objects (nothing
     // re-renders). Around their ends only, a route depends on its two boxes.
+    if (edgeCache.current.graph !== graph) {
+      edgeCache.current = { graph, edges: new Map() };
+      routeReuse.current.clear();
+    }
     const reuse = routeReuse.current;
     const ends = touched.length > FULL_ROUTES_WHILE_DRAGGING;
     const boxKey = (r: Rect | undefined) => (r ? `${r.x},${r.y},${r.width},${r.height}` : "");
@@ -750,7 +756,7 @@ function GraphCanvas({
         const route = routeOf(e);
         if (!route) return null;
         // Unchanged, the same object: React Flow skips the edge.
-        const kept = edgeCache.current.get(e.id);
+        const kept = edgeCache.current.edges.get(e.id);
         if (kept?.data?.route === route && kept.data.model === e) return kept;
         const edge: RelationFlowEdge = {
           id: e.id,
@@ -762,7 +768,7 @@ function GraphCanvas({
           focusable: false,
           zIndex: 1,
         };
-        edgeCache.current.set(e.id, edge);
+        edgeCache.current.edges.set(e.id, edge);
         return edge;
       })
       .filter((e) => e !== null);

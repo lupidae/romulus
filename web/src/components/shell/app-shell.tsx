@@ -163,7 +163,7 @@ export function AppShell({
                 aria-controls="primary-nav"
                 aria-expanded={!collapsed}
                 onClick={() => setCollapsed(!collapsed)}
-                className="text-muted-foreground"
+                className="text-muted-foreground pointer-coarse:size-11"
               >
                 {collapsed ? <SidebarExpandIcon /> : <SidebarCollapseIcon />}
               </Button>

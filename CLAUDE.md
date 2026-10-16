@@ -321,10 +321,12 @@ src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field
                          (SelectItem `description`), Dialog, ConfirmDialog, Popover, Sheet, Menu,
                          Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
                          EmptyState, Skeleton, Tooltip, Kbd, Alert, Card, Separator, Spinner,
-                         Sidebar*, TabNav (link tabs, one URL each), CodeBlock (copyable
+                         Sidebar* (items take `icon`/`label`; a rail inside SidebarRail),
+                         TabNav (link tabs, one URL each), CodeBlock (copyable
                          lines), FileButton (opens the file picker), Checkbox, Combobox
                          (a field with suggestions: ARIA combobox, the field keeps focus)
-src/components/shell/    AppShell (top bar, org switcher, user menu, nav, panel), PageHeader,
+src/components/shell/    AppShell (top bar, org switcher, user menu, nav: a rail by default,
+                         opened with ⌘\, remembered per user; panel), PageHeader,
                          PageBody, status pages (404/500), the sign-in preview
 src/components/icons/    Iconoir only, generated: `npm --prefix web run icons:add -- <name>`
 src/features/<module>/   per-feature code: queries (queryOptions), mutations, components
@@ -596,6 +598,23 @@ side (list with presence, one-click create, rename, soft delete, publish).
   edit wrote (`showGraphEdit`). Every statement kind is snapshot-tested, and
   `romulus-sandbox/tests/graph_edits.rs` checks the snapshots parse and pass
   the allowlist: change a statement, run vitest with `-u`, both follow.
+- **Groups on the graph** (docs/MVP.md "Review round 1", item 5): layout, not
+  schema, but handed out the same way: `editor.groups` (`GroupEditor`, built
+  in `useGraphEdits` over `DraftSession.createGroup/updateGroup/deleteGroup/
+  assignGroup/placeTables`, each one `LOCAL` step between `stopCapturing`).
+  Pure geometry and membership in `graph/groups.ts` (frames follow their
+  tables; a table dropped in a frame joins it, outside the others' frame
+  leaves it; a group left empty goes). The UI is `graph/group-node.tsx` (the
+  label is the drag handle; zoomed out, the area label) and
+  `graph/editing/groups.tsx` (toolbar panel, pick bar, drop hint); G groups
+  the picked tables. A drag writes once, on drop: a group's tables in one
+  transaction. With `editor.groups` the graph keeps no post-drop override
+  (`dropped`): the write is synchronous and the next render reads it.
+  Smoothness at 300 tables (`e2e/perf/groups.perf.spec.ts`, dev editor
+  `?fixture=large&groups=schemas`): edges moving with both ends are shifted,
+  many edges leaving a drag are routed around their ends only, a drop routes
+  only `affectedEdges` a render later (deferred), unchanged node and edge
+  objects are reused.
 - **Tidy**: `POST …/drafts/{id}/tidy` [developer] renders the compiled model
   (`drafts::tidy::canonical_sql`: `render_sql` without remus's header),
   refuses text with errors (422 `compile_failed`) and a rewrite that compiles
