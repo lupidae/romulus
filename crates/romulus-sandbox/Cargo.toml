@@ -20,6 +20,8 @@ remus-sql.workspace = true
 # Pinned with the sandbox image: pg_query 6.2.1 bundles libpg_query built from
 # PostgreSQL 17.7, and deploy/sandbox runs PostgreSQL 17. Bump both together.
 pg_query = "=6.2.1"
+# Format: the tools migrations are generated for, their one list.
+romulus-migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10.9"

@@ -51,6 +51,18 @@ impl Format {
         Self::GolangMigrate,
     ];
 
+    /// The wire name, as serialized (`golang_migrate`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Sqlx => "sqlx",
+            Self::Flyway => "flyway",
+            Self::Prisma => "prisma",
+            Self::Dbmate => "dbmate",
+            Self::GolangMigrate => "golang_migrate",
+        }
+    }
+
     /// The tool's name as people write it.
     pub fn label(self) -> &'static str {
         match self {
@@ -728,7 +740,18 @@ fn add_seconds(timestamp: &str, seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{add_seconds, slug, wrap};
+    use super::{Format, add_seconds, slug, wrap};
+
+    #[test]
+    fn wire_names_are_the_serialized_ones() {
+        for format in Format::ALL {
+            assert_eq!(
+                serde_json::to_value(format).unwrap(),
+                format.as_str(),
+                "{format:?}"
+            );
+        }
+    }
 
     #[test]
     fn slugs_are_file_name_safe() {

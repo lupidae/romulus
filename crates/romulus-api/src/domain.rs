@@ -74,7 +74,9 @@ pub enum VersionOrigin {
 }
 
 /// The migration tool an imported version came from (`migration_format`):
-/// `romulus_sandbox::import::Format`, under the same wire names.
+/// `romulus_sandbox::import::Format` (whose tools are
+/// `romulus_migration::Format`'s), under the same wire names (a test keeps
+/// them in agreement).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "migration_format", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -93,36 +95,36 @@ pub enum MigrationFormat {
 
 impl From<romulus_sandbox::import::Format> for MigrationFormat {
     fn from(format: romulus_sandbox::import::Format) -> Self {
-        use romulus_sandbox::import::Format as F;
+        use romulus_sandbox::import::{Format as F, ReadOnly as R, Tool as T};
         match format {
-            F::Plain => Self::Plain,
-            F::Sqlx => Self::Sqlx,
-            F::Flyway => Self::Flyway,
-            F::Prisma => Self::Prisma,
-            F::Dbmate => Self::Dbmate,
-            F::GolangMigrate => Self::GolangMigrate,
-            F::NodePgMigrate => Self::NodePgMigrate,
-            F::Alembic => Self::Alembic,
-            F::Django => Self::Django,
-            F::Rails => Self::Rails,
+            F::Tool(T::Plain) => Self::Plain,
+            F::Tool(T::Sqlx) => Self::Sqlx,
+            F::Tool(T::Flyway) => Self::Flyway,
+            F::Tool(T::Prisma) => Self::Prisma,
+            F::Tool(T::Dbmate) => Self::Dbmate,
+            F::Tool(T::GolangMigrate) => Self::GolangMigrate,
+            F::Read(R::NodePgMigrate) => Self::NodePgMigrate,
+            F::Read(R::Alembic) => Self::Alembic,
+            F::Read(R::Django) => Self::Django,
+            F::Read(R::Rails) => Self::Rails,
         }
     }
 }
 
 impl From<MigrationFormat> for romulus_sandbox::import::Format {
     fn from(format: MigrationFormat) -> Self {
-        use romulus_sandbox::import::Format as F;
+        use romulus_sandbox::import::{Format as F, ReadOnly as R, Tool as T};
         match format {
-            MigrationFormat::Plain => F::Plain,
-            MigrationFormat::Sqlx => F::Sqlx,
-            MigrationFormat::Flyway => F::Flyway,
-            MigrationFormat::Prisma => F::Prisma,
-            MigrationFormat::Dbmate => F::Dbmate,
-            MigrationFormat::GolangMigrate => F::GolangMigrate,
-            MigrationFormat::NodePgMigrate => F::NodePgMigrate,
-            MigrationFormat::Alembic => F::Alembic,
-            MigrationFormat::Django => F::Django,
-            MigrationFormat::Rails => F::Rails,
+            MigrationFormat::Plain => F::Tool(T::Plain),
+            MigrationFormat::Sqlx => F::Tool(T::Sqlx),
+            MigrationFormat::Flyway => F::Tool(T::Flyway),
+            MigrationFormat::Prisma => F::Tool(T::Prisma),
+            MigrationFormat::Dbmate => F::Tool(T::Dbmate),
+            MigrationFormat::GolangMigrate => F::Tool(T::GolangMigrate),
+            MigrationFormat::NodePgMigrate => F::Read(R::NodePgMigrate),
+            MigrationFormat::Alembic => F::Read(R::Alembic),
+            MigrationFormat::Django => F::Read(R::Django),
+            MigrationFormat::Rails => F::Read(R::Rails),
         }
     }
 }
@@ -150,6 +152,17 @@ pub enum TokenScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_formats_keep_the_import_formats_wire_names() {
+        let formats: Vec<_> = romulus_sandbox::import::Format::all().collect();
+        assert_eq!(formats.len(), 10);
+        for format in formats {
+            let stored = MigrationFormat::from(format);
+            assert_eq!(serde_json::to_value(stored).unwrap(), format.as_str());
+            assert_eq!(romulus_sandbox::import::Format::from(stored), format);
+        }
+    }
 
     #[test]
     fn reviewers_read_only() {

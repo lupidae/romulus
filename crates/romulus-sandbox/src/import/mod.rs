@@ -18,6 +18,7 @@ mod plpgsql;
 pub mod statements;
 
 pub use files::{
-    Format, IgnoreReason, Ignored, Migration, Plan, PlanError, SourceFile, detect, normalize, plan,
+    Format, IgnoreReason, Ignored, Migration, Plan, PlanError, ReadOnly, SourceFile, Tool, detect,
+    normalize, plan,
 };
 pub use statements::{Analysis, SkipReason, Skipped, analyze};

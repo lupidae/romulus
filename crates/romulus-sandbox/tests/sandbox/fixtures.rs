@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use remus_core::Schema;
-use romulus_sandbox::import::{Format, IgnoreReason, SkipReason, SourceFile, plan};
+use romulus_sandbox::import::{Format, IgnoreReason, ReadOnly, SkipReason, SourceFile, Tool, plan};
 
 use crate::{import::replay, with_compiler};
 
@@ -168,12 +168,12 @@ fn every_file_based_format_imports_the_same_history() {
     with_compiler(|compiler| async move {
         let mut finals = Vec::new();
         for (name, format) in [
-            ("sqlx", Format::Sqlx),
-            ("golang_migrate", Format::GolangMigrate),
-            ("dbmate", Format::Dbmate),
-            ("node_pg_migrate", Format::NodePgMigrate),
-            ("flyway", Format::Flyway),
-            ("plain", Format::Plain),
+            ("sqlx", Format::Tool(Tool::Sqlx)),
+            ("golang_migrate", Format::Tool(Tool::GolangMigrate)),
+            ("dbmate", Format::Tool(Tool::Dbmate)),
+            ("node_pg_migrate", Format::Read(ReadOnly::NodePgMigrate)),
+            ("flyway", Format::Tool(Tool::Flyway)),
+            ("plain", Format::Tool(Tool::Plain)),
         ] {
             let imported = import(compiler, name, format).await;
             check_canonical(&imported, name);
@@ -189,11 +189,16 @@ fn every_file_based_format_imports_the_same_history() {
 #[test]
 fn file_names_are_the_messages_and_tool_files_are_left_out() {
     with_compiler(|compiler| async move {
-        let sqlx = import(compiler, "sqlx", Format::Sqlx).await;
+        let sqlx = import(compiler, "sqlx", Format::Tool(Tool::Sqlx)).await;
         assert_eq!(sqlx.names()[0], "20240105093000_init.sql");
         assert_eq!(sqlx.plan.migrations[0].id, "20240105093000");
 
-        let golang = import(compiler, "golang_migrate", Format::GolangMigrate).await;
+        let golang = import(
+            compiler,
+            "golang_migrate",
+            Format::Tool(Tool::GolangMigrate),
+        )
+        .await;
         assert_eq!(golang.names()[11], "000012_projects_archived_at.up.sql");
         assert_eq!(golang.plan.ignored.len(), 12, "the down files");
         assert!(
@@ -211,7 +216,7 @@ fn file_names_are_the_messages_and_tool_files_are_left_out() {
                 .any(|(_, kind, r)| *kind == "COMMIT" && *r == SkipReason::Transaction)
         );
 
-        let flyway = import(compiler, "flyway", Format::Flyway).await;
+        let flyway = import(compiler, "flyway", Format::Tool(Tool::Flyway)).await;
         let ids: Vec<&str> = flyway
             .plan
             .migrations
@@ -229,7 +234,7 @@ fn file_names_are_the_messages_and_tool_files_are_left_out() {
         assert!(reasons.contains(&IgnoreReason::Down));
         assert!(reasons.contains(&IgnoreReason::NotSql), "the .sql.conf");
 
-        let plain = import(compiler, "plain", Format::Plain).await;
+        let plain = import(compiler, "plain", Format::Tool(Tool::Plain)).await;
         assert_eq!(plain.names()[9], "10-concurrent-issue-indexes.sql");
         assert_eq!(plain.plan.ignored[0].reason, IgnoreReason::NotSql);
     });
@@ -238,7 +243,7 @@ fn file_names_are_the_messages_and_tool_files_are_left_out() {
 #[test]
 fn prisma_migrations_import_with_their_hand_edits() {
     with_compiler(|compiler| async move {
-        let prisma = import(compiler, "prisma", Format::Prisma).await;
+        let prisma = import(compiler, "prisma", Format::Tool(Tool::Prisma)).await;
         assert_eq!(prisma.models.len(), 11);
         assert_eq!(prisma.names()[0], "20240105093000_init");
         assert_eq!(prisma.plan.ignored[0].reason, IgnoreReason::Tool);
@@ -270,7 +275,7 @@ fn prisma_migrations_import_with_their_hand_edits() {
 #[test]
 fn alembic_output_imports_revision_by_revision() {
     with_compiler(|compiler| async move {
-        let alembic = import(compiler, "alembic", Format::Alembic).await;
+        let alembic = import(compiler, "alembic", Format::Read(ReadOnly::Alembic)).await;
         check_canonical(&alembic, "alembic");
         assert_eq!(
             alembic.names()[0],
@@ -298,7 +303,7 @@ fn alembic_output_imports_revision_by_revision() {
 #[test]
 fn django_sqlmigrate_output_imports_every_app_in_plan_order() {
     with_compiler(|compiler| async move {
-        let django = import(compiler, "django", Format::Django).await;
+        let django = import(compiler, "django", Format::Read(ReadOnly::Django)).await;
         assert_eq!(django.models.len(), 30);
         assert_eq!(django.names()[0], "contenttypes.0001_initial");
         assert_eq!(django.names()[29], "tracker.0012_project_archived_at");
@@ -332,7 +337,7 @@ fn django_sqlmigrate_output_imports_every_app_in_plan_order() {
 #[test]
 fn rails_migrations_import_with_their_enum_blocks() {
     with_compiler(|compiler| async move {
-        let rails = import(compiler, "rails", Format::Rails).await;
+        let rails = import(compiler, "rails", Format::Read(ReadOnly::Rails)).await;
         assert_eq!(rails.models.len(), 12);
         assert_eq!(
             rails.names()[0],

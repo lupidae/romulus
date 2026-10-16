@@ -230,7 +230,7 @@ fn build(plan: Plan, history: Vec<Existing>, others: bool, latest: Option<i32>) 
                         .iter()
                         .map(|d| {
                             let mut error = located(d, migration);
-                            if format == import::Format::Flyway
+                            if format == import::Format::Tool(import::Tool::Flyway)
                                 && error.hint.is_none()
                                 && d.span.is_some_and(|s| {
                                     migration
@@ -419,7 +419,7 @@ pub fn refusal(planned: &Planned, options: &ImportOptions) -> Option<ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use romulus_sandbox::import::{Format, SourceFile, plan};
+    use romulus_sandbox::import::{Format, SourceFile, Tool, plan};
 
     use super::*;
 
@@ -436,7 +436,7 @@ mod tests {
         let files = files.iter().map(|(p, t)| SourceFile::new(*p, *t)).collect();
         let latest = history.iter().map(|e| e.number).max();
         build(
-            plan(files, Some(Format::Sqlx)).unwrap(),
+            plan(files, Some(Format::Tool(Tool::Sqlx))).unwrap(),
             history,
             others,
             latest,

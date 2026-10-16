@@ -19,7 +19,7 @@
 
 use std::ops::Range;
 
-use super::{Format, lexer};
+use super::{Format, ReadOnly, lexer};
 
 /// One migration out of an exported file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,16 +120,16 @@ pub(crate) fn sniff(text: &str) -> Option<Format> {
         .iter()
         .any(|r| alembic_header(&text[r.clone()]).is_some())
     {
-        return Some(Format::Alembic);
+        return Some(Format::Read(ReadOnly::Alembic));
     }
     let first = lines
         .iter()
         .map(|r| text[r.clone()].trim())
         .find(|l| !l.is_empty())?;
     if rails_header(first).is_some() {
-        Some(Format::Rails)
+        Some(Format::Read(ReadOnly::Rails))
     } else if django_header(first).is_some() {
-        Some(Format::Django)
+        Some(Format::Read(ReadOnly::Django))
     } else {
         None
     }
@@ -138,16 +138,16 @@ pub(crate) fn sniff(text: &str) -> Option<Format> {
 /// Split an exported text into migrations, in the order printed.
 pub(crate) fn split(format: Format, text: &str) -> Result<Split, String> {
     let header: fn(&str) -> Option<Header> = match format {
-        Format::Alembic => alembic_header,
-        Format::Django => django_header,
-        Format::Rails => rails_header,
+        Format::Read(ReadOnly::Alembic) => alembic_header,
+        Format::Read(ReadOnly::Django) => django_header,
+        Format::Read(ReadOnly::Rails) => rails_header,
         _ => return Err(format!("{} files are not split", format.label())),
     };
     let headers: Vec<(Range<usize>, Header)> = marker_lines(text, header).collect();
     if headers.is_empty() {
         let example = match format {
-            Format::Alembic => "-- Running upgrade  -> 1975ea83b712",
-            Format::Django => "-- blog.0001_initial",
+            Format::Read(ReadOnly::Alembic) => "-- Running upgrade  -> 1975ea83b712",
+            Format::Read(ReadOnly::Django) => "-- blog.0001_initial",
             _ => "-- 20240101000000_create_users.rb",
         };
         return Err(format!(
@@ -162,7 +162,8 @@ pub(crate) fn split(format: Format, text: &str) -> Result<Split, String> {
         ));
     }
     let preamble = &text[..headers[0].0.start];
-    let preamble_is_tool = format == Format::Alembic && preamble.contains("alembic_version");
+    let preamble_is_tool =
+        format == Format::Read(ReadOnly::Alembic) && preamble.contains("alembic_version");
     let mut chunks = Vec::with_capacity(headers.len());
     for (k, (range, header)) in headers.iter().enumerate() {
         let start = (range.end + 1).min(text.len());
@@ -170,7 +171,7 @@ pub(crate) fn split(format: Format, text: &str) -> Result<Split, String> {
             .get(k + 1)
             .map_or(text.len(), |(next, _)| next.start);
         let mut sql = text[start..end.max(start)].to_owned();
-        if format == Format::Alembic {
+        if format == Format::Read(ReadOnly::Alembic) {
             sql = without_alembic_bookkeeping(&sql);
         }
         chunks.push(Chunk {
@@ -230,8 +231,8 @@ mod tests {
     #[test]
     fn alembic_sections_by_revision_without_its_bookkeeping() {
         let text = "BEGIN;\n\nCREATE TABLE alembic_version (\n    version_num VARCHAR(32) NOT NULL, \n    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)\n);\n\n-- Running upgrade  -> 1975ea83b712\n\nCREATE TABLE account (id SERIAL NOT NULL);\n\nINSERT INTO alembic_version (version_num) VALUES ('1975ea83b712') RETURNING alembic_version.version_num;\n\n-- Running upgrade 1975ea83b712 -> ae1027a6acf, add a column\n\nALTER TABLE account ADD COLUMN x TEXT;\n\nUPDATE alembic_version SET version_num='ae1027a6acf' WHERE alembic_version.version_num = '1975ea83b712';\n\nCOMMIT;\n\n";
-        assert_eq!(sniff(text), Some(Format::Alembic));
-        let split = split(Format::Alembic, text).unwrap();
+        assert_eq!(sniff(text), Some(Format::Read(ReadOnly::Alembic)));
+        let split = split(Format::Read(ReadOnly::Alembic), text).unwrap();
         assert!(split.preamble_is_tool);
         let ids: Vec<_> = split
             .chunks
@@ -260,7 +261,7 @@ mod tests {
     fn alembic_downgrades_are_refused() {
         let text = "-- Running downgrade ae1027a6acf -> 1975ea83b712\nALTER TABLE account DROP COLUMN x;\n";
         assert!(
-            split(Format::Alembic, text)
+            split(Format::Read(ReadOnly::Alembic), text)
                 .unwrap_err()
                 .contains("downgrade")
         );
@@ -269,8 +270,8 @@ mod tests {
     #[test]
     fn django_headers_name_app_and_migration() {
         let text = "-- blog.0001_initial\nBEGIN;\n--\n-- Create model Post\n--\nCREATE TABLE \"blog_post\" (\"id\" bigint NOT NULL);\nCOMMIT;\n-- accounts.0002_profile_bio\nBEGIN;\n--\n-- Add field bio to profile\n--\nALTER TABLE \"accounts_profile\" ADD COLUMN \"bio\" text;\nCOMMIT;\n";
-        assert_eq!(sniff(text), Some(Format::Django));
-        let split = split(Format::Django, text).unwrap();
+        assert_eq!(sniff(text), Some(Format::Read(ReadOnly::Django)));
+        let split = split(Format::Read(ReadOnly::Django), text).unwrap();
         let ids: Vec<_> = split
             .chunks
             .iter()
@@ -287,8 +288,8 @@ mod tests {
     #[test]
     fn rails_headers_are_migration_file_names() {
         let text = "-- 20240101000000_create_users.rb\nCREATE TABLE \"users\" (\"id\" bigserial primary key);\n-- 20240102000000_add_name_to_users.rb\nALTER TABLE \"users\" ADD \"name\" character varying;\n";
-        assert_eq!(sniff(text), Some(Format::Rails));
-        let split = split(Format::Rails, text).unwrap();
+        assert_eq!(sniff(text), Some(Format::Read(ReadOnly::Rails)));
+        let split = split(Format::Read(ReadOnly::Rails), text).unwrap();
         assert_eq!(split.chunks[1].id, "20240102000000");
         assert_eq!(split.chunks[1].name, "20240102000000_add_name_to_users.rb");
     }
@@ -304,6 +305,6 @@ mod tests {
             ),
             None
         );
-        assert!(split(Format::Django, "CREATE TABLE t ();").is_err());
+        assert!(split(Format::Read(ReadOnly::Django), "CREATE TABLE t ();").is_err());
     }
 }

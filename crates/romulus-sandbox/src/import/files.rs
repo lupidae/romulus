@@ -4,95 +4,97 @@
 
 use std::{cmp::Ordering, collections::HashMap};
 
+/// The tools romulus also writes migrations for (`romulus_migration`):
+/// their one list, with their wire and display names.
+pub use romulus_migration::Format as Tool;
 use serde::{Deserialize, Serialize};
 
 use super::{export, lexer};
 
-/// A migration tool's layout. The wire names are shared with migration
-/// generation (`romulus_migration::Format`).
+/// A migration tool's layout: one romulus also generates migrations for,
+/// or one it only reads. Serialized as the tool's wire name
+/// (`golang_migrate`, `alembic`).
+///
+/// | format | files |
+/// |---|---|
+/// | `plain` | ordered `.sql` files (any names, natural order) |
+/// | `sqlx` | `<version>_<name>.sql`, or `.up.sql`/`.down.sql` pairs |
+/// | `flyway` | `V<version>__<name>.sql`; repeatable (`R__`), undo (`U`) and baseline (`B`) files left out |
+/// | `prisma` | `<timestamp>_<name>/migration.sql` |
+/// | `dbmate` | `<version>_<name>.sql` with `-- migrate:up` / `-- migrate:down` |
+/// | `golang_migrate` | `<version>_<name>.up.sql` / `.down.sql` |
+/// | `node_pg_migrate` | `<timestamp>_<name>.sql` with `-- Up Migration` / `-- Down Migration` |
+/// | `alembic` | `alembic upgrade head --sql`, split on `-- Running upgrade a -> b` |
+/// | `django` | `manage.py sqlmigrate` per migration, each under `-- <app>.<name>` (scripts/export-migrations/django.sh) |
+/// | `rails` | the SQL each migration ran, each under `-- <version>_<name>.rb` (scripts/export-migrations/rails.sh) |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(untagged)]
 pub enum Format {
-    /// Ordered `.sql` files (any names, natural order).
-    Plain,
-    /// `<version>_<name>.sql`, or `.up.sql`/`.down.sql` pairs.
-    Sqlx,
-    /// `V<version>__<name>.sql`; repeatable (`R__`), undo (`U`) and baseline
-    /// (`B`) files are left out.
-    Flyway,
-    /// `<timestamp>_<name>/migration.sql`.
-    Prisma,
-    /// `<version>_<name>.sql` with `-- migrate:up` / `-- migrate:down`.
-    Dbmate,
-    /// `<version>_<name>.up.sql` / `.down.sql`.
-    GolangMigrate,
-    /// `<timestamp>_<name>.sql` with `-- Up Migration` / `-- Down Migration`.
+    Tool(Tool),
+    Read(ReadOnly),
+}
+
+/// Tools romulus reads migrations of but does not write them for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadOnly {
     NodePgMigrate,
-    /// `alembic upgrade head --sql`, split on `-- Running upgrade a -> b`.
     Alembic,
-    /// `manage.py sqlmigrate` per migration, each under `-- <app>.<name>`
-    /// (scripts/export-migrations/django.sh).
     Django,
-    /// The SQL each migration ran, each under `-- <version>_<name>.rb`
-    /// (scripts/export-migrations/rails.sh).
     Rails,
 }
 
-impl Format {
-    pub const ALL: [Self; 10] = [
-        Self::Plain,
-        Self::Sqlx,
-        Self::Flyway,
-        Self::Prisma,
-        Self::Dbmate,
-        Self::GolangMigrate,
+impl ReadOnly {
+    pub const ALL: [Self; 4] = [
         Self::NodePgMigrate,
         Self::Alembic,
         Self::Django,
         Self::Rails,
     ];
+}
+
+impl Format {
+    /// Every format: the tools first, in their order.
+    pub fn all() -> impl Iterator<Item = Self> {
+        Tool::ALL
+            .into_iter()
+            .map(Self::Tool)
+            .chain(ReadOnly::ALL.into_iter().map(Self::Read))
+    }
 
     /// The wire name (`golang_migrate`).
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Plain => "plain",
-            Self::Sqlx => "sqlx",
-            Self::Flyway => "flyway",
-            Self::Prisma => "prisma",
-            Self::Dbmate => "dbmate",
-            Self::GolangMigrate => "golang_migrate",
-            Self::NodePgMigrate => "node_pg_migrate",
-            Self::Alembic => "alembic",
-            Self::Django => "django",
-            Self::Rails => "rails",
+            Self::Tool(tool) => tool.as_str(),
+            Self::Read(ReadOnly::NodePgMigrate) => "node_pg_migrate",
+            Self::Read(ReadOnly::Alembic) => "alembic",
+            Self::Read(ReadOnly::Django) => "django",
+            Self::Read(ReadOnly::Rails) => "rails",
         }
     }
 
     /// How people write it (`golang-migrate`).
     pub fn label(self) -> &'static str {
         match self {
-            Self::Plain => "Plain SQL",
-            Self::Sqlx => "sqlx",
-            Self::Flyway => "Flyway",
-            Self::Prisma => "Prisma",
-            Self::Dbmate => "dbmate",
-            Self::GolangMigrate => "golang-migrate",
-            Self::NodePgMigrate => "node-pg-migrate",
-            Self::Alembic => "Alembic",
-            Self::Django => "Django",
-            Self::Rails => "Rails",
+            Self::Tool(tool) => tool.label(),
+            Self::Read(ReadOnly::NodePgMigrate) => "node-pg-migrate",
+            Self::Read(ReadOnly::Alembic) => "Alembic",
+            Self::Read(ReadOnly::Django) => "Django",
+            Self::Read(ReadOnly::Rails) => "Rails",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|f| f.as_str() == name)
+        Self::all().find(|f| f.as_str() == name)
     }
 
     /// Formats whose files are the SQL a tool printed (one file holding
     /// every migration), not migrations as written.
     pub fn is_exported(self) -> bool {
-        matches!(self, Self::Alembic | Self::Django | Self::Rails)
+        matches!(
+            self,
+            Self::Read(ReadOnly::Alembic | ReadOnly::Django | ReadOnly::Rails)
+        )
     }
 }
 
@@ -309,10 +311,10 @@ pub fn detect(files: &[SourceFile]) -> Format {
             .iter()
             .any(|f| f.path.ends_with("/migration.sql") && f.path.contains('_'))
     {
-        return Format::Prisma;
+        return Format::Tool(Tool::Prisma);
     }
     if names.iter().any(|n| is_flyway_versioned(n)) {
-        return Format::Flyway;
+        return Format::Tool(Tool::Flyway);
     }
     let sql: Vec<&SourceFile> = files.iter().copied().filter(|f| is_sql(&f.path)).collect();
     if let Some(format) = sql.iter().find_map(|f| export::sniff(&f.text)) {
@@ -323,14 +325,14 @@ pub fn detect(files: &[SourceFile]) -> Format {
             .next()
             .is_some()
     }) {
-        return Format::Dbmate;
+        return Format::Tool(Tool::Dbmate);
     }
     if sql.iter().any(|f| {
         export::marker_lines(&f.text, is_node_pg_marker)
             .next()
             .is_some()
     }) {
-        return Format::NodePgMigrate;
+        return Format::Read(ReadOnly::NodePgMigrate);
     }
     let ups: Vec<&str> = names
         .iter()
@@ -342,9 +344,9 @@ pub fn detect(files: &[SourceFile]) -> Format {
             .iter()
             .all(|n| version_prefix(n, &['_']).is_some_and(|(v, _)| v.len() == 14));
         return if timestamps {
-            Format::Sqlx
+            Format::Tool(Tool::Sqlx)
         } else {
-            Format::GolangMigrate
+            Format::Tool(Tool::GolangMigrate)
         };
     }
     let versioned = sql
@@ -352,9 +354,9 @@ pub fn detect(files: &[SourceFile]) -> Format {
         .filter(|f| version_prefix(file_name(&f.path), &['_']).is_some())
         .count();
     if versioned > 0 && versioned == sql.len() {
-        return Format::Sqlx;
+        return Format::Tool(Tool::Sqlx);
     }
-    Format::Plain
+    Format::Tool(Tool::Plain)
 }
 
 fn has_suffix(name: &str, suffix: &str) -> bool {
@@ -494,7 +496,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
             path: file.path.clone(),
             reason,
         };
-        if format == Format::Prisma {
+        if format == Format::Tool(Tool::Prisma) {
             if name == "migration_lock.toml" {
                 ignored.push(ignore(IgnoreReason::Tool));
                 continue;
@@ -522,8 +524,10 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
             continue;
         }
         match format {
-            Format::Prisma => unreachable!("handled above"),
-            Format::Alembic | Format::Django | Format::Rails => {
+            Format::Tool(Tool::Prisma) => unreachable!("handled above"),
+            Format::Read(ReadOnly::Alembic)
+            | Format::Read(ReadOnly::Django)
+            | Format::Read(ReadOnly::Rails) => {
                 let split =
                     export::split(format, &file.text).map_err(|message| PlanError::Malformed {
                         path: file.path.clone(),
@@ -543,7 +547,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     });
                 }
             }
-            Format::Plain => {
+            Format::Tool(Tool::Plain) => {
                 if has_suffix(&name, ".down.sql") {
                     ignored.push(ignore(IgnoreReason::Down));
                     continue;
@@ -560,7 +564,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     sql: file.text,
                 });
             }
-            Format::Sqlx | Format::GolangMigrate => {
+            Format::Tool(Tool::Sqlx) | Format::Tool(Tool::GolangMigrate) => {
                 if has_suffix(&name, ".down.sql") {
                     ignored.push(ignore(IgnoreReason::Down));
                     continue;
@@ -569,7 +573,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     ignored.push(ignore(IgnoreReason::Unrecognized));
                     continue;
                 };
-                if format == Format::GolangMigrate && !has_suffix(&name, ".up.sql") {
+                if format == Format::Tool(Tool::GolangMigrate) && !has_suffix(&name, ".up.sql") {
                     ignored.push(ignore(IgnoreReason::Unrecognized));
                     continue;
                 }
@@ -582,8 +586,8 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     sql: file.text,
                 });
             }
-            Format::Dbmate | Format::NodePgMigrate => {
-                let separators: &[char] = if format == Format::Dbmate {
+            Format::Tool(Tool::Dbmate) | Format::Read(ReadOnly::NodePgMigrate) => {
+                let separators: &[char] = if format == Format::Tool(Tool::Dbmate) {
                     &['_']
                 } else {
                     &['_', '-']
@@ -592,7 +596,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     ignored.push(ignore(IgnoreReason::Unrecognized));
                     continue;
                 };
-                let sql = if format == Format::Dbmate {
+                let sql = if format == Format::Tool(Tool::Dbmate) {
                     up_section(&file.text, is_dbmate_marker, true)
                 } else {
                     up_section(&file.text, is_node_pg_marker, false)
@@ -610,7 +614,7 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
                     sql,
                 });
             }
-            Format::Flyway => {
+            Format::Tool(Tool::Flyway) => {
                 let reason = match name.chars().next() {
                     Some('R') if name.starts_with("R__") => Some(IgnoreReason::Repeatable),
                     Some('U') if flyway_prefixed(&name, 'U') => Some(IgnoreReason::Down),
@@ -654,10 +658,12 @@ pub fn plan(files: Vec<SourceFile>, format: Option<Format>) -> Result<Plan, Plan
     }
     if candidates.is_empty() {
         return Err(PlanError::Empty(match format {
-            Format::Prisma => {
+            Format::Tool(Tool::Prisma) => {
                 "Prisma keeps each migration in <timestamp>_<name>/migration.sql.".to_owned()
             }
-            Format::Flyway => "Flyway migrations are named V<version>__<name>.sql.".to_owned(),
+            Format::Tool(Tool::Flyway) => {
+                "Flyway migrations are named V<version>__<name>.sql.".to_owned()
+            }
             f if f.is_exported() => format!(
                 "this is not {} output: run scripts/export-migrations/{}.sh and import the file it writes.",
                 f.label(),
@@ -719,6 +725,32 @@ mod tests {
     }
 
     #[test]
+    fn formats_go_by_their_wire_names_tools_first() {
+        let names: Vec<&str> = Format::all().map(Format::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "plain",
+                "sqlx",
+                "flyway",
+                "prisma",
+                "dbmate",
+                "golang_migrate",
+                "node_pg_migrate",
+                "alembic",
+                "django",
+                "rails"
+            ]
+        );
+        for format in Format::all() {
+            let json = serde_json::to_value(format).unwrap();
+            assert_eq!(json, format.as_str());
+            assert_eq!(serde_json::from_value::<Format>(json).unwrap(), format);
+            assert_eq!(Format::parse(format.as_str()), Some(format));
+        }
+    }
+
+    #[test]
     fn natural_order_compares_numbers_as_numbers() {
         let mut names = vec!["10_c.sql", "2_b.sql", "1_a.sql", "002_a.sql", "a.sql"];
         names.sort_by(|a, b| natural_cmp(a, b));
@@ -746,9 +778,9 @@ mod tests {
             ("migrations/README.md", "# notes"),
             ("migrations/.DS_Store", "\0"),
         ]);
-        assert_eq!(detect(&set), Format::Sqlx);
+        assert_eq!(detect(&set), Format::Tool(Tool::Sqlx));
         let plan = plan(set, None).unwrap();
-        assert_eq!(plan.format, Format::Sqlx);
+        assert_eq!(plan.format, Format::Tool(Tool::Sqlx));
         assert_eq!(ids(&plan), ["20240101000000", "20240102000000"]);
         assert_eq!(plan.migrations[0].name, "20240101000000_users.up.sql");
         assert_eq!(plan.migrations[0].path, "20240101000000_users.up.sql");
@@ -769,7 +801,7 @@ mod tests {
             ("000002_posts.down.sql", "x"),
             ("000001_users.up.sql", "x"),
         ]);
-        assert_eq!(detect(&set), Format::GolangMigrate);
+        assert_eq!(detect(&set), Format::Tool(Tool::GolangMigrate));
         assert_eq!(ids(&plan(set, None).unwrap()), ["1", "2", "10"]);
     }
 
@@ -785,7 +817,7 @@ mod tests {
             ("sql/B2__baseline.sql", "x"),
             ("sql/beforeMigrate.sql", "x"),
         ]);
-        assert_eq!(detect(&set), Format::Flyway);
+        assert_eq!(detect(&set), Format::Tool(Tool::Flyway));
         let plan = plan(set, None).unwrap();
         assert_eq!(ids(&plan), ["1", "1.2", "1.10", "2.0.1"]);
         assert_eq!(
@@ -819,7 +851,7 @@ mod tests {
             ("prisma/migrations/20240102000000_posts/migration.sql", "x"),
             ("prisma/migrations/20240101000000_init/migration.sql", "x"),
         ]);
-        assert_eq!(detect(&set), Format::Prisma);
+        assert_eq!(detect(&set), Format::Tool(Tool::Prisma));
         let plan = plan(set, None).unwrap();
         assert_eq!(ids(&plan), ["20240101000000_init", "20240102000000_posts"]);
         assert_eq!(
@@ -838,7 +870,7 @@ mod tests {
             "db/migrations/20240101000000_users.sql",
             "-- migrate:up\r\nCREATE TABLE users ();\r\n\r\n-- migrate:down\r\nDROP TABLE users;\r\n",
         )]);
-        assert_eq!(detect(&set), Format::Dbmate);
+        assert_eq!(detect(&set), Format::Tool(Tool::Dbmate));
         let dbmate = plan(set, None).unwrap();
         let sql = &dbmate.migrations[0].sql;
         assert_eq!(sql.trim(), "CREATE TABLE users ();");
@@ -848,7 +880,7 @@ mod tests {
 
         let missing = files(&[("20240101000000_x.sql", "CREATE TABLE x ();")]);
         assert!(matches!(
-            plan(missing, Some(Format::Dbmate)),
+            plan(missing, Some(Format::Tool(Tool::Dbmate))),
             Err(PlanError::Malformed { .. })
         ));
     }
@@ -865,7 +897,7 @@ mod tests {
                 "CREATE TABLE posts ();",
             ),
         ]);
-        assert_eq!(detect(&set), Format::NodePgMigrate);
+        assert_eq!(detect(&set), Format::Read(ReadOnly::NodePgMigrate));
         let plan = plan(set, None).unwrap();
         assert_eq!(ids(&plan), ["1700000000000", "1700000000001"]);
         assert!(!plan.migrations[0].sql.contains("DROP"));
@@ -888,12 +920,12 @@ mod tests {
             ("schema/1_types.sql", "x"),
             ("schema/1_types.down.sql", "x"),
         ]);
-        assert_eq!(detect(&set), Format::Sqlx);
-        let plan = plan(set, Some(Format::Plain)).unwrap();
-        assert_eq!(plan.detected, Format::Sqlx);
+        assert_eq!(detect(&set), Format::Tool(Tool::Sqlx));
+        let plan = plan(set, Some(Format::Tool(Tool::Plain))).unwrap();
+        assert_eq!(plan.detected, Format::Tool(Tool::Sqlx));
         assert_eq!(ids(&plan), ["1_types", "2_tables", "10_indexes"]);
         let named = files(&[("b.sql", "x"), ("a.sql", "x")]);
-        assert_eq!(detect(&named), Format::Plain);
+        assert_eq!(detect(&named), Format::Tool(Tool::Plain));
         assert_eq!(ids(&plan_of(named).unwrap()), ["a", "b"]);
     }
 
@@ -908,17 +940,20 @@ mod tests {
         let one = files(&[("2025/02_orders.up.sql", "x")]);
         let alone = files(&[("02_orders.up.sql", "x")]);
         assert_eq!(
-            ids(&plan(whole, Some(Format::Plain)).unwrap()),
+            ids(&plan(whole, Some(Format::Tool(Tool::Plain))).unwrap()),
             ["01_users", "02_orders"]
         );
-        assert_eq!(ids(&plan(one, Some(Format::Plain)).unwrap()), ["02_orders"]);
         assert_eq!(
-            ids(&plan(alone, Some(Format::Plain)).unwrap()),
+            ids(&plan(one, Some(Format::Tool(Tool::Plain))).unwrap()),
+            ["02_orders"]
+        );
+        assert_eq!(
+            ids(&plan(alone, Some(Format::Tool(Tool::Plain))).unwrap()),
             ["02_orders"]
         );
         let twice = files(&[("2024/01_init.sql", "x"), ("2025/01_init.sql", "y")]);
         assert_eq!(
-            plan(twice, Some(Format::Plain)),
+            plan(twice, Some(Format::Tool(Tool::Plain))),
             Err(PlanError::Duplicate {
                 id: "01_init".to_owned(),
                 first: "2024/01_init.sql".to_owned(),
@@ -931,7 +966,11 @@ mod tests {
     fn nothing_to_import_says_what_was_expected() {
         let err = plan(files(&[("notes.txt", "x")]), None).unwrap_err();
         assert!(matches!(err, PlanError::Empty(_)));
-        let err = plan(files(&[("V1__x.txt", "x")]), Some(Format::Flyway)).unwrap_err();
+        let err = plan(
+            files(&[("V1__x.txt", "x")]),
+            Some(Format::Tool(Tool::Flyway)),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("V<version>__<name>.sql"));
     }
 }

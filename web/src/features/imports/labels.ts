@@ -1,26 +1,34 @@
+import { TOOLS } from "@/features/migration/queries";
+
 import type { IgnoreReason, MigrationFormat, SkipReason } from "./api";
 
-/** Every format, as people write them, with the files each one reads. */
-export const formats: { value: MigrationFormat; label: string; files: string }[] = [
-  { value: "sqlx", label: "sqlx", files: "<version>_<name>.sql, or .up.sql / .down.sql" },
-  { value: "flyway", label: "Flyway", files: "V<version>__<name>.sql" },
-  { value: "prisma", label: "Prisma", files: "<timestamp>_<name>/migration.sql" },
-  { value: "dbmate", label: "dbmate", files: "<version>_<name>.sql with -- migrate:up" },
-  { value: "golang_migrate", label: "golang-migrate", files: "<version>_<name>.up.sql" },
-  {
-    value: "node_pg_migrate",
-    label: "node-pg-migrate",
-    files: "<timestamp>_<name>.sql with -- Up Migration",
-  },
-  { value: "plain", label: "Plain SQL", files: "Any .sql files, in name order" },
-  { value: "alembic", label: "Alembic", files: "The output of alembic.sh" },
-  { value: "django", label: "Django", files: "The output of django.sh" },
-  { value: "rails", label: "Rails", files: "The output of rails.sh" },
-];
+/** The tools romulus only reads; the others' labels are migration generation's (`TOOLS`). */
+const readOnly: Partial<Record<MigrationFormat, string>> = {
+  node_pg_migrate: "node-pg-migrate",
+  alembic: "Alembic",
+  django: "Django",
+  rails: "Rails",
+};
 
 export function formatLabel(format: MigrationFormat): string {
-  return formats.find((f) => f.value === format)?.label ?? format;
+  return TOOLS.find((tool) => tool.value === format)?.label ?? readOnly[format] ?? format;
 }
+
+/** Every format, as people write them, with the files each one reads. */
+export const formats: { value: MigrationFormat; label: string; files: string }[] = (
+  [
+    { value: "sqlx", files: "<version>_<name>.sql, or .up.sql / .down.sql" },
+    { value: "flyway", files: "V<version>__<name>.sql" },
+    { value: "prisma", files: "<timestamp>_<name>/migration.sql" },
+    { value: "dbmate", files: "<version>_<name>.sql with -- migrate:up" },
+    { value: "golang_migrate", files: "<version>_<name>.up.sql" },
+    { value: "node_pg_migrate", files: "<timestamp>_<name>.sql with -- Up Migration" },
+    { value: "plain", files: "Any .sql files, in name order" },
+    { value: "alembic", files: "The output of alembic.sh" },
+    { value: "django", files: "The output of django.sh" },
+    { value: "rails", files: "The output of rails.sh" },
+  ] as const
+).map((f) => ({ ...f, label: formatLabel(f.value) }));
 
 /** Why a statement was not replayed, as a short label. */
 export const skipReasonLabel: Record<SkipReason, string> = {
