@@ -53,7 +53,10 @@ DROP TABLE public.b;
 -- DESTRUCTIVE: Deletes the table and its rows.
 DROP TABLE public.c;
 
--- DESTRUCTIVE: Deletes the table and its rows.
+-- DESTRUCTIVE: Deletes the table and its rows. Possibly renamed to clients:
+-- see the CREATE TABLE above.
+-- To keep the data instead:
+--   ALTER TABLE public.customers RENAME TO clients;
 DROP TABLE public.customers;
 
 COMMIT;
