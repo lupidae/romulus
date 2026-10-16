@@ -667,3 +667,60 @@ fn check(
         edits,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Joined, check};
+    use crate::{catalog::Catalog, prepare::prepare_with, stubs::Overrides};
+
+    fn script(migrations: &[&str]) -> String {
+        let catalog = Catalog::new(["now", "lower", "repeat"].map(str::to_owned), []);
+        let checked = check(
+            migrations.iter().map(|m| (*m).to_owned()).collect(),
+            &catalog,
+            1000,
+        )
+        .unwrap_or_else(|failed| panic!("{:?}", failed.failure));
+        prepare_with(
+            &checked.joined.text,
+            &checked.parsed,
+            &catalog,
+            &Overrides::default(),
+            &checked.edits,
+        )
+        .script
+    }
+
+    /// The invariant the sandbox's safety rests on in import mode: no body
+    /// a migration wrote reaches the script, however it is spelled.
+    #[test]
+    fn no_function_body_of_the_import_reaches_the_script() {
+        let script = script(&[
+            "CREATE FUNCTION a() RETURNS int LANGUAGE sql AS 'SELECT 1 /* USER-CODE-1 */';",
+            "CREATE OR REPLACE FUNCTION b() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RAISE 'USER-CODE-2'; END $body$;\nCREATE PROCEDURE c() LANGUAGE sql BEGIN ATOMIC SELECT 'USER-CODE-3'; END;",
+            "CREATE FUNCTION d(x int) RETURNS int LANGUAGE sql IMMUTABLE RETURN x + length('USER-CODE-4');\nCREATE FUNCTION e() RETURNS int LANGUAGE c AS 'USER-CODE-5', 'symbol';",
+            "CREATE TABLE t (x int);\nCREATE TRIGGER g BEFORE INSERT ON t FOR EACH ROW WHEN (NEW.x::text = 'USER-CODE-6') EXECUTE FUNCTION b();\nCREATE RULE r AS ON INSERT TO t DO ALSO SELECT 'USER-CODE-7';\nCREATE TABLE u AS SELECT 'USER-CODE-8' AS v;",
+        ]);
+        for k in 1..=7 {
+            assert!(
+                !script.contains(&format!("USER-CODE-{k}")),
+                "USER-CODE-{k} reached the script:\n{script}"
+            );
+        }
+        // A CREATE TABLE … AS keeps its query (it is never run: WITH NO DATA).
+        assert!(script.contains("USER-CODE-8' AS v WITH NO DATA"));
+    }
+
+    #[test]
+    fn migrations_are_located_in_the_joined_text() {
+        let joined = Joined::new(&[
+            "CREATE TABLE a ();".to_owned(),
+            String::new(),
+            "x".to_owned(),
+        ]);
+        assert_eq!(joined.migration_at(0), 0);
+        assert_eq!(joined.migration_at(joined.ranges[2].start), 2);
+        // The separator after migration 0 belongs to it.
+        assert_eq!(joined.migration_at(joined.ranges[0].end + 2), 0);
+    }
+}

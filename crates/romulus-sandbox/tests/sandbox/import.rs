@@ -207,3 +207,166 @@ fn a_repeated_create_extension_if_not_exists_is_not_run_again() {
         assert_eq!(replay.skipped[1].len(), 1, "{:?}", replay.skipped[1]);
     });
 }
+
+/// Hostile migrations: whatever they define, none of their own code runs
+/// in the sandbox, and what the compile allowlist refuses outside
+/// functions is still refused.
+mod hostile {
+    use std::time::{Duration, Instant};
+
+    use romulus_sandbox::Code;
+
+    use super::replay;
+    use crate::with_compiler;
+
+    /// Postgres evaluates constant calls of immutable and stable functions
+    /// while it creates defaults, checks and indexes: with the real body,
+    /// each of these raises (or sleeps). The replay gives every function a
+    /// fixed body, so they all succeed, at once.
+    #[test]
+    fn function_bodies_never_run_even_where_postgres_folds_calls() {
+        with_compiler(|compiler| async move {
+            let started = Instant::now();
+            let (replay, models) = replay(
+                compiler,
+                &[
+                    "CREATE FUNCTION boom() RETURNS int IMMUTABLE LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'user code ran'; END $$;\n\
+                     CREATE FUNCTION nap() RETURNS int STABLE LANGUAGE sql AS $$ SELECT pg_sleep(30)::text::int $$;\n\
+                     CREATE FUNCTION loop() RETURNS int IMMUTABLE LANGUAGE plpgsql AS $$ BEGIN LOOP END LOOP; END $$;\n\
+                     CREATE FUNCTION grow() RETURNS text IMMUTABLE LANGUAGE sql BEGIN ATOMIC SELECT repeat('x', 500000000); END;\n\
+                     CREATE FUNCTION native() RETURNS int IMMUTABLE LANGUAGE c AS '$libdir/plpgsql', 'plpgsql_call_handler';\n\
+                     CREATE FUNCTION py() RETURNS int IMMUTABLE LANGUAGE plpython3u AS 'import os; os.system(\"id\")';",
+                    "CREATE TABLE t (x int);\n\
+                     ALTER TABLE t ADD COLUMN a int DEFAULT boom();\n\
+                     ALTER TABLE t ADD COLUMN b int DEFAULT nap();\n\
+                     ALTER TABLE t ADD COLUMN c int DEFAULT loop();\n\
+                     ALTER TABLE t ADD COLUMN d text DEFAULT grow();\n\
+                     ALTER TABLE t ADD COLUMN e int DEFAULT native() + py();\n\
+                     ALTER TABLE t ADD CONSTRAINT ok CHECK (x > boom());\n\
+                     CREATE INDEX t_folded ON t ((x + boom() + loop()));\n\
+                     CREATE INDEX t_partial ON t (x) WHERE grow() IS NOT NULL;",
+                ],
+                0,
+            )
+            .await;
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+            assert_eq!(models.len(), 2);
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "took {:?}",
+                started.elapsed()
+            );
+        });
+    }
+
+    /// Triggers keep firing nothing (no rows are ever written), and their
+    /// conditions and rules' actions are dropped before they reach the
+    /// sandbox: denied calls there no longer matter.
+    #[test]
+    fn trigger_conditions_rules_and_queries_never_run() {
+        with_compiler(|compiler| async move {
+            let started = Instant::now();
+            let (replay, _) = replay(
+                compiler,
+                &[
+                    "CREATE TABLE t (x int);\n\
+                     CREATE FUNCTION f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n\
+                     CREATE TRIGGER slow BEFORE INSERT ON t FOR EACH ROW WHEN (pg_sleep(30) IS NULL) EXECUTE FUNCTION f();\n\
+                     CREATE RULE r AS ON INSERT TO t DO ALSO SELECT pg_sleep(30), pg_terminate_backend(1);\n\
+                     CREATE TABLE copy AS SELECT repeat('x', 500000000) AS big, generate_series(1, 100000000) AS n;\n\
+                     SELECT generate_series(1, 100000000) AS n INTO numbers;\n\
+                     INSERT INTO t SELECT generate_series(1, 100000000);\n\
+                     DO $$ BEGIN PERFORM pg_sleep(30); END $$;\n\
+                     WITH gone AS (DELETE FROM t RETURNING *) SELECT count(*) FROM gone;\n\
+                     COPY t FROM PROGRAM 'id';\n\
+                     CALL nothing();",
+                ],
+                0,
+            )
+            .await;
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+            assert!(started.elapsed() < Duration::from_secs(10));
+            let kinds: Vec<&str> = replay.skipped[0].iter().map(|s| s.kind.as_str()).collect();
+            assert_eq!(kinds, ["INSERT", "DO", "WITH", "COPY", "CALL"]);
+        });
+    }
+
+    /// What the compile allowlist refuses outside function bodies is still
+    /// refused in an import (before anything runs), and the server-wide
+    /// statements are skipped, never run.
+    #[test]
+    fn the_allowlist_still_holds_outside_function_bodies() {
+        with_compiler(|compiler| async move {
+            for sql in [
+                // Arguments' defaults are evaluated by callers: still checked.
+                "CREATE FUNCTION f(x text DEFAULT repeat('x', 500000000)) RETURNS text LANGUAGE sql AS 'SELECT x'",
+                "CREATE TABLE t (x int DEFAULT pg_terminate_backend(1)::int)",
+                "CREATE TABLE t (x text); CREATE INDEX ON t ((lpad('', 400000000, 'x')))",
+                "CREATE TABLE copy AS SELECT pg_sleep(30)",
+                "CREATE FUNCTION pg_temp.f() RETURNS int LANGUAGE sql AS 'SELECT 1'",
+                "CREATE TEMP TABLE t (id int)",
+                "CREATE EXTENSION dblink; CREATE EXTENSION IF NOT EXISTS dblink; CREATE TABLE t (x int DEFAULT dblink_exec('x')::int)",
+            ] {
+                let (replay, _) = replay(compiler, &[sql], 0).await;
+                let failure = replay.failure.unwrap_or_else(|| panic!("{sql} replayed"));
+                assert!(
+                    failure.diagnostics.iter().all(|d| matches!(
+                        d.code,
+                        Code::NotAllowed | Code::FunctionNotAllowed | Code::Sql
+                    )),
+                    "{sql}: {:?}",
+                    failure.diagnostics
+                );
+            }
+            let (replay, models) = replay(
+                compiler,
+                &["CREATE ROLE intruder SUPERUSER;\n\
+                   ALTER SYSTEM SET shared_buffers = '8GB';\n\
+                   SET ROLE sandbox_admin;\n\
+                   SET SESSION AUTHORIZATION sandbox_admin;\n\
+                   RESET ALL;\n\
+                   SET statement_timeout = 0;\n\
+                   CREATE EVENT TRIGGER e ON ddl_command_start EXECUTE FUNCTION f();\n\
+                   CREATE LANGUAGE plperlu;\n\
+                   CREATE CAST (int AS text) WITH FUNCTION f(int) AS IMPLICIT;\n\
+                   LOCK TABLE pg_class IN ACCESS EXCLUSIVE MODE;\n\
+                   LISTEN x; NOTIFY x;\n\
+                   VACUUM FULL;\n\
+                   CREATE DATABASE escape;\n\
+                   CREATE TABLESPACE t LOCATION '/tmp';\n\
+                   GRANT ALL ON SCHEMA public TO PUBLIC;\n\
+                   CREATE TABLE kept (id int);"],
+                0,
+            )
+            .await;
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+            assert_eq!(super::tables(&models[0].1), ["public.kept"]);
+            assert_eq!(replay.skipped[0].len(), 16, "{:?}", replay.skipped[0]);
+        });
+    }
+
+    /// A function the import defines may share a name with one an
+    /// extension's install script calls (it runs as the bootstrap
+    /// superuser): its body is a stub, so capturing the call runs nothing
+    /// of the import's.
+    #[test]
+    fn functions_shadowing_extension_calls_run_nothing() {
+        with_compiler(|compiler| async move {
+            let started = Instant::now();
+            let (replay, _) = replay(
+                compiler,
+                &[
+                    "CREATE FUNCTION public.format(text, VARIADIC text[]) RETURNS text LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(30); RETURN ''; END $$;\n\
+                     CREATE FUNCTION public.lower(anyelement) RETURNS text LANGUAGE plpgsql AS $$ BEGIN ALTER ROLE CURRENT_USER SUPERUSER; RETURN ''; END $$;\n\
+                     CREATE EXTENSION IF NOT EXISTS pgcrypto;\n\
+                     CREATE EXTENSION IF NOT EXISTS citext;\n\
+                     CREATE TABLE t (id uuid DEFAULT gen_random_uuid(), name citext);",
+                ],
+                0,
+            )
+            .await;
+            assert!(started.elapsed() < Duration::from_secs(10));
+            assert!(replay.failure.is_none(), "{:?}", replay.failure);
+        });
+    }
+}

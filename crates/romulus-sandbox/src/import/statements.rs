@@ -162,6 +162,7 @@ fn first_line(text: &str) -> String {
 /// Types only C functions take or return: such a function cannot be
 /// stood in for, and only a superuser can create the real one.
 const INTERNAL_TYPES: &[&str] = &[
+    "any",
     "internal",
     "cstring",
     "opaque",
