@@ -3,8 +3,9 @@
 //! versions) to the model its SQL compiles to, laid out like a version's
 //! migration ([`crate::versions::migration`]).
 //!
-//! - `sha256` (the publish preview's): the text the person reviewed. When
-//!   the draft moved on since, 409 `draft_changed`: review again.
+//! - `sha256` (required; the publish preview's, or the live compile event's):
+//!   the text the person reviewed, so a migration is never of a text nobody
+//!   saw. When the draft moved on since, 409 `draft_changed`: review again.
 //! - A stale draft (someone published since it started) has no migration a
 //!   database at the latest version could run: 409 `stale_base`, update the
 //!   draft first.
@@ -40,9 +41,10 @@ use crate::{
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct Reviewed {
-    /// SHA-256 of the SQL the person reviewed (the publish preview's): the
-    /// migration of exactly that text, or 409 `draft_changed`.
-    pub sha256: Option<String>,
+    /// SHA-256 of the SQL the person reviewed (the publish preview's, or a
+    /// live compile's): the migration of exactly that text, or 409
+    /// `draft_changed`. Required: a migration is never of a text unseen.
+    pub sha256: String,
 }
 
 /// The migration publishing the draft now would call for.
@@ -60,7 +62,7 @@ pub struct Reviewed {
     ),
     responses(
         (status = 200, body = SchemaMigration),
-        (status = 400, description = "`bad_request`: an unknown format", body = ErrorBody),
+        (status = 400, description = "`bad_request`: an unknown format, no `sha256`", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first", body = ErrorBody),
         (status = 422, description = "`compile_failed`: the SQL has errors (`details.diagnostics`)", body = ErrorBody),
@@ -86,9 +88,7 @@ pub(super) async fn draft_migration(
         return Err(stale_base(latest));
     }
     let content = state.collab.content(id).await.map_err(hub_error)?;
-    if let Some(reviewed) = &reviewed.sha256
-        && *reviewed != sha256_hex(&content.sql)
-    {
+    if reviewed.sha256 != sha256_hex(&content.sql) {
         return Err(ApiError::Conflict {
             code: "draft_changed",
             message: "The draft changed since you reviewed it. Review the changes again.".into(),

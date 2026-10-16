@@ -307,7 +307,9 @@ async fn draft(db: &PgPool) -> (TestApp, Team, String) {
     (app, team, id)
 }
 
-async fn type_in(app: &TestApp, id: &str, team: &Team, text: &'static str) {
+/// Types `text` at the top of the draft and returns the `sha256` of the
+/// compile that saw it: what a member reviewing the draft live has.
+async fn type_in(app: &TestApp, id: &str, team: &Team, text: &'static str) -> String {
     let addr = serve(app).await;
     let mut alice = Client::join(
         addr,
@@ -321,22 +323,21 @@ async fn type_in(app: &TestApp, id: &str, team: &Team, text: &'static str) {
             roots.sql.insert(txn, 0, text);
         })
         .await;
-    alice
-        .until(|c| {
-            c.events.iter().any(|e| {
-                e["type"] == "compile"
-                    && (e["state"] == "failed" || e["model"].to_string().contains("invoices"))
-            })
-        })
-        .await;
+    let seen = |e: &Value| {
+        e["type"] == "compile"
+            && (e["state"] == "failed" || e["model"].to_string().contains("invoices"))
+    };
+    alice.until(|c| c.events.iter().any(seen)).await;
+    let compile = alice.events.iter().rev().find(|e| seen(e)).expect("seen");
+    compile["sha256"].as_str().expect("its sha256").to_owned()
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn a_draft_migrates_from_its_base_to_what_it_holds(db: PgPool) {
     let (app, team, id) = draft(&db).await;
-    type_in(&app, &id, &team, "CREATE TABLE invoices (id bigint);\n").await;
+    let sha = type_in(&app, &id, &team, "CREATE TABLE invoices (id bigint);\n").await;
     let path = team.path(&format!(
-        "/databases/shop/drafts/{id}/migration?format=golang_migrate"
+        "/databases/shop/drafts/{id}/migration?format=golang_migrate&sha256={sha}"
     ));
     let response = app.as_user(&team.reviewer).get(&path).await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.json());
@@ -367,10 +368,12 @@ async fn a_draft_migrates_from_its_base_to_what_it_holds(db: PgPool) {
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn a_draft_with_errors_has_no_migration(db: PgPool) {
     let (app, team, id) = draft(&db).await;
-    type_in(&app, &id, &team, "ERROR here;\n").await;
+    let sha = type_in(&app, &id, &team, "ERROR here;\n").await;
     let response = app
         .as_user(&team.developer)
-        .get(&team.path(&format!("/databases/shop/drafts/{id}/migration")))
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{id}/migration?sha256={sha}"
+        )))
         .await;
     assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(response.code(), "compile_failed");
@@ -410,6 +413,19 @@ async fn a_draft_migration_is_of_the_text_reviewed(db: PgPool) {
         .await;
     assert_eq!(moved.status, StatusCode::CONFLICT);
     assert_eq!(moved.code(), "draft_changed");
+    // No reviewed text, no migration: never one of a text nobody saw.
+    let unbound = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!("/databases/shop/drafts/{id}/migration")))
+        .await;
+    assert_eq!(unbound.status, StatusCode::BAD_REQUEST);
+    assert!(
+        unbound.json()["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("sha256")),
+        "{}",
+        unbound.json()
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -429,7 +445,10 @@ async fn a_stale_draft_has_no_migration_until_updated(db: PgPool) {
     .await;
     let response = app
         .as_user(&team.developer)
-        .get(&team.path(&format!("/databases/shop/drafts/{id}/migration")))
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{id}/migration?sha256={}",
+            "0".repeat(64)
+        )))
         .await;
     assert_eq!(response.status, StatusCode::CONFLICT);
     assert_eq!(response.code(), "stale_base");

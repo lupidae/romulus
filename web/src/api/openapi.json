@@ -1585,8 +1585,8 @@
           {
             "name": "sha256",
             "in": "query",
-            "description": "SHA-256 of the SQL the person reviewed (the publish preview's): the\nmigration of exactly that text, or 409 `draft_changed`.",
-            "required": false,
+            "description": "SHA-256 of the SQL the person reviewed (the publish preview's, or a\nlive compile's): the migration of exactly that text, or 409\n`draft_changed`. Required: a migration is never of a text unseen.",
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -1603,7 +1603,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: an unknown format",
+            "description": "`bad_request`: an unknown format, no `sha256`",
             "content": {
               "application/json": {
                 "schema": {
@@ -5523,7 +5523,8 @@
           "widens_access",
           "foreign_table",
           "unsupported",
-          "empty_schema"
+          "empty_schema",
+          "guessed_names"
         ]
       },
       "Org": {

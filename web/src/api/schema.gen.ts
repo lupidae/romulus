@@ -1540,7 +1540,8 @@ export interface components {
       | "widens_access"
       | "foreign_table"
       | "unsupported"
-      | "empty_schema";
+      | "empty_schema"
+      | "guessed_names";
     /** @description An organization, as one of its members sees it. */
     Org: {
       /** Format: uuid */
@@ -3262,7 +3263,7 @@ export interface operations {
   };
   draft_migration: {
     parameters: {
-      query?: {
+      query: {
         /**
          * @description The migration tool: its file names, transactions and down migration.
          *     `plain` when absent.
@@ -3287,10 +3288,11 @@ export interface operations {
          */
         version?: string;
         /**
-         * @description SHA-256 of the SQL the person reviewed (the publish preview's): the
-         *     migration of exactly that text, or 409 `draft_changed`.
+         * @description SHA-256 of the SQL the person reviewed (the publish preview's, or a
+         *     live compile's): the migration of exactly that text, or 409
+         *     `draft_changed`. Required: a migration is never of a text unseen.
          */
-        sha256?: string;
+        sha256: string;
       };
       header?: never;
       path: {
@@ -3310,7 +3312,7 @@ export interface operations {
           "application/json": components["schemas"]["SchemaMigration"];
         };
       };
-      /** @description `bad_request`: an unknown format */
+      /** @description `bad_request`: an unknown format, no `sha256` */
       400: {
         headers: {
           [name: string]: unknown;
