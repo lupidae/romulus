@@ -13,6 +13,7 @@ import { ApiError } from "@/api/client";
 import {
   ClockIcon,
   DatabaseIcon,
+  ImportIcon,
   NetworkRightIcon,
   SettingsIcon,
   UploadIcon,
@@ -64,11 +65,15 @@ function DatabaseLayout() {
   const [draft, setDraft] = React.useState("");
   const openUpload = React.useCallback(() => setUploading(true), []);
   useShortcut("u", openUpload, writer);
+  useShortcut("i", () => void navigate({ to: "/$org/$db/import", params: { org, db } }), writer);
 
   const params = { org, db };
   const onVersion = !!matchRoute({ to: "/$org/$db/v/$number", params, fuzzy: true });
-  // A comparison is read from the history: its tab stays current.
-  const onDiff = !!matchRoute({ to: "/$org/$db/diff", params, fuzzy: true });
+  // A comparison is read from the history, an import adds to it: its tab
+  // stays current.
+  const onDiff =
+    !!matchRoute({ to: "/$org/$db/diff", params, fuzzy: true }) ||
+    !!matchRoute({ to: "/$org/$db/import", params });
   const latest = database.latest?.number;
 
   return (
@@ -96,6 +101,16 @@ function DatabaseLayout() {
             <div className="flex shrink-0 items-center gap-2">
               <OpenDrafts org={org} db={db} />
               {writer && <NewDraftButton org={org} db={db} compact />}
+              {writer && (
+                <Tooltip content="Import migration files as versions" shortcut={["I"]}>
+                  <Button asChild aria-label="Import migrations" className="max-sm:px-2.5">
+                    <Link to="/$org/$db/import" params={params}>
+                      <ImportIcon />
+                      <span className="max-sm:hidden">Import</span>
+                    </Link>
+                  </Button>
+                </Tooltip>
+              )}
               {writer && (
                 <Tooltip content="Upload SQL as a new version" shortcut={["U"]}>
                   <Button

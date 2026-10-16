@@ -23,6 +23,7 @@ import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
 import { Route as OrgDbIndexRouteImport } from './routes/$org/$db/index'
 import { Route as OrgDbHistoryRouteImport } from './routes/$org/$db/history'
+import { Route as OrgDbImportRouteImport } from './routes/$org/$db/import'
 import { Route as OrgDbSettingsRouteImport } from './routes/$org/$db/settings'
 import { Route as OrgSettingsIndexRouteImport } from './routes/$org/settings/index'
 import { Route as OrgSettingsInvitationsRouteImport } from './routes/$org/settings/invitations'
@@ -105,6 +106,11 @@ const OrgDbHistoryRoute = OrgDbHistoryRouteImport.update({
   path: '/history',
   getParentRoute: () => OrgDbRoute,
 } as any)
+const OrgDbImportRoute = OrgDbImportRouteImport.update({
+  id: '/import',
+  path: '/import',
+  getParentRoute: () => OrgDbRoute,
+} as any)
 const OrgDbSettingsRoute = OrgDbSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -175,6 +181,7 @@ export interface FileRoutesByFullPath {
   '/invite/$token': typeof InviteTokenRoute
   '/$org/': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
+  '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
@@ -199,6 +206,7 @@ export interface FileRoutesByTo {
   '/invite/$token': typeof InviteTokenRoute
   '/$org': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
+  '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
@@ -227,6 +235,7 @@ export interface FileRoutesById {
   '/invite/$token': typeof InviteTokenRoute
   '/$org/': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
+  '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
@@ -256,6 +265,7 @@ export interface FileRouteTypes {
     | '/invite/$token'
     | '/$org/'
     | '/$org/$db/history'
+    | '/$org/$db/import'
     | '/$org/$db/settings'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
@@ -280,6 +290,7 @@ export interface FileRouteTypes {
     | '/invite/$token'
     | '/$org'
     | '/$org/$db/history'
+    | '/$org/$db/import'
     | '/$org/$db/settings'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
@@ -307,6 +318,7 @@ export interface FileRouteTypes {
     | '/invite/$token'
     | '/$org/'
     | '/$org/$db/history'
+    | '/$org/$db/import'
     | '/$org/$db/settings'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
@@ -435,6 +447,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgDbHistoryRouteImport
       parentRoute: typeof OrgDbRoute
     }
+    '/$org/$db/import': {
+      id: '/$org/$db/import'
+      path: '/import'
+      fullPath: '/$org/$db/import'
+      preLoaderRoute: typeof OrgDbImportRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
     '/$org/$db/settings': {
       id: '/$org/$db/settings'
       path: '/settings'
@@ -517,6 +536,7 @@ declare module '@tanstack/react-router' {
 
 interface OrgDbRouteChildren {
   OrgDbHistoryRoute: typeof OrgDbHistoryRoute
+  OrgDbImportRoute: typeof OrgDbImportRoute
   OrgDbSettingsRoute: typeof OrgDbSettingsRoute
   OrgDbIndexRoute: typeof OrgDbIndexRoute
   OrgDbDiffRangeRoute: typeof OrgDbDiffRangeRoute
@@ -526,6 +546,7 @@ interface OrgDbRouteChildren {
 
 const OrgDbRouteChildren: OrgDbRouteChildren = {
   OrgDbHistoryRoute: OrgDbHistoryRoute,
+  OrgDbImportRoute: OrgDbImportRoute,
   OrgDbSettingsRoute: OrgDbSettingsRoute,
   OrgDbIndexRoute: OrgDbIndexRoute,
   OrgDbDiffRangeRoute: OrgDbDiffRangeRoute,

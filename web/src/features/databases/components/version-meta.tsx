@@ -1,4 +1,4 @@
-import { CloudIcon, EditPencilIcon, GitBranchIcon, KeyIcon } from "@/components/icons";
+import { CloudIcon, EditPencilIcon, GitBranchIcon, ImportIcon, KeyIcon } from "@/components/icons";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime, timeAgo } from "@/lib/time";
@@ -10,12 +10,14 @@ const originIcon = {
   upload: EditPencilIcon,
   push: CloudIcon,
   draft: GitBranchIcon,
+  import: ImportIcon,
 } satisfies Record<VersionOrigin, unknown>;
 
 const originHint: Record<VersionOrigin, string> = {
   upload: "Uploaded as SQL",
   push: "Pushed with an API token",
   draft: "Published from a draft",
+  import: "Imported from a migration file",
 };
 
 /** How a version came to be, as a word with its icon. */

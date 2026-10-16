@@ -1420,6 +1420,15 @@ export interface components {
           /** @enum {string} */
           event: "failed";
         };
+    /** @description Where a failed import stopped (`details` of 422 `import_failed`). */
+    ImportFailure: {
+      errors: components["schemas"]["ImportError"][];
+      id: string;
+      /** @description Its position among the planned migrations. */
+      index: number;
+      name: string;
+      path: string;
+    };
     /** @description What importing the files would do; nothing run yet. */
     ImportPreview: {
       /** @description The format they look like (`format` unless one was asked for). */

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import { CloudIcon, KeyIcon, PageIcon } from "@/components/icons";
+import { CloudIcon, ImportIcon, KeyIcon, PageIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CodeBlock } from "@/components/ui/code-block";
@@ -10,9 +10,10 @@ import { pushCommand } from "../push-command";
 import type { Database } from "../queries";
 
 /**
- * A database without a version yet: the two ways in, side by side. Upload
- * SQL by hand, or push from CI with remus (the real command, this database's
- * id in it). Reviewers read what will happen, without the buttons.
+ * A database without a version yet: the ways in. Upload SQL by hand, import
+ * a folder of migrations as the history, or push from CI with remus (the
+ * real command, this database's id in it). Reviewers read what will happen,
+ * without the buttons.
  */
 export function GetStarted({
   org,
@@ -31,11 +32,11 @@ export function GetStarted({
         <h2 className="text-lg font-semibold text-foreground">No versions yet</h2>
         <p className="max-w-prose text-base text-muted-foreground">
           {writer
-            ? "Bring in the first one: upload the schema's SQL, or push it from CI."
-            : "The first one appears here once a developer uploads SQL or CI pushes it."}
+            ? "Bring in the first one: upload the schema's SQL, import your migrations as the history, or push it from CI."
+            : "The first one appears here once a developer uploads SQL, imports migrations or CI pushes it."}
         </p>
       </div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card className="flex flex-col gap-4 p-5">
           <Way icon={<PageIcon />} title="Upload SQL">
             Paste your DDL or drop a .sql file. It is compiled in a sandbox Postgres and saved as v1
@@ -52,7 +53,23 @@ export function GetStarted({
             </div>
           )}
         </Card>
-        <Card className="flex min-w-0 flex-col gap-4 p-5">
+        <Card className="flex flex-col gap-4 p-5">
+          <Way icon={<ImportIcon />} title="Import migrations">
+            Drop your migrations folder (sqlx, Flyway, Prisma, dbmate…): each migration becomes a
+            version, so the history starts where your project did.
+          </Way>
+          {writer && (
+            <div className="mt-auto">
+              <Button asChild>
+                <Link to="/$org/$db/import" params={{ org, db: database.slug }}>
+                  Import migrations
+                  <Kbd className="ml-1">I</Kbd>
+                </Link>
+              </Button>
+            </div>
+          )}
+        </Card>
+        <Card className="flex min-w-0 flex-col gap-4 p-5 lg:col-span-2">
           <Way icon={<CloudIcon />} title="Push from CI">
             remus sends the live database&apos;s schema. Unchanged schemas are skipped, so run it on
             every build.

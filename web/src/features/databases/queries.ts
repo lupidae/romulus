@@ -105,6 +105,7 @@ export const originLabel: Record<VersionOrigin, string> = {
   upload: "Upload",
   push: "Push",
   draft: "Draft",
+  import: "Import",
 };
 
 /** The diagnostics a 422 `compile_failed` carries in `details`. */

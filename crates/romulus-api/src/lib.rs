@@ -49,7 +49,7 @@ pub use crate::{
         title = "romulus",
         description = "DBA as a service: versioned Postgres schemas, diffs and collaborative drafts."
     ),
-    components(schemas(error::ErrorBody))
+    components(schemas(error::ErrorBody, imports::ImportFailure))
 )]
 struct ApiDoc;
 

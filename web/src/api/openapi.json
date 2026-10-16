@@ -5562,6 +5562,39 @@
         ],
         "description": "One line of an import's progress (`Accept: application/x-ndjson`)."
       },
+      "ImportFailure": {
+        "type": "object",
+        "description": "Where a failed import stopped (`details` of 422 `import_failed`).",
+        "required": [
+          "index",
+          "id",
+          "name",
+          "path",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportError"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "description": "Its position among the planned migrations.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
       "ImportPreview": {
         "type": "object",
         "description": "What importing the files would do; nothing run yet.",

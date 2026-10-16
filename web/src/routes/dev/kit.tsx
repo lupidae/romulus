@@ -59,6 +59,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TabNav, TabNavItem } from "@/components/ui/tab-nav";
+import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -99,7 +100,7 @@ const sections = [
   ["tabs", "Tabs"],
   ["toggles", "ToggleGroup, Checkbox"],
   ["overlays", "Menu, Popover, Dialog, Toast"],
-  ["feedback", "Alert, Spinner, Skeleton"],
+  ["feedback", "Alert, Spinner, Progress, Skeleton"],
   ["empty", "Empty state"],
   ["table", "Table, CopyField, CodeBlock, TabNav"],
   ["shell", "App shell"],
@@ -727,7 +728,7 @@ function Overlays() {
 
 function Feedback() {
   return (
-    <Section id="feedback" title="Alert, Spinner, Skeleton">
+    <Section id="feedback" title="Alert, Spinner, Progress, Skeleton">
       <div className="grid gap-3">
         <Alert variant="info" title="This draft is behind v13">
           Update it to bring in the latest version before publishing.
@@ -748,6 +749,12 @@ function Feedback() {
         <Specimen label="Spinner">
           <Spinner />
           <Spinner className="text-lg text-primary" />
+        </Specimen>
+        <Specimen label="Progress: a long task, step by step (or indeterminate)">
+          <div className="grid w-full max-w-md gap-3">
+            <Progress aria-label="Import progress" value={7} max={12} />
+            <Progress aria-label="Starting" />
+          </div>
         </Specimen>
         <Specimen label="Skeleton: the exact shape of what loads">
           <div className="flex w-full max-w-md items-center gap-3">
