@@ -987,7 +987,10 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(message.contains("rename one, or import only the folder you mean"), "{message}");
+        assert!(
+            message.contains("rename one, or import only the folder you mean"),
+            "{message}"
+        );
     }
 
     #[test]

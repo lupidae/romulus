@@ -268,7 +268,9 @@ mod tests {
         let _one = wait(&turns, late);
         assert!(matches!(turns.take(late), Err(ApiError::Unavailable(_))));
         // The other places go one per organization.
-        let _others: Vec<Wait> = (6..=12).map(|org| wait(&turns, Uuid::from_u128(org))).collect();
+        let _others: Vec<Wait> = (6..=12)
+            .map(|org| wait(&turns, Uuid::from_u128(org)))
+            .collect();
         assert_eq!(turns.waiting(), WAITING);
         assert!(matches!(
             turns.take(Uuid::from_u128(13)),
