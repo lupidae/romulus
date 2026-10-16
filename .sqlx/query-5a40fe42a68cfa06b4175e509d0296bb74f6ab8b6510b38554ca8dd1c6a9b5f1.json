@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO import_staging (import_id, ordinal, database_id, model, layout)\n                         VALUES ($1, $2, $3, $4::text::jsonb, $5::text::jsonb)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5a40fe42a68cfa06b4175e509d0296bb74f6ab8b6510b38554ca8dd1c6a9b5f1"
+}

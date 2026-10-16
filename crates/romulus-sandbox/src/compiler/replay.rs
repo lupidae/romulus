@@ -31,10 +31,11 @@ use std::{
 use pg_query::NodeEnum;
 use remus_core::Schema;
 use serde::Serialize;
+use tokio::sync::mpsc;
 
 use super::{
     Inner, Lease, MODEL_DATABASE, SandboxError, bump, millis, readable,
-    session::{self, AttemptError, Ran, Settings, Slot, Step},
+    session::{self, AttemptError, Delivery, Ran, Settings, Slot, Step},
 };
 use crate::{
     allowlist,
@@ -166,7 +167,7 @@ impl Inner {
         &self,
         migrations: Vec<String>,
         from: usize,
-        on_event: &mut (dyn FnMut(ReplayEvent) + Send),
+        events: &mpsc::Sender<ReplayEvent>,
     ) -> Result<Replay, SandboxError> {
         if self.prefix_lost.load(Ordering::Relaxed) {
             return Err(SandboxError::PrefixInUse(self.config.prefix.clone()));
@@ -235,7 +236,7 @@ impl Inner {
             &parsed,
             &edits,
             from,
-            on_event,
+            events,
         ));
         let outcome = tokio::select! {
             outcome = &mut work => Some(outcome),
@@ -305,7 +306,7 @@ impl Inner {
         parsed: &ParsedSql,
         edits: &Edits,
         from: usize,
-        on_event: &mut (dyn FnMut(ReplayEvent) + Send),
+        events: &mpsc::Sender<ReplayEvent>,
     ) -> Result<Replay, SandboxError> {
         let settings = Settings {
             statement_timeout_ms: self.config.statement_timeout.as_millis(),
@@ -379,11 +380,13 @@ impl Inner {
                     &each,
                     false,
                     max_locks,
-                    &mut |_, _, _| {},
+                    &mut |_, _, _| Box::pin(std::future::ready(true)),
                 )
                 .await
             {
                 Ok(Ran::All) => break prepared,
+                // Phase 1 hands nothing on.
+                Ok(Ran::Abandoned) => return Err(SandboxError::Abandoned),
                 Ok(Ran::TooManyLocks { step, locks }) => {
                     let (k, last) = part_of[step];
                     return Ok(too_many_locks(k, last, locks));
@@ -426,7 +429,9 @@ impl Inner {
                 }
             }
         };
-        on_event(ReplayEvent::Checked);
+        if events.send(ReplayEvent::Checked).await.is_err() {
+            return Err(SandboxError::Abandoned);
+        }
 
         // Phase 2: a migration at a time, models from `from` on, sent as
         // they are read.
@@ -459,22 +464,33 @@ impl Inner {
         }
         let mut read = 0;
         let mut unreadable = None;
-        let mut emit = |k: usize, json: String, roles: Vec<session::PolicyRoles>| {
+        let mut emit = |k: usize, json: String, roles: Vec<session::PolicyRoles>| -> Delivery {
             match session::postprocess(&json, &roles, MODEL_DATABASE) {
                 Ok(model) => {
                     // Migrations with nothing to run after it share it.
                     let shared = (k + 1..migrations.len())
                         .take_while(|j| empty.contains(j))
                         .count();
-                    for index in k..=k + shared {
-                        on_event(ReplayEvent::Replayed {
-                            index,
-                            model: Box::new(model.clone()),
-                        });
-                    }
                     read += shared + 1;
+                    let events = events.clone();
+                    let model = Box::new(model);
+                    Box::pin(async move {
+                        for index in k..=k + shared {
+                            let event = ReplayEvent::Replayed {
+                                index,
+                                model: model.clone(),
+                            };
+                            if events.send(event).await.is_err() {
+                                return false;
+                            }
+                        }
+                        true
+                    })
                 }
-                Err(e) => unreadable = Some(e.to_string()),
+                Err(e) => {
+                    unreadable = Some(e.to_string());
+                    Box::pin(std::future::ready(true))
+                }
             }
         };
         let ran = slot
@@ -490,6 +506,7 @@ impl Inner {
             .await;
         match ran {
             Ok(Ran::All) => {}
+            Ok(Ran::Abandoned) => return Err(SandboxError::Abandoned),
             Ok(Ran::TooManyLocks { step, locks }) => {
                 // Cannot happen after phase 1 (the same script); kept as
                 // a stop all the same.

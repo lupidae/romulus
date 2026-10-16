@@ -16,6 +16,7 @@ use axum::{
 use remus_core::Schema;
 use romulus_sandbox::{ReplayEvent, import::Migration};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use tokio::sync::mpsc;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -30,7 +31,10 @@ use crate::{
     domain::MigrationFormat,
     error::ErrorBody,
     extract::Json,
-    versions::store::{ImportedVersion, NewImport, store_import},
+    versions::{
+        layout::VersionLayout,
+        store::{ImportedVersion, NewImport, store_import},
+    },
 };
 
 /// Who imports.
@@ -215,6 +219,12 @@ impl Job {
         if planned.new.is_empty() {
             return Ok(self.report(ImportStatus::Unchanged, &[], &[], &[]));
         }
+        // One import of a database at a time: a retry of this one (after a
+        // proxy stopped waiting for the answer) is told it still runs.
+        let _running = self.state.imports.running(
+            self.target.database_id,
+            plan::fingerprint(planned, self.options.dry_run),
+        )?;
         let new: Vec<&Migration> = planned
             .new
             .iter()
@@ -224,14 +234,25 @@ impl Job {
         let from = texts.len();
         texts.extend(new.iter().map(|m| m.sql.clone()));
 
-        let Replayed {
-            models,
-            changes,
-            skipped,
-        } = self.replay(&new, texts, from, events).await?;
-        if self.options.dry_run {
-            return Ok(self.report(ImportStatus::Checked, &[], &changes, &skipped));
+        // Models go to the staging table as they are read (a dry run keeps
+        // none): the job holds one at a time.
+        let staging = (!self.options.dry_run).then(staging_id);
+        if staging.is_some() {
+            discard_stale(&self.state.db).await;
         }
+        let replayed = self.replay(&new, texts, from, events, staging).await;
+        let Replayed { changes, skipped } = match replayed {
+            Ok(replayed) => replayed,
+            Err(err) => {
+                if let Some(staging) = staging {
+                    discard(&self.state.db, staging).await;
+                }
+                return Err(err);
+            }
+        };
+        let Some(staging) = staging else {
+            return Ok(self.report(ImportStatus::Checked, &[], &changes, &skipped));
+        };
 
         let (created_by, created_by_token) = match self.author {
             Author::User(id) => (Some(id), None),
@@ -239,10 +260,8 @@ impl Job {
         };
         let versions = new
             .iter()
-            .zip(models)
             .zip(&skipped)
-            .map(|((migration, model), skipped)| ImportedVersion {
-                model,
+            .map(|(migration, skipped)| ImportedVersion {
                 source: migration.sql.clone(),
                 message: migration.name.clone(),
                 migration_id: migration.id.clone(),
@@ -271,10 +290,19 @@ impl Job {
                 created_by_token,
                 append: self.options.append,
                 imported_before: planned.history.len(),
+                latest: planned.latest.as_ref().map(|l| l.number),
+                staging,
                 versions,
             },
         )
-        .await?;
+        .await;
+        let stored = match stored {
+            Ok(stored) => stored,
+            Err(err) => {
+                discard(&self.state.db, staging).await;
+                return Err(err.into());
+            }
+        };
         if let Some((_, last)) = stored.last() {
             // Open drafts of the database learn their base moved.
             self.state
@@ -285,14 +313,16 @@ impl Job {
         Ok(self.report(ImportStatus::Created, &numbers, &changes, &skipped))
     }
 
-    /// The replay of the history and the new migrations: their models,
-    /// what each changes and skips, or the error naming the failing one.
+    /// The replay of the history and the new migrations: what each new one
+    /// changes and skips (its model staged under `staging`), or the error
+    /// naming the failing one.
     async fn replay(
         &self,
         new: &[&Migration],
         texts: Vec<String>,
         from: usize,
         events: Option<&Events>,
+        staging: Option<Uuid>,
     ) -> ApiResult<Replayed> {
         let planned = &self.planned;
         // One import replays at a time; organizations take turns.
@@ -305,25 +335,15 @@ impl Job {
                 wait.turn().await?
             }
         };
-        // Models arrive as they are read; each is compared with the one
-        // before it, off the async workers.
-        let (models, received) = mpsc::unbounded_channel();
-        let compared = self.compare(received, events.cloned());
-        let sender = events.cloned();
-        let replay = self
-            .state
-            .compiler
-            .replay(texts, from, move |event| match event {
-                ReplayEvent::Checked => {
-                    if let Some(sender) = &sender {
-                        let _ = sender.send(ImportEvent::Checked);
-                    }
-                }
-                ReplayEvent::Replayed { index, model } => {
-                    let _ = models.send((index - from, model));
-                }
-            })
-            .await?;
+        // A model at a time: the replay waits while the last one is
+        // compared and staged, and stops if staging stops.
+        let (sender, received) = mpsc::channel(1);
+        let staged = tokio::spawn(self.stage(received, events.cloned(), from, staging));
+        let replay = self.state.compiler.replay(texts, from, sender).await;
+        let staged = staged.await.map_err(ApiError::internal)?;
+        // Why staging stopped comes first: the replay only stopped with it.
+        let changes = staged?;
+        let replay = replay?;
 
         let skipped: Vec<Vec<SkippedStatement>> = new
             .iter()
@@ -353,64 +373,105 @@ impl Job {
                 errors,
             ));
         }
-        // The replay is over: its sink is dropped, the comparisons end.
-        let Progress { models, changes } = compared.await.map_err(ApiError::internal)?;
-        if models.len() != new.len() {
+        if changes.len() != new.len() {
             return Err(ApiError::Internal(
                 format!(
                     "the replay read {} models for {} migrations",
-                    models.len(),
+                    changes.len(),
                     new.len()
                 )
                 .into(),
             ));
         }
-        Ok(Replayed {
-            models,
-            changes,
-            skipped,
-        })
+        Ok(Replayed { changes, skipped })
     }
 
-    /// What each model read changes against the one before it (the latest
-    /// version for the first), on a blocking thread: a diff of large
-    /// models takes a while. Ends with the replay (its sink dropped).
-    fn compare(
+    /// Takes the replay's events: passes progress on to the client, and
+    /// for each model, what it changes against the one before it (the
+    /// latest version for the first) and its layout (the previous one,
+    /// pruned to it), then stages it. One model in hand at a time; the
+    /// models' total size is held to the budget. Ends with the replay (its
+    /// sender dropped), or stops it by returning.
+    fn stage(
         &self,
-        mut received: mpsc::UnboundedReceiver<(usize, Box<Schema>)>,
+        mut received: mpsc::Receiver<ReplayEvent>,
         sender: Option<Events>,
-    ) -> tokio::task::JoinHandle<Progress> {
+        from: usize,
+        staging: Option<Uuid>,
+    ) -> impl Future<Output = ApiResult<Vec<String>>> + Send + 'static {
         let planned = &self.planned;
         let first_number = planned.preview.first_number.unwrap_or(1);
-        let mut previous = planned
-            .latest
-            .as_ref()
-            .and_then(|(_, model)| Schema::deserialize(model).ok());
+        let latest = planned.latest.as_ref();
+        let mut previous = latest.and_then(|l| Schema::deserialize(&l.model).ok());
+        let mut layout = latest
+            .map(|l| VersionLayout::from_value(&l.layout))
+            .unwrap_or_default();
         let indexes = planned.new.clone();
         let slug = self.target.slug.clone();
-        let expected = indexes.len();
-        tokio::task::spawn_blocking(move || {
-            let mut progress = Progress {
-                models: Vec::with_capacity(expected),
-                changes: Vec::with_capacity(expected),
-            };
-            while let Some((k, model)) = received.blocking_recv() {
-                let mut model = *model;
-                slug.clone_into(&mut model.database);
-                let changes = changes(previous.as_ref(), &model);
+        let db = self.state.db.clone();
+        let database_id = self.target.database_id;
+        let budget = self.state.imports.model_budget();
+        async move {
+            let mut changes = Vec::with_capacity(indexes.len());
+            let mut bytes = 0usize;
+            while let Some(event) = received.recv().await {
+                let (index, model) = match event {
+                    ReplayEvent::Checked => {
+                        if let Some(sender) = &sender {
+                            let _ = sender.send(ImportEvent::Checked);
+                        }
+                        continue;
+                    }
+                    ReplayEvent::Replayed { index, model } => (index, model),
+                };
+                let k = index - from;
+                let slug = slug.clone();
+                let before = previous.take();
+                let layout_before = std::mem::take(&mut layout);
+                // Diffing and serialising megabytes: off the async workers.
+                let compared = tokio::task::spawn_blocking(move || {
+                    let mut model = *model;
+                    slug.clone_into(&mut model.database);
+                    let summary = changes_between(before.as_ref(), &model);
+                    let layout = layout_before.pruned(&model);
+                    let json = serde_json::to_string(&model)?;
+                    let layout_json = serde_json::to_string(&layout)?;
+                    Ok::<_, serde_json::Error>((model, summary, layout, json, layout_json))
+                })
+                .await
+                .map_err(ApiError::internal)?
+                .map_err(ApiError::internal)?;
+                let (model, summary, next_layout, json, layout_json) = compared;
+                bytes += json.len();
+                if bytes > budget {
+                    return Err(too_large(budget));
+                }
+                if let Some(staging) = staging {
+                    sqlx::query!(
+                        "INSERT INTO import_staging (import_id, ordinal, database_id, model, layout)
+                         VALUES ($1, $2, $3, $4::text::jsonb, $5::text::jsonb)",
+                        staging,
+                        i32::try_from(k).map_err(ApiError::internal)?,
+                        database_id,
+                        json,
+                        layout_json,
+                    )
+                    .execute(&db)
+                    .await?;
+                }
                 if let Some(sender) = &sender {
                     let _ = sender.send(ImportEvent::Replayed {
                         index: indexes[k],
                         number: first_number + i32::try_from(k).unwrap_or(i32::MAX),
-                        changes: changes.clone(),
+                        changes: summary.clone(),
                     });
                 }
-                previous = Some(model.clone());
-                progress.models.push(model);
-                progress.changes.push(changes);
+                previous = Some(model);
+                layout = next_layout;
+                changes.push(summary);
             }
-            progress
-        })
+            Ok(changes)
+        }
     }
 
     /// The report: every migration of the files, the new ones with what
@@ -456,21 +517,58 @@ impl Job {
     }
 }
 
-/// What a replay made of the new migrations.
+/// What a replay made of the new migrations (their models are staged).
 struct Replayed {
-    models: Vec<Schema>,
     changes: Vec<String>,
     skipped: Vec<Vec<SkippedStatement>>,
 }
 
-struct Progress {
-    models: Vec<Schema>,
-    changes: Vec<String>,
+/// 422 `models_too_large`: the versions would hold more than `budget`
+/// bytes of models.
+fn too_large(budget: usize) -> ApiError {
+    ApiError::Unprocessable {
+        code: "models_too_large",
+        message: format!(
+            "These migrations' schemas add up to more than {} MiB of versions (each version keeps its whole schema). Import them in several parts, the oldest first. Nothing was imported.",
+            budget >> 20
+        ),
+        details: None,
+    }
+}
+
+/// A new import's id in the staging table.
+fn staging_id() -> Uuid {
+    let mut bytes = [0u8; 16];
+    // The OS random source failing leaves no safe way to continue.
+    getrandom::fill(&mut bytes).expect("the OS random number generator is available");
+    uuid::Builder::from_random_bytes(bytes).into_uuid()
+}
+
+/// Removes an import's staged models.
+async fn discard(db: &PgPool, staging: Uuid) {
+    let deleted = sqlx::query!("DELETE FROM import_staging WHERE import_id = $1", staging)
+        .execute(db)
+        .await;
+    if let Err(err) = deleted {
+        tracing::warn!(error = %err, %staging, "staged models left behind");
+    }
+}
+
+/// Removes models staged by imports that never ended (a stopped process):
+/// no import runs for an hour.
+async fn discard_stale(db: &PgPool) {
+    let deleted =
+        sqlx::query!("DELETE FROM import_staging WHERE created_at < now() - interval '1 hour'")
+            .execute(db)
+            .await;
+    if let Err(err) = deleted {
+        tracing::warn!(error = %err, "stale staged models left behind");
+    }
 }
 
 /// `"2 tables added, 1 changed"`, against the model before (nothing for
 /// the first version).
-fn changes(previous: Option<&Schema>, model: &Schema) -> String {
+fn changes_between(previous: Option<&Schema>, model: &Schema) -> String {
     if let Some(previous) = previous {
         return romulus_diff::diff(previous, model).summary.text;
     }

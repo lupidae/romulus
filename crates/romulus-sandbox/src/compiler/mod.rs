@@ -166,6 +166,9 @@ pub enum SandboxError {
     VersionMismatch { server: String, parser: u32 },
     #[error("no sandbox database became free within {0:?}")]
     Busy(Duration),
+    /// A replay's receiver of models went away: the replay stopped.
+    #[error("the replay's receiver went away")]
+    Abandoned,
 }
 
 /// Why [`Compiler::compile_for`] returned no compilation.
@@ -503,9 +506,12 @@ impl Compiler {
     /// Replay migrations from an empty database, one after the other in one
     /// sandbox session, reading the model after each one from `from` on
     /// (the earlier ones are only run): a migration import (see
-    /// [`crate::import`] and the `replay` module). Models arrive through
-    /// `on_event`, as they are read; the result says what was skipped per
-    /// migration, and where the replay stopped if it did.
+    /// [`crate::import`] and the `replay` module). Models are sent on
+    /// `events` as they are read, one at a time: a bounded channel holds
+    /// the replay back while its receiver is busy, so models never pile up,
+    /// and a receiver that goes away stops it ([`SandboxError::Abandoned`]).
+    /// The result says what was skipped per migration, and where the replay
+    /// stopped if it did.
     ///
     /// Cancel-safe like [`Compiler::compile`]. One import at a time; it
     /// counts as an upload for the pool's share.
@@ -513,7 +519,7 @@ impl Compiler {
         &self,
         migrations: Vec<String>,
         from: usize,
-        mut on_event: impl FnMut(ReplayEvent) + Send + 'static,
+        events: tokio::sync::mpsc::Sender<ReplayEvent>,
     ) -> Result<Replay, SandboxError> {
         bump(&self.inner.counters.requests);
         let inner = Arc::clone(&self.inner);
@@ -527,7 +533,7 @@ impl Compiler {
                 .map_err(|_| SandboxError::Busy(wait))?
                 .map_err(|_| closed())?;
             let _upload = inner.uploads.acquire().await.map_err(|_| closed())?;
-            inner.replay(migrations, from, &mut on_event).await
+            inner.replay(migrations, from, &events).await
         })
         .await
         .map_err(|e| SandboxError::Unavailable(format!("the import failed unexpectedly: {e}")))?

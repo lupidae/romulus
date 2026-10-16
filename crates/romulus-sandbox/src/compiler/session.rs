@@ -241,7 +241,13 @@ pub(crate) enum Ran {
     /// stopped there and rolled back. Everything a replay creates stays
     /// locked until it ends, in the lock table every compile shares.
     TooManyLocks { step: usize, locks: i64 },
+    /// The models' receiver went away: stopped there, rolled back.
+    Abandoned,
 }
+
+/// Hands a model on, waiting while its receiver is busy; `false` when the
+/// receiver is gone (the replay then stops).
+pub(crate) type Delivery = std::pin::Pin<Box<dyn Future<Output = bool> + Send>>;
 
 /// The locks this session holds.
 const OWN_LOCKS_SQL: &str =
@@ -249,7 +255,8 @@ const OWN_LOCKS_SQL: &str =
 
 impl Slot {
     /// Run a script step by step in one transaction, reading the model
-    /// after the steps that ask for it (`each(k, model, policy roles)`),
+    /// after the steps that ask for it (`each(k, model, policy roles)`,
+    /// awaited before the next step: models are handed on one at a time),
     /// then roll back. A failure's position is in the whole script.
     #[allow(clippy::too_many_arguments)]
     pub async fn replay(
@@ -260,7 +267,7 @@ impl Slot {
         steps: &[Step],
         records_policy_roles: bool,
         max_locks: usize,
-        each: &mut (dyn FnMut(usize, String, Vec<PolicyRoles>) + Send),
+        each: &mut (dyn FnMut(usize, String, Vec<PolicyRoles>) -> Delivery + Send),
     ) -> Result<Ran, AttemptError> {
         self.connection(base).await.map_err(AttemptError::stale)?;
         let Self { conn, dirty, .. } = self;
@@ -336,7 +343,14 @@ impl Slot {
                 .execute(&mut *conn)
                 .await
                 .map_err(AttemptError::running)?;
-            each(k, model, roles);
+            if !each(k, model, roles).await {
+                raw_sql("ROLLBACK")
+                    .execute(&mut *conn)
+                    .await
+                    .map_err(AttemptError::running)?;
+                *dirty = false;
+                return Ok(Ran::Abandoned);
+            }
         }
         raw_sql("ROLLBACK")
             .execute(&mut *conn)

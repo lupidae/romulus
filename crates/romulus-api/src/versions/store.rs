@@ -275,8 +275,6 @@ async fn blocking<T: Send + 'static>(
 
 /// One version of an import, about to be stored.
 pub struct ImportedVersion {
-    /// Canonical, with its `database` set.
-    pub model: Schema,
     /// The migration's up SQL.
     pub source: String,
     /// The file (or folder) name.
@@ -289,7 +287,9 @@ pub struct ImportedVersion {
     pub skipped: serde_json::Value,
 }
 
-/// An import's versions, stored together or not at all.
+/// An import's versions, stored together or not at all. Their models and
+/// layouts are in `import_staging` under `staging`, one row per version in
+/// order (`imports::run` writes them as the replay reads them).
 pub struct NewImport {
     pub database_id: Uuid,
     pub format: crate::domain::MigrationFormat,
@@ -300,38 +300,34 @@ pub struct NewImport {
     /// How many migrations the database had imported when the import was
     /// planned: another import storing meanwhile makes this one stale.
     pub imported_before: usize,
+    /// The latest version's number when the import was planned: the first
+    /// version was compared with it and inherits its layout.
+    pub latest: Option<i32>,
+    pub staging: Uuid,
     pub versions: Vec<ImportedVersion>,
 }
 
 /// Stores an import's versions in one transaction, numbered after the
-/// latest version under the same lock as [`store`], each inheriting the
-/// previous one's layout (pruned to its model). Refuses with 409
-/// `concurrent_import` when another import stored migrations since this one
-/// was planned, and `has_versions` when versions that were not imported
-/// exist and `append` is false. Returns each version's (id, number).
+/// latest version under the same lock as [`store`], their staged models
+/// and layouts moved in (and the staging rows deleted) without passing
+/// through the API. Refuses with 409 `concurrent_import` when another
+/// import stored migrations, or another version was created, since this
+/// one was planned, and `has_versions` when versions that were not
+/// imported exist and `append` is false. Returns each version's (id,
+/// number).
 #[allow(clippy::too_many_lines)] // one transaction, query after query
 pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)>, StoreError> {
-    let database_id = new.database_id;
     let NewImport {
+        database_id,
         format,
         created_by,
         created_by_token,
         append,
         imported_before,
+        latest: planned_latest,
+        staging,
         versions,
-        ..
     } = new;
-    // Serialising hundreds of models: off the async workers, before the lock.
-    let versions = blocking(move || {
-        versions
-            .into_iter()
-            .map(|v| {
-                let json = serde_json::to_value(&v.model).map_err(ApiError::internal)?;
-                Ok::<_, ApiError>((v, json))
-            })
-            .collect::<Result<Vec<_>, _>>()
-    })
-    .await??;
 
     let mut tx = db.begin().await?;
     sqlx::query_scalar!(
@@ -369,33 +365,44 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
             }));
         }
     }
-    let latest = latest(&mut *tx, database_id).await?;
-    let mut number = latest.as_ref().map_or(0, |l| l.number);
-    let mut layout = latest
-        .map(|l| VersionLayout::from_value(&l.layout))
-        .unwrap_or_default();
+    let latest = sqlx::query_scalar!(
+        "SELECT max(number) FROM versions WHERE database_id = $1",
+        database_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if latest != planned_latest {
+        return Err(StoreError::Api(ApiError::Conflict {
+            code: "concurrent_import",
+            message: "A version of this database was created during the import. Import again: nothing was stored."
+                .into(),
+        }));
+    }
+    let mut number = latest.unwrap_or(0);
 
     let mut stored = Vec::with_capacity(versions.len());
-    for (version, model) in versions {
+    for (k, version) in versions.into_iter().enumerate() {
         number += 1;
-        layout = layout.pruned(&version.model);
-        let layout_json = serde_json::to_value(&layout).map_err(ApiError::internal)?;
         let message: String = version.message.chars().take(1000).collect();
         let id = sqlx::query_scalar!(
             "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,
                                    message, created_by, created_by_token)
-             VALUES ($1, $2, $3, $4, 'migration', 'import', $5, $6, $7, $8) RETURNING id",
+             SELECT $1, $2, s.model, $3, 'migration', 'import', s.layout, $4, $5, $6
+             FROM import_staging s
+             WHERE s.import_id = $7 AND s.ordinal = $8
+             RETURNING id",
             database_id,
             number,
-            model,
             version.source,
-            layout_json,
             message.trim(),
             created_by,
             created_by_token,
+            staging,
+            i32::try_from(k).map_err(ApiError::internal)?,
         )
-        .fetch_one(&mut *tx)
-        .await?;
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| ApiError::Internal(format!("no staged model for version {k}").into()))?;
         let inserted = sqlx::query!(
             "INSERT INTO version_migrations (version_id, database_id, migration_id, path, format, checksum, skipped)
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -421,6 +428,9 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
         }
         stored.push((id, number));
     }
+    sqlx::query!("DELETE FROM import_staging WHERE import_id = $1", staging)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     tracing::info!(database = %database_id, versions = stored.len(), last = number, "migrations imported");
     Ok(stored)

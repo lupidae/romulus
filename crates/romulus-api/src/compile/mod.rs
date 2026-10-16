@@ -209,14 +209,15 @@ impl SqlCompiler {
 
     /// A migration import's replay (`romulus_sandbox::Compiler::replay`):
     /// the migrations from an empty database, a model after each one from
-    /// `from` on, sent through `on_event`. Without a sandbox (tests), the
-    /// function compiles each migration's replayed text alone (its errors)
-    /// and the texts so far joined (the model).
+    /// `from` on, sent on `events` one at a time (the replay waits while
+    /// the receiver is busy, and stops if it goes away). Without a sandbox
+    /// (tests), the function compiles each migration's replayed text alone
+    /// (its errors) and the texts so far joined (the model).
     pub async fn replay(
         &self,
         migrations: Vec<String>,
         from: usize,
-        mut on_event: impl FnMut(ReplayEvent) + Send + 'static,
+        events: tokio::sync::mpsc::Sender<ReplayEvent>,
     ) -> ApiResult<Replay> {
         match &self.0 {
             Backend::None => Err(unavailable()),
@@ -227,26 +228,30 @@ impl SqlCompiler {
                     )
                 })?;
                 compiler
-                    .replay(migrations, from, on_event)
+                    .replay(migrations, from, events)
                     .await
-                    .map_err(|err| {
-                        tracing::warn!(error = %Chain(&err), "sandbox import replay failed");
-                        match err {
-                            SandboxError::Busy(_) => ApiError::Unavailable(
+                    .map_err(|err| match err {
+                        SandboxError::Abandoned => abandoned(),
+                        SandboxError::Busy(_) => {
+                            tracing::warn!(error = %Chain(&err), "sandbox import replay failed");
+                            ApiError::Unavailable(
                                 "The SQL compiler is busy with another import. Try again in a minute."
                                     .into(),
-                            ),
-                            _ => unavailable(),
+                            )
+                        }
+                        _ => {
+                            tracing::warn!(error = %Chain(&err), "sandbox import replay failed");
+                            unavailable()
                         }
                     })
             }
             Backend::Function(compile) => {
                 let compile = Arc::clone(compile);
                 tokio::task::spawn_blocking(move || {
-                    replay_with(&*compile, &migrations, from, &mut on_event)
+                    replay_with(&*compile, &migrations, from, &events)
                 })
                 .await
-                .map_err(ApiError::internal)
+                .map_err(ApiError::internal)?
             }
         }
     }
@@ -299,8 +304,8 @@ fn replay_with(
     compile: &CompileFn,
     migrations: &[String],
     from: usize,
-    on_event: &mut (dyn FnMut(ReplayEvent) + Send),
-) -> Replay {
+    events: &tokio::sync::mpsc::Sender<ReplayEvent>,
+) -> ApiResult<Replay> {
     let analyses: Vec<_> = migrations
         .iter()
         .map(|m| romulus_sandbox::import::analyze(m))
@@ -313,37 +318,43 @@ fn replay_with(
         failure: Some(ReplayFailure { index, diagnostics }),
         duration_ms: 0,
     };
-    let mut models = Vec::new();
+    // Like the sandbox: everything checked first, then a model at a time.
     for (k, analysis) in analyses.iter().enumerate() {
         if !analysis.errors.is_empty() {
-            return failed(k, analysis.errors.clone());
+            return Ok(failed(k, analysis.errors.clone()));
         }
         let alone = compile(&analysis.sql);
         if alone.model.is_none() && !analysis.sql.trim().is_empty() {
-            return failed(k, alone.diagnostics);
-        }
-        if k >= from {
-            let so_far: Vec<&str> = analyses[..=k].iter().map(|a| a.sql.as_str()).collect();
-            let Some(model) = compile(&so_far.join("\n;\n")).model else {
-                return failed(k, Vec::new());
-            };
-            models.push((k, model.canonical()));
+            return Ok(failed(k, alone.diagnostics));
         }
     }
-    on_event(ReplayEvent::Checked);
-    for (index, model) in models {
-        on_event(ReplayEvent::Replayed {
-            index,
-            model: Box::new(model),
-        });
+    events
+        .blocking_send(ReplayEvent::Checked)
+        .map_err(|_| abandoned())?;
+    for k in from..analyses.len() {
+        let so_far: Vec<&str> = analyses[..=k].iter().map(|a| a.sql.as_str()).collect();
+        let Some(model) = compile(&so_far.join("\n;\n")).model else {
+            return Ok(failed(k, Vec::new()));
+        };
+        let event = ReplayEvent::Replayed {
+            index: k,
+            model: Box::new(model.canonical()),
+        };
+        events.blocking_send(event).map_err(|_| abandoned())?;
     }
-    Replay {
+    Ok(Replay {
         notes: vec![Vec::new(); migrations.len()],
         skipped,
         stubs: Vec::new(),
         failure: None,
         duration_ms: 0,
-    }
+    })
+}
+
+/// The replay stopped because its receiver went away: whatever made it go
+/// away is the answer, this only stands in for it.
+fn abandoned() -> ApiError {
+    ApiError::Internal("the import stopped receiving models".into())
 }
 
 /// Why [`SqlCompiler::compile_for`] returned no compilation.

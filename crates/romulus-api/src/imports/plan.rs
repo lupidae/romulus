@@ -106,8 +106,33 @@ pub struct Planned {
     pub history: Vec<Existing>,
     /// The new migrations, by index into `migrations`.
     pub new: Vec<usize>,
-    /// The latest version (any origin): number and model.
-    pub latest: Option<(i32, serde_json::Value)>,
+    /// The latest version (any origin), which the first new one follows.
+    pub latest: Option<Latest>,
+}
+
+/// The latest version when the import was planned: the first new version
+/// is compared with its model and inherits its layout. Storing refuses if
+/// it changed meanwhile.
+#[derive(Debug)]
+pub struct Latest {
+    pub number: i32,
+    pub model: serde_json::Value,
+    pub layout: serde_json::Value,
+}
+
+/// What an import does, as a fingerprint: its new migrations (ids and
+/// checksums) and whether it is a dry run. A retry of the same request has
+/// the same one.
+pub fn fingerprint(planned: &Planned, dry_run: bool) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update([u8::from(dry_run)]);
+    for &k in &planned.new {
+        let migration = &planned.migrations[k];
+        hash.update(migration.id.as_bytes());
+        hash.update([0]);
+        hash.update(Sha256::digest(migration.sql.as_bytes()));
+    }
+    hash.finalize().into()
 }
 
 pub fn checksum(sql: &str) -> Vec<u8> {
@@ -175,16 +200,16 @@ pub async fn plan(
     )
     .fetch_one(db)
     .await?;
-    let latest = sqlx::query!(
-        "SELECT number, model FROM versions WHERE database_id = $1 ORDER BY number DESC LIMIT 1",
+    let latest = sqlx::query_as!(
+        Latest,
+        "SELECT number, model, layout FROM versions WHERE database_id = $1 ORDER BY number DESC LIMIT 1",
         database_id,
     )
     .fetch_optional(db)
-    .await?
-    .map(|row| (row.number, row.model));
+    .await?;
 
     // Analysing hundreds of migrations: off the async workers.
-    let latest_number = latest.as_ref().map(|(n, _)| *n);
+    let latest_number = latest.as_ref().map(|l| l.number);
     let planned =
         tokio::task::spawn_blocking(move || build(planned, history, others, latest_number))
             .await

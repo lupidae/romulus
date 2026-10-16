@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM import_staging WHERE created_at < now() - interval '1 hour'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "e6eb85c275994c1762037f175b77f6395f8bb76040b8e0d89c72ead684ab9274"
+}

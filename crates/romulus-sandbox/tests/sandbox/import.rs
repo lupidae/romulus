@@ -1,8 +1,6 @@
 //! Migration imports: replaying migrations one after the other, a model
 //! after each.
 
-use std::sync::{Arc, Mutex};
-
 use remus_core::Schema;
 use romulus_sandbox::{Code, Compiler, Replay, ReplayEvent};
 
@@ -15,21 +13,25 @@ pub async fn replay(
     migrations: &[&str],
     from: usize,
 ) -> (Replay, Vec<(usize, Schema)>) {
-    let models = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&models);
+    let (events, mut received) = tokio::sync::mpsc::channel(2);
+    let collected = tokio::spawn(async move {
+        let mut models = Vec::new();
+        while let Some(event) = received.recv().await {
+            if let ReplayEvent::Replayed { index, model } = event {
+                models.push((index, *model));
+            }
+        }
+        models
+    });
     let replay = compiler
         .replay(
             migrations.iter().map(|m| (*m).to_owned()).collect(),
             from,
-            move |event| {
-                if let ReplayEvent::Replayed { index, model } = event {
-                    sink.lock().unwrap().push((index, *model));
-                }
-            },
+            events,
         )
         .await
         .expect("the sandbox runs");
-    let models = std::mem::take(&mut *models.lock().unwrap());
+    let models = collected.await.expect("the collector");
     (replay, models)
 }
 
@@ -612,4 +614,35 @@ fn a_huge_migration_is_stopped_partway_by_the_lock_budget() {
             assert_eq!(models.len(), 0);
         },
     );
+}
+
+/// Models are handed on one at a time: a receiver that goes away stops the
+/// replay instead of letting models pile up.
+#[test]
+fn a_replay_whose_receiver_leaves_stops() {
+    with_compiler(|compiler| async move {
+        let (events, mut received) = tokio::sync::mpsc::channel(1);
+        let migrations: Vec<String> = (0..50)
+            .map(|k| format!("CREATE TABLE t{k} (id int);"))
+            .collect();
+        let replay = compiler.replay(migrations, 0, events);
+        let listener = async move {
+            // The check, then one model: enough.
+            let mut seen = 0;
+            while let Some(event) = received.recv().await {
+                if let ReplayEvent::Replayed { .. } = event {
+                    seen += 1;
+                    break;
+                }
+            }
+            drop(received);
+            seen
+        };
+        let (outcome, seen) = tokio::join!(replay, listener);
+        assert_eq!(seen, 1);
+        assert!(
+            matches!(outcome, Err(romulus_sandbox::SandboxError::Abandoned)),
+            "{outcome:?}"
+        );
+    });
 }

@@ -947,3 +947,83 @@ async fn an_import_waits_for_its_turn_and_says_so(db: PgPool) {
         ]
     );
 }
+
+/// Past the models' budget the import stops, nothing stored or staged.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_import_whose_models_outgrow_the_budget_is_refused(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let app = TestApp::compiling(db.clone());
+    app.state.imports.set_model_budget(20_000);
+    let files: Vec<(String, String)> = (0..10)
+        .map(|k| {
+            let tables = (0..20)
+                .map(|t| format!("CREATE TABLE t_{k}_{t} (id bigint);"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (format!("{:04}_tables.sql", k + 1), tables)
+        })
+        .collect();
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let refused = web(
+        &app,
+        &team.developer,
+        &team.path("/databases/app/imports"),
+        &files,
+        None,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.code(), "models_too_large");
+    assert_eq!(versions(&db, id).await, []);
+    let staged = sqlx::query_scalar!(r#"SELECT count(*) AS "count!" FROM import_staging"#)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(staged, 0);
+}
+
+/// A retry of an import still running (a proxy gave up waiting for the
+/// answer) is told so; once it is done, the same request answers that
+/// nothing is left.
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_retry_while_the_import_runs_is_told_it_still_runs(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let id = database(&db, team.org, "app").await;
+    let token = api_token(&db, id, TokenScope::Push).await;
+    let app = TestApp::compiling(db.clone());
+    let archive = zip(HISTORY);
+    // Another organization's import has the turn: this one waits.
+    let held = app.state.imports.take(Uuid::from_u128(7)).ok();
+    let first = ci(&app, id, &token, "", "application/zip", archive.clone());
+    let retry = async {
+        while app.state.imports.waiting() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let retried = ci(&app, id, &token, "", "application/zip", archive.clone()).await;
+        drop(held);
+        retried
+    };
+    let (first, retried) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::join!(first, retry)
+    })
+    .await
+    .expect("both answered");
+    assert_eq!(retried.status, StatusCode::CONFLICT);
+    assert_eq!(retried.code(), "concurrent_import");
+    assert!(
+        retried.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("still being imported"),
+        "{}",
+        retried.json()
+    );
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.json());
+    let again = ci(&app, id, &token, "", "application/zip", archive).await;
+    assert_eq!(again.status, StatusCode::OK);
+    assert_eq!(again.json()["status"], "unchanged");
+}

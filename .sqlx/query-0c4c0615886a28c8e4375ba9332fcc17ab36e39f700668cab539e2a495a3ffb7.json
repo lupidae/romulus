@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,\n                                   message, created_by, created_by_token)\n             SELECT $1, $2, s.model, $3, 'migration', 'import', s.layout, $4, $5, $6\n             FROM import_staging s\n             WHERE s.import_id = $7 AND s.ordinal = $8\n             RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0c4c0615886a28c8e4375ba9332fcc17ab36e39f700668cab539e2a495a3ffb7"
+}

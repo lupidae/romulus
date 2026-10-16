@@ -13,11 +13,19 @@
 //! end on its own (`run::start` spawns it), like one already replaying, so
 //! leaving the page never loses an import. Only a place given up (the wait
 //! timed out) stops counting; a turn handed to it passes on.
+//!
+//! [`Turns::running`] also keeps one import per database, waiting or
+//! replaying: another one (a CI retry after its proxy gave up waiting, say)
+//! is told it is still running, and [`Turns::model_budget`] is how many
+//! bytes of models one import may store.
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use tokio::sync::oneshot;
@@ -33,6 +41,10 @@ const WAITING: usize = 16;
 /// How long an import waits for its turn, at most.
 const MAX_WAIT: Duration = Duration::from_mins(10);
 
+/// The models one import may store, all versions together, by default:
+/// each version keeps its whole model (about 2 MB for 1 000 tables).
+pub const MODEL_BUDGET: usize = 256 << 20;
+
 /// The queue (one per API). Cheap to clone.
 #[derive(Clone, Default)]
 pub struct Turns(Arc<Inner>);
@@ -40,6 +52,26 @@ pub struct Turns(Arc<Inner>);
 #[derive(Default)]
 struct Inner {
     state: Mutex<State>,
+    /// Imports in flight, by database: when they started, what they do.
+    running: Mutex<HashMap<Uuid, (Instant, [u8; 32])>>,
+    /// [`MODEL_BUDGET`] unless set (0).
+    model_budget: AtomicUsize,
+}
+
+/// An import of a database in flight; it ends when this is dropped.
+pub struct Running {
+    inner: Arc<Inner>,
+    database: Uuid,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        lock(&self.inner.running).remove(&self.database);
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[derive(Default)]
@@ -103,6 +135,46 @@ impl Turns {
 }
 
 impl Turns {
+    /// Marks an import of `database` (`fingerprint`: `plan::fingerprint`)
+    /// as in flight until the guard is dropped; 409 `concurrent_import` if
+    /// one already is, saying whether it is this very import (a retry).
+    pub fn running(&self, database: Uuid, fingerprint: [u8; 32]) -> Result<Running, ApiError> {
+        let mut running = lock(&self.0.running);
+        if let Some((started, theirs)) = running.get(&database) {
+            let ago = ago(started.elapsed());
+            return Err(ApiError::Conflict {
+                code: "concurrent_import",
+                message: if *theirs == fingerprint {
+                    format!(
+                        "These migrations are still being imported (started {ago} ago): the import finishes on the server. Send the same request again in a minute: once the versions are stored, it answers that nothing is left to import."
+                    )
+                } else {
+                    format!(
+                        "Another import of this database is running (started {ago} ago). Send this one again when it is done."
+                    )
+                },
+            });
+        }
+        running.insert(database, (Instant::now(), fingerprint));
+        Ok(Running {
+            inner: Arc::clone(&self.0),
+            database,
+        })
+    }
+
+    /// How many bytes of models one import may store ([`MODEL_BUDGET`]).
+    pub fn model_budget(&self) -> usize {
+        match self.0.model_budget.load(Ordering::Relaxed) {
+            0 => MODEL_BUDGET,
+            set => set,
+        }
+    }
+
+    /// Another budget (tests).
+    pub fn set_model_budget(&self, bytes: usize) {
+        self.0.model_budget.store(bytes, Ordering::Relaxed);
+    }
+
     /// Imports waiting for their turn.
     pub fn waiting(&self) -> usize {
         let mut state = self.0.lock();
@@ -126,9 +198,19 @@ impl Wait {
     }
 }
 
+/// `42 s`, `3 min`.
+fn ago(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 120 {
+        format!("{seconds} s")
+    } else {
+        format!("{} min", seconds / 60)
+    }
+}
+
 impl Inner {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     /// Hands the turn to the next waiter still there, or frees it.
@@ -221,6 +303,26 @@ mod tests {
             .enumerate()
             .filter_map(|(k, w)| w.0.try_recv().ok().map(|turn| (k, turn)))
             .collect()
+    }
+
+    #[test]
+    fn one_import_per_database_is_in_flight_and_a_retry_is_told_so() {
+        let turns = Turns::default();
+        let (database, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let running = turns.running(database, [1; 32]).unwrap();
+        let Err(ApiError::Conflict { code, message }) = turns.running(database, [1; 32]) else {
+            panic!("one at a time");
+        };
+        assert_eq!(code, "concurrent_import");
+        assert!(message.contains("still being imported"), "{message}");
+        let Err(ApiError::Conflict { message, .. }) = turns.running(database, [2; 32]) else {
+            panic!("one at a time");
+        };
+        assert!(message.contains("Another import"), "{message}");
+        // Other databases are not concerned; done, the database is free.
+        let _other = turns.running(other, [1; 32]).unwrap();
+        drop(running);
+        let _again = turns.running(database, [2; 32]).unwrap();
     }
 
     #[test]
