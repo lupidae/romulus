@@ -70,7 +70,7 @@ use crate::{
     auth::{Member, min},
     compile::{self, Diagnostic, SqlCompiler},
     databases,
-    domain::{MigrationFormat, SourceKind, VersionOrigin},
+    domain::{MigrationFormat, PgMajor, SourceKind, VersionOrigin},
     error::ErrorBody,
     extract::{Json, Path, Query},
     orgs::invalid,
@@ -130,6 +130,41 @@ pub struct VersionSummary {
     /// Published from a draft in migration mode: the migration it was
     /// written as is at `…/versions/{number}/migration`.
     pub written_migration: bool,
+    pub postgres: VersionPostgres,
+}
+
+/// The Postgres a version was compiled on (uploads, drafts, imports: the
+/// sandbox of its database's major) or pushed from (remus JSON: the real
+/// server). Versions keep it when their database moves to another major.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct VersionPostgres {
+    /// As remus read it: `17.11 (Debian 17.11-1.pgdg13+1)`.
+    pub server_version: String,
+    /// `server_version`'s major; `null` when it does not start with one.
+    pub major: Option<i32>,
+    /// The major its database targeted when it was created.
+    pub database_major: i32,
+    /// Pushed from a server on another major than its database targeted
+    /// then: the history flags it, and offers to move the database.
+    pub other_major: bool,
+}
+
+impl VersionPostgres {
+    /// From a version's `server_version`, `pg_major` and `database_major`.
+    pub fn new(
+        origin: VersionOrigin,
+        server_version: Option<String>,
+        major: Option<i16>,
+        database_major: i16,
+    ) -> Self {
+        Self {
+            server_version: server_version.unwrap_or_default(),
+            major: major.map(i32::from),
+            database_major: i32::from(database_major),
+            other_major: origin == VersionOrigin::Push
+                && major.is_some_and(|m| m != database_major),
+        }
+    }
 }
 
 /// One version, whole.
@@ -159,6 +194,7 @@ pub struct VersionDetail {
     /// Published from a draft in migration mode: the migration it was
     /// written as is at `…/versions/{number}/migration`.
     pub written_migration: bool,
+    pub postgres: VersionPostgres,
 }
 
 /// An approval of the draft a version was published from, as it was then.
@@ -273,6 +309,9 @@ struct SummaryRow {
     token_id: Option<Uuid>,
     token_name: Option<String>,
     written_migration: bool,
+    server_version: Option<String>,
+    pg_major: Option<i16>,
+    database_major: i16,
 }
 
 impl From<SummaryRow> for VersionSummary {
@@ -286,6 +325,12 @@ impl From<SummaryRow> for VersionSummary {
             created_at: r.created_at,
             author: Author::from_columns(r.user_id, r.user_name, r.token_id, r.token_name),
             written_migration: r.written_migration,
+            postgres: VersionPostgres::new(
+                r.origin,
+                r.server_version,
+                r.pg_major,
+                r.database_major,
+            ),
         }
     }
 }
@@ -303,7 +348,8 @@ async fn page(
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
                   u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
-                  v.migration_sql IS NOT NULL AS "written_migration!"
+                  v.migration_sql IS NOT NULL AS "written_migration!",
+                  v.server_version, v.pg_major, v.database_major
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -324,7 +370,8 @@ async fn summary(db: &PgPool, id: Uuid) -> ApiResult<VersionSummary> {
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
                   v.source_kind AS "source_kind: SourceKind", v.message, v.created_at,
                   u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
-                  v.migration_sql IS NOT NULL AS "written_migration!"
+                  v.migration_sql IS NOT NULL AS "written_migration!",
+                  v.server_version, v.pg_major, v.database_major
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -349,7 +396,8 @@ pub(crate) async fn detail(
                   u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
                   m.migration_id AS "migration_id?", m.path AS "migration_path?",
                   m.format AS "migration_format?: MigrationFormat", m.skipped AS "migration_skipped?",
-                  v.migration_sql IS NOT NULL AS "written_migration!"
+                  v.migration_sql IS NOT NULL AS "written_migration!",
+                  v.server_version, v.pg_major, v.database_major
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -394,6 +442,12 @@ pub(crate) async fn detail(
         },
         approvals,
         written_migration: row.written_migration,
+        postgres: VersionPostgres::new(
+            row.origin,
+            row.server_version,
+            row.pg_major,
+            row.database_major,
+        ),
     })
 }
 
@@ -442,10 +496,16 @@ fn checked_message(message: Option<&str>) -> ApiResult<Option<String>> {
     Ok(message.map(str::to_owned))
 }
 
-/// Compiles `sql` for the database `slug`: its model (named after the
-/// database), or 422 `compile_failed` with the diagnostics.
-async fn compiled_model(compiler: &SqlCompiler, sql: &str, slug: &str) -> ApiResult<Schema> {
-    let outcome = compiler.compile(sql).await?;
+/// Compiles `sql` on the database's major for the database `slug`: its
+/// model (named after the database), or 422 `compile_failed` with the
+/// diagnostics.
+async fn compiled_model(
+    compiler: &SqlCompiler,
+    major: PgMajor,
+    sql: &str,
+    slug: &str,
+) -> ApiResult<Schema> {
+    let outcome = compiler.compile(major, sql).await?;
     match outcome.model {
         Some(mut model) => {
             slug.clone_into(&mut model.database);
@@ -538,7 +598,13 @@ async fn upload(
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     state.limits.compile.check(member.user.id)?;
     state.limits.database_compiles.check(database.id)?;
-    let model = compiled_model(&state.compiler, &body.sql, &database.slug).await?;
+    let model = compiled_model(
+        &state.compiler,
+        database.pg_major,
+        &body.sql,
+        &database.slug,
+    )
+    .await?;
     let new = NewVersion {
         database_id: database.id,
         model,
@@ -553,6 +619,7 @@ async fn upload(
         publishes_draft: None,
         approvals: None,
         migration_sql: None,
+        compiled_on: Some(database.pg_major),
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.
@@ -593,7 +660,7 @@ async fn check(
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     state.limits.compile.check(member.user.id)?;
     state.limits.database_compiles.check(database.id)?;
-    let compiled = state.compiler.compile(&body.sql).await?;
+    let compiled = state.compiler.compile(database.pg_major, &body.sql).await?;
     let Some(model) = compiled.model else {
         return Ok(Json(CompileReport {
             diagnostics: compiled.diagnostics,

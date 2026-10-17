@@ -170,6 +170,12 @@ impl As<'_> {
             .await
     }
 
+    pub async fn put(&self, path: &str, body: &Value) -> TestResponse {
+        self.app
+            .call(Method::PUT, path, Some(self.session), Some(body))
+            .await
+    }
+
     pub async fn delete(&self, path: &str) -> TestResponse {
         self.app
             .call(Method::DELETE, path, Some(self.session), None)
@@ -396,7 +402,12 @@ pub fn model_json(tables: &[&str]) -> String {
 /// Stands in for the sandbox: `CREATE TABLE <name>` makes a table (see
 /// [`model`]); the word `oops` is a syntax error located where it is.
 pub fn fake_compiler() -> SqlCompiler {
-    SqlCompiler::from_fn(|sql| {
+    SqlCompiler::from_fn(fake_compile)
+}
+
+/// What [`fake_compiler`] makes of `sql`.
+pub fn fake_compile(sql: &str) -> Compiled {
+    {
         if let Some(at) = sql.find("oops") {
             return Compiled {
                 model: None,
@@ -416,5 +427,5 @@ pub fn fake_compiler() -> SqlCompiler {
             model: Some(model),
             diagnostics: Vec::new(),
         }
-    })
+    }
 }

@@ -24,6 +24,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { TabNav, TabNavItem } from "@/components/ui/tab-nav";
 import { toast } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { DatabaseMajorBadge } from "@/features/databases/components/postgres";
 import { UploadDialog } from "@/features/databases/components/upload-dialog";
 import { NewDraftButton, OpenDrafts } from "@/features/draft/components/drafts-section";
 import { databaseQuery } from "@/features/databases/queries";
@@ -88,6 +89,7 @@ function DatabaseLayout() {
               <div className="grid min-w-0">
                 <h1 className="flex items-center gap-2 text-xl font-semibold text-foreground">
                   <span className="truncate">{database.name}</span>
+                  <DatabaseMajorBadge org={org} database={database} editable={writer} />
                   {!writer && <Badge variant="outline">Read-only</Badge>}
                 </h1>
                 <p className="truncate text-sm text-muted-foreground">
@@ -172,6 +174,7 @@ function DatabaseLayout() {
           org={org}
           db={db}
           next={database.next_number}
+          major={database.pg_major}
           open={uploading}
           onOpenChange={setUploading}
           draft={draft}

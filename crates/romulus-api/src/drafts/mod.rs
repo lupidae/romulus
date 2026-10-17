@@ -59,7 +59,7 @@ use crate::{
     auth::{Member, min},
     collab::{Hub, Present, compile, doc},
     databases::{self, DatabaseRef},
-    domain::{DraftMode, DraftStatus, SourceKind},
+    domain::{DraftMode, DraftStatus, PgMajor, SourceKind},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
@@ -118,6 +118,8 @@ pub struct DraftDatabase {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    /// The Postgres major the draft compiles on (its database's).
+    pub pg_major: PgMajor,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -183,6 +185,7 @@ impl Row {
                 id: database.id,
                 slug: database.slug.clone(),
                 name: database.name.clone(),
+                pg_major: database.pg_major,
             },
             stale: self.status == DraftStatus::Open && self.base_version != latest,
             base_removed: self.base_removed.unwrap_or(false),
@@ -412,13 +415,24 @@ async fn create(
         };
         let tables = serde_json::to_value(tables).map_err(ApiError::internal)?;
         let hash = compile::input_hash(mode, &sql, source);
+        // Compiled on its version's major: a database on another one now
+        // compiles the draft again (the graph shows this meanwhile). Only
+        // SQL versions are seeded, compiled here on a supported major; one
+        // that says otherwise counts as the database's (a compile key is
+        // always a major this server knows).
+        let major = base
+            .as_ref()
+            .and_then(|v| v.pg_major)
+            .and_then(|m| PgMajor::new(m.into()))
+            .unwrap_or(database.pg_major);
         sqlx::query!(
-            "INSERT INTO draft_compiles (draft_id, source_hash, model, good_model, good_tables)
-             VALUES ($1, $2, $3, $3, $4)",
+            "INSERT INTO draft_compiles (draft_id, source_hash, model, good_model, good_tables, pg_major)
+             VALUES ($1, $2, $3, $3, $4, $5)",
             id,
             unhex(&hash),
             model,
             tables,
+            major as PgMajor,
         )
         .execute(&mut *tx)
         .await?;

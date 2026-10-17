@@ -17,12 +17,14 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use super::{protocol::ReviewRequest, review};
-use crate::domain::{DraftMode, DraftStatus, Schema, SourceKind};
+use crate::domain::{DraftMode, DraftStatus, PgMajor, Schema, SourceKind};
 
 /// What loading a draft finds.
 pub struct Loaded {
     pub database_id: Uuid,
     pub org_id: Uuid,
+    /// What its database's SQL compiles on.
+    pub pg_major: PgMajor,
     pub status: DraftStatus,
     pub mode: DraftMode,
     /// The version the draft is based on, if any: what its migration
@@ -70,6 +72,8 @@ impl Base {
 #[derive(Debug, Clone)]
 pub struct SavedCompile {
     pub source_hash: Vec<u8>,
+    /// The major it was compiled on: a result only for a room on it.
+    pub pg_major: PgMajor,
     pub model: Option<Value>,
     pub errors: Option<Value>,
     pub good_model: Option<Value>,
@@ -85,6 +89,7 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     let Some(draft) = sqlx::query!(
         r#"SELECT d.database_id, d.status AS "status: DraftStatus", d.mode AS "mode: DraftMode",
                   b.deleted_at IS NOT NULL AS "database_deleted!", b.org_id, o.approvals_required,
+                  b.pg_major AS "pg_major: PgMajor",
                   d.editors_unknown,
                   v.id AS "base_id?", v.source AS "base_source?", v.source_kind AS "base_kind?: SourceKind",
                   v.model AS "base_model?"
@@ -116,8 +121,8 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     .await?;
     let compile = sqlx::query_as!(
         SavedCompile,
-        "SELECT source_hash, model, errors, good_model, good_tables
-         FROM draft_compiles WHERE draft_id = $1",
+        r#"SELECT source_hash, pg_major AS "pg_major: PgMajor", model, errors, good_model, good_tables
+           FROM draft_compiles WHERE draft_id = $1"#,
         draft_id,
     )
     .fetch_optional(&mut *tx)
@@ -156,6 +161,7 @@ pub async fn load(db: &PgPool, draft_id: Uuid) -> Result<Option<Loaded>, sqlx::E
     Ok(Some(Loaded {
         database_id: draft.database_id,
         org_id: draft.org_id,
+        pg_major: draft.pg_major,
         status: draft.status,
         mode: draft.mode,
         base,
@@ -297,6 +303,8 @@ pub async fn compact(
 #[derive(Debug)]
 pub struct CompileRow {
     pub source_hash: Vec<u8>,
+    /// The major it compiled on.
+    pub pg_major: PgMajor,
     /// When it compiled; it also becomes `good_model`.
     pub model: Option<Arc<Value>>,
     /// When it did not: the diagnostics. `good_model` stays as it was.
@@ -311,11 +319,11 @@ pub async fn save_compile(
     row: &CompileRow,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
-        "INSERT INTO draft_compiles (draft_id, source_hash, model, errors, good_model, good_tables)
-         VALUES ($1, $2, $3, $4, $3, $5)
+        "INSERT INTO draft_compiles (draft_id, source_hash, model, errors, good_model, good_tables, pg_major)
+         VALUES ($1, $2, $3, $4, $3, $5, $6)
          ON CONFLICT (draft_id) DO UPDATE
          SET compiled_at = now(), source_hash = EXCLUDED.source_hash, model = EXCLUDED.model,
-             errors = EXCLUDED.errors,
+             errors = EXCLUDED.errors, pg_major = EXCLUDED.pg_major,
              good_model = COALESCE(EXCLUDED.good_model, draft_compiles.good_model),
              good_tables = COALESCE(EXCLUDED.good_tables, draft_compiles.good_tables)",
         draft_id,
@@ -323,6 +331,7 @@ pub async fn save_compile(
         row.model.as_deref(),
         row.errors,
         row.tables,
+        row.pg_major as PgMajor,
     )
     .execute(db)
     .await?;

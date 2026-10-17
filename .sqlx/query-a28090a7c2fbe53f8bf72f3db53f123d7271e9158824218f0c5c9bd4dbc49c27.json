@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout)\n         VALUES ($1, $2, $3, $4, 'remus_json', 'push', '{}')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a28090a7c2fbe53f8bf72f3db53f123d7271e9158824218f0c5c9bd4dbc49c27"
+}

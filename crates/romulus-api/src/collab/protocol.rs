@@ -31,7 +31,7 @@ use yrs::{
 };
 
 use super::compile::CompileState;
-use crate::domain::{DraftMode, Role};
+use crate::domain::{DraftMode, PgMajor, Role};
 
 /// The tag of [`ServerEvent`] messages.
 pub const MESSAGE_EVENT: u8 = 100;
@@ -145,6 +145,9 @@ pub enum ServerEvent {
     /// The database has a new version (another draft was published): if
     /// it is not this draft's base, publishing now needs "Update draft".
     VersionCreated { number: i32 },
+    /// Someone moved the database to another Postgres major: the draft
+    /// compiles on it from now on (a compile follows).
+    Major { pg_major: PgMajor, by: String },
     /// An admin removed a version: if it is this draft's base, publishing
     /// now needs "Update draft" (onto the latest version left).
     VersionRemoved { number: i32, by: String },

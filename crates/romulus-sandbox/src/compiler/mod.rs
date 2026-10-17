@@ -68,12 +68,25 @@ const CONNECTION_RETRIES: u32 = 6;
 /// sandbox database a compile ran in is meaningless outside it).
 pub const MODEL_DATABASE: &str = "sandbox";
 
+/// The Postgres majors a sandbox may run: what the compile (remus's
+/// introspection reads 12+, the allowlist and stubs the catalogs) is tested
+/// on. The parser is one for all of them, `pg_query`'s (17): an older
+/// major's grammar is a subset of it, and the server refuses what it lacks
+/// with its own error; syntax new in a later major fails to parse (see
+/// [`Compiler::major`]).
+pub const MAJORS: std::ops::RangeInclusive<u32> = 15..=18;
+
 /// How to reach the sandbox and how hard to let compiles push it.
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
     /// A superuser connection URL to the sandbox cluster (it creates the
     /// roles and databases; compiles never use it).
     pub admin_url: String,
+    /// The Postgres major the cluster must run (one of [`MAJORS`]); `None`:
+    /// whichever of them it runs. A compiler refuses to start on another
+    /// ([`SandboxError::VersionMismatch`]), and stops compiling if its
+    /// cluster comes back from a restart on another.
+    pub major: Option<u32>,
     /// Pool databases (and so concurrent compiles). Default 4.
     pub pool_size: usize,
     /// Names of the pool's roles and databases (`<prefix>_<n>`); one process
@@ -130,6 +143,7 @@ impl SandboxConfig {
     pub fn new(admin_url: impl Into<String>) -> Self {
         Self {
             admin_url: admin_url.into(),
+            major: None,
             pool_size: 4,
             prefix: "romulus_sandbox".to_owned(),
             statement_timeout: Duration::from_secs(5),
@@ -164,8 +178,13 @@ pub enum SandboxError {
     /// stops compiling for good; restart it once the other one is gone).
     #[error("another process already uses the sandbox prefix {0:?}")]
     PrefixInUse(String),
-    #[error("the sandbox runs PostgreSQL {server}, but the parser speaks PostgreSQL {parser}")]
-    VersionMismatch { server: String, parser: u32 },
+    /// The cluster runs another major than [`SandboxConfig::major`] (at
+    /// start, or after a restart: the compiler then stops for good).
+    #[error("the sandbox runs PostgreSQL {server}, not PostgreSQL {expected}")]
+    VersionMismatch { server: String, expected: u32 },
+    /// The cluster runs a major outside [`MAJORS`].
+    #[error("the sandbox runs PostgreSQL {server}: romulus compiles on PostgreSQL {} to {}", MAJORS.start(), MAJORS.end())]
+    UnsupportedMajor { server: String },
     #[error("no sandbox database became free within {0:?}")]
     Busy(Duration),
     /// A replay's receiver of models went away: the replay stopped.
@@ -337,6 +356,8 @@ struct Inner {
     options: PgConnectOptions,
     catalog: Arc<Catalog>,
     server_version: String,
+    /// The major the cluster ran at start: it must stay the same.
+    major: u32,
     /// Holds the prefix lock; terminates runaway backends. `None` while
     /// lost and not yet re-established.
     admin: tokio::sync::Mutex<Option<PgConnection>>,
@@ -385,8 +406,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Compiler {
     /// Bootstrap the pool and connect every slot. Fails if the sandbox is
-    /// unreachable, its major version differs from the parser's, or another
-    /// process holds the prefix.
+    /// unreachable, runs another major than [`SandboxConfig::major`] (or one
+    /// outside [`MAJORS`]), or another process holds the prefix.
     pub async fn start(config: SandboxConfig) -> Result<Self, SandboxError> {
         let options = PgConnectOptions::from_str(&config.admin_url)
             .map_err(|e| SandboxError::Bootstrap(format!("admin_url: {e}")))?;
@@ -395,6 +416,7 @@ impl Compiler {
             slots,
             catalog,
             server_version,
+            major,
         } = bootstrap::bootstrap(&config, &options).await?;
         let mut connected = Vec::with_capacity(slots.len());
         for spec in slots {
@@ -429,6 +451,7 @@ impl Compiler {
                 options,
                 catalog: Arc::new(catalog),
                 server_version,
+                major,
                 keys: Mutex::new(HashMap::new()),
                 cache: Mutex::new(Cache::default()),
                 counters: Counters::default(),
@@ -457,6 +480,13 @@ impl Compiler {
     /// The sandbox's `server_version`.
     pub fn server_version(&self) -> &str {
         &self.inner.server_version
+    }
+
+    /// The Postgres major the sandbox runs (one of [`MAJORS`]). Past the
+    /// parser's (17), syntax new in that major fails to parse: such errors
+    /// say so in their hint.
+    pub fn major(&self) -> u32 {
+        self.inner.major
     }
 
     pub fn config(&self) -> &SandboxConfig {
@@ -652,7 +682,7 @@ impl Inner {
         if let Some(server) = lock(&self.version_changed).clone() {
             return Err(SandboxError::VersionMismatch {
                 server,
-                parser: bootstrap::parser_major(),
+                expected: self.major,
             });
         }
         let started = Instant::now();
@@ -735,7 +765,8 @@ impl Inner {
         .map_err(|e| SandboxError::Unavailable(format!("parser task failed: {e}")))?;
         let statements = parsed.statements.len();
         if !parsed.errors.is_empty() {
-            return Ok(Compilation::failed(sha256, statements, parsed.errors));
+            let errors = bootstrap::newer_syntax(self.major, parsed.errors);
+            return Ok(Compilation::failed(sha256, statements, errors));
         }
         if !problems.is_empty() {
             return Ok(Compilation::failed(sha256, statements, problems));
@@ -890,12 +921,12 @@ impl Inner {
         .await
         .map_err(|e| SandboxError::Unavailable(e.to_string()))?;
         let major = version.1.parse::<u32>().unwrap_or(0) / 10_000;
-        if major != bootstrap::parser_major() {
-            tracing::error!(server = %version.0, "the sandbox restarted on another Postgres major; this compiler stops");
+        if major != self.major {
+            tracing::error!(server = %version.0, expected = self.major, "the sandbox restarted on another Postgres major; this compiler stops");
             *lock(&self.version_changed) = Some(version.0.clone());
             return Err(SandboxError::VersionMismatch {
                 server: version.0,
-                parser: bootstrap::parser_major(),
+                expected: self.major,
             });
         }
         tracing::info!(%prefix, "sandbox admin connection and prefix lock re-established");

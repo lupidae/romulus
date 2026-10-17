@@ -1,11 +1,25 @@
 # The sandbox Postgres
 
-Where `crates/romulus-sandbox` compiles draft SQL: PostgreSQL 17 (the
-grammar `pg_query` parses), PostGIS and pgvector, run by `docker-compose.yml`
-(`just sandbox`) and by CI. It holds nothing but empty pool databases;
-every compile is rolled back. This page is what an operator needs to run it
-safely; the crate's `allowlist` and `compiler` modules document the rest of
-the threat model.
+Where `crates/romulus-sandbox` compiles draft SQL: PostgreSQL with PostGIS
+and pgvector, one cluster per major a database can target (15, 16, 17, 18;
+docs/MVP.md "Several Postgres majors"), run by `docker-compose.yml` (`just
+sandbox`, 17; `just sandbox 15`, `just sandbox all`) and by CI. Each holds
+nothing but empty pool databases; every compile is rolled back. This page is
+what an operator needs to run them safely; the crate's `allowlist` and
+`compiler` modules document the rest of the threat model.
+
+**One image, a major each.** `docker build --build-arg PG_MAJOR=15
+deploy/sandbox` (17 by default): the Dockerfile pins each major's minor
+release, and PostGIS and pgvector at the same release for all (PGDG builds
+them per major). Everything below applies to each cluster; size the host for
+all of them (the preview: 1 GB for 17, 768 MB for each other major). The
+parser is `pg_query`'s, PostgreSQL 17's grammar, whatever the cluster runs:
+an older major refuses what its grammar lacks with its own error; syntax new
+in 18 fails to parse until `pg_query` speaks 18. A compiler started for one
+major (`SandboxConfig::major`) refuses a cluster running another, and stops
+if its cluster comes back on another. PostgreSQL 18's image keeps its data in
+`/var/lib/postgresql/18/docker`: mount the volume at `/var/lib/postgresql`
+there, not `…/data`.
 
 ## Memory: one bad compile must not take the sandbox down
 

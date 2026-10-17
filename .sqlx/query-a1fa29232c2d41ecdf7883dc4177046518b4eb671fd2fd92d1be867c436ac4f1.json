@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT 14::smallint AS \"m!: PgMajor\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "m!: PgMajor",
+        "type_info": "Int2",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a1fa29232c2d41ecdf7883dc4177046518b4eb671fd2fd92d1be867c436ac4f1"
+}

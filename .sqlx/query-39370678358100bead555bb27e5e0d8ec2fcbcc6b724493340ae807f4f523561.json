@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT last_version_number FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
+  "query": "SELECT id FROM databases WHERE id = $1 FOR NO KEY UPDATE",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "last_version_number",
-        "type_info": "Int4",
+        "name": "id",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
             "table": "databases",
-            "name": "last_version_number"
+            "name": "id"
           }
         }
       }
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "e72cfb207874edfab6d0d50bac505c73f2237a2c729cf7fbb3eb9ddb4046524a"
+  "hash": "39370678358100bead555bb27e5e0d8ec2fcbcc6b724493340ae807f4f523561"
 }

@@ -17,10 +17,10 @@ use remus_core::{
     },
 };
 use romulus_migration::{Format, Options};
-use romulus_sandbox::render_sql;
+use romulus_sandbox::{Compiler, render_sql};
 
 use crate::{
-    Case, check_all, compile, corpus,
+    Case, check_all, compile, corpus, smoke,
     tools::{ToolCase, check_tools},
     with_compiler,
 };
@@ -743,11 +743,13 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
     }
 }
 
-fn seeds() -> u64 {
+/// Seeds per schema: `ROMULUS_ORACLE_SEEDS`, default 12 (2 for the smoke
+/// subset of another major).
+fn seeds(compiler: &Compiler) -> u64 {
     std::env::var("ROMULUS_ORACLE_SEEDS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(12)
+        .unwrap_or(if smoke(compiler) { 2 } else { 12 })
 }
 
 #[test]
@@ -758,7 +760,7 @@ fn random_edits_of_the_corpus_migrate_both_ways() {
         let mut tried = 0;
         let mut invalid = 0;
         for (name, model) in models {
-            for seed in 0..seeds() {
+            for seed in 0..seeds(&compiler) {
                 let mut rng = Rng(seed.wrapping_mul(1_000_003)
                     ^ name.len() as u64
                     ^ u64::from(name.as_bytes()[0]) << 32);
@@ -802,12 +804,12 @@ fn random_edits_of_the_corpus_migrate_both_ways() {
 }
 
 /// Seeds per schema run by the tools too (on a real database each, so
-/// fewer): `ROMULUS_ORACLE_TOOL_SEEDS`, default 3.
-fn tool_seeds() -> u64 {
+/// fewer): `ROMULUS_ORACLE_TOOL_SEEDS`, default 3 (1 for the smoke subset).
+fn tool_seeds(compiler: &Compiler) -> u64 {
     std::env::var("ROMULUS_ORACLE_TOOL_SEEDS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(3)
+        .unwrap_or(if smoke(compiler) { 1 } else { 3 })
 }
 
 #[test]
@@ -816,7 +818,7 @@ fn random_edits_of_the_corpus_run_as_each_tool_would_run_them() {
         let models = corpus::models(&compiler).await;
         let mut cases = Vec::new();
         for (i, (name, model)) in models.iter().enumerate() {
-            for seed in 0..tool_seeds() {
+            for seed in 0..tool_seeds(&compiler) {
                 let mut rng = Rng(seed.wrapping_mul(7_919) ^ (i as u64) << 20 ^ 0xA5A5);
                 let mut mutated = model.clone();
                 let mut edits = Vec::new();
@@ -840,6 +842,7 @@ fn random_edits_of_the_corpus_run_as_each_tool_would_run_them() {
                     new,
                     options: Options {
                         concurrently: n % 3 == 0,
+                        ..Options::default()
                     },
                     format: Format::ALL[n % Format::ALL.len()],
                     sources: None,

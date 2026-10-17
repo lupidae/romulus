@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pg_major AS \"pg_major: PgMajor\" FROM draft_compiles WHERE draft_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pg_major: PgMajor",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "pg_major"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "59baef980a9d3cf5db049aef6872ddf369229293e4e5fdf0ba91372d8c140a23"
+}

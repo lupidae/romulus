@@ -14,6 +14,7 @@ mod errors;
 mod fixtures;
 pub mod import;
 mod keys;
+mod majors;
 mod malicious;
 
 use std::{future::Future, sync::LazyLock, time::Duration};
@@ -35,6 +36,13 @@ static COMPILER: OnceCell<Compiler> = OnceCell::const_new();
 pub fn admin_url() -> Option<String> {
     let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env"));
     std::env::var("ROMULUS_SANDBOX_URL").ok()
+}
+
+/// The admin URL of another major's sandbox (`ROMULUS_SANDBOX_URL_PG15`…),
+/// when it is set.
+pub fn major_url(major: u32) -> Option<String> {
+    let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env"));
+    std::env::var(format!("ROMULUS_SANDBOX_URL_PG{major}")).ok()
 }
 
 pub fn config(admin_url: String, prefix: &str) -> SandboxConfig {

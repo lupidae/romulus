@@ -20,7 +20,12 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::tidy::canonical_sql;
-use crate::{ApiError, ApiResult, collab::Hub, domain::Schema, rate::Limits};
+use crate::{
+    ApiError, ApiResult,
+    collab::Hub,
+    domain::{PgMajor, Schema},
+    rate::Limits,
+};
 
 /// Who the checking compiles are for, and where they run.
 pub(super) struct Checks<'a> {
@@ -30,6 +35,8 @@ pub(super) struct Checks<'a> {
     pub user: Uuid,
     /// The draft's database (`Limits::database_compiles`).
     pub database: Uuid,
+    /// What the draft compiles on (its database's major).
+    pub major: PgMajor,
 }
 
 /// What the refusal is about: what did not happen.
@@ -46,7 +53,7 @@ impl Checks<'_> {
     async fn differences(&self, sql: &str, model: &Schema) -> ApiResult<Option<Vec<String>>> {
         self.limits.compile.check(self.user)?;
         self.limits.database_compiles.check(self.database)?;
-        let Some(mut compiled) = self.hub.compiler().compile(sql).await?.model else {
+        let Some(mut compiled) = self.hub.compiler().compile(self.major, sql).await?.model else {
             return Ok(Some(Vec::new()));
         };
         compiled.database.clone_from(&model.database);

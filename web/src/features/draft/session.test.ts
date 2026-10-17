@@ -18,6 +18,7 @@ const initial: SessionState = {
   mode: "schema",
   schemaSql: null,
   modeChanged: null,
+  majorChanged: null,
   staleEdit: null,
   compile: { state: "ok", stale: false, diagnostics: [], model: null, sha256: null },
   versionCreated: null,

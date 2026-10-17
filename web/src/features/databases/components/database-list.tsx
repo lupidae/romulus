@@ -1,8 +1,10 @@
 import { Link } from "@tanstack/react-router";
 
 import { DatabaseIcon, NavArrowRightIcon } from "@/components/icons";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 
+import { DEFAULT_MAJOR, majorLabel } from "../postgres";
 import type { Database } from "../queries";
 import { Byline } from "./version-meta";
 
@@ -32,6 +34,12 @@ export function DatabaseList({ org, databases }: { org: string; databases: Datab
                   <span className="hidden truncate font-mono text-xs text-faint-foreground sm:inline">
                     {database.slug}
                   </span>
+                  {/* Only when it sets the database apart: most are on the default. */}
+                  {database.pg_major !== DEFAULT_MAJOR && (
+                    <Badge variant="outline" className="self-center">
+                      {majorLabel(database.pg_major)}
+                    </Badge>
+                  )}
                 </span>
                 {database.description && (
                   <span className="truncate text-sm text-muted-foreground">

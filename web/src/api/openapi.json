@@ -1001,7 +1001,7 @@
             }
           },
           "422": {
-            "description": "`validation`, `details` names the field",
+            "description": "`validation`, `details` names the field; `major_unavailable`: this server has no sandbox for that Postgres major",
             "content": {
               "application/json": {
                 "schema": {
@@ -3092,6 +3092,212 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/major": {
+      "put": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Moves the database to another Postgres major, once its latest version\ncompiles there. Developers and admins.",
+        "operationId": "change_database_major",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMajor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Database"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`latest_changed`: a version arrived meanwhile; check again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`incompatible_major` (`details`: `MajorCheck`): the latest version does not compile there; `major_unavailable`: this server has no sandbox for it; or `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: that major's compiler is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/major/check": {
+      "post": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Compiles the latest version on another major, without changing\nanything: what moving the database there would meet. Developers and\nadmins.",
+        "operationId": "check_database_major",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMajor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MajorCheck"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: not a supported major; `major_unavailable`: this server has no sandbox for it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: that major's compiler is down",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/migration": {
       "get": {
         "tags": [
@@ -4420,6 +4626,38 @@
           }
         }
       }
+    },
+    "/api/postgres-majors": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "The Postgres majors a database can target, and whether this server\ncompiles each one now (the major picker, the settings).",
+        "operationId": "list_postgres_majors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PostgresMajor"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4609,7 +4847,8 @@
           "version_purged",
           "version_published",
           "approvals_overridden",
-          "approvals_required_changed"
+          "approvals_required_changed",
+          "major_changed"
         ]
       },
       "AuditActor": {
@@ -4857,6 +5096,17 @@
           "composite",
           "extension"
         ]
+      },
+      "ChangeMajor": {
+        "type": "object",
+        "required": [
+          "pg_major"
+        ],
+        "properties": {
+          "pg_major": {
+            "$ref": "#/components/schemas/PgMajor"
+          }
+        }
       },
       "ChangeRole": {
         "type": "object",
@@ -5272,6 +5522,15 @@
           "pending"
         ]
       },
+      "CompilerStatus": {
+        "type": "string",
+        "description": "What the health check reports about a major's compiler.",
+        "enum": [
+          "ok",
+          "unavailable",
+          "off"
+        ]
+      },
       "CompositeChange": {
         "oneOf": [
           {
@@ -5512,6 +5771,10 @@
             "type": "string",
             "description": "1 to 100 characters."
           },
+          "pg_major": {
+            "$ref": "#/components/schemas/PgMajor",
+            "description": "The Postgres major it targets; 17 when not given. Changed later with\n`PUT …/major`."
+          },
           "slug": {
             "type": "string",
             "description": "Lowercase letters, digits and single hyphens, at most 63 characters,\nnot one of the organization's own pages."
@@ -5643,6 +5906,7 @@
           "slug",
           "name",
           "description",
+          "pg_major",
           "created_at",
           "updated_at",
           "versions",
@@ -5694,6 +5958,10 @@
             "type": "integer",
             "format": "int32",
             "description": "The number the next version gets: numbers are never given twice."
+          },
+          "pg_major": {
+            "$ref": "#/components/schemas/PgMajor",
+            "description": "The Postgres major its schema targets: its SQL compiles on that\nmajor, its migrations are generated for it."
           },
           "slug": {
             "type": "string",
@@ -6085,7 +6353,8 @@
         "required": [
           "id",
           "slug",
-          "name"
+          "name",
+          "pg_major"
         ],
         "properties": {
           "id": {
@@ -6094,6 +6363,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "pg_major": {
+            "$ref": "#/components/schemas/PgMajor",
+            "description": "The Postgres major the draft compiles on (its database's)."
           },
           "slug": {
             "type": "string"
@@ -6715,6 +6988,7 @@
           "status",
           "database",
           "sandbox",
+          "sandboxes",
           "version"
         ],
         "properties": {
@@ -6724,7 +6998,17 @@
           },
           "sandbox": {
             "type": "string",
-            "description": "The SQL compiler (uploads, SQL pushes): `ok`, `unavailable` (starting,\nor the sandbox is down) or `off` (no sandbox configured). Not part of\nthe status: the rest of the API works without it."
+            "description": "The default major's SQL compiler (17): `ok`, `unavailable` (starting,\nor the sandbox is down) or `off` (no sandbox configured). Not part of\nthe status: the rest of the API works without it."
+          },
+          "sandboxes": {
+            "type": "object",
+            "description": "Every supported major's compiler, by major (`\"15\"`…`\"18\"`), as\n`sandbox` says it: a database compiles on its own major's.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "status": {
             "type": "string",
@@ -7355,6 +7639,66 @@
           "deleted"
         ]
       },
+      "MajorCheck": {
+        "type": "object",
+        "description": "Whether the database's latest version compiles on another major.",
+        "required": [
+          "pg_major",
+          "compiles",
+          "diagnostics"
+        ],
+        "properties": {
+          "against": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version compiled: the latest. `null` when the database has none\n(nothing to check: it may move)."
+          },
+          "against_major": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The major that version was compiled (or pushed) on; `null` when its\nmodel does not say."
+          },
+          "changes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Changes",
+                "description": "When it compiles: how its model reads on `pg_major` against the\nversion's (`no changes`, most often)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "compiles": {
+            "type": "boolean",
+            "description": "It compiles on `pg_major`, or there is no version: the database may\nmove there."
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "description": "Errors (when it does not compile), then notes, located in `sql`."
+          },
+          "pg_major": {
+            "$ref": "#/components/schemas/PgMajor",
+            "description": "The major checked."
+          },
+          "sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SQL compiled, when it does not compile (the errors' lines are\nits): the version's source, or its model as SQL."
+          }
+        }
+      },
       "MigrationFile": {
         "type": "object",
         "required": [
@@ -7618,7 +7962,8 @@
           "foreign_table",
           "unsupported",
           "empty_schema",
-          "guessed_names"
+          "guessed_names",
+          "newer_postgres"
         ]
       },
       "Org": {
@@ -7864,6 +8209,16 @@
             "type": "string"
           }
         }
+      },
+      "PgMajor": {
+        "type": "integer",
+        "description": "A Postgres major romulus compiles on: 15, 16, 17 (the default) or 18.",
+        "enum": [
+          15,
+          16,
+          17,
+          18
+        ]
       },
       "PlannedMigration": {
         "type": "object",
@@ -8135,6 +8490,35 @@
               "null"
             ],
             "minimum": 0
+          }
+        }
+      },
+      "PostgresMajor": {
+        "type": "object",
+        "description": "A Postgres major romulus compiles on, as this server runs it.",
+        "required": [
+          "major",
+          "default",
+          "status"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "What a new database targets."
+          },
+          "major": {
+            "$ref": "#/components/schemas/PgMajor"
+          },
+          "server_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The exact version compiles run on (`17.11 (Debian …)`), once its\nsandbox answered."
+          },
+          "status": {
+            "$ref": "#/components/schemas/CompilerStatus",
+            "description": "Whether its compiles run now: `ok`, `unavailable` (starting, or its\nsandbox is down) or `off` (this server has no sandbox for it)."
           }
         }
       },
@@ -8549,7 +8933,8 @@
           "warnings",
           "destructive",
           "files",
-          "archive"
+          "archive",
+          "pg_major"
         ],
         "properties": {
           "archive": {
@@ -8578,6 +8963,10 @@
             ],
             "format": "int32",
             "description": "The version migrated from; `null` for nothing (a draft of a database\nwithout versions)."
+          },
+          "pg_major": {
+            "$ref": "#/components/schemas/PgMajor",
+            "description": "The Postgres major it is written for: the database's."
           },
           "statements": {
             "type": "array",
@@ -8790,6 +9179,29 @@
                 "type": "string",
                 "enum": [
                   "version_created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Someone moved the database to another Postgres major: the draft\ncompiles on it from now on (a compile follows).",
+            "required": [
+              "pg_major",
+              "by",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "type": "string"
+              },
+              "pg_major": {
+                "$ref": "#/components/schemas/PgMajor"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "major"
                 ]
               }
             }
@@ -9453,7 +9865,8 @@
           "source",
           "layout",
           "approvals",
-          "written_migration"
+          "written_migration",
+          "postgres"
         ],
         "properties": {
           "approvals": {
@@ -9512,6 +9925,9 @@
           },
           "origin": {
             "$ref": "#/components/schemas/VersionOrigin"
+          },
+          "postgres": {
+            "$ref": "#/components/schemas/VersionPostgres"
           },
           "source": {
             "type": "string",
@@ -9655,6 +10071,38 @@
           }
         }
       },
+      "VersionPostgres": {
+        "type": "object",
+        "description": "The Postgres a version was compiled on (uploads, drafts, imports: the\nsandbox of its database's major) or pushed from (remus JSON: the real\nserver). Versions keep it when their database moves to another major.",
+        "required": [
+          "server_version",
+          "database_major",
+          "other_major"
+        ],
+        "properties": {
+          "database_major": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The major its database targeted when it was created."
+          },
+          "major": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`server_version`'s major; `null` when it does not start with one."
+          },
+          "other_major": {
+            "type": "boolean",
+            "description": "Pushed from a server on another major than its database targeted\nthen: the history flags it, and offers to move the database."
+          },
+          "server_version": {
+            "type": "string",
+            "description": "As remus read it: `17.11 (Debian 17.11-1.pgdg13+1)`."
+          }
+        }
+      },
       "VersionSummary": {
         "type": "object",
         "description": "A version in a list.",
@@ -9664,7 +10112,8 @@
           "origin",
           "source_kind",
           "created_at",
-          "written_migration"
+          "written_migration",
+          "postgres"
         ],
         "properties": {
           "author": {
@@ -9700,6 +10149,9 @@
           },
           "origin": {
             "$ref": "#/components/schemas/VersionOrigin"
+          },
+          "postgres": {
+            "$ref": "#/components/schemas/VersionPostgres"
           },
           "source_kind": {
             "$ref": "#/components/schemas/SourceKind"

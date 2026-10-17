@@ -44,8 +44,7 @@ ALTER TABLE public.t ALTER COLUMN d ADD GENERATED ALWAYS AS IDENTITY;
 -- already holds.
 SELECT setval(pg_get_serial_sequence('public.t', 'd'), coalesce(max(d), 0) + 1, false) FROM public.t;
 
--- PostgreSQL 17 or later; it rewrites the table (stored column). On older
--- servers, drop and add the column.
+-- PostgreSQL 17 or later; it rewrites the table (stored column).
 ALTER TABLE public.t ALTER COLUMN e SET EXPRESSION AS ((a * 3));
 
 ALTER TABLE public.t ADD COLUMN g integer GENERATED ALWAYS AS ((a - 1)) STORED;

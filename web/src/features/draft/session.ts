@@ -91,6 +91,8 @@ export interface SessionState {
   schemaSql: string | null;
   /** The last mode switch while this tab was open (someone else's or this tab's). */
   modeChanged: { mode: DraftMode; by: string } | null;
+  /** Someone moved the database to another Postgres major: the draft compiles there now. */
+  majorChanged: { major: number; by: string } | null;
   /** This tab's edit reached the text that is not the source (before it saw a switch) and was undone. */
   staleEdit: { mode: DraftMode; at: number } | null;
   compile: CompileView;
@@ -183,6 +185,8 @@ export function eventPatch(
       };
     case "mode":
       return { modeChanged: { mode: event.mode, by: event.by } };
+    case "major":
+      return { majorChanged: { major: event.pg_major, by: event.by } };
     case "stale_edit":
       return { staleEdit: { mode: event.mode, at: Date.now() } };
   }
@@ -295,6 +299,7 @@ export class DraftSession {
     mode: "schema",
     schemaSql: null,
     modeChanged: null,
+    majorChanged: null,
     staleEdit: null,
     compile: { state: "waiting", stale: true, diagnostics: [], model: null, sha256: null },
     versionCreated: null,

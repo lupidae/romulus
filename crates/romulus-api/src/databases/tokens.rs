@@ -27,7 +27,7 @@ use super::find;
 use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
-    domain::TokenScope,
+    domain::{PgMajor, TokenScope},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
@@ -265,6 +265,8 @@ pub struct Bearer<S: scope::Required = scope::Push> {
     pub scope: TokenScope,
     pub database_id: Uuid,
     pub database_slug: String,
+    /// What the database's SQL compiles on.
+    pub database_major: PgMajor,
     required: PhantomData<S>,
 }
 
@@ -290,7 +292,8 @@ impl<S: scope::Required> FromRequestParts<AppState> for Bearer<S> {
             return Err(ApiError::InvalidToken(BAD_TOKEN.into()));
         }
         let token = sqlx::query!(
-            r#"SELECT t.id, t.name, t.scope AS "scope: TokenScope", d.id AS database_id, d.slug
+            r#"SELECT t.id, t.name, t.scope AS "scope: TokenScope", d.id AS database_id, d.slug,
+                      d.pg_major AS "pg_major: PgMajor"
                FROM api_tokens t JOIN databases d ON d.id = t.database_id
                WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND d.deleted_at IS NULL"#,
             token::hash(secret),
@@ -340,6 +343,7 @@ impl<S: scope::Required> FromRequestParts<AppState> for Bearer<S> {
             scope: token.scope,
             database_id: token.database_id,
             database_slug: token.slug,
+            database_major: token.pg_major,
             required: PhantomData,
         })
     }

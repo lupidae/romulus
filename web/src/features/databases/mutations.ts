@@ -5,6 +5,7 @@ import type { components } from "@/api/schema.gen";
 
 import { draftKeys } from "@/features/draft/queries";
 
+import type { PgMajor } from "./postgres";
 import { type ApiToken, type Database, databaseKeys, type TokenScope } from "./queries";
 
 type CreateDatabase = components["schemas"]["CreateDatabase"];
@@ -174,5 +175,40 @@ export function useRestoreVersion(org: string, db: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (number: number) => restoreVersion(queryClient, org, db, number),
+  });
+}
+
+/**
+ * The dry run of moving the database to another major: its latest version
+ * compiled there. Read only, but a compile: a mutation, not a cached query.
+ */
+export function useCheckMajor(org: string, db: string) {
+  return useMutation({
+    mutationFn: (pg_major: PgMajor) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/databases/{db}/major/check", {
+          ...path(org, db),
+          body: { pg_major },
+        }),
+      ),
+  });
+}
+
+/** Moves the database to another major (the API checks again first). */
+export function useChangeMajor(org: string, db: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (pg_major: PgMajor) =>
+      unwrap(
+        api.PUT("/api/orgs/{org}/databases/{db}/major", {
+          ...path(org, db),
+          body: { pg_major },
+        }),
+      ),
+    onSuccess: (database) => {
+      queryClient.setQueryData(databaseKeys.one(org, db), database);
+      void queryClient.invalidateQueries({ queryKey: databaseKeys.list(org), exact: true });
+      void queryClient.invalidateQueries({ queryKey: databaseKeys.activity(org, db) });
+    },
   });
 }

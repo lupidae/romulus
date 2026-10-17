@@ -333,7 +333,7 @@ async fn rebase(
     let diagnostics = match state
         .collab
         .compiler()
-        .compile_migration(&base_sql, &content.migration)
+        .compile_migration(content.major, &base_sql, &content.migration)
         .await
     {
         Ok(compiled) if compiled.model.is_none() => compiled

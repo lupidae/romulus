@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO draft_compiles (draft_id, source_hash, model, good_model, good_tables, pg_major)\n             VALUES ($1, $2, $3, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Jsonb",
+        "Jsonb",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f906a364a6d829af4195f93c92430aeee2746378de86550864403a2717295bc"
+}

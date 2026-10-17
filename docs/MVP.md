@@ -144,7 +144,8 @@ time. Compiles are debounced and coalesced per draft (a newer request replaces a
 queued one) and rate-limited per draft.
 
 The sandbox Postgres major version is pinned, and the `pg_query` / libpg_query
-versions match it.
+versions match it. (Since "Several Postgres majors" below: one sandbox per major
+a database can target, one parser, 17's, for all of them.)
 
 **Dependencies the SQL does not create (auto-stub).** Real schemas reference
 roles, functions and extensions that are not in the text, and remus's SQL output
@@ -645,10 +646,77 @@ Two features, built in this order:
    and typing a `---` line creates a comment there. They travel into the published version as
    review history; never into `COMMENT ON` (database comments stay as they are).
 
-**Ideas, after the round:** several Postgres majors per database (sandbox per major), then a
-**playground** (a real throwaway database per draft with generated fake data, to run SQL and
-try migrations) — design document first: [docs/playground.md](playground.md) (proposed,
-awaiting approval).
+**Ideas, after the round:** several Postgres majors per database (sandbox per major; built,
+below), then a **playground** (a real throwaway database per draft with generated fake data,
+to run SQL and try migrations) — design document first: [docs/playground.md](playground.md)
+(proposed, awaiting approval).
+
+## Several Postgres majors (decided 2026-10-16, built: task PGV)
+
+Each database targets a Postgres major: 15, 16, 17 (the default, the one sandbox there was) or
+18. Its SQL compiles on that major's sandbox and its migrations are written for it.
+
+- **Chosen at creation, changed by developers** (and admins, as the database's other settings;
+  `databases.pg_major`, a check on the supported list: adding a major is a migration and a
+  sandbox image). The picker lists them newest first, the default marked and, under each,
+  whether this server compiles it now (`GET /api/postgres-majors`). A major this server has no
+  sandbox for cannot be picked, and the API refuses it (creating, checking or moving: 422
+  `major_unavailable`); one whose sandbox is only down can (it comes back). The database's header, its
+  versions and the list (only when it is not the default) show it as a quiet badge.
+- **Moving is a dry run first.** `POST …/major/check` compiles the latest version's SQL (its
+  source, or its model rendered for a push or an import) on the new major and says whether it
+  compiles, its errors in that text, and how its model reads there; `PUT …/major` does the same
+  compile (served from the sandbox's cache) and refuses with 422 `incompatible_major` unless it
+  compiles, 409 `latest_changed` when a version arrived meanwhile. A database with no version
+  moves freely. **What compiled before a move is not stored after it**: a version carries the
+  major it was compiled on (uploads, SQL pushes, publishes, imports' replays; not remus JSON),
+  checked under the databases row lock that numbers versions; a move in between refuses it with
+  409 `major_changed` (nothing stored; trying again compiles on the new major). The move is an audit event (`major_changed`, from and to). The settings card
+  checks a major as soon as it is picked and offers the switch only when it compiles.
+- **Versions keep what they were compiled on**, never recompiled: `versions.server_version` and
+  `pg_major` are generated from the model (remus's `server_version`: the sandbox's, or the
+  pushing server's), `database_major` is the database's major when the version was stored (a
+  trigger). **A push from another major** (remus JSON from a server on 16 while the database
+  targets 17) is accepted and flagged for good (`other_major`): a badge in the history and on
+  its page, and while it is the latest a banner offering "Switch to Postgres 16…" (the dry run,
+  preselected). SQL pushes, uploads, imports and drafts compile on the database's own major.
+- **One sandbox cluster per major**, the same image built with `PG_MAJOR` (PostGIS and pgvector
+  are the same release on every major). Dev runs 17 always and the others on demand (`just
+  sandbox 15`, compose profiles, ports `40000 + 10·slot + major − 10`); the preview runs all
+  four (768 MB each beside 17's 1 GB). `/api/health` lists each (`sandboxes`); a major without
+  a sandbox answers 503 for its databases only.
+- **The compiler routes by major**: uploads, dry runs, SQL pushes, import replays, drafts
+  (`compile_for` keys are per major's compiler), publish, Tidy, mode switches and "Update draft".
+  Caches are per major: each compiler's own, `draft_compiles.pg_major` (a room on another major
+  compiles again), the web's migration queries keyed by the major. A move tells the database's
+  open drafts (`ServerEvent::Major`): they compile on the new major at once, and say so.
+  Approvals are of the text and stay.
+- **One parser for every major**: pg_query's, PostgreSQL 17's grammar. An older major's grammar
+  is a subset of it, and its server refuses what it lacks with its own error, located (an
+  exclusion constraint on a partitioned table on 15: "not supported on partitioned tables").
+  Syntax new in 18 (`VIRTUAL` generated columns, `NOT ENFORCED`, `WITHOUT OVERLAPS`…) fails to
+  parse, with a hint saying the grammar is 17's, until pg_query speaks 18; so does a draft from a
+  version pushed from 18 with a virtual column (remus-sql renders it `VIRTUAL`).
+- **Before 17, an enum value cannot be used in the transaction that added it**, even one that
+  created the type (`55P04`; 17 allows that case). A compile is one transaction, so a text that
+  grows its enums and uses the new values fails on 15 and 16, with a hint (put the value in the
+  `CREATE TYPE`, or move to 17); so does an import whose history adds a value and uses it in a
+  later migration (the replay is one transaction too).
+- **Migrations are planned for the database's major** (`romulus_migration::Options::major`; the
+  files' header names it): a generated column's new expression is `SET EXPRESSION` from 17 on,
+  dropped and added again before; what the new model needs of a newer major is kept, noted on
+  its statement and warned about (`newer_postgres`: `NULLS NOT DISTINCT` and a column list in
+  `ON DELETE SET NULL` 15+, an exclusion constraint on a partitioned table 17+, virtual
+  generated columns, `NOT ENFORCED` and temporal keys 18+). Enum values a migration uses are
+  committed before its transaction on every major (as before). The oracle plans for its
+  sandbox's major and runs per major in CI: everything on 17, the scenarios and a smoke subset
+  of the corpus pairs and random edits on 15, 16 and 18 (snapshots are 17's: each major prints
+  views its own way).
+- Follow-ups: replay imports on 15/16 with a commit between migrations (a scratch database per
+  import) so enum values added then used import; check a hand-written migration's data
+  statements against the major (they are blanked, never run: a `MERGE … RETURNING`, 17+, is not
+  caught on 15); pg_query 18 when it ships (then 18's syntax compiles, and `VIRTUAL` columns
+  round-trip).
 
 ## Decided
 

@@ -39,6 +39,7 @@ use crate::{
         column_definition, create_policy, create_view, identity_when, mentions, owned_sequence,
         parenthesized, policy_roles, relation_keyword, same_sql, storage, table_name,
     },
+    versions::{self, Feature, PARTITIONED_EXCLUSION},
 };
 
 /// A schema and a name: the identity of every schema-qualified object.
@@ -129,6 +130,9 @@ impl Phase {
 struct Planned {
     phase: Phase,
     statement: Statement,
+    /// What it needs of Postgres that its text does not show
+    /// ([`versions::features`] reads the rest).
+    needs: Vec<Feature>,
 }
 
 impl Statement {
@@ -350,8 +354,16 @@ impl<'a> Planner<'a> {
                 stage: Stage::Transaction,
                 section: phase.section(),
             },
+            needs: Vec::new(),
         });
         &mut self.out.last_mut().expect("just pushed").statement
+    }
+
+    /// The statement just pushed needs `feature`.
+    fn needs(&mut self, feature: Feature) {
+        if let Some(last) = self.out.last_mut() {
+            last.needs.push(feature);
+        }
     }
 
     fn warn(&mut self, code: WarningCode, object: Option<String>, message: impl Into<String>) {
@@ -451,16 +463,24 @@ impl<'a> Planner<'a> {
                 let Some(after) = a.column(&column.name) else {
                     continue;
                 };
-                if readd(column, after) {
+                let new_expression = column.generated.is_some()
+                    && column.generated == after.generated
+                    && !same_opt_sql(column.default.as_ref(), after.default.as_ref());
+                if readd(column, after) || (new_expression && !self.options.has(17)) {
                     let why = if column.generated.is_none() {
-                        "It becomes generated, which Postgres cannot do in place: dropped and added again, its values replaced by the generated ones."
+                        "It becomes generated, which Postgres cannot do in place: dropped and added again, its values replaced by the generated ones.".to_owned()
+                    } else if new_expression {
+                        format!(
+                            "Its expression changes, and PostgreSQL {} has no SET EXPRESSION (17 and later do): dropped and added again, its values computed anew.",
+                            self.options.major.unwrap_or_default()
+                        )
                     } else {
-                        "Its generated storage changes, which Postgres cannot do in place: dropped and added again."
+                        "Its generated storage changes, which Postgres cannot do in place: dropped and added again.".to_owned()
                     };
                     self.readded
                         .entry(name.clone())
                         .or_default()
-                        .insert(column.name.clone(), why.to_owned());
+                        .insert(column.name.clone(), why);
                 } else if column.r#type != after.r#type || self.type_recreated(after) {
                     self.converted
                         .entry(name.clone())
@@ -1385,6 +1405,14 @@ impl<'a> Planner<'a> {
         }
         sql.push(';');
         self.push(Phase::Tables, Kind::CreateTable, sql);
+        if table.partition_key.is_some()
+            && table
+                .constraints
+                .iter()
+                .any(|c| c.kind == ConstraintKind::Exclusion)
+        {
+            self.needs(PARTITIONED_EXCLUSION);
+        }
         for column in &table.columns {
             self.own_sequence(Phase::Tables, &name, column);
         }
@@ -1771,6 +1799,13 @@ impl<'a> Planner<'a> {
         );
         statement.note = note;
         statement.hazard = hazard;
+        let partitioned = self
+            .new_entities
+            .values()
+            .any(|e| e.kind == EntityKind::PartitionedTable && table_name(e) == table);
+        if constraint.kind == ConstraintKind::Exclusion && partitioned {
+            self.needs(PARTITIONED_EXCLUSION);
+        }
     }
 
     fn constraint_comment(&mut self, table: &str, constraint: &Constraint, comment: Option<&str>) {
@@ -2214,7 +2249,7 @@ impl<'a> Planner<'a> {
                     format!("{alter} SET EXPRESSION AS ({expression});"),
                 )
                 .noted(format!(
-                    "PostgreSQL 17 or later; it rewrites the table ({} column). On older servers, drop and add the column.",
+                    "PostgreSQL 17 or later; it rewrites the table ({} column).",
                     storage(kind).to_lowercase()
                 ));
             }
@@ -2722,10 +2757,62 @@ impl<'a> Planner<'a> {
             let s = &mut planned.statement;
             s.destructive = matches!(s.hazard, Some(Hazard::DeletesData | Hazard::CanFail));
         }
+        self.guard_versions();
         self.out.sort_by_key(|p| (p.statement.stage, p.phase));
         Migration {
             statements: self.out.into_iter().map(|p| p.statement).collect(),
             warnings: self.warnings,
+            major: self.options.major,
+        }
+    }
+}
+
+impl Planner<'_> {
+    /// What the statements need of a newer Postgres than the target major
+    /// ([`Options::major`]): noted on each, one warning per feature.
+    fn guard_versions(&mut self) {
+        let Some(major) = self.options.major else {
+            return;
+        };
+        let mut missing: BTreeMap<Feature, usize> = BTreeMap::new();
+        for planned in &mut self.out {
+            let mut needs = versions::features(planned.statement.kind, &planned.statement.sql);
+            needs.extend(planned.needs.iter().copied());
+            needs.retain(|f| f.since > major);
+            needs.sort_by(|a, b| b.cmp(a));
+            needs.dedup();
+            if needs.is_empty() {
+                continue;
+            }
+            let what = needs
+                .iter()
+                .map(|f| format!("{} (PostgreSQL {}+)", f.what, f.since))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let note = format!("Fails on PostgreSQL {major}: it uses {what}.");
+            let s = &mut planned.statement;
+            s.note = Some(match s.note.take() {
+                Some(own) => format!("{own} {note}"),
+                None => note,
+            });
+            for feature in needs {
+                *missing.entry(feature).or_default() += 1;
+            }
+        }
+        for (feature, count) in missing.into_iter().rev() {
+            let statements = if count == 1 {
+                "a statement".to_owned()
+            } else {
+                format!("{count} statements")
+            };
+            self.warn(
+                WarningCode::NewerPostgres,
+                None,
+                format!(
+                    "The new schema uses {}, which needs PostgreSQL {} or later; the database is on {major}, where {statements} of this migration fail. Change the schema, or move the database to PostgreSQL {}.",
+                    feature.what, feature.since, feature.since
+                ),
+            );
         }
     }
 }

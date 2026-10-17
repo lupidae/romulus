@@ -32,17 +32,24 @@ up: env
     port=$(sed -n 's/^ROMULUS_ZITADEL_PORT=//p' .env)
     echo "up: ready. Zitadel http://localhost:$port, client in .dev/zitadel/oidc.env, users in .dev/zitadel/users.json"
 
-# only the sandbox Postgres (romulus-sandbox's tests need it; no Zitadel)
-sandbox: env
-    {{compose}} up -d --build --wait sandbox-postgres
+# a sandbox Postgres (no Zitadel): the default major's (17), another's (`just sandbox 15`), or all of them (`just sandbox all`)
+sandbox major="17": env
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{major}}" in
+        17) {{compose}} up -d --build --wait sandbox-postgres ;;
+        15 | 16 | 18) {{compose}} --profile pg{{major}} up -d --build --wait sandbox-postgres-{{major}} ;;
+        all) {{compose}} --profile majors up -d --build --wait sandbox-postgres sandbox-postgres-15 sandbox-postgres-16 sandbox-postgres-18 ;;
+        *) echo "sandbox: 15, 16, 17, 18 or all, not {{major}}" >&2; exit 1 ;;
+    esac
 
-# stop the stack, keep its data
+# stop the stack (every major's sandbox included), keep its data
 down:
-    {{compose}} down --remove-orphans
+    {{compose}} --profile majors down --remove-orphans
 
 # stop the stack and delete its data and the provisioned credentials
 nuke:
-    {{compose}} down -v --remove-orphans
+    {{compose}} --profile majors down -v --remove-orphans
     rm -rf .dev
 
 # apply migrations to DATABASE_URL (the API also applies them on start)

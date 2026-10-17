@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT d.database_id, d.status AS \"status: DraftStatus\", d.mode AS \"mode: DraftMode\",\n                  b.deleted_at IS NOT NULL AS \"database_deleted!\", b.org_id, o.approvals_required,\n                  d.editors_unknown,\n                  v.id AS \"base_id?\", v.source AS \"base_source?\", v.source_kind AS \"base_kind?: SourceKind\",\n                  v.model AS \"base_model?\"\n           FROM drafts d JOIN databases b ON b.id = d.database_id\n           JOIN organizations o ON o.id = b.org_id\n           LEFT JOIN versions v ON v.id = d.base_version_id\n           WHERE d.id = $1",
+  "query": "SELECT d.database_id, d.status AS \"status: DraftStatus\", d.mode AS \"mode: DraftMode\",\n                  b.deleted_at IS NOT NULL AS \"database_deleted!\", b.org_id, o.approvals_required,\n                  b.pg_major AS \"pg_major: PgMajor\",\n                  d.editors_unknown,\n                  v.id AS \"base_id?\", v.source AS \"base_source?\", v.source_kind AS \"base_kind?: SourceKind\",\n                  v.model AS \"base_model?\"\n           FROM drafts d JOIN databases b ON b.id = d.database_id\n           JOIN organizations o ON o.id = b.org_id\n           LEFT JOIN versions v ON v.id = d.base_version_id\n           WHERE d.id = $1",
   "describe": {
     "columns": [
       {
@@ -87,6 +87,17 @@
       },
       {
         "ordinal": 6,
+        "name": "pg_major: PgMajor",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "pg_major"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "editors_unknown",
         "type_info": "Bool",
         "origin": {
@@ -97,7 +108,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "base_id?",
         "type_info": "Uuid",
         "origin": {
@@ -108,7 +119,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "base_source?",
         "type_info": "Text",
         "origin": {
@@ -119,7 +130,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "base_kind?: SourceKind",
         "type_info": {
           "Custom": {
@@ -141,7 +152,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "base_model?",
         "type_info": "Jsonb",
         "origin": {
@@ -165,11 +176,12 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "95f56e5ecb2e4df954dc6533801f5e8a4106e60772f672499a97ffc0884f873f"
+  "hash": "afd4d875cdd4d6a5213dafc15c87bd54422279030caf063b6390620de721504e"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT d.id, d.slug, d.name, d.description, d.created_at, d.updated_at,\n                  v.id AS \"v_id?\", v.number AS \"v_number?\",\n                  v.origin AS \"v_origin?: VersionOrigin\",\n                  v.source_kind AS \"v_source_kind?: SourceKind\",\n                  v.message AS \"v_message?\", v.created_at AS \"v_created_at?\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\",\n                  t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  v.written_migration AS \"v_written_migration?\",\n                  greatest(d.updated_at, v.created_at) AS \"last_activity_at!\",\n                  d.last_version_number + 1 AS \"next_number!\", n.live AS \"versions!\",\n                  CASE WHEN n.live < coalesce(v.number, 0) THEN ARRAY(\n                      SELECT g FROM generate_series(1, v.number) g\n                      WHERE NOT EXISTS (\n                          SELECT 1 FROM versions o WHERE o.database_id = d.id AND o.number = g AND o.removed_at IS NULL\n                      )\n                      ORDER BY g\n                  ) ELSE '{}' END AS \"missing!\"\n           FROM databases d\n           LEFT JOIN LATERAL (\n               SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token,\n                      migration_sql IS NOT NULL AS written_migration\n               FROM versions WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1\n           ) v ON true\n           CROSS JOIN LATERAL (\n               SELECT count(*) AS live FROM versions WHERE database_id = d.id AND removed_at IS NULL\n           ) n\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE d.org_id = $1 AND d.deleted_at IS NULL AND ($2::text IS NULL OR d.slug = $2)\n           ORDER BY greatest(d.updated_at, v.created_at) DESC, lower(d.name), d.slug",
+  "query": "SELECT d.id, d.slug, d.name, d.description, d.pg_major AS \"pg_major: PgMajor\",\n                  d.created_at, d.updated_at,\n                  v.id AS \"v_id?\", v.number AS \"v_number?\",\n                  v.origin AS \"v_origin?: VersionOrigin\",\n                  v.source_kind AS \"v_source_kind?: SourceKind\",\n                  v.message AS \"v_message?\", v.created_at AS \"v_created_at?\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\",\n                  t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  v.written_migration AS \"v_written_migration?\",\n                  v.server_version AS \"v_server_version?\", v.pg_major AS \"v_pg_major?\",\n                  v.database_major AS \"v_database_major?\",\n                  greatest(d.updated_at, v.created_at) AS \"last_activity_at!\",\n                  d.last_version_number + 1 AS \"next_number!\", n.live AS \"versions!\",\n                  CASE WHEN n.live < coalesce(v.number, 0) THEN ARRAY(\n                      SELECT g FROM generate_series(1, v.number) g\n                      WHERE NOT EXISTS (\n                          SELECT 1 FROM versions o WHERE o.database_id = d.id AND o.number = g AND o.removed_at IS NULL\n                      )\n                      ORDER BY g\n                  ) ELSE '{}' END AS \"missing!\"\n           FROM databases d\n           LEFT JOIN LATERAL (\n               SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token,\n                      migration_sql IS NOT NULL AS written_migration, server_version, pg_major,\n                      database_major\n               FROM versions WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1\n           ) v ON true\n           CROSS JOIN LATERAL (\n               SELECT count(*) AS live FROM versions WHERE database_id = d.id AND removed_at IS NULL\n           ) n\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE d.org_id = $1 AND d.deleted_at IS NULL AND ($2::text IS NULL OR d.slug = $2)\n           ORDER BY greatest(d.updated_at, v.created_at) DESC, lower(d.name), d.slug",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,17 @@
       },
       {
         "ordinal": 4,
+        "name": "pg_major: PgMajor",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "pg_major"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -70,7 +81,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "v_id?",
         "type_info": "Uuid",
         "origin": {
@@ -81,7 +92,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "v_number?",
         "type_info": "Int4",
         "origin": {
@@ -92,7 +103,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "v_origin?: VersionOrigin",
         "type_info": {
           "Custom": {
@@ -115,7 +126,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "v_source_kind?: SourceKind",
         "type_info": {
           "Custom": {
@@ -137,7 +148,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "v_message?",
         "type_info": "Text",
         "origin": {
@@ -148,7 +159,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "v_created_at?",
         "type_info": "Timestamptz",
         "origin": {
@@ -159,7 +170,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "user_id?",
         "type_info": "Uuid",
         "origin": {
@@ -170,7 +181,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "user_name?",
         "type_info": "Text",
         "origin": {
@@ -181,7 +192,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "token_id?",
         "type_info": "Uuid",
         "origin": {
@@ -192,7 +203,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "token_name?",
         "type_info": "Text",
         "origin": {
@@ -203,31 +214,64 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "v_written_migration?",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 17,
+        "ordinal": 18,
+        "name": "v_server_version?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "server_version"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "v_pg_major?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "pg_major"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "v_database_major?",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "database_major"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
         "name": "last_activity_at!",
         "type_info": "Timestamptz",
         "origin": "Expression"
       },
       {
-        "ordinal": 18,
+        "ordinal": 22,
         "name": "next_number!",
         "type_info": "Int4",
         "origin": "Expression"
       },
       {
-        "ordinal": 19,
+        "ordinal": 23,
         "name": "versions!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 20,
+        "ordinal": 24,
         "name": "missing!",
         "type_info": "Int4Array",
         "origin": "Expression"
@@ -250,6 +294,7 @@
       false,
       false,
       false,
+      false,
       true,
       false,
       false,
@@ -257,11 +302,14 @@
       false,
       false,
       null,
+      true,
+      true,
+      false,
       null,
       null,
       null,
       null
     ]
   },
-  "hash": "11117a534913c60c070a595f8b773f51642abdf20b94604ea19fe7a184530bc8"
+  "hash": "c606917075db2c0db11c9c4999ff56d71a273e87e120515362742d26126c956d"
 }

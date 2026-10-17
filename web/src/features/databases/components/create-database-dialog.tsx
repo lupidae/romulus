@@ -14,8 +14,10 @@ import { Field } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
 
 import { useCreateDatabase } from "../mutations";
+import { DEFAULT_MAJOR, type PgMajor } from "../postgres";
 import type { Database } from "../queries";
 import { databaseSlugProblem, slugify } from "../slug";
+import { MajorSelect } from "./postgres";
 
 interface CreateDatabaseDialogProps {
   org: string;
@@ -24,7 +26,7 @@ interface CreateDatabaseDialogProps {
   onCreated: (database: Database) => void;
 }
 
-type Errors = { name?: string; slug?: string; description?: string };
+type Errors = { name?: string; slug?: string; description?: string; pg_major?: string };
 
 /**
  * Name, URL and description of a new database. The URL follows the name
@@ -71,6 +73,7 @@ function CreateDatabaseForm({
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const [major, setMajor] = React.useState<PgMajor>(DEFAULT_MAJOR);
   const [slugEdited, setSlugEdited] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
   const [serverErrors, setServerErrors] = React.useState<Errors>({});
@@ -82,6 +85,7 @@ function CreateDatabaseForm({
     name: serverErrors.name ?? (submitted ? nameProblem : undefined),
     slug: serverErrors.slug ?? (submitted ? databaseSlugProblem(slug) : undefined),
     description: serverErrors.description,
+    pg_major: serverErrors.pg_major,
   };
 
   const submit = (event: React.FormEvent) => {
@@ -90,13 +94,15 @@ function CreateDatabaseForm({
     if (nameProblem) return nameRef.current?.focus();
     if (databaseSlugProblem(slug)) return slugRef.current?.focus();
     create.mutate(
-      { name: name.trim(), slug, description: description.trim() },
+      { name: name.trim(), slug, description: description.trim(), pg_major: major },
       {
         onSuccess: onCreated,
         onError: (error) => {
           if (error instanceof ApiError && error.code === "slug_taken") {
             setServerErrors({ slug: "This organization already has a database at that URL." });
             slugRef.current?.focus();
+          } else if (error instanceof ApiError && error.code === "major_unavailable") {
+            setServerErrors({ pg_major: error.message });
           } else if (error instanceof ApiError && error.code === "validation") {
             setServerErrors(error.fields);
           } else {
@@ -143,6 +149,20 @@ function CreateDatabaseForm({
                 ? slugify(name)
                 : e.target.value.toLowerCase().replace(/\s+/g, "-"),
             );
+            setServerErrors({});
+          }}
+        />
+      </Field>
+      <Field
+        label="Postgres version"
+        description="Match your server: SQL compiles on it. You can change it later."
+        error={errors.pg_major}
+      >
+        <MajorSelect
+          className="sm:w-full"
+          value={major}
+          onValueChange={(picked) => {
+            setMajor(picked);
             setServerErrors({});
           }}
         />

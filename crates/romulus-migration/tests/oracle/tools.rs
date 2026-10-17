@@ -477,8 +477,12 @@ pub async fn run(compiler: &Compiler, admin: &str, case: &ToolCase) -> Result<To
             .await
             .map_err(|e| format!("the old schema does not build: {e}"))?;
         let old = introspect(&mut db).await?;
-        let up = migration(&old, &new, &case.options);
-        let down = migration(&new, &old, &Options::default());
+        let up = migration(&old, &new, &crate::options_for(compiler, &case.options));
+        let down = migration(
+            &new,
+            &old,
+            &crate::options_for(compiler, &Options::default()),
+        );
         let laid_out = files(&up, &down, case.format, &meta(case.format));
         apply(&mut db, case.format, &laid_out, false)
             .await

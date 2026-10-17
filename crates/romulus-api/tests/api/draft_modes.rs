@@ -11,7 +11,7 @@ use romulus_api::{
         Hub,
         compile::{Compiled, SqlCompiler, input_hash, sha256_hex},
     },
-    domain::DraftMode,
+    domain::{DraftMode, PgMajor},
 };
 use romulus_sandbox::{Action, Code, Diagnostic, LineIndex, ObjectKind};
 use serde_json::{Value, json};
@@ -681,7 +681,11 @@ async fn a_migration_draft_survives_a_restart(db: PgPool) {
 
 /// The model `sql` compiles to with [`mode_compiler`], named like a version's.
 async fn compiled_as(sql: &str) -> Option<Value> {
-    let mut model = mode_compiler().compile(sql).await.unwrap().model?;
+    let mut model = mode_compiler()
+        .compile(PgMajor::DEFAULT, sql)
+        .await
+        .unwrap()
+        .model?;
     "shop".clone_into(&mut model.database);
     Some(serde_json::to_value(model).unwrap())
 }
@@ -755,7 +759,7 @@ async fn discarding_keeps_what_canonical_sql_cannot_write(db: PgPool) {
     assert_eq!(back.status, StatusCode::OK, "{}", back.json());
     alice.until(|c| c.mode() == DraftMode::Schema).await;
     let mut model = mode_compiler()
-        .compile(&alice.sql())
+        .compile(PgMajor::DEFAULT, &alice.sql())
         .await
         .unwrap()
         .model

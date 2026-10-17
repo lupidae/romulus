@@ -129,8 +129,13 @@ pub(super) async fn switch_mode(
             DraftMode::Migration => {
                 let old = base_model.unwrap_or_else(|| empty_like(&model));
                 let meta = meta(&database_name, base_number, &row.name);
+                let major = content.major;
                 let seed = tokio::task::spawn_blocking(move || {
-                    editable(&migration(&old, &model, &Options::default()), &meta)
+                    let options = Options {
+                        major: Some(major.number()),
+                        ..Options::default()
+                    };
+                    editable(&migration(&old, &model, &options), &meta)
                 })
                 .await
                 .map_err(ApiError::internal)?;
@@ -142,6 +147,7 @@ pub(super) async fn switch_mode(
                     limits: &state.limits,
                     user: member.user.id,
                     database: database.id,
+                    major: content.major,
                 };
                 let (seed, base_sql) = checks
                     .back_to_schema(

@@ -166,7 +166,9 @@ function Compare() {
         <MigrationView
           // A new pair is a new view: its own file tab and scroll.
           key={rangeParam(from, to)}
-          query={(choice) => versionMigrationQuery(org, db, database.id, from, to, choice)}
+          query={(choice) =>
+            versionMigrationQuery(org, db, database.id, database.pg_major, from, to, choice)
+          }
           className="min-h-0 flex-1"
         />
       </div>

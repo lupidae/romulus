@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, number, model, source, source_kind AS \"source_kind: SourceKind\", layout, pg_major\n           FROM versions WHERE database_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "model",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "source_kind: SourceKind",
+        "type_info": {
+          "Custom": {
+            "name": "version_source_kind",
+            "kind": {
+              "Enum": [
+                "sql",
+                "remus_json",
+                "migration"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "layout",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "layout"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "pg_major",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "pg_major"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "867d6b639e0ae2b5dfb06a875e8dc856fdf998e9901693ee6c97be5ad5095023"
+}

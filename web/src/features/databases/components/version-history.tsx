@@ -13,6 +13,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { type Database, databaseKeys, neighbours, versionsQuery } from "../queries";
+import { VersionPostgresBadge } from "./postgres";
 import { Byline, OriginBadge } from "./version-meta";
 
 /**
@@ -139,8 +140,18 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
                       {v.message ?? "No message"}
                     </span>
                     {v.number === latest && <Badge variant="success">Latest</Badge>}
+                    {/* Only a push from another major is worth a mark in the list. */}
+                    {v.postgres.other_major && (
+                      <span className="max-sm:hidden">
+                        <VersionPostgresBadge version={v} />
+                      </span>
+                    )}
                   </span>
-                  <Byline author={v.author} at={v.created_at} className="text-sm sm:hidden" />
+                  {/* Phones: under the message, so the message keeps its room. */}
+                  <span className="flex min-w-0 items-center gap-2 sm:hidden">
+                    {v.postgres.other_major && <VersionPostgresBadge version={v} />}
+                    <Byline author={v.author} at={v.created_at} className="text-sm" />
+                  </span>
                 </span>
                 <Byline
                   author={v.author}

@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     ApiError, ApiResult,
-    domain::{Schema, SourceKind, VersionOrigin},
+    domain::{PgMajor, Schema, SourceKind, VersionOrigin},
     versions::{
         layout::VersionLayout,
         store::{NewVersion, StoreError, Stored, store},
@@ -24,6 +24,8 @@ pub struct Version {
     pub source: String,
     pub source_kind: SourceKind,
     pub layout: Value,
+    /// The major it was compiled (or pushed) on.
+    pub pg_major: Option<i16>,
 }
 
 impl Version {
@@ -48,7 +50,7 @@ impl Version {
 pub async fn by_id(db: &PgPool, database_id: Uuid, id: Uuid) -> ApiResult<Option<Version>> {
     Ok(sqlx::query_as!(
         Version,
-        r#"SELECT id, number, model, source, source_kind AS "source_kind: SourceKind", layout
+        r#"SELECT id, number, model, source, source_kind AS "source_kind: SourceKind", layout, pg_major
            FROM versions WHERE database_id = $1 AND id = $2"#,
         database_id,
         id,
@@ -61,7 +63,7 @@ pub async fn by_id(db: &PgPool, database_id: Uuid, id: Uuid) -> ApiResult<Option
 pub async fn latest(db: &PgPool, database_id: Uuid) -> ApiResult<Option<Version>> {
     Ok(sqlx::query_as!(
         Version,
-        r#"SELECT id, number, model, source, source_kind AS "source_kind: SourceKind", layout
+        r#"SELECT id, number, model, source, source_kind AS "source_kind: SourceKind", layout, pg_major
            FROM versions WHERE database_id = $1 AND removed_at IS NULL ORDER BY number DESC LIMIT 1"#,
         database_id,
     )
@@ -90,6 +92,9 @@ pub struct DraftVersion {
     /// The approvals to check again and keep with the version (when the
     /// organization requires some).
     pub approvals: Option<super::approvals::Freeze>,
+    /// The major `model` was compiled on (the room's): still the
+    /// database's when it is stored, or 409 `major_changed`.
+    pub compiled_on: PgMajor,
 }
 
 pub struct Created {
@@ -118,6 +123,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             publishes_draft: Some(new.draft),
             approvals: new.approvals,
             migration_sql: new.migration_sql,
+            compiled_on: Some(new.compiled_on),
         },
         false,
     )
@@ -128,7 +134,9 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             number: version.number,
         }),
         Err(StoreError::StaleBase { latest }) => Err(stale_base(latest.map(|v| v.number))),
-        Err(err @ (StoreError::DraftNotOpen | StoreError::Api(_))) => Err(err.into()),
+        Err(
+            err @ (StoreError::DraftNotOpen | StoreError::MajorChanged { .. } | StoreError::Api(_)),
+        ) => Err(err.into()),
     }
 }
 

@@ -206,7 +206,13 @@ impl Inner {
             edits,
         } = match checked {
             Ok(checked) => checked,
-            Err(failed) => return Ok(*failed),
+            Err(mut failed) => {
+                if let Some(failure) = failed.failure.as_mut() {
+                    let errors = std::mem::take(&mut failure.diagnostics);
+                    failure.diagnostics = super::bootstrap::newer_syntax(self.major, errors);
+                }
+                return Ok(*failed);
+            }
         };
         let skipped: Vec<Vec<Skipped>> = analyses.iter().map(|a| a.skipped.clone()).collect();
 

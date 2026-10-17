@@ -468,6 +468,12 @@ mod tests {
             created_at: chrono::DateTime::UNIX_EPOCH,
             author: None,
             written_migration: false,
+            postgres: crate::versions::VersionPostgres::new(
+                VersionOrigin::Push,
+                Some("17.11".into()),
+                Some(17),
+                17,
+            ),
         };
         let content = DiffContent {
             diff: romulus_diff::diff(&model(&["a"]), &model(&["a", "b"])),

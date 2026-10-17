@@ -1,20 +1,34 @@
-# The sandbox Postgres that compiles draft SQL (crates/romulus-sandbox).
+# The sandbox Postgres that compiles draft SQL (crates/romulus-sandbox), one
+# image per supported major: `--build-arg PG_MAJOR=15` (15, 16, 17, 18; 17
+# by default). A database compiles on its own major's sandbox
+# (docs/MVP.md, "Several Postgres majors").
 #
-# Its major version is pinned to the one the `pg_query` crate parses
-# (pg_query 6.2.1 → libpg_query from PostgreSQL 17.7): the allowlist checks
-# the grammar the sandbox runs. Bump both together, and the package versions
-# below with them (`apt-cache madison postgresql-17-postgis-3` in the base
-# image lists what PGDG still serves).
-FROM postgres:17.11
+# The parser is one for every major: the `pg_query` crate (6.2.1 → libpg_query
+# from PostgreSQL 17.7). Older majors' grammar is a subset of it (the server
+# refuses what it lacks, with its own error); syntax new in 18 is refused by
+# the parser until pg_query speaks 18. Each major's minor release is pinned
+# below; PostGIS and pgvector are the same release on every major (PGDG builds
+# them per major: `apt-cache madison postgresql-17-postgis-3` in a base image
+# lists what PGDG still serves). Bump them together.
+ARG PG_MAJOR=17
+
+FROM postgres:15.19 AS pg15
+FROM postgres:16.15 AS pg16
+FROM postgres:17.11 AS pg17
+FROM postgres:18.6 AS pg18
+
+# Only the chosen major's base is pulled (BuildKit skips unused stages).
+FROM pg${PG_MAJOR}
 
 ARG POSTGIS_VERSION=3.6.4+dfsg-2.pgdg13+1
 ARG PGVECTOR_VERSION=0.8.7-1.pgdg13+1
 
+# PG_MAJOR here is the base image's own (ENV PG_MAJOR), the major it runs.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      "postgresql-17-postgis-3=${POSTGIS_VERSION}" \
-      "postgresql-17-postgis-3-scripts=${POSTGIS_VERSION}" \
-      "postgresql-17-pgvector=${PGVECTOR_VERSION}" \
+      "postgresql-${PG_MAJOR}-postgis-3=${POSTGIS_VERSION}" \
+      "postgresql-${PG_MAJOR}-postgis-3-scripts=${POSTGIS_VERSION}" \
+      "postgresql-${PG_MAJOR}-pgvector=${PGVECTOR_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 
 # Compiles run as an unprivileged role, which may only create *trusted*
@@ -25,7 +39,7 @@ RUN apt-get update \
 # and the server-side allowlist refuses them before Postgres is asked.
 COPY trusted-extensions.txt /tmp/trusted-extensions.txt
 RUN set -eu; \
-    dir=/usr/share/postgresql/17/extension; \
+    dir=/usr/share/postgresql/${PG_MAJOR}/extension; \
     while read -r ext; do \
       [ -n "$ext" ] || continue; \
       control="$dir/$ext.control"; \

@@ -58,6 +58,7 @@ mod plan;
 mod sql;
 #[cfg(test)]
 mod tests;
+mod versions;
 
 pub use extensions::{
     PROVIDED as EXTENSION_OBJECTS, REQUIRES as EXTENSION_REQUIREMENTS,
@@ -79,6 +80,20 @@ pub struct Options {
     /// stay in the transaction.
     #[serde(default)]
     pub concurrently: bool,
+    /// The Postgres major the migration runs on (the database's); `None`:
+    /// any, the newest. Statements then use what it has (a generated
+    /// column's new expression is `SET EXPRESSION` from 17 on, the column
+    /// dropped and added again before), and what the new model needs that
+    /// it lacks is a [`WarningCode::NewerPostgres`] warning.
+    #[serde(default)]
+    pub major: Option<u32>,
+}
+
+impl Options {
+    /// Whether the target major has what `since` brought (any, without one).
+    pub(crate) fn has(&self, since: u32) -> bool {
+        self.major.is_none_or(|major| major >= since)
+    }
 }
 
 /// What [`migration`] returns: the statements, in order, and what a
@@ -90,6 +105,10 @@ pub struct Migration {
     /// [`Stage::Transaction`], then [`Stage::Concurrent`].
     pub statements: Vec<Statement>,
     pub warnings: Vec<Warning>,
+    /// The Postgres major it was planned for ([`Options::major`]); the
+    /// files' header names it.
+    #[serde(default)]
+    pub major: Option<u32>,
 }
 
 impl Migration {
@@ -305,6 +324,11 @@ pub enum WarningCode {
     /// A partition becomes a table: the names of its keys and indexes are
     /// Postgres's defaults, assumed (the model does not list a partition's).
     GuessedNames,
+    /// A statement needs a newer Postgres than the migration's
+    /// [`Options::major`] (`NULLS NOT DISTINCT` is 15+, an exclusion
+    /// constraint on a partitioned table 17+, a virtual generated column
+    /// 18+…): it is kept, and fails on that server.
+    NewerPostgres,
 }
 
 /// The migration from `old` to `new`. No statements when

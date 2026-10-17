@@ -27,7 +27,8 @@
                 "version_purged",
                 "version_published",
                 "approvals_overridden",
-                "approvals_required_changed"
+                "approvals_required_changed",
+                "major_changed"
               ]
             }
           }

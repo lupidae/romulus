@@ -3,6 +3,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   ActivityIcon,
   CheckCircleIcon,
+  DatabaseIcon,
   EyeClosedIcon,
   SettingsIcon,
   ShieldCheckIcon,
@@ -33,8 +34,8 @@ export function Activity({ org, db }: { org: string; db: string }) {
         <div className="grid gap-0.5">
           <CardTitle>Activity</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Removed and restored versions, drafts published and who approved them, and the approvals
-            publishing needs.
+            Removed and restored versions, drafts published and who approved them, the approvals
+            publishing needs, and moves to another Postgres version.
           </p>
         </div>
       </CardHeader>
@@ -107,6 +108,7 @@ const icons = {
   version_published: CheckCircleIcon,
   approvals_overridden: ShieldCheckIcon,
   approvals_required_changed: SettingsIcon,
+  major_changed: DatabaseIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -131,6 +133,10 @@ function sentence(event: AuditEvent): string {
       return `${who} published ${v} without its approvals (${details.approvals ?? 0} of ${details.required ?? "?"})`;
     case "approvals_required_changed":
       return `${who} changed the approvals publishing needs: ${approvalsCount(details.from)} → ${approvalsCount(details.to)}`;
+    case "major_changed":
+      return event.version_number == null
+        ? `${who} moved the database from Postgres ${details.from ?? "?"} to ${details.to ?? "?"}`
+        : `${who} moved the database from Postgres ${details.from ?? "?"} to ${details.to ?? "?"}, after ${v} compiled there`;
   }
 }
 

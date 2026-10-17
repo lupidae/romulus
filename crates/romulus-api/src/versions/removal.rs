@@ -40,7 +40,7 @@ use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
-use super::{Author, VersionSummary, summary};
+use super::{Author, VersionPostgres, VersionSummary, summary};
 use crate::{
     ApiError, ApiResult, AppState, audit,
     auth::{Member, min},
@@ -326,7 +326,8 @@ async fn list(
                   v.removed_at > now() - make_interval(days => $3) AS "restorable!",
                   u.id AS "user_id?", u.name AS "user_name?", t.id AS "token_id?", t.name AS "token_name?",
                   r.id AS "remover_id?", r.name AS "remover_name?",
-                  v.migration_sql IS NOT NULL AS "written_migration!"
+                  v.migration_sql IS NOT NULL AS "written_migration!",
+                  v.server_version, v.pg_major, v.database_major
            FROM versions v
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
@@ -351,6 +352,12 @@ async fn list(
                 created_at: r.created_at,
                 author: Author::from_columns(r.user_id, r.user_name, r.token_id, r.token_name),
                 written_migration: r.written_migration,
+                postgres: VersionPostgres::new(
+                    r.origin,
+                    r.server_version,
+                    r.pg_major,
+                    r.database_major,
+                ),
             },
             removed_at: r.removed_at,
             removed_by: r

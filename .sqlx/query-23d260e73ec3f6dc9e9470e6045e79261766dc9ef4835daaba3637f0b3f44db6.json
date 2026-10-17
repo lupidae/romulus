@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, slug, name FROM databases WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+  "query": "INSERT INTO databases (org_id, name, slug, description, created_by, pg_major)\n         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at, updated_at",
   "describe": {
     "columns": [
       {
@@ -16,23 +16,23 @@
       },
       {
         "ordinal": 1,
-        "name": "slug",
-        "type_info": "Text",
+        "name": "created_at",
+        "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "databases",
-            "name": "slug"
+            "name": "created_at"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "name",
-        "type_info": "Text",
+        "name": "updated_at",
+        "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "databases",
-            "name": "name"
+            "name": "updated_at"
           }
         }
       }
@@ -40,7 +40,11 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text"
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Int2"
       ]
     },
     "nullable": [
@@ -49,5 +53,5 @@
       false
     ]
   },
-  "hash": "a4017a7e3a1b4a6f3b3d5bb74c71cc95ece1d93024c0cd8bb15a1bfc3b3c8ea7"
+  "hash": "23d260e73ec3f6dc9e9470e6045e79261766dc9ef4835daaba3637f0b3f44db6"
 }

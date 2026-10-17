@@ -86,7 +86,7 @@ use super::{
     store::{self, BaseSql, CompileRow, Job, Loaded, Writer},
 };
 use crate::{
-    domain::{DraftMode, DraftStatus},
+    domain::{DraftMode, DraftStatus, PgMajor},
     drafts::tidy::canonical_sql,
     versions::layout::{TableGroup, TablePosition, VersionLayout},
 };
@@ -277,6 +277,8 @@ pub struct Content {
     /// without one): what the migration applies to. They move together.
     pub base_version: Option<Uuid>,
     pub base_sql: Arc<str>,
+    /// What the draft compiles on: its database's major.
+    pub major: PgMajor,
     pub layout: VersionLayout,
     /// The model of exactly this source (and base), when the last compile
     /// was of it and succeeded (publishing then needs no compile of its
@@ -379,6 +381,11 @@ pub enum Command {
     VersionCreated {
         number: i32,
     },
+    /// The database moved to another Postgres major.
+    Major {
+        major: PgMajor,
+        by: String,
+    },
     /// News for everyone in the draft, as it is (a version removed or
     /// restored).
     Event(ServerEvent),
@@ -480,6 +487,8 @@ struct ClientState {
 struct CompileDone {
     /// The mode it compiled the source of.
     mode: DraftMode,
+    /// The major it compiled on.
+    major: PgMajor,
     /// Of the source compiled (what clients compare with their text).
     sha256: String,
     /// What it compiled (`compile::input_hash`).
@@ -517,6 +526,8 @@ struct Room {
     /// mode.
     base_version: Option<Uuid>,
     base_sql: Arc<str>,
+    /// What it compiles on: its database's major.
+    major: PgMajor,
     /// The text that is not the source, as it must stay: an edit of it (a
     /// tab that had not seen a switch) is undone.
     inactive: String,
@@ -770,6 +781,7 @@ impl Room {
             mode,
             base_version,
             base_sql,
+            major: loaded.pg_major,
             inactive,
             touched_sql: Arc::new(AtomicBool::new(false)),
             touched_migration: Arc::new(AtomicBool::new(false)),
@@ -821,7 +833,9 @@ impl Room {
             .good_tables
             .and_then(|tables| serde_json::from_value(tables).ok())
             .unwrap_or_default();
-        if hex(&saved.source_hash) == input {
+        // Of this text on another major (the database moved since): the
+        // graph keeps its model until the compile on this one.
+        if hex(&saved.source_hash) == input && saved.pg_major == self.major {
             self.last_compile = Some(LastCompile {
                 state: if saved.model.is_some() {
                     CompileState::Ok
@@ -938,9 +952,8 @@ impl Room {
                 };
                 self.broadcast_event(&updated, None);
             }
-            Command::VersionCreated { number } => {
-                self.broadcast_event(&ServerEvent::VersionCreated { number }, None);
-            }
+            Command::VersionCreated { number } => self.version_created(number),
+            Command::Major { major, by } => self.major_changed(major, by),
             Command::Event(event) => self.broadcast_event(&event, None),
             Command::CheckApproval {
                 user_id,
@@ -1402,6 +1415,7 @@ impl Room {
             migration: self.roots.migration(&txn),
             base_version: self.base_version,
             base_sql: Arc::clone(&self.base_sql),
+            major: self.major,
         }
     }
 
@@ -1666,7 +1680,7 @@ impl Room {
             self.id.to_string(),
             self.source.clone(),
         );
-        let (mode, base) = (self.mode, Arc::clone(&self.base_sql));
+        let (mode, base, major) = (self.mode, Arc::clone(&self.base_sql), self.major);
         let results = self.results.0.clone();
         tokio::spawn(async move {
             let sha256 = sha256_hex(&source);
@@ -1674,13 +1688,15 @@ impl Room {
             let (tables, result) = match mode {
                 DraftMode::Schema => (
                     compile::created_at(&source),
-                    compiler.compile_for(&key, source).await,
+                    compiler.compile_for(major, &key, source).await,
                 ),
                 // Renames typed in a migration are `ALTER … RENAME`: the
                 // statement-index rule does not apply.
                 DraftMode::Migration => (
                     HashMap::new(),
-                    compiler.compile_migration_for(&key, &base, &source).await,
+                    compiler
+                        .compile_migration_for(major, &key, &base, &source)
+                        .await,
                 ),
             };
             let schema_sql = match (&result, mode) {
@@ -1700,6 +1716,7 @@ impl Room {
             };
             let _ = results.send(CompileDone {
                 mode,
+                major,
                 sha256,
                 input,
                 schema_sql,
@@ -1734,14 +1751,16 @@ impl Room {
     fn compiled(&mut self, done: CompileDone) {
         let CompileDone {
             mode,
+            major,
             sha256,
             input,
             schema_sql,
             tables,
             result,
         } = done;
-        // Of the other text: the draft switched modes since it started.
-        if mode != self.mode {
+        // Of the other text (the draft switched modes since it started), or
+        // on another major (the database moved: a compile on it follows).
+        if mode != self.mode || major != self.major {
             return;
         }
         let compiled = match result {
@@ -1775,6 +1794,7 @@ impl Room {
             self.schema_sql.clone_from(&schema_sql);
             self.writer.send(Job::Compile(Box::new(CompileRow {
                 source_hash,
+                pg_major: major,
                 model: Some(Arc::clone(&model)),
                 errors: None,
                 tables: serde_json::to_value(&self.good_tables).ok(),
@@ -1798,6 +1818,7 @@ impl Room {
         } else {
             self.writer.send(Job::Compile(Box::new(CompileRow {
                 source_hash,
+                pg_major: major,
                 model: None,
                 errors: Some(diagnostics.clone()),
                 tables: None,
@@ -1818,6 +1839,35 @@ impl Room {
                 input: Some(input),
                 diagnostics,
             });
+        }
+    }
+
+    fn version_created(&mut self, number: i32) {
+        self.broadcast_event(&ServerEvent::VersionCreated { number }, None);
+    }
+
+    /// The database moved to another major: everyone hears it, and the
+    /// source compiles on it (the result on the old one is not of this
+    /// draft any more; the graph keeps its model meanwhile).
+    fn major_changed(&mut self, major: PgMajor, by: String) {
+        if major == self.major {
+            return;
+        }
+        self.major = major;
+        self.last_compile = None;
+        self.broadcast_event(
+            &ServerEvent::Major {
+                pg_major: major,
+                by,
+            },
+            None,
+        );
+        if self.status == LiveStatus::Open
+            || self.status == LiveStatus::Publishing
+            || self.status == LiveStatus::Updating
+        {
+            let now = Instant::now();
+            self.dirty = Some((now, now));
         }
     }
 

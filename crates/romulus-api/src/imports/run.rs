@@ -32,7 +32,7 @@ use super::{
 };
 use crate::{
     ApiError, ApiResult, AppState,
-    domain::MigrationFormat,
+    domain::{MigrationFormat, PgMajor},
     error::ErrorBody,
     extract::Json,
     versions::{
@@ -125,6 +125,8 @@ pub struct Target {
     pub database_id: Uuid,
     /// The models' `database`.
     pub slug: String,
+    /// The history replays on this major's sandbox.
+    pub major: PgMajor,
 }
 
 /// Silence after which the NDJSON stream sends a blank line.
@@ -328,6 +330,7 @@ impl Job {
                 last_number: planned.last_number,
                 staging,
                 versions,
+                replayed_on: self.target.major,
             },
         )
         .await;
@@ -374,7 +377,11 @@ impl Job {
         // compared and staged, and stops if staging stops.
         let (sender, received) = mpsc::channel(1);
         let staged = tokio::spawn(self.stage(received, events.cloned(), from, staging));
-        let replay = self.state.compiler.replay(texts, from, sender).await;
+        let replay = self
+            .state
+            .compiler
+            .replay(self.target.major, texts, from, sender)
+            .await;
         let staged = staged.await.map_err(ApiError::internal)?;
         // Why staging stopped comes first: the replay only stopped with it.
         let changes = staged?;

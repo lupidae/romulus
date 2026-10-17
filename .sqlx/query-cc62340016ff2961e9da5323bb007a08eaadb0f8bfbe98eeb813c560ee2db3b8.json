@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE databases SET pg_major = 16 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cc62340016ff2961e9da5323bb007a08eaadb0f8bfbe98eeb813c560ee2db3b8"
+}

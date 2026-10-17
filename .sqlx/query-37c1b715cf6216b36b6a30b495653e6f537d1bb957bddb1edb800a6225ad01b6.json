@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout)\n         VALUES ($1, 1, $2, 'CREATE TABLE users (id bigint);', 'sql', 'upload', '{}')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37c1b715cf6216b36b6a30b495653e6f537d1bb957bddb1edb800a6225ad01b6"
+}

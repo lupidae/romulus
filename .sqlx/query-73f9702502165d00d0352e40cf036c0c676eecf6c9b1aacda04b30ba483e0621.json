@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, number, model, source, source_kind AS \"source_kind: SourceKind\", layout\n           FROM versions WHERE database_id = $1 AND id = $2",
+  "query": "SELECT id, number, pg_major, source, source_kind AS \"source_kind: SourceKind\", model\n           FROM versions WHERE database_id = $1 AND removed_at IS NULL\n           ORDER BY number DESC LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -27,12 +27,12 @@
       },
       {
         "ordinal": 2,
-        "name": "model",
-        "type_info": "Jsonb",
+        "name": "pg_major",
+        "type_info": "Int2",
         "origin": {
           "Table": {
             "table": "versions",
-            "name": "model"
+            "name": "pg_major"
           }
         }
       },
@@ -71,30 +71,29 @@
       },
       {
         "ordinal": 5,
-        "name": "layout",
+        "name": "model",
         "type_info": "Jsonb",
         "origin": {
           "Table": {
             "table": "versions",
-            "name": "layout"
+            "name": "model"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
         "Uuid"
       ]
     },
     "nullable": [
       false,
       false,
-      false,
+      true,
       false,
       false,
       false
     ]
   },
-  "hash": "c6e258e761032bddb839f70f1e59a732870cdc82fdef9e5d00da91b9d6869993"
+  "hash": "73f9702502165d00d0352e40cf036c0c676eecf6c9b1aacda04b30ba483e0621"
 }

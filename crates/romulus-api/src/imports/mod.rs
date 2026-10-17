@@ -265,6 +265,7 @@ async fn import(
         org_id: member.org.id,
         database_id: database.id,
         slug: database.slug,
+        major: database.pg_major,
     };
     run::start(state, target, author, files, options, streams(&headers)).await
 }
@@ -326,6 +327,7 @@ async fn import_with_token(
         org_id,
         database_id: token.database_id,
         slug: token.database_slug,
+        major: token.database_major,
     };
     run::start(state, target, author, files, options, streams(&headers)).await
 }

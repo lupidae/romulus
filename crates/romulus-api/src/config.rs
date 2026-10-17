@@ -4,9 +4,11 @@
 //! `scripts/dev-env`) and `.dev/zitadel/oidc.env` (written by the Zitadel
 //! provisioner); variables already set always win.
 
-use std::{env, fmt, net::SocketAddr, path::PathBuf};
+use std::{collections::BTreeMap, env, fmt, net::SocketAddr, path::PathBuf};
 
 use url::Url;
+
+use crate::domain::PgMajor;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -17,8 +19,11 @@ pub struct Config {
     /// `ROMULUS_PUBLIC_URL`: the origin the browser uses (the web app, which
     /// proxies `/api`). Used for `Origin` checks and redirect URLs.
     pub public_url: Url,
-    /// `ROMULUS_SANDBOX_URL`: an admin connection to the sandbox Postgres.
-    pub sandbox_url: Option<String>,
+    /// An admin connection to each major's sandbox Postgres:
+    /// `ROMULUS_SANDBOX_URL` for the default major (17),
+    /// `ROMULUS_SANDBOX_URL_PG15`, `…_PG16`, `…_PG18` for the others. A
+    /// major without one cannot compile (503), the others work.
+    pub sandbox_urls: BTreeMap<PgMajor, String>,
     /// `ROMULUS_SANDBOX_PREFIX`: names of this process's sandbox roles and
     /// databases (`<prefix>_<n>`), `romulus_sandbox` by default. One process
     /// per prefix: a second API on the same sandbox (Playwright's) needs its
@@ -96,7 +101,7 @@ impl Config {
             database_url: String::new(),
             api_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             public_url: Url::parse("http://localhost:41000").expect("valid URL"),
-            sandbox_url: None,
+            sandbox_urls: BTreeMap::new(),
             sandbox_prefix: "romulus_sandbox".to_owned(),
             oidc: None,
             session_cookie: "romulus_session".to_owned(),
@@ -209,7 +214,7 @@ impl Config {
             database_url: required("DATABASE_URL")?,
             api_addr,
             public_url,
-            sandbox_url: get("ROMULUS_SANDBOX_URL"),
+            sandbox_urls: sandbox_urls(&get),
             sandbox_prefix,
             oidc,
             session_cookie: get("ROMULUS_SESSION_COOKIE")
@@ -218,6 +223,32 @@ impl Config {
             web_dir,
             edge_key,
         })
+    }
+}
+
+/// Each major's sandbox URL, from `ROMULUS_SANDBOX_URL` (the default
+/// major's) and `ROMULUS_SANDBOX_URL_PG<N>`.
+fn sandbox_urls(get: impl Fn(&'static str) -> Option<String>) -> BTreeMap<PgMajor, String> {
+    let mut urls = BTreeMap::new();
+    if let Some(url) = get("ROMULUS_SANDBOX_URL") {
+        urls.insert(PgMajor::DEFAULT, url);
+    }
+    for major in PgMajor::SUPPORTED {
+        if let Some(url) = sandbox_var(major).and_then(&get) {
+            urls.insert(major, url);
+        }
+    }
+    urls
+}
+
+/// The variable naming a major's sandbox other than the default's
+/// (`ROMULUS_SANDBOX_URL`).
+pub fn sandbox_var(major: PgMajor) -> Option<&'static str> {
+    match major.get() {
+        15 => Some("ROMULUS_SANDBOX_URL_PG15"),
+        16 => Some("ROMULUS_SANDBOX_URL_PG16"),
+        18 => Some("ROMULUS_SANDBOX_URL_PG18"),
+        _ => None,
     }
 }
 
@@ -339,6 +370,28 @@ mod tests {
                 ("ROMULUS_DEV_SIGNIN", "1"),
             ];
             assert!(config(&vars).unwrap().dev_signin, "{public}");
+        }
+    }
+
+    #[test]
+    fn each_major_has_its_sandbox() {
+        assert!(config(&BASE).unwrap().sandbox_urls.is_empty());
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SANDBOX_URL", "postgres://a@h:1/postgres"));
+        vars.push(("ROMULUS_SANDBOX_URL_PG15", "postgres://a@h:2/postgres"));
+        let urls = config(&vars).unwrap().sandbox_urls;
+        assert_eq!(
+            urls.iter()
+                .map(|(major, url)| (major.get(), url.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (15, "postgres://a@h:2/postgres"),
+                (17, "postgres://a@h:1/postgres")
+            ]
+        );
+        // Every supported major but the default has its variable.
+        for major in PgMajor::SUPPORTED {
+            assert_eq!(sandbox_var(major).is_none(), major == PgMajor::DEFAULT);
         }
     }
 

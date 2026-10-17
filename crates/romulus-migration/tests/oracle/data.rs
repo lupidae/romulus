@@ -151,7 +151,11 @@ fn hazards_are_what_happens_to_rows() {
             let new = compile(&compiler, case.new)
                 .await
                 .expect("the new schema compiles");
-            let m = migration(&old, &new, &Options::default());
+            let m = migration(
+                &old,
+                &new,
+                &crate::options_for(&compiler, &Options::default()),
+            );
             let Some(flagged) = m.statements.iter().find(|s| s.sql.contains(case.statement)) else {
                 failures.push(format!(
                     "{}: no statement with {:?} in\n{}",

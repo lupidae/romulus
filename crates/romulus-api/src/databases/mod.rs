@@ -7,12 +7,18 @@
 //! - `GET /orgs/{org}/databases/{db}` [member]; `PATCH` [developer]: name,
 //!   slug, description; `DELETE` [developer]: soft delete (`deleted_at`; its
 //!   versions stay, its slug is free again, its tokens are revoked).
+//! - `POST /orgs/{org}/databases/{db}/major/check`, `PUT …/major`
+//!   [developer]: move it to another Postgres major, once its latest version
+//!   compiles there (see [`major`]).
 //! - `GET/POST /orgs/{org}/databases/{db}/tokens`, `DELETE
 //!   …/tokens/{id}` [developer]: API tokens (see [`tokens`]), and the
 //!   [`tokens::Bearer`] extractor the machine API authenticates with.
 //!
 //! Tables: `databases`, `api_tokens`. Versions are the `versions` module's.
+//! A database targets a Postgres major (`pg_major`, 17 unless chosen at
+//! creation): every compile of its SQL runs on that major's sandbox.
 
+pub mod major;
 pub mod slug;
 pub mod tokens;
 
@@ -28,18 +34,20 @@ use crate::{
     ApiError, ApiResult, AppState,
     auth::{Member, min},
     collab::Hub,
+    compile::SqlCompiler,
     db,
-    domain::{SourceKind, VersionOrigin},
+    domain::{PgMajor, SourceKind, VersionOrigin},
     error::ErrorBody,
     extract::{Json, Path},
     orgs::invalid,
-    versions::{Author, VersionSummary},
+    versions::{Author, VersionPostgres, VersionSummary},
 };
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, create))
         .routes(routes!(get, update, delete))
+        .merge(major::router())
         .merge(tokens::router())
 }
 
@@ -52,6 +60,9 @@ pub struct Database {
     pub name: String,
     /// Empty when none was given.
     pub description: String,
+    /// The Postgres major its schema targets: its SQL compiles on that
+    /// major, its migrations are generated for it.
+    pub pg_major: PgMajor,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     /// The newest version; `null` before the first upload or push (or
@@ -78,6 +89,10 @@ pub struct CreateDatabase {
     /// At most 1000 characters.
     #[serde(default)]
     pub description: String,
+    /// The Postgres major it targets; 17 when not given. Changed later with
+    /// `PUT …/major`.
+    #[serde(default)]
+    pub pg_major: PgMajor,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -94,19 +109,34 @@ pub struct DatabaseRef {
     pub id: Uuid,
     pub slug: String,
     pub name: String,
+    /// What its SQL compiles on.
+    pub pg_major: PgMajor,
 }
 
 /// The live database `slug` of the organization `org_id`, or 404.
 pub async fn find(db: &PgPool, org_id: Uuid, slug: &str) -> ApiResult<DatabaseRef> {
     sqlx::query_as!(
         DatabaseRef,
-        "SELECT id, slug, name FROM databases WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
+        r#"SELECT id, slug, name, pg_major AS "pg_major: PgMajor"
+           FROM databases WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL"#,
         org_id,
         slug,
     )
     .fetch_optional(db)
     .await?
     .ok_or_else(no_such_database)
+}
+
+pub(crate) async fn load_one_by_id(db: &PgPool, org_id: Uuid, id: Uuid) -> ApiResult<Database> {
+    let slug = sqlx::query_scalar!(
+        "SELECT slug FROM databases WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL",
+        id,
+        org_id,
+    )
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(no_such_database)?;
+    load_one(db, org_id, &slug).await
 }
 
 pub fn no_such_database() -> ApiError {
@@ -163,7 +193,8 @@ fn slug_taken(slug: &str) -> impl FnOnce(sqlx::Error) -> ApiError + '_ {
 /// disagree.
 async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Database>> {
     let rows = sqlx::query!(
-        r#"SELECT d.id, d.slug, d.name, d.description, d.created_at, d.updated_at,
+        r#"SELECT d.id, d.slug, d.name, d.description, d.pg_major AS "pg_major: PgMajor",
+                  d.created_at, d.updated_at,
                   v.id AS "v_id?", v.number AS "v_number?",
                   v.origin AS "v_origin?: VersionOrigin",
                   v.source_kind AS "v_source_kind?: SourceKind",
@@ -171,6 +202,8 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                   u.id AS "user_id?", u.name AS "user_name?",
                   t.id AS "token_id?", t.name AS "token_name?",
                   v.written_migration AS "v_written_migration?",
+                  v.server_version AS "v_server_version?", v.pg_major AS "v_pg_major?",
+                  v.database_major AS "v_database_major?",
                   greatest(d.updated_at, v.created_at) AS "last_activity_at!",
                   d.last_version_number + 1 AS "next_number!", n.live AS "versions!",
                   CASE WHEN n.live < coalesce(v.number, 0) THEN ARRAY(
@@ -183,7 +216,8 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
            FROM databases d
            LEFT JOIN LATERAL (
                SELECT id, number, origin, source_kind, message, created_at, created_by, created_by_token,
-                      migration_sql IS NOT NULL AS written_migration
+                      migration_sql IS NOT NULL AS written_migration, server_version, pg_major,
+                      database_major
                FROM versions WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1
            ) v ON true
            CROSS JOIN LATERAL (
@@ -223,6 +257,12 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                             r.token_name,
                         ),
                         written_migration: r.v_written_migration.unwrap_or(false),
+                        postgres: VersionPostgres::new(
+                            origin,
+                            r.v_server_version,
+                            r.v_pg_major,
+                            r.v_database_major.unwrap_or_else(|| r.pg_major.get()),
+                        ),
                     })
                 }
                 _ => None,
@@ -232,6 +272,7 @@ async fn load(db: &PgPool, org_id: Uuid, slug: Option<&str>) -> ApiResult<Vec<Da
                 slug: r.slug,
                 name: r.name,
                 description: r.description,
+                pg_major: r.pg_major,
                 created_at: r.created_at,
                 updated_at: r.updated_at,
                 latest,
@@ -279,30 +320,33 @@ async fn list(member: Member, State(db): State<PgPool>) -> ApiResult<Json<Vec<Da
         (status = 201, body = Database),
         (status = 403, body = ErrorBody),
         (status = 409, description = "`slug_taken`", body = ErrorBody),
-        (status = 422, description = "`validation`, `details` names the field", body = ErrorBody),
+        (status = 422, description = "`validation`, `details` names the field; `major_unavailable`: this server has no sandbox for that Postgres major", body = ErrorBody),
     )
 )]
 async fn create(
     member: Member<min::Developer>,
     State(db): State<PgPool>,
+    State(compiler): State<SqlCompiler>,
     Json(body): Json<CreateDatabase>,
 ) -> ApiResult<(StatusCode, Json<Database>)> {
     let name = checked_name(&body.name)?;
     let slug = checked_slug(&body.slug)?;
     let description = checked_description(&body.description)?;
+    compiler.require_served(body.pg_major)?;
     let row = sqlx::query!(
-        "INSERT INTO databases (org_id, name, slug, description, created_by)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at, updated_at",
+        "INSERT INTO databases (org_id, name, slug, description, created_by, pg_major)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at, updated_at",
         member.org.id,
         name,
         slug,
         description,
         member.user.id,
+        body.pg_major as PgMajor,
     )
     .fetch_one(&db)
     .await
     .map_err(slug_taken(&slug))?;
-    tracing::info!(org = %member.org.slug, database = %slug, "database created");
+    tracing::info!(org = %member.org.slug, database = %slug, major = %body.pg_major, "database created");
     Ok((
         StatusCode::CREATED,
         Json(Database {
@@ -310,6 +354,7 @@ async fn create(
             slug,
             name,
             description,
+            pg_major: body.pg_major,
             created_at: row.created_at,
             updated_at: row.updated_at,
             latest: None,

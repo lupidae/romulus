@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use romulus_api::{
     AppState, Config,
     compile::SqlCompiler,
-    domain::{SourceKind, TokenScope, VersionOrigin},
+    domain::{PgMajor, SourceKind, TokenScope, VersionOrigin},
     versions::{
         layout::VersionLayout,
         store::{NewVersion, StoreError, Stored, store},
@@ -364,6 +364,7 @@ fn new_version(database_id: Uuid, tables: &[&str]) -> NewVersion {
         publishes_draft: None,
         approvals: None,
         migration_sql: None,
+        compiled_on: None,
     }
 }
 
@@ -491,11 +492,11 @@ async fn the_sandbox_compiles_uploads_and_sql_pushes(db: PgPool) {
         return;
     };
     let mut config = Config::for_tests();
-    config.sandbox_url = Some(url);
+    config.sandbox_urls.insert(PgMajor::DEFAULT, url);
     config.sandbox_prefix = "romulus_api_test".into();
     let compiler = SqlCompiler::sandbox(&config);
     for _ in 0..120 {
-        if compiler.status().await == romulus_api::compile::CompilerStatus::Ok {
+        if compiler.status(PgMajor::DEFAULT).await == romulus_api::compile::CompilerStatus::Ok {
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;

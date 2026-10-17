@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT source_hash, model, errors, good_model, good_tables\n         FROM draft_compiles WHERE draft_id = $1",
+  "query": "SELECT source_hash, pg_major AS \"pg_major: PgMajor\", model, errors, good_model, good_tables\n           FROM draft_compiles WHERE draft_id = $1",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "pg_major: PgMajor",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "draft_compiles",
+            "name": "pg_major"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "model",
         "type_info": "Jsonb",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "errors",
         "type_info": "Jsonb",
         "origin": {
@@ -37,7 +48,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "good_model",
         "type_info": "Jsonb",
         "origin": {
@@ -48,7 +59,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "good_tables",
         "type_info": "Jsonb",
         "origin": {
@@ -66,11 +77,12 @@
     },
     "nullable": [
       false,
+      false,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "aa7eb63c6ac0d671942ac036371f023c801c56a29ab2108f55440b6a0920cd55"
+  "hash": "c1e9f0dad9842da6ade69ada2ac85947263ccafe5e80cd986e1624e34024e636"
 }

@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/components/ui/toaster";
 import { meQuery } from "@/features/auth/queries";
+import { databaseKeys } from "@/features/databases/queries";
 import { orgKeys, orgQuery } from "@/features/orgs/queries";
 import { canWrite } from "@/features/orgs/roles";
 import type { Schema } from "@/features/schema/model";
@@ -175,6 +176,23 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
         description: "The schema SQL is what everyone edits again.",
       });
   }, [modeChanged, queryClient, org, db, draftId, me.name]);
+  // The database moved to another Postgres major: the draft compiles there
+  // now (a compile follows), and its migration is written for it.
+  const majorChanged = state?.majorChanged ?? null;
+  React.useEffect(() => {
+    if (!majorChanged) return;
+    void queryClient.invalidateQueries({ queryKey: databaseKeys.one(org, db), exact: true });
+    void queryClient.invalidateQueries({ queryKey: draftKeys.one(org, db, draftId) });
+    queryClient.removeQueries({ queryKey: ["drafts", org, db, draftId, "migration"] });
+    if (majorChanged.by === me.name)
+      toast.info(`The draft compiles on Postgres ${majorChanged.major} now`, {
+        description: `Its migration is written for Postgres ${majorChanged.major} too.`,
+      });
+    else
+      toast.info(`${majorChanged.by} moved the database to Postgres ${majorChanged.major}`, {
+        description: "The draft compiles there now, and its migration is written for it.",
+      });
+  }, [majorChanged, queryClient, org, db, draftId, me.name]);
   // The server sees another role than this page thought: a role changed.
   // Catch up.
   const serverRole = state?.role ?? null;

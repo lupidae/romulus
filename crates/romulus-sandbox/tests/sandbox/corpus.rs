@@ -12,7 +12,7 @@ use romulus_sandbox::{Code, Compilation, Compiler, render_sql};
 use crate::{compile_ok, explain, with_compiler};
 
 /// Compile `sql`, then its rendered model, and require the same model.
-async fn round_trip(compiler: &Compiler, name: &str, sql: &str) -> (Compilation, Schema) {
+pub async fn round_trip(compiler: &Compiler, name: &str, sql: &str) -> (Compilation, Schema) {
     let first = compile_ok(compiler, sql).await;
     let model = first.model.clone().expect("a model");
     let rendered = render_sql(&model);
@@ -28,7 +28,7 @@ async fn round_trip(compiler: &Compiler, name: &str, sql: &str) -> (Compilation,
 }
 
 /// Equal models, or a panic showing where they first differ.
-fn assert_same(name: &str, expected: &Schema, actual: &Schema) {
+pub fn assert_same(name: &str, expected: &Schema, actual: &Schema) {
     if expected == actual {
         return;
     }

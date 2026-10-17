@@ -497,7 +497,14 @@ fn concurrently_builds_plain_indexes_on_existing_tables_after_the_transaction() 
         definition: "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)"
             .into(),
     });
-    let m = migration(&old, &new, &Options { concurrently: true });
+    let m = migration(
+        &old,
+        &new,
+        &Options {
+            concurrently: true,
+            ..Options::default()
+        },
+    );
     let plain = find(&m, "CREATE INDEX CONCURRENTLY users_email_idx");
     assert_eq!(plain.stage, Stage::Concurrent);
     let unique = find(&m, "CREATE UNIQUE INDEX users_email_key");
@@ -621,7 +628,10 @@ fn with_index_concurrently() -> (Migration, Migration) {
         partial: false,
         definition: "CREATE INDEX users_name_idx ON public.users USING btree (name)".into(),
     });
-    let options = Options { concurrently: true };
+    let options = Options {
+        concurrently: true,
+        ..Options::default()
+    };
     (
         migration(&old, &new, &options),
         migration(&new, &old, &Options::default()),
@@ -1262,4 +1272,200 @@ fn the_editable_text_has_the_statements_and_no_transaction() {
          -- Write what changes v4 here (ALTER TABLE …):\n\
          -- the schema and the graph follow from it.\n"
     );
+}
+
+// ---- Target majors (Options::major) -------------------------------------------
+
+fn on(major: u32) -> Options {
+    Options {
+        major: Some(major),
+        ..Options::default()
+    }
+}
+
+fn generated(expression: &str) -> Column {
+    let mut g = col("g", "integer");
+    g.generated = Some(remus_core::model::Generated::Stored);
+    g.default = Some(expression.into());
+    g
+}
+
+#[test]
+fn a_new_expression_is_set_in_place_from_17_and_readded_before() {
+    let old = schema(vec![table(
+        "t",
+        vec![col("a", "integer"), generated("(a * 2)")],
+    )]);
+    let new = schema(vec![table(
+        "t",
+        vec![col("a", "integer"), generated("(a * 3)")],
+    )]);
+
+    for options in [Options::default(), on(17), on(18)] {
+        let m = migration(&old, &new, &options);
+        assert_eq!(
+            sqls(&m),
+            ["ALTER TABLE public.t ALTER COLUMN g SET EXPRESSION AS ((a * 3));"],
+            "{options:?}"
+        );
+        assert_eq!(m.warnings, []);
+    }
+    for major in [15, 16] {
+        let m = migration(&old, &new, &on(major));
+        let drop = find(&m, "ALTER TABLE public.t DROP COLUMN g;");
+        assert!(
+            drop.note
+                .as_deref()
+                .is_some_and(|n| n.contains(&format!("PostgreSQL {major} has no SET EXPRESSION"))),
+            "{:?}",
+            drop.note
+        );
+        // Its values are generated: nothing is lost.
+        assert_eq!(drop.hazard, None);
+        assert!(
+            position(&m, "ALTER TABLE public.t DROP COLUMN g;")
+                < position(
+                    &m,
+                    "ALTER TABLE public.t ADD COLUMN g integer GENERATED ALWAYS AS ((a * 3)) STORED;"
+                )
+        );
+        assert!(!sqls(&m).iter().any(|s| s.contains("SET EXPRESSION")));
+        assert_eq!(m.warnings, []);
+    }
+}
+
+fn with_constraint(name: &str, kind: ConstraintKind, definition: &str) -> Entity {
+    let mut t = table("t", vec![col("a", "integer"), col("b", "integer")]);
+    t.constraints.push(Constraint {
+        name: name.into(),
+        kind,
+        columns: vec!["a".into()],
+        definition: definition.into(),
+        ..pk("t", "a")
+    });
+    t
+}
+
+#[test]
+fn syntax_newer_than_the_target_is_kept_noted_and_warned_about() {
+    let old = schema(vec![table(
+        "t",
+        vec![col("a", "integer"), col("b", "integer")],
+    )]);
+    let new = schema(vec![with_constraint(
+        "t_a_key",
+        ConstraintKind::Unique,
+        "UNIQUE NULLS NOT DISTINCT (a)",
+    )]);
+    let add = "ALTER TABLE public.t ADD CONSTRAINT t_a_key UNIQUE NULLS NOT DISTINCT (a);";
+
+    // 15 has it (and no target means the newest).
+    for options in [Options::default(), on(15)] {
+        let m = migration(&old, &new, &options);
+        assert_eq!(m.warnings, []);
+        assert!(
+            !find(&m, add)
+                .note
+                .as_deref()
+                .unwrap_or("")
+                .contains("Fails on PostgreSQL")
+        );
+    }
+    let m = migration(&old, &new, &on(14));
+    let statement = find(&m, add);
+    assert!(
+        statement.note.as_deref().is_some_and(|n| n
+            .ends_with(" Fails on PostgreSQL 14: it uses NULLS NOT DISTINCT (PostgreSQL 15+).")),
+        "{:?}",
+        statement.note
+    );
+    assert_eq!(m.warnings.len(), 1);
+    assert_eq!(m.warnings[0].code, WarningCode::NewerPostgres);
+    assert!(
+        m.warnings[0]
+            .message
+            .contains("needs PostgreSQL 15 or later; the database is on 14"),
+        "{}",
+        m.warnings[0].message
+    );
+}
+
+#[test]
+fn a_virtual_column_and_unenforced_constraints_need_18() {
+    let mut v = generated("(a * 2)");
+    v.generated = Some(remus_core::model::Generated::Virtual);
+    let old = schema(vec![table("t", vec![col("a", "integer")])]);
+    let mut wanted = with_constraint(
+        "t_a_check",
+        ConstraintKind::Check,
+        "CHECK ((a > 0)) NOT ENFORCED",
+    );
+    wanted.columns.push(v);
+    let new = schema(vec![wanted]);
+
+    let m = migration(&old, &new, &on(17));
+    let add = find(
+        &m,
+        "ALTER TABLE public.t ADD COLUMN g integer GENERATED ALWAYS AS ((a * 2)) VIRTUAL;",
+    );
+    assert!(
+        add.note
+            .as_deref()
+            .is_some_and(|n| n.contains("virtual generated columns (PostgreSQL 18+)"))
+    );
+    let check = find(&m, "ALTER TABLE public.t ADD CONSTRAINT t_a_check");
+    assert!(
+        check
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("NOT ENFORCED constraints"))
+    );
+    let codes: Vec<_> = m.warnings.iter().map(|w| w.code).collect();
+    assert_eq!(
+        codes,
+        [WarningCode::NewerPostgres, WarningCode::NewerPostgres]
+    );
+    assert_eq!(migration(&old, &new, &on(18)).warnings, []);
+}
+
+#[test]
+fn an_exclusion_constraint_on_a_partitioned_table_needs_17() {
+    let mut partitioned = with_constraint(
+        "t_a_excl",
+        ConstraintKind::Exclusion,
+        "EXCLUDE USING gist (a WITH =)",
+    );
+    partitioned.kind = EntityKind::PartitionedTable;
+    partitioned.partition_key = Some("RANGE (a)".into());
+    let new = schema(vec![partitioned.clone()]);
+
+    // Created with the table, or added to it later.
+    let created = migration(&schema(Vec::new()), &new, &on(16));
+    assert!(
+        find(&created, "CREATE TABLE public.t")
+            .note
+            .as_deref()
+            .is_some_and(
+                |n| n.contains("exclusion constraints on partitioned tables (PostgreSQL 17+)")
+            )
+    );
+    assert_eq!(created.warnings[0].code, WarningCode::NewerPostgres);
+    let mut bare = partitioned;
+    bare.constraints.clear();
+    let added = migration(&schema(vec![bare]), &new, &on(16));
+    assert!(
+        find(&added, "ALTER TABLE public.t ADD CONSTRAINT t_a_excl")
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("PostgreSQL 17+"))
+    );
+    assert_eq!(migration(&schema(Vec::new()), &new, &on(17)).warnings, []);
+
+    // On a plain table, every major has them.
+    let plain = schema(vec![with_constraint(
+        "t_a_excl",
+        ConstraintKind::Exclusion,
+        "EXCLUDE USING gist (a WITH =)",
+    )]);
+    assert_eq!(migration(&schema(Vec::new()), &plain, &on(15)).warnings, []);
 }

@@ -60,25 +60,31 @@ fn every_scenario_migrates_both_ways() {
             };
             let back = migration(&new, &old, &Options::default());
             let plain = files(&m, &back, Format::Plain, &meta);
-            insta::assert_snapshot!(name.clone(), plain[0].content);
+            // Each major prints view definitions its own way: the
+            // snapshots are the default major's.
+            if compiler.major() == crate::DEFAULT_MAJOR {
+                insta::assert_snapshot!(name.clone(), plain[0].content);
+            }
             cases.push(case.concurrently());
             cases.push(case.reversed());
             cases.push(case);
         }
         // The only pairs the compile cannot run move an extension (the
-        // tool runs below run them as the cluster's superuser).
+        // tool runs below run them as the cluster's superuser), and before
+        // 17 use the enum values they commit first.
         let skipped = check_all(&compiler, cases).await;
+        let mut moved = 0;
         for (label, why) in &skipped {
+            if label.starts_with("extension_moved") && *why == crate::MOVED_EXTENSION {
+                moved += 1;
+                continue;
+            }
             assert!(
-                label.starts_with("extension_moved") && *why == crate::MOVED_EXTENSION,
+                compiler.major() < 17 && *why == crate::ENUM_VALUES_COMMITTED,
                 "{label} skipped: {why}"
             );
         }
-        assert_eq!(
-            skipped.len(),
-            3,
-            "extension_moved: forward, reversed, concurrently"
-        );
+        assert_eq!(moved, 3, "extension_moved: forward, reversed, concurrently");
     });
 }
 
@@ -101,7 +107,10 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
                     label: format!("{name} (as written)"),
                     old: old.clone(),
                     new: new.clone(),
-                    options: Options { concurrently },
+                    options: Options {
+                        concurrently,
+                        ..Options::default()
+                    },
                     format,
                     sources: Some((old_sql.clone(), new_sql.clone())),
                 });
@@ -112,7 +121,10 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
                         label: name.clone(),
                         old: old.clone(),
                         new: new.clone(),
-                        options: Options { concurrently },
+                        options: Options {
+                            concurrently,
+                            ..Options::default()
+                        },
                         format,
                         sources: None,
                     });
@@ -150,7 +162,11 @@ fn every_scenario_s_editable_migration_compiles_as_a_draft_does() {
             let new = compile(&compiler, &new)
                 .await
                 .expect("the new schema compiles");
-            let m = migration(&old, &new, &Options::default());
+            let m = migration(
+                &old,
+                &new,
+                &crate::options_for(&compiler, &Options::default()),
+            );
             let meta = Meta {
                 database: "acme/app".to_owned(),
                 from: "v1".to_owned(),
@@ -169,8 +185,13 @@ fn every_scenario_s_editable_migration_compiles_as_a_draft_does() {
             let diagnostics = script.relocate(&text, compilation.diagnostics.clone());
             let Some(result) = compilation.model else {
                 // A function the schemas call without defining it is guessed
-                // per text: the oracle skips those pairs too.
-                if !compilation.stubs.is_empty() {
+                // per text: the oracle skips those pairs too. Before 17, the
+                // enum values a migration adds wait for a commit.
+                let enum_values = compiler.major() < 17
+                    && compilation
+                        .errors()
+                        .any(|d| d.sqlstate.as_deref() == Some("55P04"));
+                if !compilation.stubs.is_empty() || enum_values {
                     continue;
                 }
                 panic!(

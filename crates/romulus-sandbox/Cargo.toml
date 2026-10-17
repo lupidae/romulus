@@ -17,8 +17,9 @@ utoipa = ["dep:utoipa"]
 remus-core.workspace = true
 remus-sql.workspace = true
 
-# Pinned with the sandbox image: pg_query 6.2.1 bundles libpg_query built from
-# PostgreSQL 17.7, and deploy/sandbox runs PostgreSQL 17. Bump both together.
+# pg_query 6.2.1 bundles libpg_query built from PostgreSQL 17.7: the grammar
+# read for every sandbox major (15–18, deploy/sandbox); syntax new in 18 waits
+# for a pg_query that speaks it. Bump with the sandbox images.
 pg_query = "=6.2.1"
 # Format: the tools migrations are generated for, their one list.
 romulus-migration.workspace = true

@@ -556,6 +556,47 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/major": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Moves the database to another Postgres major, once its latest version
+     *     compiles there. Developers and admins.
+     */
+    put: operations["change_database_major"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/major/check": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Compiles the latest version on another major, without changing
+     *     anything: what moving the database there would meet. Developers and
+     *     admins.
+     */
+    post: operations["check_database_major"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/migration": {
     parameters: {
       query?: never;
@@ -839,6 +880,26 @@ export interface paths {
     patch: operations["change_member_role"];
     trace?: never;
   };
+  "/api/postgres-majors": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The Postgres majors a database can target, and whether this server
+     *     compiles each one now (the major picker, the settings).
+     */
+    get: operations["list_postgres_majors"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -918,7 +979,8 @@ export interface components {
       | "version_purged"
       | "version_published"
       | "approvals_overridden"
-      | "approvals_required_changed";
+      | "approvals_required_changed"
+      | "major_changed";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1023,6 +1085,9 @@ export interface components {
       | "domain"
       | "composite"
       | "extension";
+    ChangeMajor: {
+      pg_major: components["schemas"]["PgMajor"];
+    };
     ChangeRole: {
       role: components["schemas"]["Role"];
     };
@@ -1157,6 +1222,11 @@ export interface components {
      */
     CompileState: "ok" | "failed" | "unavailable" | "pending";
     /**
+     * @description What the health check reports about a major's compiler.
+     * @enum {string}
+     */
+    CompilerStatus: "ok" | "unavailable" | "off";
+    /**
      * @description A change to a composite type other than its attributes.
      *
      *     Every variant carries the old value as `before` and the new one as
@@ -1228,6 +1298,11 @@ export interface components {
       description?: string;
       /** @description 1 to 100 characters. */
       name: string;
+      /**
+       * @description The Postgres major it targets; 17 when not given. Changed later with
+       *     `PUT …/major`.
+       */
+      pg_major?: components["schemas"]["PgMajor"];
       /**
        * @description Lowercase letters, digits and single hyphens, at most 63 characters,
        *     not one of the organization's own pages.
@@ -1313,6 +1388,11 @@ export interface components {
        * @description The number the next version gets: numbers are never given twice.
        */
       next_number: number;
+      /**
+       * @description The Postgres major its schema targets: its SQL compiles on that
+       *     major, its migrations are generated for it.
+       */
+      pg_major: components["schemas"]["PgMajor"];
       /** @description Its address: `/app/<org>/<slug>`. */
       slug: string;
       /** Format: date-time */
@@ -1457,6 +1537,8 @@ export interface components {
       /** Format: uuid */
       id: string;
       name: string;
+      /** @description The Postgres major the draft compiles on (its database's). */
+      pg_major: components["schemas"]["PgMajor"];
       slug: string;
     };
     /**
@@ -1676,11 +1758,18 @@ export interface components {
       /** @description `ok` when a query round-trips. */
       database: string;
       /**
-       * @description The SQL compiler (uploads, SQL pushes): `ok`, `unavailable` (starting,
+       * @description The default major's SQL compiler (17): `ok`, `unavailable` (starting,
        *     or the sandbox is down) or `off` (no sandbox configured). Not part of
        *     the status: the rest of the API works without it.
        */
       sandbox: string;
+      /**
+       * @description Every supported major's compiler, by major (`"15"`…`"18"`), as
+       *     `sandbox` says it: a database compiles on its own major's.
+       */
+      sandboxes: {
+        [key: string]: string;
+      };
       /** @description Always `ok` in a 200. */
       status: string;
       /** @description The API's crate version. */
@@ -1906,6 +1995,36 @@ export interface components {
      * @enum {string}
      */
     LiveStatus: "open" | "publishing" | "updating" | "published" | "deleted";
+    /** @description Whether the database's latest version compiles on another major. */
+    MajorCheck: {
+      /**
+       * Format: int32
+       * @description The version compiled: the latest. `null` when the database has none
+       *     (nothing to check: it may move).
+       */
+      against?: number | null;
+      /**
+       * Format: int32
+       * @description The major that version was compiled (or pushed) on; `null` when its
+       *     model does not say.
+       */
+      against_major?: number | null;
+      changes?: components["schemas"]["Changes"] | null;
+      /**
+       * @description It compiles on `pg_major`, or there is no version: the database may
+       *     move there.
+       */
+      compiles: boolean;
+      /** @description Errors (when it does not compile), then notes, located in `sql`. */
+      diagnostics: components["schemas"]["Diagnostic"][];
+      /** @description The major checked. */
+      pg_major: components["schemas"]["PgMajor"];
+      /**
+       * @description The SQL compiled, when it does not compile (the errors' lines are
+       *     its): the version's source, or its model as SQL.
+       */
+      sql?: string | null;
+    };
     MigrationFile: {
       content: string;
       /**
@@ -2065,7 +2184,8 @@ export interface components {
       | "foreign_table"
       | "unsupported"
       | "empty_schema"
-      | "guessed_names";
+      | "guessed_names"
+      | "newer_postgres";
     /** @description An organization, as one of its members sees it. */
     Org: {
       /**
@@ -2159,6 +2279,11 @@ export interface components {
       id: string;
       name: string;
     };
+    /**
+     * @description A Postgres major romulus compiles on: 15, 16, 17 (the default) or 18.
+     * @enum {integer}
+     */
+    PgMajor: 15 | 16 | 17 | 18;
     /** @description One migration of the files, in order. */
     PlannedMigration: {
       /** @description Syntax errors (new migrations only): the import would stop here. */
@@ -2255,6 +2380,22 @@ export interface components {
     Positions: {
       after: number | null;
       before: number | null;
+    };
+    /** @description A Postgres major romulus compiles on, as this server runs it. */
+    PostgresMajor: {
+      /** @description What a new database targets. */
+      default: boolean;
+      major: components["schemas"]["PgMajor"];
+      /**
+       * @description The exact version compiles run on (`17.11 (Debian …)`), once its
+       *     sandbox answered.
+       */
+      server_version?: string | null;
+      /**
+       * @description Whether its compiles run now: `ok`, `unavailable` (starting, or its
+       *     sandbox is down) or `off` (this server has no sandbox for it).
+       */
+      status: components["schemas"]["CompilerStatus"];
     };
     /** @description Someone who has a draft open right now. */
     Present: {
@@ -2427,6 +2568,8 @@ export interface components {
        *     without versions).
        */
       from?: number | null;
+      /** @description The Postgres major it is written for: the database's. */
+      pg_major: components["schemas"]["PgMajor"];
       /** @description In order; the same whatever the format. */
       statements: components["schemas"]["MigrationStatement"][];
       /**
@@ -2515,6 +2658,12 @@ export interface components {
           number: number;
           /** @enum {string} */
           type: "version_created";
+        }
+      | {
+          by: string;
+          pg_major: components["schemas"]["PgMajor"];
+          /** @enum {string} */
+          type: "major";
         }
       | {
           by: string;
@@ -2809,6 +2958,7 @@ export interface components {
       /** Format: int32 */
       number: number;
       origin: components["schemas"]["VersionOrigin"];
+      postgres: components["schemas"]["VersionPostgres"];
       /**
        * @description What was uploaded or pushed, verbatim: SQL, remus JSON, or the
        *     migration's up SQL for imports.
@@ -2885,6 +3035,30 @@ export interface components {
       next_before?: number | null;
       versions: components["schemas"]["VersionSummary"][];
     };
+    /**
+     * @description The Postgres a version was compiled on (uploads, drafts, imports: the
+     *     sandbox of its database's major) or pushed from (remus JSON: the real
+     *     server). Versions keep it when their database moves to another major.
+     */
+    VersionPostgres: {
+      /**
+       * Format: int32
+       * @description The major its database targeted when it was created.
+       */
+      database_major: number;
+      /**
+       * Format: int32
+       * @description `server_version`'s major; `null` when it does not start with one.
+       */
+      major?: number | null;
+      /**
+       * @description Pushed from a server on another major than its database targeted
+       *     then: the history flags it, and offers to move the database.
+       */
+      other_major: boolean;
+      /** @description As remus read it: `17.11 (Debian 17.11-1.pgdg13+1)`. */
+      server_version: string;
+    };
     /** @description A version in a list. */
     VersionSummary: {
       author?: components["schemas"]["Author"] | null;
@@ -2901,6 +3075,7 @@ export interface components {
        */
       number: number;
       origin: components["schemas"]["VersionOrigin"];
+      postgres: components["schemas"]["VersionPostgres"];
       source_kind: components["schemas"]["SourceKind"];
       /**
        * @description Published from a draft in migration mode: the migration it was
@@ -3696,7 +3871,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `validation`, `details` names the field */
+      /** @description `validation`, `details` names the field; `major_unavailable`: this server has no sandbox for that Postgres major */
       422: {
         headers: {
           [name: string]: unknown;
@@ -5083,6 +5258,157 @@ export interface operations {
       };
     };
   };
+  change_database_major: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChangeMajor"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Database"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `latest_changed`: a version arrived meanwhile; check again */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `incompatible_major` (`details`: `MajorCheck`): the latest version does not compile there; `major_unavailable`: this server has no sandbox for it; or `validation` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `unavailable`: that major's compiler is down */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  check_database_major: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChangeMajor"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MajorCheck"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`: not a supported major; `major_unavailable`: this server has no sandbox for it */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `unavailable`: that major's compiler is down */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   version_migration: {
     parameters: {
       query: {
@@ -5961,6 +6287,33 @@ export interface operations {
       };
       /** @description `last_admin` */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_postgres_majors: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PostgresMajor"][];
+        };
+      };
+      401: {
         headers: {
           [name: string]: unknown;
         };

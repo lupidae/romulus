@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO draft_compiles (draft_id, source_hash, model, errors, good_model, good_tables, pg_major)\n         VALUES ($1, $2, $3, $4, $3, $5, $6)\n         ON CONFLICT (draft_id) DO UPDATE\n         SET compiled_at = now(), source_hash = EXCLUDED.source_hash, model = EXCLUDED.model,\n             errors = EXCLUDED.errors, pg_major = EXCLUDED.pg_major,\n             good_model = COALESCE(EXCLUDED.good_model, draft_compiles.good_model),\n             good_tables = COALESCE(EXCLUDED.good_tables, draft_compiles.good_tables)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bd957f74234487e59825de36a505776573e7513b8d13da224fdf8e28d119c132"
+}

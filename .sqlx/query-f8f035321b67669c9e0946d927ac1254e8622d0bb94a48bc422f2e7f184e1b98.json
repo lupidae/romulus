@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.removed_at AS \"removed_at!\", v.removal_reason AS \"reason!\",\n                  v.removed_at + make_interval(days => $3) AS \"restorable_until!\",\n                  v.removed_at > now() - make_interval(days => $3) AS \"restorable!\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  r.id AS \"remover_id?\", r.name AS \"remover_name?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\"\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN users r ON r.id = v.removed_by\n           WHERE v.database_id = $1 AND v.removed_at IS NOT NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.removed_at DESC, v.number DESC",
+  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.removed_at AS \"removed_at!\", v.removal_reason AS \"reason!\",\n                  v.removed_at + make_interval(days => $3) AS \"restorable_until!\",\n                  v.removed_at > now() - make_interval(days => $3) AS \"restorable!\",\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  r.id AS \"remover_id?\", r.name AS \"remover_name?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\",\n                  v.server_version, v.pg_major, v.database_major\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN users r ON r.id = v.removed_by\n           WHERE v.database_id = $1 AND v.removed_at IS NOT NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.removed_at DESC, v.number DESC",
   "describe": {
     "columns": [
       {
@@ -197,6 +197,39 @@
         "name": "written_migration!",
         "type_info": "Bool",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 17,
+        "name": "server_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "server_version"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "pg_major",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "pg_major"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "database_major",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "database_major"
+          }
+        }
       }
     ],
     "parameters": {
@@ -223,8 +256,11 @@
       false,
       false,
       false,
-      null
+      null,
+      true,
+      true,
+      false
     ]
   },
-  "hash": "66e4d74209940e8d549ee06803d6c0ad874206329852ccea85dcfa0a876d5a80"
+  "hash": "f8f035321b67669c9e0946d927ac1254e8622d0bb94a48bc422f2e7f184e1b98"
 }

@@ -179,7 +179,13 @@ async fn push(
         Format::Sql => {
             state.limits.database_compiles.check(token.database_id)?;
             (
-                compiled_model(&state.compiler, &text, &token.database_slug).await?,
+                compiled_model(
+                    &state.compiler,
+                    token.database_major,
+                    &text,
+                    &token.database_slug,
+                )
+                .await?,
                 SourceKind::Sql,
             )
         }
@@ -198,6 +204,9 @@ async fn push(
         publishes_draft: None,
         approvals: None,
         migration_sql: None,
+        // SQL compiled here, on the database's major; remus JSON was read
+        // from a server, whatever its major (`other_major`).
+        compiled_on: (source_kind == SourceKind::Sql).then_some(token.database_major),
     };
     let database_id = new.database_id;
     Ok(match store(&state.db, new, true).await? {

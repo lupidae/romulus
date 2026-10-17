@@ -42,8 +42,8 @@ export function GetStarted({
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="flex flex-col gap-4 p-5">
           <Way icon={<PageIcon />} title="Upload SQL">
-            Paste your DDL or drop a .sql file. It is compiled in a sandbox Postgres and saved as v1
-            if it compiles.
+            Paste your DDL or drop a .sql file. It is compiled on Postgres {database.pg_major} in a
+            sandbox and saved as v1 if it compiles.
           </Way>
           {writer && (
             <div className="mt-auto">

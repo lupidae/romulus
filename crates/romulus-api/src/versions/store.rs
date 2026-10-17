@@ -14,7 +14,7 @@ use super::{VersionSummary, layout::VersionLayout, summary};
 use crate::{
     ApiError,
     databases::no_such_database,
-    domain::{SourceKind, VersionOrigin},
+    domain::{PgMajor, SourceKind, VersionOrigin},
 };
 
 /// A version about to be stored.
@@ -48,6 +48,11 @@ pub struct NewVersion {
     /// The migration the version was written as (a draft in migration mode
     /// publishing it; `versions.migration_sql`).
     pub migration_sql: Option<String>,
+    /// The Postgres major `model` was compiled on (`None`: not compiled
+    /// here, a remus JSON push). Checked against the database's under the
+    /// lock: a database that moved meanwhile refuses it
+    /// ([`StoreError::MajorChanged`]).
+    pub compiled_on: Option<PgMajor>,
 }
 
 /// Why [`store`] stored nothing.
@@ -57,11 +62,15 @@ pub enum StoreError {
     #[error("the base version is no longer the latest")]
     StaleBase {
         /// The latest version now.
-        latest: Option<VersionSummary>,
+        latest: Option<Box<VersionSummary>>,
     },
     /// The draft being published was deleted or published meanwhile.
     #[error("the draft is no longer open")]
     DraftNotOpen,
+    /// The database moved to another Postgres major after the model was
+    /// compiled (`compiled_on`): it is not this database's any more.
+    #[error("the database moved to Postgres {now} meanwhile")]
+    MajorChanged { compiled_on: PgMajor, now: PgMajor },
     #[error(transparent)]
     Api(#[from] ApiError),
 }
@@ -81,6 +90,7 @@ impl From<StoreError> for ApiError {
                 code: "draft_not_open",
                 message: "This draft was deleted or published meanwhile.".into(),
             },
+            StoreError::MajorChanged { compiled_on, now } => major_changed(compiled_on, now),
             StoreError::StaleBase { latest } => ApiError::Conflict {
                 code: STALE_BASE,
                 message: match &latest {
@@ -97,6 +107,41 @@ impl From<StoreError> for ApiError {
 
 /// The 409's code when the base moved.
 pub const STALE_BASE: &str = "stale_base";
+
+/// 409 `major_changed`: compiled on one major, while the database moved to
+/// another; trying again compiles on the new one.
+fn major_changed(compiled_on: PgMajor, now: PgMajor) -> ApiError {
+    ApiError::Conflict {
+        code: "major_changed",
+        message: format!(
+            "The database moved to Postgres {now} while this compiled on Postgres {compiled_on}: nothing was stored. Try again: it compiles on Postgres {now} now."
+        ),
+    }
+}
+
+/// The databases row, locked for a version's number: `None` when it is gone.
+/// `compiled_on` must still be its major.
+async fn lock_database(
+    tx: &mut sqlx::PgConnection,
+    database_id: Uuid,
+    compiled_on: Option<PgMajor>,
+) -> Result<i32, StoreError> {
+    let row = sqlx::query!(
+        r#"SELECT last_version_number, pg_major AS "pg_major: PgMajor"
+           FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE"#,
+        database_id,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(no_such_database)?;
+    match compiled_on {
+        Some(compiled_on) if compiled_on != row.pg_major => Err(StoreError::MajorChanged {
+            compiled_on,
+            now: row.pg_major,
+        }),
+        _ => Ok(row.last_version_number),
+    }
+}
 
 #[derive(Debug)]
 pub enum Stored {
@@ -139,13 +184,7 @@ pub async fn store(
     let mut compared = compare(&new, latest(db, database_id).await?, skip_unchanged).await?;
 
     let mut tx = db.begin().await?;
-    let last_number = sqlx::query_scalar!(
-        "SELECT last_version_number FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
-        database_id,
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(no_such_database)?;
+    let last_number = lock_database(&mut tx, database_id, new.compiled_on).await?;
     if let Some(draft) = new.publishes_draft {
         // As approving and withdrawing lock it: the approvals checked below
         // are the ones the draft has, and none changes once it is published.
@@ -171,7 +210,7 @@ pub async fn store(
     {
         tx.rollback().await?;
         let latest = match base {
-            Some((id, _)) => Some(summary(db, id).await?),
+            Some((id, _)) => Some(Box::new(summary(db, id).await?)),
             None => None,
         };
         return Err(StoreError::StaleBase { latest });
@@ -332,6 +371,9 @@ pub struct NewImport {
     pub last_number: i32,
     pub staging: Uuid,
     pub versions: Vec<ImportedVersion>,
+    /// The Postgres major the history was replayed on: still the
+    /// database's, checked under the lock ([`StoreError::MajorChanged`]).
+    pub replayed_on: PgMajor,
 }
 
 /// Stores an import's versions in one transaction, numbered after the
@@ -355,16 +397,11 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
         last_number: planned_last,
         staging,
         versions,
+        replayed_on,
     } = new;
 
     let mut tx = db.begin().await?;
-    let last_number = sqlx::query_scalar!(
-        "SELECT last_version_number FROM databases WHERE id = $1 AND deleted_at IS NULL FOR NO KEY UPDATE",
-        database_id,
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(no_such_database)?;
+    let last_number = lock_database(&mut tx, database_id, Some(replayed_on)).await?;
     let imported = sqlx::query_scalar!(
         r#"SELECT count(*) AS "count!" FROM version_migrations WHERE database_id = $1"#,
         database_id,

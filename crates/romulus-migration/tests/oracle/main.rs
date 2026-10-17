@@ -21,6 +21,13 @@
 //!
 //! Needs `ROMULUS_SANDBOX_URL` (`.env`, `just sandbox`): skipped, loudly,
 //! without it on a laptop, and failed without it in CI (`CI` set).
+//!
+//! **Per Postgres major.** Migrations are planned for the sandbox's major
+//! (`Options::major`), so pointing `ROMULUS_SANDBOX_URL` at another major's
+//! sandbox (`ROMULUS_SANDBOX_URL_PG15`…; CI runs a job per major) proves
+//! them there. Off the default major (17) the corpus pairs and random edits
+//! are a smoke subset ([`smoke`]; `ROMULUS_ORACLE_FULL=1` runs them all);
+//! the scenarios, one per kind of change, always run whole.
 
 mod corpus;
 mod data;
@@ -31,7 +38,7 @@ mod tools;
 use std::{fmt::Write, future::Future, sync::LazyLock, time::Duration};
 
 use remus_core::Schema;
-use romulus_migration::{Kind, Options, WarningCode, migration};
+use romulus_migration::{Kind, Options, Stage, WarningCode, migration};
 use romulus_sandbox::{Compilation, Compiler, SandboxConfig, render_sql};
 use tokio::{runtime::Runtime, sync::OnceCell, task::JoinSet};
 
@@ -50,6 +57,23 @@ pub fn admin_url() -> Option<String> {
     std::env::var("ROMULUS_SANDBOX_URL")
         .ok()
         .filter(|url| !url.is_empty())
+}
+
+/// The major the product defaults to, where the oracle runs whole.
+pub const DEFAULT_MAJOR: u32 = 17;
+
+/// A case's options, for the sandbox's major.
+pub fn options_for(compiler: &Compiler, options: &Options) -> Options {
+    Options {
+        major: Some(compiler.major()),
+        ..options.clone()
+    }
+}
+
+/// Off the default major, a smoke subset of the corpus pairs and random
+/// edits, unless `ROMULUS_ORACLE_FULL` is set.
+pub fn smoke(compiler: &Compiler) -> bool {
+    compiler.major() != DEFAULT_MAJOR && std::env::var_os("ROMULUS_ORACLE_FULL").is_none()
 }
 
 /// Run a test body on the shared compiler, or skip without a sandbox.
@@ -163,7 +187,10 @@ impl Case {
     pub fn concurrently(&self) -> Self {
         Self {
             label: format!("{} (concurrently)", self.label),
-            options: Options { concurrently: true },
+            options: Options {
+                concurrently: true,
+                ..Options::default()
+            },
             ..self.clone()
         }
     }
@@ -186,10 +213,15 @@ pub const MOVED_EXTENSION: &str = "moves an extension";
 /// A function the schemas call without defining it, whose type the
 /// sandbox guesses differently for the old text and the migration.
 pub const GUESSED_FUNCTION: &str = "a guessed function signature";
+/// Before 17, an enum value cannot be used in the transaction adding it,
+/// even one that created the type: the compile runs the old schema and the
+/// migration in one; the migration commits its values first, as the tool
+/// runs (`tools.rs`) check.
+pub const ENUM_VALUES_COMMITTED: &str = "uses enum values it commits first (before 17)";
 
 #[allow(clippy::too_many_lines)]
 pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> {
-    let m = migration(&case.old, &case.new, &case.options);
+    let m = migration(&case.old, &case.new, &options_for(compiler, &case.options));
     if romulus_diff::diff(&case.old, &case.new).is_empty() != m.is_empty() && m.warnings.is_empty()
     {
         return Err(format!(
@@ -242,6 +274,14 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
             .any(|stub| text.contains(&format!("{}(", stub.name)))
     };
     let Some(mut result) = compilation.model.clone() else {
+        if compiler.major() < 17
+            && m.statements.iter().any(|s| s.stage == Stage::Commit)
+            && compilation
+                .errors()
+                .any(|d| d.sqlstate.as_deref() == Some("55P04"))
+        {
+            return Ok(Outcome::Skipped(ENUM_VALUES_COMMITTED));
+        }
         let errors = explain(&sql, &compilation);
         let in_old_part = compilation.errors().any(|d| {
             d.span.is_some_and(|span| {
@@ -372,10 +412,15 @@ pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) -> Vec<(String, &'
             failures.len()
         );
     }
+    // Enum values committed first are proven by the tool runs, which
+    // commit as the tools do: they do not count against the compile.
+    let unproven = skipped
+        .iter()
+        .filter(|(_, why)| *why != ENUM_VALUES_COMMITTED)
+        .count();
     assert!(
-        skipped.len() * 10 <= total,
-        "{} of {total} pairs skipped: too many to call this tested",
-        skipped.len()
+        unproven * 10 <= total,
+        "{unproven} of {total} pairs skipped: too many to call this tested"
     );
     if !failures.is_empty() {
         #[allow(clippy::print_stderr)]

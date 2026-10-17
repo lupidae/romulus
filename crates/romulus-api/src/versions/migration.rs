@@ -25,6 +25,7 @@ use crate::{
     ApiError, ApiResult, AppState,
     auth::Member,
     databases,
+    domain::PgMajor,
     error::ErrorBody,
     extract::{Json, Path, Query},
     orgs::invalid,
@@ -86,6 +87,8 @@ pub struct SchemaMigration {
     pub files: Vec<File>,
     /// What the files download as together: `<version>_<name>.zip`.
     pub archive: String,
+    /// The Postgres major it is written for: the database's.
+    pub pg_major: PgMajor,
 }
 
 /// The two sides, for [`build`].
@@ -102,6 +105,8 @@ pub(crate) struct Sides<'a> {
     pub name: String,
     /// `org/db`.
     pub database: String,
+    /// The major the database targets: what the migration is planned for.
+    pub major: PgMajor,
 }
 
 /// Plans the migration and lays it out (off the async workers: a few
@@ -139,10 +144,25 @@ pub(crate) async fn build(
     let archive = archive_name(format, &meta);
     let (old, new) = (sides.old.clone(), sides.new.clone());
     let concurrently = options.concurrently;
+    let major = Some(sides.major.number());
     let (up, files) = tokio::task::spawn_blocking(move || {
-        let up = migration(&old, &new, &Options { concurrently });
+        let up = migration(
+            &old,
+            &new,
+            &Options {
+                concurrently,
+                major,
+            },
+        );
         let down = if format.has_down() {
-            migration(&new, &old, &Options::default())
+            migration(
+                &new,
+                &old,
+                &Options {
+                    major,
+                    ..Options::default()
+                },
+            )
         } else {
             romulus_migration::Migration::default()
         };
@@ -160,6 +180,7 @@ pub(crate) async fn build(
         warnings: up.warnings,
         files,
         archive,
+        pg_major: sides.major,
     })
 }
 
@@ -252,6 +273,7 @@ async fn version_migration(
         to_label: format!("v{}", versions.to),
         name,
         database: format!("{org}/{slug}"),
+        major: database.pg_major,
     };
     Ok(Json(build(sides, options).await?))
 }

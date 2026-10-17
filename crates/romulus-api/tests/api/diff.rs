@@ -38,6 +38,7 @@ fn pushed(database_id: Uuid, tables: &[&str]) -> NewVersion {
         publishes_draft: None,
         approvals: None,
         migration_sql: None,
+        compiled_on: None,
     }
 }
 

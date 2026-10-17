@@ -99,6 +99,8 @@ export function EditorBar(props: EditorBarProps) {
   const tidy = useTidyDraft(org, db, draft.id);
   const hasErrors = compile.state === "failed";
   const open = draft.status === "open";
+  // What the draft compiles on (the database's major), for the status.
+  const major = draft.database.pg_major;
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-card px-2 md:gap-2 md:px-3">
@@ -141,7 +143,7 @@ export function EditorBar(props: EditorBarProps) {
       </nav>
 
       <div className="flex min-w-0 shrink items-center">
-        {synced && <CompileStatus compile={compile} onJump={props.onJump} />}
+        {synced && <CompileStatus compile={compile} major={major} onJump={props.onJump} />}
         <ConnectionStatus connection={connection} synced={synced} unsynced={props.unsynced} />
       </div>
 

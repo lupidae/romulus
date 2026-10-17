@@ -814,6 +814,7 @@ mod tests {
                 last_number: 0,
                 staging,
                 versions,
+                replayed_on: crate::domain::PgMajor::DEFAULT,
             },
         )
         .await

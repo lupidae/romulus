@@ -3,10 +3,122 @@
 //! The `query!` macros cannot infer custom enum types; annotate the column:
 //! `SELECT role AS "role: Role" FROM memberships`.
 
+use std::{borrow::Cow, fmt};
+
 /// The schema model every version and compile result holds: remus's JSON.
 pub use remus_core::Schema;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{
+    PartialSchema, ToSchema,
+    openapi::{ObjectBuilder, RefOr, Type, schema::Schema as OpenApiSchema},
+};
+
+/// A Postgres major a database targets (`databases.pg_major`): 15, 16, 17
+/// (the default) or 18. Its SQL compiles on that major's sandbox and its
+/// migrations are generated for it (docs/MVP.md, "Several Postgres
+/// majors"). JSON and SQL: the number (`smallint`); anything else is
+/// refused when read, from either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "i16", into = "i16")]
+pub struct PgMajor(i16);
+
+impl sqlx::Type<sqlx::Postgres> for PgMajor {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <i16 as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <i16 as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+impl sqlx::Encode<'_, sqlx::Postgres> for PgMajor {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <i16 as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.0, buf)
+    }
+}
+
+/// A column that holds another major (none should: `databases` checks its
+/// own, and nothing writes another) is an error, never a `PgMajor`.
+impl sqlx::Decode<'_, sqlx::Postgres> for PgMajor {
+    fn decode(value: sqlx::postgres::PgValueRef<'_>) -> Result<Self, sqlx::error::BoxDynError> {
+        let major = <i16 as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        Self::try_from(major).map_err(Into::into)
+    }
+}
+
+impl PgMajor {
+    /// Every major romulus compiles on, oldest first: a sandbox image each
+    /// (deploy/sandbox) and `databases_pg_major_supported`.
+    pub const SUPPORTED: [Self; 4] = [Self(15), Self(16), Self(17), Self(18)];
+    /// What a new database targets, and the sandbox `ROMULUS_SANDBOX_URL`
+    /// names.
+    pub const DEFAULT: Self = Self(17);
+
+    pub fn new(major: i64) -> Option<Self> {
+        Self::SUPPORTED
+            .into_iter()
+            .find(|supported| i64::from(supported.0) == major)
+    }
+
+    pub fn get(self) -> i16 {
+        self.0
+    }
+
+    /// As `romulus_migration::Options::major` and the sandbox count it.
+    pub fn number(self) -> u32 {
+        u32::try_from(self.0).unwrap_or_default()
+    }
+}
+
+impl Default for PgMajor {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl fmt::Display for PgMajor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl TryFrom<i16> for PgMajor {
+    type Error = String;
+
+    fn try_from(major: i16) -> Result<Self, Self::Error> {
+        Self::new(major.into()).ok_or_else(|| {
+            format!("romulus does not compile on Postgres {major}: use 15, 16, 17 or 18")
+        })
+    }
+}
+
+impl From<PgMajor> for i16 {
+    fn from(major: PgMajor) -> Self {
+        major.0
+    }
+}
+
+impl PartialSchema for PgMajor {
+    fn schema() -> RefOr<OpenApiSchema> {
+        ObjectBuilder::new()
+            .schema_type(Type::Integer)
+            .description(Some(
+                "A Postgres major romulus compiles on: 15, 16, 17 (the default) or 18.",
+            ))
+            .enum_values(Some(Self::SUPPORTED.map(|m| i64::from(m.0))))
+            .into()
+    }
+}
+
+impl ToSchema for PgMajor {
+    fn name() -> Cow<'static, str> {
+        Cow::Borrowed("PgMajor")
+    }
+}
 
 /// A member's role in an organization (`member_role`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
@@ -156,6 +268,9 @@ pub enum AuditAction {
     ApprovalsOverridden,
     /// An admin changed how many approvals publishing needs.
     ApprovalsRequiredChanged,
+    /// A developer moved the database to another Postgres major (`from`,
+    /// `to` in the details).
+    MajorChanged,
 }
 
 /// What a draft is edited as (`draft_mode`): one source of truth at a time
@@ -237,5 +352,22 @@ mod tests {
             r#""remus_json""#
         );
         assert_eq!(serde_json::to_string(&Role::Admin).unwrap(), r#""admin""#);
+    }
+
+    #[test]
+    fn majors_are_numbers_and_only_supported_ones_are_read() {
+        assert_eq!(serde_json::to_string(&PgMajor::DEFAULT).unwrap(), "17");
+        assert_eq!(
+            serde_json::from_str::<PgMajor>("15").unwrap(),
+            PgMajor::SUPPORTED[0]
+        );
+        let refused = serde_json::from_str::<PgMajor>("14").unwrap_err();
+        assert!(
+            refused.to_string().contains("15, 16, 17 or 18"),
+            "{refused}"
+        );
+        assert!(serde_json::from_str::<PgMajor>("\"17\"").is_err());
+        assert_eq!(PgMajor::new(18).map(PgMajor::number), Some(18));
+        assert_eq!(PgMajor::new(19), None);
     }
 }

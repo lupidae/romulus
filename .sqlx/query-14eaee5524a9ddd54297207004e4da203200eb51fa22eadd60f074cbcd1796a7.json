@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO databases (org_id, name, slug, description, created_by)\n         VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at, updated_at",
+  "query": "SELECT id, slug, name, pg_major AS \"pg_major: PgMajor\"\n           FROM databases WHERE org_id = $1 AND slug = $2 AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -16,23 +16,34 @@
       },
       {
         "ordinal": 1,
-        "name": "created_at",
-        "type_info": "Timestamptz",
+        "name": "slug",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "databases",
-            "name": "created_at"
+            "name": "slug"
           }
         }
       },
       {
         "ordinal": 2,
-        "name": "updated_at",
-        "type_info": "Timestamptz",
+        "name": "name",
+        "type_info": "Text",
         "origin": {
           "Table": {
             "table": "databases",
-            "name": "updated_at"
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "pg_major: PgMajor",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "pg_major"
           }
         }
       }
@@ -40,17 +51,15 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Text",
-        "Text",
-        "Text",
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "1d9261bac0156c9d6e1552450ba7175448088af7aeabc852e36f875517311477"
+  "hash": "14eaee5524a9ddd54297207004e4da203200eb51fa22eadd60f074cbcd1796a7"
 }

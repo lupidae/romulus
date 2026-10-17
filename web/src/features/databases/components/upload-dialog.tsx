@@ -52,6 +52,8 @@ interface UploadDialogProps {
   db: string;
   /** The number the upload will get. */
   next: number;
+  /** What it compiles on: the database's Postgres major. */
+  major: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The text to start from (kept between openings until uploaded). */
@@ -86,6 +88,7 @@ function UploadForm({
   org,
   db,
   next,
+  major,
   onOpenChange,
   draft,
   onDraftChange,
@@ -266,8 +269,8 @@ function UploadForm({
         <DialogHeader className="pr-0">
           <DialogTitle>Upload SQL</DialogTitle>
           <DialogDescription>
-            Paste the schema or drop a .sql file. It is compiled in a sandbox Postgres and saved as
-            v{next} only if it compiles.
+            Paste the schema or drop a .sql file. It is compiled on Postgres {major} in a sandbox
+            and saved as v{next} only if it compiles.
           </DialogDescription>
         </DialogHeader>
         <FileButton

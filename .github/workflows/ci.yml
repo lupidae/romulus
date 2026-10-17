@@ -82,6 +82,43 @@ jobs:
       - run: cargo sqlx migrate run --source migrations
       - run: just check
 
+  # The other Postgres majors a database can target (docs/MVP.md, "Several
+  # Postgres majors"); `just check` covers the default one (17) whole. Per
+  # major: the sandbox compiles the corpus (romulus-sandbox's `majors`
+  # tests), and the migration oracle proves the migrations planned for it,
+  # as a smoke subset (the scenarios whole; ROMULUS_ORACLE_FULL=1 for all).
+  majors:
+    name: Postgres ${{ matrix.major }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        major: [15, 16, 18]
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Start the Postgres ${{ matrix.major }} sandbox
+        run: |
+          docker build --build-arg PG_MAJOR=${{ matrix.major }} -t romulus-sandbox deploy/sandbox
+          docker run -d --name sandbox -p 5433:5432 \
+            --memory 768m --oom-score-adj -1000 \
+            -e PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj -e PG_OOM_ADJUST_VALUE=1000 \
+            -e POSTGRES_USER=sandbox_admin -e POSTGRES_PASSWORD=sandbox_admin -e POSTGRES_DB=postgres \
+            romulus-sandbox postgres -c synchronous_commit=off -c wal_level=minimal -c max_wal_senders=0 \
+            -c shared_buffers=32MB -c max_connections=60 -c max_locks_per_transaction=2048
+          for _ in $(seq 60); do docker exec sandbox pg_isready -U sandbox_admin -d postgres && exit 0; sleep 1; done
+          docker logs sandbox; exit 1
+      # (An env key cannot hold an expression: the variable is set in the script.)
+      - name: The corpus compiles on Postgres ${{ matrix.major }}
+        run: |
+          export ROMULUS_SANDBOX_URL_PG${{ matrix.major }}=postgres://sandbox_admin:sandbox_admin@localhost:5433/postgres
+          cargo test -p romulus-sandbox --test sandbox majors
+      - name: The migration oracle on Postgres ${{ matrix.major }} (smoke subset)
+        run: cargo test -p romulus-migration --test oracle
+        env:
+          ROMULUS_SANDBOX_URL: postgres://sandbox_admin:sandbox_admin@localhost:5433/postgres
+
   e2e:
     name: end-to-end
     # Manual for now: it boots the whole stack, Zitadel included.
@@ -102,6 +139,8 @@ jobs:
       - run: npm ci --prefix web
       - run: npx --prefix web playwright install --with-deps chromium
       - run: just up
+      # A database on Postgres 15 (e2e/postgres-majors.spec.ts).
+      - run: just sandbox 15
       - run: scripts/check-oidc
       - run: just e2e
         env:

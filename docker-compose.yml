@@ -22,17 +22,22 @@ services:
       timeout: 5s
       retries: 30
 
-  # Where draft SQL is compiled (crates/romulus-sandbox). Its major version is
-  # pinned to the one the `pg_query` crate's libpg_query parses (pg_query 6.2.1
-  # → PostgreSQL 17.7), so the server-side allowlist and the compile agree on
-  # the grammar. Bump both together. The image adds the allowlisted extensions
-  # (PostGIS, pgvector) and marks them trusted (deploy/sandbox). Nothing is
-  # ever committed in it but the empty pool databases. Sized small: compiles
-  # touch only empty tables. Its data is on a volume, not tmpfs: every compile
-  # writes WAL (a PostGIS install is megabytes of catalog rows), which on tmpfs
-  # counts as memory; WAL is kept small and never archived instead.
-  sandbox-postgres:
-    build: deploy/sandbox
+  # Where draft SQL is compiled (crates/romulus-sandbox): one cluster per
+  # supported Postgres major, each database compiling on its own major's
+  # (docs/MVP.md, "Several Postgres majors"). This one is the default major,
+  # 17, and always runs; the others (below) start on demand: `just sandbox
+  # 15`, `just sandbox all`. The parser is pg_query 6.2.1's (PostgreSQL 17.7's
+  # grammar) for every major. The image adds the allowlisted extensions
+  # (PostGIS, pgvector) and marks them trusted (deploy/sandbox, PG_MAJOR picks
+  # the major). Nothing is ever committed in it but the empty pool databases.
+  # Sized small: compiles touch only empty tables. Its data is on a volume,
+  # not tmpfs: every compile writes WAL (a PostGIS install is megabytes of
+  # catalog rows), which on tmpfs counts as memory; WAL is kept small and
+  # never archived instead.
+  sandbox-postgres: &sandbox
+    build:
+      context: deploy/sandbox
+      args: { PG_MAJOR: 17 }
     image: romulus-sandbox:17.11-postgis3.6.4-pgvector0.8.7
     environment:
       POSTGRES_USER: sandbox_admin
@@ -66,6 +71,47 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
+
+  # The other majors, on demand (profiles): `just sandbox 15`, `just sandbox
+  # all`. Same settings; each has its port (ROMULUS_SANDBOX_PG<N>_PORT) and the
+  # API its URL (ROMULUS_SANDBOX_URL_PG<N>), so a sandbox started while the API
+  # runs is picked up within its retry (30 s at most).
+  sandbox-postgres-15:
+    <<: *sandbox
+    profiles: [pg15, majors]
+    build:
+      context: deploy/sandbox
+      args: { PG_MAJOR: 15 }
+    image: romulus-sandbox:15.19-postgis3.6.4-pgvector0.8.7
+    ports:
+      - 127.0.0.1:${ROMULUS_SANDBOX_PG15_PORT:?run scripts/dev-env}:5432
+    volumes:
+      - sandbox-15-data:/var/lib/postgresql/data
+
+  sandbox-postgres-16:
+    <<: *sandbox
+    profiles: [pg16, majors]
+    build:
+      context: deploy/sandbox
+      args: { PG_MAJOR: 16 }
+    image: romulus-sandbox:16.15-postgis3.6.4-pgvector0.8.7
+    ports:
+      - 127.0.0.1:${ROMULUS_SANDBOX_PG16_PORT:?run scripts/dev-env}:5432
+    volumes:
+      - sandbox-16-data:/var/lib/postgresql/data
+
+  sandbox-postgres-18:
+    <<: *sandbox
+    profiles: [pg18, majors]
+    build:
+      context: deploy/sandbox
+      args: { PG_MAJOR: 18 }
+    image: romulus-sandbox:18.6-postgis3.6.4-pgvector0.8.7
+    ports:
+      - 127.0.0.1:${ROMULUS_SANDBOX_PG18_PORT:?run scripts/dev-env}:5432
+    # 18's image keeps its data in a directory per major under this one.
+    volumes:
+      - sandbox-18-data:/var/lib/postgresql
 
   # Identity (OIDC). Login v1, built into the zitadel binary, so the stack needs
   # no separate login container or proxy. On a fresh database `start-from-init`
@@ -168,5 +214,8 @@ services:
 volumes:
   postgres-data:
   sandbox-data:
+  sandbox-15-data:
+  sandbox-16-data:
+  sandbox-18-data:
   zitadel-db-data:
   zitadel-bootstrap:

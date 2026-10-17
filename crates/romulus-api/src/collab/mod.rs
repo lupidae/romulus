@@ -64,7 +64,10 @@ use self::{
         ReviewChange, RewriteError, Settings, Shared, UpdateTicket,
     },
 };
-use crate::{AppState, domain::DraftMode};
+use crate::{
+    AppState,
+    domain::{DraftMode, PgMajor},
+};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(socket::connect))
@@ -449,6 +452,20 @@ impl Hub {
         for entry in rooms.entries.values() {
             if entry.shared.database_id.get() == Some(&database_id) {
                 let _ = entry.commands.send(Command::VersionCreated { number });
+            }
+        }
+    }
+
+    /// The database moved to another Postgres major: its drafts open now
+    /// compile on it from now on, and say so.
+    pub fn major_changed(&self, database_id: Uuid, major: PgMajor, by: &str) {
+        let rooms = self.0.rooms();
+        for entry in rooms.entries.values() {
+            if entry.shared.database_id.get() == Some(&database_id) {
+                let _ = entry.commands.send(Command::Major {
+                    major,
+                    by: by.to_owned(),
+                });
             }
         }
     }

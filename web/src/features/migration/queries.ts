@@ -45,31 +45,37 @@ type MigrationKey = readonly unknown[];
 export type MigrationQuery = ReturnType<typeof versionMigrationQuery>;
 
 export const migrationKeys = {
-  // Keyed by the database's id, like versions and diffs: never by slug alone.
+  // Keyed by the database's id, like versions and diffs: never by slug
+  // alone; and by the Postgres major it is written for (the database's).
   versions: (
     org: string,
     db: string,
     databaseId: string,
+    major: number,
     from: number,
     to: number,
     choice: MigrationChoice,
-  ) => ["versions", databaseId, "migration", from, to, choice, { org, db }] as const,
+  ) => ["versions", databaseId, "migration", major, from, to, choice, { org, db }] as const,
   // The text reviewed (its SHA-256): another text is another migration.
   draft: (org: string, db: string, id: string, sha256: string, choice: MigrationChoice) =>
     ["drafts", org, db, id, "migration", sha256, choice] as const,
 };
 
-/** From version `from` to version `to`, laid out for a tool. */
+/**
+ * From version `from` to version `to`, laid out for a tool, for the
+ * database's Postgres `major`.
+ */
 export const versionMigrationQuery = (
   org: string,
   db: string,
   databaseId: string,
+  major: number,
   from: number,
   to: number,
   choice: MigrationChoice,
 ) =>
   queryOptions<SchemaMigration, Error, SchemaMigration, MigrationKey>({
-    queryKey: migrationKeys.versions(org, db, databaseId, from, to, choice),
+    queryKey: migrationKeys.versions(org, db, databaseId, major, from, to, choice),
     queryFn: () =>
       unwrap(
         api.GET("/api/orgs/{org}/databases/{db}/migration", {

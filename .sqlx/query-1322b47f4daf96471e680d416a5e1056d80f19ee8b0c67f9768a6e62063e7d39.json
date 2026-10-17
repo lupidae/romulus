@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE databases SET pg_major = $2 WHERE id = $1 AND deleted_at IS NULL AND pg_major = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1322b47f4daf96471e680d416a5e1056d80f19ee8b0c67f9768a6e62063e7d39"
+}

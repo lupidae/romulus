@@ -12,7 +12,7 @@ crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tes
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
 crates/romulus-migration/ model → model migration (ALTER … in dependency order), tool files; no I/O; oracle in tests/
 crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, allowlist, stubs, compile pool
-deploy/sandbox/       the sandbox image: Postgres 17 + PostGIS + pgvector, allowlisted extensions trusted
+deploy/sandbox/       the sandbox image, one per Postgres major (PG_MAJOR 15–18) + PostGIS + pgvector, allowlisted extensions trusted
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
 site/                 the static homepage (tokens copied from web/; see site/README.md); its Pages
@@ -42,6 +42,7 @@ just e2e-dev     # Playwright on dev-only screens (/app/dev/*, e.g. the schema v
 just perf        # schema viewer frame times at 300 tables: headed, production build with dev routes
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
 just site        # the homepage on $ROMULUS_SITE_PORT; `just site-check` = its CI gate
+just sandbox 15   # another Postgres major's sandbox (15, 16, 18, or all); `just up` runs 17 only
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
 ```
@@ -71,6 +72,7 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
 | +7 | `ROMULUS_SITE_PORT` | the static homepage (`just site`, site/'s Playwright) |
 | +8 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel sends (sign-up codes) |
+| 40000 + 10·N + M − 10 | `ROMULUS_SANDBOX_PG15_PORT`, `…PG16…`, `…PG18…` | the other Postgres majors' sandboxes (`ROMULUS_SANDBOX_URL_PG15`…), on demand |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
 the worktree path>`, computed by `scripts/dev-env --project-name` and passed
@@ -98,10 +100,16 @@ Made in the skeleton (S0):
   Dev mirrors it: Vite serves `/app` (base and router `basepath`) and proxies
   `/api` (REST and websockets) without rewriting `Host`, so cookies are
   first-party and the API sees the real `Origin`.
-- **Sandbox Postgres is 17**, because `pg_query` 6.2.1 bundles libpg_query
-  built from PostgreSQL 17.7. Bump both together (and the PostGIS/pgvector
-  versions in `deploy/sandbox/Dockerfile`); `Compiler::start` refuses a
-  mismatch. The app database is 18 (`uuidv7()` ids).
+- **A sandbox per Postgres major** (docs/MVP.md "Several Postgres majors"):
+  a database targets 15, 16, 17 (the default) or 18 (`databases.pg_major`,
+  `domain::PgMajor`) and compiles on that major's cluster. One image,
+  `PG_MAJOR` picks the base (the minor pins live in `deploy/sandbox/
+  Dockerfile`); compose runs 17 always, the others behind profiles (`just
+  sandbox 15`). The parser is one for all: `pg_query` 6.2.1, libpg_query
+  from PostgreSQL 17.7 (older majors' grammar is a subset; syntax new in 18
+  fails to parse, with a hint). `SandboxConfig::major` makes a compiler
+  refuse a cluster on another major. The app database is 18 (`uuidv7()`
+  ids).
 - **Zitadel v4.19.4 with its built-in login (v1)**, one container, no proxy.
   Login v1 disappears in v5: upgrading means adding the `zitadel-login`
   container and a path-routing proxy. The OIDC callback is
@@ -274,6 +282,17 @@ Made in the skeleton (S0):
   model has no names for a partition's own keys and indexes, so a detached
   one's are Postgres's defaults, guessed (`IF EXISTS`/`IF NOT EXISTS`, a
   `guessed_names` warning).
+- **Postgres majors** (`databases::major`, docs/MVP.md "Several Postgres
+  majors"): `POST …/major/check` (the latest version compiled on another
+  major: `MajorCheck`) and `PUT …/major` (refused with 422
+  `incompatible_major` unless it compiles; 409 `latest_changed`; an audit
+  event; `Hub::major_changed` tells the open drafts). Versions keep
+  `server_version`/`pg_major` (generated from the model) and
+  `database_major` (a trigger): `VersionSummary::postgres`, `other_major`
+  for a push from another major. Migrations are planned with
+  `Options::major` = the database's (`SchemaMigration::pg_major`); the web
+  keys them by it. `GET /api/postgres-majors` says what this server
+  compiles.
 - **Rate limits**: `rate::Limits` in `AppState` (per API token for pushes,
   checked before the body is read; per person and per database for SQL
   compiles; per database for imports and, apart, their previews), 429 `rate_limited` with `Retry-After`. Handlers that must decide
@@ -410,19 +429,25 @@ src/styles/globals.css   every token; the only file with raw colors
 
 ## Sandbox compiler (`crates/romulus-sandbox`)
 
-The API holds one `Compiler`, behind `compile::SqlCompiler` (`AppState::
-compiler`): never call `Compiler::start` elsewhere (one process per pool
-prefix). `SqlCompiler::sandbox(&config)` starts it in the background and
-retries until the sandbox answers, so the API boots without it; until then
-compiles answer 503. `ROMULUS_SANDBOX_PREFIX` (default `romulus_sandbox`)
-names the pool: Playwright's API uses `romulus_e2e`. `compile(sql)` for
-uploads, `compile_for(draft_id, sql)` for drafts (coalesced per draft: a
-superseded caller gets `compile::Rejected::Superseded` and should drop it).
+The API holds one `Compiler` per Postgres major, behind `compile::SqlCompiler`
+(`AppState::compiler`): never call `Compiler::start` elsewhere (one process
+per pool prefix and cluster). `SqlCompiler::sandbox(&config)` starts each
+configured major's (`Config::sandbox_urls`: `ROMULUS_SANDBOX_URL` for 17,
+`ROMULUS_SANDBOX_URL_PG15`/`16`/`18`) in the background and retries until
+its sandbox answers, so the API boots without them; until then that major's
+compiles answer 503. **Every call names the major** of the database it
+compiles for (`DatabaseRef::pg_major`, `Bearer::database_major`, a room's
+`Content::major`). `ROMULUS_SANDBOX_PREFIX` (default `romulus_sandbox`)
+names the pool on every cluster: Playwright's API uses `romulus_e2e`.
+`compile(major, sql)` for uploads, `compile_for(major, draft_id, sql)` for
+drafts (coalesced per draft: a superseded caller gets
+`compile::Rejected::Superseded` and should drop it).
 Both return a `Compiled`: `model` (canonical, `database` = `"sandbox"`: set
 the real name) or `diagnostics`, each with a stable `code` and a `Span` in
 bytes, UTF-16 (CodeMirror/Yjs) and line/column. A sandbox failure is a 503,
-never stored. `/api/health` reports `sandbox` (`ok`, `unavailable`, `off`)
-from `Compiler::check_admin`. Tests use `SqlCompiler::from_fn`.
+never stored. `/api/health` reports `sandbox` (17's: `ok`, `unavailable`,
+`off`) and `sandboxes` (each major's) from `Compiler::check_admin`. Tests use
+`SqlCompiler::from_fn` (any major) or `from_fn_per_major`.
 
 - **Pure tooling**: `parse(sql)` → statements with spans and `Key`s
   (`table:public.users`, `fk:public.orders.x_fkey`, `comment:column:…`;
@@ -453,7 +478,12 @@ from `Compiler::check_admin`. Tests use `SqlCompiler::from_fn`.
   (not the macros: it is not the app database).
 - **Tests**: `just sandbox` starts only the sandbox (no Zitadel); the
   integration tests read `ROMULUS_SANDBOX_URL` from `.env` and are skipped,
-  loudly, without it. CI starts the image itself.
+  loudly, without it. CI starts the image itself. The `majors` tests run the
+  corpus on each other major whose URL is set and whose sandbox answers
+  (`just sandbox all`; CI's job per major); the migration oracle plans for
+  whatever major `ROMULUS_SANDBOX_URL` runs (point it at
+  `ROMULUS_SANDBOX_URL_PG15` to prove 15: a smoke subset off 17,
+  `ROMULUS_ORACLE_FULL=1` for all).
 - **Operating the sandbox** (memory caps, OOM behaviour, why the extensions
   are trusted): `deploy/sandbox/README.md`. Wire `Compiler::check_admin` into
   the API's health check: `PrefixInUse` there means another process took the

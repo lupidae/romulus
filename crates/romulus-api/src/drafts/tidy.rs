@@ -125,7 +125,7 @@ pub(super) async fn tidy(
             }));
         }
         // The rewrite must be the same schema, or it is no tidying.
-        let check = state.collab.compiler().compile(&sql).await?;
+        let check = state.collab.compiler().compile(content.major, &sql).await?;
         if check.model.as_ref() != Some(&model) {
             tracing::warn!(
                 draft = %id,

@@ -1,0 +1,305 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  v.model, v.source, v.layout,\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  m.migration_id AS \"migration_id?\", m.path AS \"migration_path?\",\n                  m.format AS \"migration_format?: MigrationFormat\", m.skipped AS \"migration_skipped?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\",\n                  v.server_version, v.pg_major, v.database_major\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           LEFT JOIN version_migrations m ON m.version_id = v.id\n           WHERE v.database_id = $1 AND v.removed_at IS NULL AND ($2::int IS NULL OR v.number = $2)\n           ORDER BY v.number DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "origin: VersionOrigin",
+        "type_info": {
+          "Custom": {
+            "name": "version_origin",
+            "kind": {
+              "Enum": [
+                "upload",
+                "push",
+                "draft",
+                "import"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "origin"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "source_kind: SourceKind",
+        "type_info": {
+          "Custom": {
+            "name": "version_source_kind",
+            "kind": {
+              "Enum": [
+                "sql",
+                "remus_json",
+                "migration"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "model",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "layout",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "layout"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "user_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "user_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "token_id?",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "api_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "token_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "api_tokens",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "migration_id?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "version_migrations",
+            "name": "migration_id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "migration_path?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "version_migrations",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "migration_format?: MigrationFormat",
+        "type_info": {
+          "Custom": {
+            "name": "migration_format",
+            "kind": {
+              "Enum": [
+                "plain",
+                "sqlx",
+                "flyway",
+                "prisma",
+                "dbmate",
+                "golang_migrate",
+                "node_pg_migrate",
+                "alembic",
+                "django",
+                "rails"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "version_migrations",
+            "name": "format"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "migration_skipped?",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "version_migrations",
+            "name": "skipped"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "written_migration!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 18,
+        "name": "server_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "server_version"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "pg_major",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "pg_major"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "database_major",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "database_major"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "eb9b423b904f4cd4fc001d4364473f0ee6ee159462b02e046aff6cd5cd6f20a3"
+}

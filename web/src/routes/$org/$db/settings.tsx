@@ -14,22 +14,34 @@ import { Input, Textarea } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
 import { Activity } from "@/features/databases/components/activity";
 import { ApiTokens } from "@/features/databases/components/api-tokens";
+import { PostgresCard } from "@/features/databases/components/postgres-card";
 import { RemovedVersions } from "@/features/databases/components/removed-versions";
 import { useDeleteDatabase, useUpdateDatabase } from "@/features/databases/mutations";
+import { isMajor, type PgMajor } from "@/features/databases/postgres";
 import { type Database, databaseQuery } from "@/features/databases/queries";
 import { databaseSlugProblem } from "@/features/databases/slug";
 import { orgQuery } from "@/features/orgs/queries";
 import { canManageMembers, canWrite } from "@/features/orgs/roles";
 
-// Name, address and description; API tokens; removed versions and the
-// activity; deleting. Developers and admins.
+interface SettingsSearch {
+  /** A Postgres major to check moving to (the history's "Switch to Postgres 16"). */
+  major?: PgMajor;
+}
+
+// Name, address and description; the Postgres version; API tokens; removed
+// versions and the activity; deleting. Developers and admins.
 export const Route = createFileRoute("/$org/$db/settings")({
+  validateSearch: (search: Record<string, unknown>): SettingsSearch => {
+    const major = Number(search.major);
+    return isMajor(major) ? { major } : {};
+  },
   head: () => ({ meta: [{ title: "Database settings – romulus" }] }),
   component: Settings,
 });
 
 function Settings() {
   const { org, db } = Route.useParams();
+  const { major } = Route.useSearch();
   const { data: orgData } = useSuspenseQuery(orgQuery(org));
   const { data: database } = useSuspenseQuery(databaseQuery(org, db));
 
@@ -51,6 +63,13 @@ function Settings() {
         key={`${database.name}:${database.slug}:${database.description}`}
         org={org}
         database={database}
+      />
+      {/* Remounted when the database moves, or another major is asked for. */}
+      <PostgresCard
+        key={`${database.pg_major}:${major ?? ""}`}
+        org={org}
+        database={database}
+        initial={major}
       />
       <Card>
         <CardHeader>

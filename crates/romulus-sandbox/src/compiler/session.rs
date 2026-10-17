@@ -495,6 +495,15 @@ pub(crate) fn diagnostic(
             "The sandbox stops statements that run too long; nothing in a schema should take this long."
                 .to_owned()
         });
+    } else if sqlstate == "55P04" {
+        // unsafe_new_enum_value_usage: before PostgreSQL 17, a value added
+        // to an enum cannot be used in the transaction that added it, even
+        // when it created the type; a compile (and an import's replay) is
+        // one transaction.
+        hint = Some(
+            "Before PostgreSQL 17, an enum value cannot be used in the transaction that added it, and romulus compiles the whole text (an import, the whole history) in one transaction. List the value in the enum's CREATE TYPE, or move the database to PostgreSQL 17 or later."
+                .to_owned(),
+        );
     } else if hint.is_none() {
         hint = extension_hint(&message, catalog);
     }

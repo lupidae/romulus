@@ -18,6 +18,7 @@ mod idp;
 mod imports;
 mod invitations;
 mod live;
+mod majors;
 mod members;
 mod migration;
 mod oidc;

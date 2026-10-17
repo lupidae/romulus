@@ -55,6 +55,7 @@ const VERSIONS: VersionSummary[] = [
     created_at: new Date(Date.now() - 3_600_000).toISOString(),
     author: { kind: "token", id: "t1", name: "CI" },
     written_migration: false,
+    postgres: { server_version: "17.4", major: 17, database_major: 17, other_major: false },
   },
   {
     id: "v1",
@@ -65,6 +66,7 @@ const VERSIONS: VersionSummary[] = [
     created_at: new Date(Date.now() - 86_400_000 * 3).toISOString(),
     author: { kind: "user", id: "u-alice", name: "Alice Martin" },
     written_migration: false,
+    postgres: { server_version: "17.4", major: 17, database_major: 17, other_major: false },
   },
 ];
 

@@ -131,10 +131,16 @@ async fn serve() -> Result<(), MainError> {
         config.public_url
     );
     let compiler = SqlCompiler::sandbox(&config);
-    if config.sandbox_url.is_none() {
+    if config.sandbox_urls.is_empty() {
         tracing::warn!(
             "no sandbox configured (ROMULUS_SANDBOX_URL): SQL uploads answer 503, drafts do not compile"
         );
+    } else {
+        for major in romulus_api::domain::PgMajor::SUPPORTED {
+            if !config.sandbox_urls.contains_key(&major) {
+                tracing::warn!(%major, "no sandbox for this Postgres major: its databases do not compile");
+            }
+        }
     }
     let state = AppState::new(pool, config).with_compiler(compiler.clone());
     let collab = state.collab.clone();

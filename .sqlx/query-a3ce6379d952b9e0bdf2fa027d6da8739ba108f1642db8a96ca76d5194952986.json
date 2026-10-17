@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, number, model, source, source_kind AS \"source_kind: SourceKind\", layout\n           FROM versions WHERE database_id = $1 AND removed_at IS NULL ORDER BY number DESC LIMIT 1",
+  "query": "SELECT id, number, model, source, source_kind AS \"source_kind: SourceKind\", layout, pg_major\n           FROM versions WHERE database_id = $1 AND removed_at IS NULL ORDER BY number DESC LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -79,6 +79,17 @@
             "name": "layout"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "pg_major",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "pg_major"
+          }
+        }
       }
     ],
     "parameters": {
@@ -92,8 +103,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "805dbda6a8faf7e99ecb257a6a7812ba9904c44835a11298f86a9ef88119ee47"
+  "hash": "a3ce6379d952b9e0bdf2fa027d6da8739ba108f1642db8a96ca76d5194952986"
 }

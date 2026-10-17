@@ -245,6 +245,7 @@ pub(super) async fn publish(
         limits: &state.limits,
         user: member.user.id,
         database: database.id,
+        major: content.major,
     };
     let source = version_source(&checks, &content, &model).await?;
     database.slug.clone_into(&mut model.database);
@@ -337,6 +338,7 @@ async fn store(
             message: message.map(str::to_owned),
             created_by: by,
             approvals,
+            compiled_on: content.major,
         },
     )
     .await;
@@ -376,10 +378,14 @@ pub(super) async fn compiled(
         return Ok((Some(model), Vec::new()));
     }
     let compiled = match content.mode {
-        DraftMode::Schema => hub.compiler().compile_draft(&content.sql).await?,
+        DraftMode::Schema => {
+            hub.compiler()
+                .compile_draft(content.major, &content.sql)
+                .await?
+        }
         DraftMode::Migration => {
             hub.compiler()
-                .compile_migration(&content.base_sql, &content.migration)
+                .compile_migration(content.major, &content.base_sql, &content.migration)
                 .await?
         }
     };

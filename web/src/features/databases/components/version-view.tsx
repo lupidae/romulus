@@ -45,6 +45,7 @@ import {
   type VersionDetail,
 } from "../queries";
 import { RemoveVersionDialog } from "./remove-version-dialog";
+import { VersionPostgresBadge } from "./postgres";
 import { Byline, OriginBadge } from "./version-meta";
 import { WrittenMigrationButton } from "./written-migration";
 
@@ -203,6 +204,7 @@ function VersionStrip({
       {version ? (
         <div className="hidden min-w-0 flex-1 items-center gap-3 text-sm md:flex">
           <OriginBadge origin={version.origin} />
+          <VersionPostgresBadge version={version} />
           <Byline author={version.author} at={version.created_at} />
           {version.approvals.length > 0 && (
             <span className="hidden max-w-64 min-w-0 shrink items-center gap-1 text-sm text-muted-foreground lg:inline-flex">

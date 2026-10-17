@@ -46,8 +46,11 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::{AssertSqlSafe, Connection, PgConnection, Row, postgres::PgConnectOptions, raw_sql};
 
-use super::{SandboxConfig, SandboxError};
-use crate::catalog::{ALLOWED_EXTENSIONS, Catalog, Extension, ProvidedKind, ProvidedObject};
+use super::{MAJORS, SandboxConfig, SandboxError};
+use crate::{
+    catalog::{ALLOWED_EXTENSIONS, Catalog, Extension, ProvidedKind, ProvidedObject},
+    diagnostic::{Code, Diagnostic},
+};
 
 /// Bump to recreate every pool database on the next start (changes to how
 /// they are set up).
@@ -66,6 +69,7 @@ pub(crate) struct Bootstrapped {
     pub slots: Vec<SlotSpec>,
     pub catalog: Catalog,
     pub server_version: String,
+    pub major: u32,
 }
 
 pub(crate) async fn bootstrap(
@@ -92,11 +96,17 @@ pub(crate) async fn bootstrap(
         .await
         .map_err(bootstrap_error)?;
     let server_major = server_num.parse::<u32>().unwrap_or(0) / 10_000;
-    let parser_major = parser_major();
-    if server_major != parser_major {
+    if !MAJORS.contains(&server_major) {
+        return Err(SandboxError::UnsupportedMajor {
+            server: server_version,
+        });
+    }
+    if let Some(expected) = config.major
+        && expected != server_major
+    {
         return Err(SandboxError::VersionMismatch {
             server: server_version,
-            parser: parser_major,
+            expected,
         });
     }
 
@@ -135,6 +145,7 @@ pub(crate) async fn bootstrap(
         slots,
         catalog,
         server_version,
+        major: server_major,
     })
 }
 
@@ -206,12 +217,40 @@ fn validate(config: &SandboxConfig) -> Result<(), SandboxError> {
 }
 
 /// The major version of the Postgres grammar `pg_query` parses (17 for
-/// `libpg_query` 17.x): the sandbox must run the same.
+/// `libpg_query` 17.x), whatever major the sandbox runs.
 pub(crate) fn parser_major() -> u32 {
     pg_query::parse("SELECT 1")
         .ok()
         .and_then(|r| u32::try_from(r.protobuf.version).ok())
         .map_or(0, |v| v / 10_000)
+}
+
+/// Syntax errors of a text compiled on a major newer than the parser's
+/// (18): the text may be right for that major, in syntax the parser does
+/// not know yet. Their hint says so (the error itself stays the parser's).
+pub(crate) fn newer_syntax(major: u32, errors: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    let parser = parser_major();
+    if major <= parser {
+        return errors;
+    }
+    errors
+        .into_iter()
+        .map(|d| {
+            if d.code != Code::SyntaxError {
+                return d;
+            }
+            let hint = format!(
+                "romulus reads SQL with PostgreSQL {parser}'s grammar: syntax new in PostgreSQL \
+                 {major} (VIRTUAL generated columns, NOT ENFORCED, WITHOUT OVERLAPS…) cannot be \
+                 compiled yet."
+            );
+            let hint = match d.hint.as_deref() {
+                Some(own) => format!("{own} {hint}"),
+                None => hint,
+            };
+            d.with_hint(hint)
+        })
+        .collect()
 }
 
 /// A slot role's password: derived from the admin URL (which holds the
@@ -544,11 +583,31 @@ JOIN pg_available_extensions a ON a.name = v.name AND a.default_version = v.vers
 
 #[cfg(test)]
 mod tests {
-    use super::{hex, parser_major, password};
+    use super::{hex, newer_syntax, parser_major, password};
+    use crate::diagnostic::{Code, Diagnostic};
 
     #[test]
     fn the_parser_speaks_postgres_17() {
         assert_eq!(parser_major(), 17);
+    }
+
+    #[test]
+    fn syntax_errors_on_a_newer_major_say_the_grammar_is_older() {
+        let errors = || {
+            vec![
+                Diagnostic::error(Code::SyntaxError, "syntax error at end of input"),
+                Diagnostic::error(Code::TooLarge, "too large"),
+            ]
+        };
+        let on_18 = newer_syntax(18, errors());
+        assert!(
+            on_18[0].hint.as_deref().is_some_and(
+                |h| h.contains("PostgreSQL 17's grammar") && h.contains("PostgreSQL 18")
+            )
+        );
+        assert_eq!(on_18[1].hint, None);
+        assert!(newer_syntax(17, errors()).iter().all(|d| d.hint.is_none()));
+        assert!(newer_syntax(15, errors()).iter().all(|d| d.hint.is_none()));
     }
 
     #[test]

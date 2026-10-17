@@ -7,7 +7,7 @@ use romulus_sandbox::{Compiler, render_sql};
 use tokio::sync::OnceCell;
 
 use crate::{
-    Case, check_all, compile, corpus, empty,
+    Case, check_all, compile, corpus, empty, smoke,
     tools::{ToolCase, check_tools},
     with_compiler,
 };
@@ -35,6 +35,11 @@ pub async fn models(compiler: &Compiler) -> &'static [(String, Schema)] {
                     .expect("a file name")
                     .to_string_lossy()
                     .into_owned();
+                // Grows its enums and uses the values in one transaction:
+                // 17 and later only (romulus-sandbox's `majors` tests).
+                if name == "14_enum_evolution" && compiler.major() < 17 {
+                    continue;
+                }
                 let sql = std::fs::read_to_string(&path).expect("a readable corpus file");
                 let model = compile(compiler, &sql)
                     .await
@@ -71,9 +76,11 @@ fn every_corpus_schema_migrates_into_every_other() {
     with_compiler(|compiler| async move {
         let models = models(&compiler).await;
         let mut cases = Vec::new();
-        for (a, old) in models {
-            for (b, new) in models {
-                if a != b {
+        for (i, (a, old)) in models.iter().enumerate() {
+            for (j, (b, new)) in models.iter().enumerate() {
+                // The smoke subset: each into the next one only.
+                let wanted = !smoke(&compiler) || j == (i + 1) % models.len();
+                if a != b && wanted {
                     cases.push(Case::new(format!("{a} → {b}"), old, new));
                 }
             }
@@ -140,6 +147,7 @@ fn every_corpus_schema_is_built_and_dropped_by_each_tool() {
                 new: next_model.clone(),
                 options: Options {
                     concurrently: i % 2 == 0,
+                    ..Options::default()
                 },
                 format: Format::ALL[(i + 3) % Format::ALL.len()],
                 sources: None,

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DraftsSlot } from "@/features/databases/components/drafts-slot";
+import { OtherMajorAlert } from "@/features/databases/components/postgres";
 import { VersionHistory } from "@/features/databases/components/version-history";
 import { databaseQuery, versionsQuery } from "@/features/databases/queries";
 import { orgQuery } from "@/features/orgs/queries";
@@ -24,7 +25,8 @@ function History() {
   const { org, db } = Route.useParams();
   const { data: database } = useSuspenseQuery(databaseQuery(org, db));
   const { data: orgData } = useSuspenseQuery(orgQuery(org));
-  const importLink = canWrite(orgData.role) && (
+  const writer = canWrite(orgData.role);
+  const importLink = writer && (
     <Button size="sm" asChild>
       <Link to="/$org/$db/import" params={{ org, db }}>
         <ImportIcon />
@@ -34,6 +36,7 @@ function History() {
   );
   return (
     <div className="grid w-full max-w-5xl gap-6 px-4 py-6 md:px-8">
+      <OtherMajorAlert org={org} database={database} writer={writer} />
       <DraftsSlot org={org} db={db} />
       <section aria-labelledby="versions-title" className="grid gap-3">
         <div className="flex flex-wrap items-end justify-between gap-3">

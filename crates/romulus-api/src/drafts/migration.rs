@@ -127,6 +127,7 @@ pub(super) async fn draft_migration(
         to_label: format!("draft \"{}\"", row.name),
         name: row.name.clone(),
         database: format!("{org}/{db_slug}"),
+        major: content.major,
     };
     Ok(Json(build(sides, options).await?))
 }

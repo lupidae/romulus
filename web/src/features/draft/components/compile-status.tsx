@@ -9,6 +9,8 @@ import type { CompileView } from "../session";
 
 interface CompileStatusProps {
   compile: CompileView;
+  /** The Postgres major it compiles on (the database's), once known. */
+  major?: number;
   /** Puts the caret on a diagnostic in the SQL. */
   onJump: (diagnostic: Diagnostic) => void;
 }
@@ -20,7 +22,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * "2 errors", "Not checked". The details (each error, where it is) open
  * below; a click on one goes to it in the text.
  */
-export function CompileStatus({ compile, onJump }: CompileStatusProps) {
+export function CompileStatus({ compile, major, onJump }: CompileStatusProps) {
   const errors = compile.diagnostics.filter((d) => d.severity === "error");
   const problems = errorCount(errors);
   const notes = compile.diagnostics.filter((d) => d.severity === "info");
@@ -63,7 +65,14 @@ export function CompileStatus({ compile, onJump }: CompileStatusProps) {
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="grid w-96 max-w-[calc(100vw-2rem)] gap-3">
-        <Details compile={compile} errors={errors} notes={notes} busy={busy} onJump={onJump} />
+        <Details
+          compile={compile}
+          errors={errors}
+          notes={notes}
+          busy={busy}
+          postgres={major ? `Postgres ${major}` : "Postgres"}
+          onJump={onJump}
+        />
       </PopoverContent>
     </Popover>
   );
@@ -74,12 +83,15 @@ function Details({
   errors,
   notes,
   busy,
+  postgres,
   onJump,
 }: {
   compile: CompileView;
   errors: Diagnostic[];
   notes: Diagnostic[];
   busy: boolean;
+  /** "Postgres 15": what it compiles on. */
+  postgres: string;
   onJump: (diagnostic: Diagnostic) => void;
 }) {
   if (compile.state === "unavailable") {
@@ -94,8 +106,8 @@ function Details({
       <>
         <Explain title={busy ? "Compiling your latest edits" : "The SQL compiles"}>
           {busy
-            ? "Postgres checks the text a moment after typing stops; the graph follows."
-            : "Postgres accepts every statement; the graph shows exactly this schema."}
+            ? `${postgres} checks the text a moment after typing stops; the graph follows.`
+            : `${postgres} accepts every statement; the graph shows exactly this schema.`}
         </Explain>
         {notes.length > 0 && <List items={notes} onJump={onJump} />}
       </>
