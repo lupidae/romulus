@@ -2301,6 +2301,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_chacha"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2331,6 +2341,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rand_regex"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79e745eeef604742ec751000e44d91cdc0552aacacb2c74bee88cc7685918cfa"
+dependencies = [
+ "rand 0.10.3",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -2557,6 +2577,28 @@ dependencies = [
  "serde",
  "serde_json",
  "utoipa",
+]
+
+[[package]]
+name = "romulus-fakedata"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "libm",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
+ "rand_regex",
+ "regex",
+ "regex-syntax",
+ "remus-core",
+ "romulus-migration",
+ "romulus-sandbox",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

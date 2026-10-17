@@ -1,0 +1,45 @@
+[package]
+name = "romulus-fakedata"
+description = "Fake rows for a remus schema model, for playgrounds: an ordered, streamed load plan (COPY in text format, then SQL Postgres judges with) and its report. No I/O, builds for wasm."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+remus-core.workspace = true
+# The RNG of every cell: ChaCha8, seeded per column, one stream per row.
+# rand without its default features: no OS randomness (getrandom does not
+# build for wasm32-unknown-unknown, and nothing here is random but seeded).
+rand = { version = "0.10.3", default-features = false }
+rand_chacha = { version = "0.10.0", default-features = false }
+# Values for CHECK regexes (`slug ~ '^[a-z0-9-]{3,40}$'`), and checking that
+# a heuristic's value matches one.
+rand_regex = "0.19.0"
+regex = "1.13.1"
+# The objects extensions provide (PostGIS's spatial_ref_sys…): never loaded.
+romulus-migration.workspace = true
+# Floating-point functions the same bits on every platform (std's ln, cos,
+# powf come from the system's libm, which may differ by an ulp).
+libm = "0.2.16"
+# Sampler classes kept to printable characters (no NUL in a COPY).
+regex-syntax = "0.8.11"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+thiserror.workspace = true
+
+[dev-dependencies]
+remus-core = { workspace = true, features = ["fixtures"] }
+# The oracle: corpus schemas compiled in the sandbox, built on a scratch
+# database there, and loaded with the plan (tests/oracle).
+dotenvy.workspace = true
+romulus-sandbox.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
