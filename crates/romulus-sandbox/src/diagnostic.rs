@@ -73,6 +73,10 @@ pub enum Code {
     /// run (data, transaction control): it cannot change the schema, and
     /// stays in the migration ([`crate::draft_migration`]).
     NotRun,
+    /// A draft's line written as a comment of its discussion (`--- words`)
+    /// that was never posted: a draft's SQL never keeps one (romulus-api's
+    /// `collab::comments::comment_lines`).
+    CommentLine,
 }
 
 impl Diagnostic {

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE version_comments SET body = 'rewritten'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "54719c70893407b92f2daeb9b32b090443cb57de5c2ce937b484f3c4cb5eae44"
+}

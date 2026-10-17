@@ -11,8 +11,10 @@
 //! Table: `audit_events` (no update, delete or truncate but with the
 //! organization or database). Written by `versions::removal` (a version
 //! removed, restored, purged), `drafts::approvals` (a draft published, with
-//! who approved it, or without the approvals it needed) and `orgs` (the
-//! approvals required changed). The actor's name is kept as it was.
+//! who approved it, or without the approvals it needed), `orgs` (the
+//! approvals required changed) and `collab` (someone else's comments
+//! deleted in a draft, by its room's writer). The actor's name is kept as it
+//! was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -42,7 +44,8 @@ pub struct AuditDetails {
     /// The version's message (versions removed, restored, purged).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// The draft published (approvals overridden).
+    /// The draft published (approvals overridden), or whose discussion
+    /// lost comments (comments deleted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,6 +63,18 @@ pub struct AuditDetails {
     pub from: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<i32>,
+    /// The thread a deletion was in (comments deleted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<Uuid>,
+    /// How many comments went (comments deleted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<i32>,
+    /// Whose they were, by name as it was (comments deleted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authors: Option<Vec<String>>,
+    /// The beginning of the first one (comments deleted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
 }
 
 /// One approval, as it was when the draft was published.

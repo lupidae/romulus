@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_thread_reads (thread_id, user_id, read_at)\n         SELECT t.id, r.user_id, r.read_at\n         FROM draft_thread_reads r\n         JOIN version_threads t ON t.version_id = $1 AND t.draft_thread = r.thread\n         WHERE r.draft_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c7b920bd5f068045958aa442ec1de067d872a1c2e1f62e78f7ea85cf5f1ed37"
+}

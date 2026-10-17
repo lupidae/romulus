@@ -4,7 +4,8 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Workspace } from "@/features/draft/components/draft-editor";
 import type { Diagnostic, Draft } from "@/features/draft/queries";
-import { DraftSession } from "@/features/draft/session";
+import type { Anchor, DocComment, DocThread } from "@/features/comments/model";
+import { DraftSession, type LocalDraft } from "@/features/draft/session";
 import { useSessionState } from "@/features/draft/use-session";
 import { applyEdit } from "@/features/schema/edits/apply";
 import blogJson from "@/features/schema/fixtures/blog.json";
@@ -21,11 +22,13 @@ import { devRoutes } from "@/lib/dev-routes";
 //   ?fixture=empty       no SQL yet
 //   ?fixture=large       300 tables (frame times while editing)
 //   &groups=schemas      a group per schema (frame times while dragging one)
+//   ?comments=none       no comment threads (the blog has a few by default)
 
 interface Search {
   role?: "reviewer";
   fixture?: "empty" | "large";
   groups?: "schemas";
+  comments?: "none";
 }
 
 export const Route = createFileRoute("/dev/editor")({
@@ -33,6 +36,7 @@ export const Route = createFileRoute("/dev/editor")({
     role: search.role === "reviewer" ? "reviewer" : undefined,
     fixture: search.fixture === "empty" || search.fixture === "large" ? search.fixture : undefined,
     groups: search.groups === "schemas" ? "schemas" : undefined,
+    comments: search.comments === "none" ? "none" : undefined,
   }),
   beforeLoad: () => {
     if (!devRoutes) throw notFound();
@@ -81,6 +85,78 @@ function error(from: number, to: number, message: string): Diagnostic {
 
 const PALETTE: GroupColor[] = ["blue", "teal", "violet", "green", "amber", "pink"];
 
+const PEOPLE = [
+  { id: "u-alice", name: "Alice Martin", detail: "developer" },
+  { id: "u-bob", name: "Bob Chen", detail: "reviewer" },
+  { id: "u-carol", name: "Carol Diaz", detail: "admin" },
+];
+
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+/** A discussion to look at: replies, a mention, something unread, resolved, outdated. */
+function seededComments(): Pick<LocalDraft, "threads" | "comments"> {
+  const bob = { id: "u-bob", name: "Bob Chen" };
+  const alice = { id: "u-alice", name: "Alice Martin" };
+  const carol = { id: "u-carol", name: "Carol Diaz" };
+  const thread = (
+    by: string,
+    at: string,
+    anchor: Anchor,
+    resolved: DocThread["resolved"] = null,
+  ) => ({
+    anchor,
+    by,
+    at,
+    resolved,
+  });
+  const comment = (
+    thread: string,
+    author: { id: string; name: string },
+    body: string,
+    at: string,
+    mentions: string[] = [],
+  ): DocComment => ({ thread, author, body, mentions, at, edited: null });
+  return {
+    threads: {
+      t1: thread("u-bob", ago(180), { kind: "column", table: "public.posts", column: "slug" }),
+      t2: thread("u-carol", ago(42), { kind: "table", table: "public.comments" }),
+      t3: thread(
+        "u-bob",
+        ago(600),
+        { kind: "table", table: "public.post_tags" },
+        { by: "u-alice", name: "Alice Martin", at: ago(300) },
+      ),
+      t4: thread("u-alice", ago(90), { kind: "point", x: 40, y: -120 }),
+      t5: thread("u-bob", ago(2000), { kind: "column", table: "public.posts", column: "subtitle" }),
+    },
+    comments: {
+      c1: comment(
+        "t1",
+        bob,
+        "Should slugs be unique per author rather than across the blog?",
+        ago(180),
+      ),
+      c2: comment(
+        "t1",
+        alice,
+        "Across the blog: URLs are /posts/<slug>. @Bob Chen, does that work for imports?",
+        ago(150),
+        ["u-bob"],
+      ),
+      c3: comment(
+        "t2",
+        carol,
+        "Do we need parent_id? Nested replies were cut from the spec.",
+        ago(42),
+      ),
+      c4: comment("t3", bob, "post_tags needs an index on tag_id for the tag pages.", ago(600)),
+      c5: comment("t3", alice, "Added in v3.", ago(300)),
+      c6: comment("t4", alice, "Billing tables go here once we start on invoices.", ago(90)),
+      c7: comment("t5", bob, "Is subtitle optional?", ago(2000)),
+    },
+  };
+}
+
 /** One group per schema, named after it. */
 function groupsBySchema(schema: Schema): Groups {
   const out: Groups = {};
@@ -97,7 +173,7 @@ function groupsBySchema(schema: Schema): Groups {
 }
 
 function DevEditor() {
-  const { role, fixture, groups } = Route.useSearch();
+  const { role, fixture, groups, comments } = Route.useSearch();
   const [session, setSession] = React.useState<DraftSession | null>(null);
   const [failNext, setFailNext] = React.useState(false);
   const failNextRef = React.useRef(false);
@@ -125,6 +201,7 @@ function DevEditor() {
       local: {
         sql: fixture === "empty" ? "" : fixture === "large" ? large!.sql : blogSql,
         groups: groups === "schemas" ? groupsBySchema(base) : undefined,
+        ...(fixture === undefined && comments !== "none" ? seededComments() : {}),
         role: role ?? "developer",
         compile: (sql) => {
           let model = base;
@@ -166,7 +243,7 @@ function DevEditor() {
       created.destroy();
       setSession(null);
     };
-  }, [role, fixture, groups, large]);
+  }, [role, fixture, groups, comments, large]);
 
   const state = useSessionState(session, (s) => s, null);
   return (
@@ -176,7 +253,8 @@ function DevEditor() {
         org="acme"
         db="blog"
         draft={draft}
-        meId="u-alice"
+        me={{ id: "u-alice", name: "Alice Martin" }}
+        local={{ people: PEOPLE }}
         isWriter={role !== "reviewer"}
         session={session}
         state={state}

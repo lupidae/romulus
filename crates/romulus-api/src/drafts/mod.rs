@@ -28,18 +28,22 @@
 //! - `POST/DELETE …/drafts/{id}/approvals` [member], `POST/DELETE
 //!   …/drafts/{id}/review-request` [developer]: approvals before
 //!   publishing, and "Request review" ([`approvals`]).
+//! - `GET …/drafts/{id}/reads`, `PUT …/drafts/{id}/reads/{thread}`
+//!   [member]: up to when the caller read each comment thread (the threads
+//!   themselves are in the doc: `collab::comments`) ([`reads`]).
 //! - `POST …/drafts/{id}/mode` [developer]: switches between schema mode
 //!   (the SQL is the source) and migration mode (a migration from the base
 //!   version is) ([`mode`]).
 //!
 //! Tables: `drafts`, `draft_compiles` (with `collab`'s `draft_updates`,
 //! `draft_snapshots`), `draft_approvals`, `draft_review_requests`,
-//! `draft_editors`.
+//! `draft_editors`, `draft_thread_reads`.
 
 pub mod approvals;
 pub mod migration;
 pub mod mode;
 pub mod publish;
+pub mod reads;
 mod source;
 pub mod tidy;
 pub mod update;
@@ -77,6 +81,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(approvals::approve, approvals::withdraw))
         .routes(routes!(approvals::request_review, approvals::cancel_review))
         .routes(routes!(mode::switch_mode))
+        .routes(routes!(reads::list))
+        .routes(routes!(reads::read))
 }
 
 /// A draft, as the database page and the editor show it.

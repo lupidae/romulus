@@ -32,6 +32,10 @@
 //!   [member]: the `ALTER …` statements from one version to another
 //!   (`romulus-migration`) and the files of one migration tool.
 //!
+//! Discussion ([`discussion`]): `GET/POST …/versions/{number}/threads`
+//! [member] and their comments, resolve, reopen and read marks: the review
+//! of the draft it was published from (frozen) and threads started since.
+//!
 //! Removing ([`removal`]):
 //! - `POST …/versions/{number}/remove` [admin], with a reason: hidden from
 //!   the history, diffs, imports and the latest version; `POST
@@ -45,6 +49,7 @@
 //! of live versions (`removed_at IS NULL`).
 
 pub mod diff;
+pub mod discussion;
 pub mod layout;
 pub mod migration;
 pub mod push;
@@ -84,6 +89,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(texts))
         .routes(routes!(written_migration))
         .merge(diff::router())
+        .merge(discussion::router())
         .merge(migration::router())
         .merge(push::router())
         .merge(removal::router())
@@ -620,6 +626,7 @@ async fn upload(
         approvals: None,
         migration_sql: None,
         compiled_on: Some(database.pg_major),
+        discussion: Vec::new(),
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.

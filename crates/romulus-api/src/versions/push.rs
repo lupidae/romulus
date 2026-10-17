@@ -207,6 +207,7 @@ async fn push(
         // SQL compiled here, on the database's major; remus JSON was read
         // from a server, whatever its major (`other_major`).
         compiled_on: (source_kind == SourceKind::Sql).then_some(token.database_major),
+        discussion: Vec::new(),
     };
     let database_id = new.database_id;
     Ok(match store(&state.db, new, true).await? {

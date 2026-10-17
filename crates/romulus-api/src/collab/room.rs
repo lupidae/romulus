@@ -3,7 +3,36 @@
 //!
 //! - **Sync**: y-sync with each connection. Document updates from people
 //!   who may not edit (reviewers), or while the draft is not open, are
-//!   dropped; their awareness still goes through.
+//!   dropped; their awareness still goes through. A Yjs client id is the
+//!   person's whose update extended it alone (a tab's first edit), or whose
+//!   connection announced it and then extended it ([`Owners`]). An update
+//!   extending an id bound to someone else (or the room's own) is refused
+//!   with 4409 (reload). An update extending one id alone takes it over
+//!   from a connection that only announced it (an editor's is closed 4409:
+//!   it never wrote with it, so loses nothing); a reviewer's announcement
+//!   never holds an id. An update carrying several ids, one of them
+//!   announced by another editor's open tab and not bound yet, is closed
+//!   4003 (sync again: that tab brings its own edits first). Others'
+//!   structs an editor carries (edits the server lost, back in a sync step
+//!   2) are kept, but the comment changes of such an update are not (they
+//!   could be anyone's). An update whose structs wait on others the doc
+//!   lacks (a tab typing before its step 2 after a reconnect) keeps what
+//!   applied; the rest is dropped and the tab asked for a step 2 again
+//!   (`SyncStep1`), which brings it with what it waited on: nothing waits
+//!   to land later in someone else's transaction, nothing is lost. Stored
+//!   updates that wait on structs never stored ([`Waiting`]) are kept out
+//!   of the doc (and in every snapshot), retried only once the doc reaches
+//!   what they wait on, in a transaction of their own: sent to everyone,
+//!   their comment changes taken back.
+//! - **Comments**: written by the room for whoever asks, reviewers
+//!   included, with an operation on the socket (`comments::Op`, budgeted
+//!   per person; deletions of others' comments by developers and admins
+//!   go to the audit log). Editors' direct changes to the threads and comments (a
+//!   `---` line posted, a rename moving threads) are checked
+//!   (`comments::check`, list content removed); what may not be is written
+//!   back in the update everyone else receives with it, so nobody sees a
+//!   forged comment, even for a moment. A `---` line left in the source
+//!   fails the compile (`comments::comment_lines`).
 //! - **Awareness**: each state is stamped with its connection's identity
 //!   (see `awareness`), and a connection only speaks for the Yjs client ids
 //!   it announced first.
@@ -78,6 +107,7 @@ use yrs::{
 use super::{
     HubInner, Present,
     awareness::{Peer, sanitize},
+    comments::{self, Changes, Request},
     compile::{self, CompileState, Compiled, Rejected, SqlCompiler, sha256_hex},
     doc::{self, Roots},
     patch,
@@ -86,7 +116,8 @@ use super::{
     store::{self, BaseSql, CompileRow, Job, Loaded, Writer},
 };
 use crate::{
-    domain::{DraftMode, DraftStatus, PgMajor},
+    audit,
+    domain::{AuditAction, DraftMode, DraftStatus, PgMajor},
     drafts::tidy::canonical_sql,
     versions::layout::{TableGroup, TablePosition, VersionLayout},
 };
@@ -146,6 +177,9 @@ pub type ConnId = u64;
 /// new id Yjs picks after a clash).
 const CLIENTS_PER_CONNECTION: usize = 4;
 
+/// Connections one person may have to one draft (tabs, devices).
+pub const MAX_TABS: usize = 8;
+
 /// What the socket task hands the room, already decoded (decoding runs
 /// there, so a malformed frame only costs its own connection).
 pub enum Incoming {
@@ -154,6 +188,14 @@ pub enum Incoming {
     Update(Bytes, Update),
     Awareness(AwarenessUpdate),
     AwarenessQuery,
+    /// A comment operation (`protocol::MESSAGE_COMMENT`), its mentions
+    /// already checked against the organization's members.
+    Comment(Request),
+    /// A comment operation the socket refused before anything else (too
+    /// many in a frame, or too fast): only answered.
+    CommentRefused {
+        id: String,
+    },
 }
 
 impl Incoming {
@@ -170,6 +212,21 @@ impl Incoming {
             }
             Message::Awareness(update) => Ok(Self::Awareness(update)),
             Message::AwarenessQuery => Ok(Self::AwarenessQuery),
+            Message::Custom(protocol::MESSAGE_COMMENT, body) => {
+                serde_json::from_slice::<Request>(&body)
+                    .ok()
+                    .filter(|request| request.id.len() <= comments::MAX_REQUEST_ID)
+                    .map(|mut request| {
+                        // Never more looked up than kept.
+                        if let Some(mentions) = request.op.mentions_mut() {
+                            let mut seen = HashSet::new();
+                            mentions.retain(|id| seen.insert(*id));
+                            mentions.truncate(comments::MAX_MENTIONS);
+                        }
+                        Self::Comment(request)
+                    })
+                    .ok_or(())
+            }
             Message::Auth(_) | Message::Custom(..) => return None,
         })
     }
@@ -258,9 +315,17 @@ pub mod close {
     pub const SESSION: u16 = 4401;
     /// The draft was deleted: do not reconnect.
     pub const DELETED: u16 = 4404;
+    /// The person has the draft open in too many tabs already. Final.
+    pub const TOO_MANY: u16 = 4429;
     /// An update would make the draft larger than it may be: the update was
     /// not applied; reload.
     pub const TOO_LARGE: u16 = 4413;
+    /// The tab wrote with a client id bound to another person: its copy no
+    /// longer matches the server's; reload. Final.
+    pub const OUT_OF_STEP: u16 = 4409;
+    /// The tab wrote with a client id another person's open tab announced:
+    /// reconnect and sync again (that tab brings its own edits first).
+    pub const RESYNC: u16 = 4003;
     /// The draft could not be loaded.
     pub const UNAVAILABLE: u16 = 1011;
 }
@@ -288,6 +353,8 @@ pub struct Content {
     pub merged: Option<i32>,
     /// Who approved exactly this SQL without having edited it (`review`).
     pub approved_by: Vec<Uuid>,
+    /// The comment threads, with their comments (`comments::discussion`).
+    pub discussion: Vec<comments::DocThread>,
 }
 
 impl Content {
@@ -348,6 +415,11 @@ pub enum Command {
     },
     Content {
         reply: oneshot::Sender<Content>,
+    },
+    /// Whether the doc has this comment thread.
+    ThreadExists {
+        thread: Uuid,
+        reply: oneshot::Sender<bool>,
     },
     Freeze {
         by: String,
@@ -476,6 +548,121 @@ struct Conn {
     clients: HashSet<u64>,
 }
 
+/// So many of something in a burst, then so many a second.
+pub(crate) struct Budget {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Budget {
+    /// Comment operations, per person in a draft: someone commenting sends
+    /// a few at a time.
+    const BURST: f64 = 30.0;
+    const PER_SECOND: f64 = 2.0;
+
+    pub(crate) fn new() -> Self {
+        Self {
+            tokens: Self::BURST,
+            at: Instant::now(),
+        }
+    }
+
+    pub(crate) fn take(&mut self) -> bool {
+        let now = Instant::now();
+        self.tokens =
+            (self.tokens + (now - self.at).as_secs_f64() * Self::PER_SECOND).min(Self::BURST);
+        self.at = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Whose each Yjs client id is, for the room's life: the person whose
+/// connection announced it (awareness, first come: a tab announces its own
+/// as it opens) and then extended it (its first edit). A person keeps at
+/// most [`MAX_TABS`] (one per tab they may have open); past that, their
+/// oldest is forgotten.
+#[derive(Debug, Default)]
+struct Owners {
+    by_client: HashMap<u64, Uuid>,
+    by_person: HashMap<Uuid, std::collections::VecDeque<u64>>,
+}
+
+impl Owners {
+    fn owner(&self, client: u64) -> Option<Uuid> {
+        self.by_client.get(&client).copied()
+    }
+
+    fn bind(&mut self, client: u64, person: Uuid) {
+        if self.by_client.contains_key(&client) {
+            return;
+        }
+        self.by_client.insert(client, person);
+        let theirs = self.by_person.entry(person).or_default();
+        theirs.push_back(client);
+        while theirs.len() > MAX_TABS {
+            if let Some(oldest) = theirs.pop_front() {
+                self.by_client.remove(&oldest);
+            }
+        }
+    }
+}
+
+/// The clients whose structs an update adds beyond what the doc has (`sv`):
+/// the ids it writes new content with.
+fn extended_clients(update: &Update, sv: &StateVector) -> Vec<u64> {
+    update
+        .insertions(true)
+        .iter()
+        .filter(|(client, ranges)| {
+            let known = sv.get(client);
+            ranges.iter().any(|range| range.end > known)
+        })
+        .map(|(client, _)| client.get())
+        .collect()
+}
+
+/// Stored updates waiting on structs never stored (a write lost before a
+/// restart): kept as stored, and in every snapshot, never applied in
+/// someone else's transaction.
+struct Waiting {
+    bytes: Vec<u8>,
+    /// Per client, a clock they wait on: once the doc has it, try again.
+    missing: Vec<(u64, u32)>,
+}
+
+/// Takes what waits out of the doc (yrs's pending structs and deletes).
+fn waiting_of(txn: &mut TransactionMut) -> Option<Waiting> {
+    let mut missing = Vec::new();
+    {
+        let store = txn.store();
+        if let Some(pending) = store.pending_update() {
+            missing.extend(pending.missing.iter().map(|(c, clock)| (c.get(), *clock)));
+        }
+        if let Some(deletes) = store.pending_ds() {
+            for (client, ranges) in deletes.iter() {
+                missing.extend(ranges.iter().map(|range| (client.get(), range.start)));
+            }
+        }
+    }
+    let update = yrs::WriteTxn::prune_pending(txn)?;
+    Some(Waiting {
+        bytes: yrs::updates::encoder::Encode::encode_v1(&update),
+        missing,
+    })
+}
+
+/// Whether the doc (`sv`) has any of what waits on.
+fn reached(sv: &StateVector, missing: &[(u64, u32)]) -> bool {
+    missing
+        .iter()
+        .any(|&(client, clock)| sv.get(&yrs::block::ClientID::new(client)) > clock)
+}
+
 struct ClientState {
     clock: u32,
     /// Sanitized JSON, or `null` once the client said it left.
@@ -534,8 +721,18 @@ struct Room {
     /// Set when a transaction changes `sql` / `migration` (observers).
     touched_sql: Arc<AtomicBool>,
     touched_migration: Arc<AtomicBool>,
+    /// What the last transaction changed in the threads and comments
+    /// (observers), for [`Room::check_comments`].
+    comment_changes: Arc<std::sync::Mutex<Changes>>,
+    /// Comment operations each person may still send (survives their
+    /// reconnecting, unlike a connection).
+    op_budgets: HashMap<Uuid, Budget>,
     conns: HashMap<ConnId, Conn>,
     clients: HashMap<u64, ClientState>,
+    /// Whose each Yjs client id is (see [`Owners`]).
+    owners: Owners,
+    /// Stored updates waiting on structs never stored.
+    waiting: Option<Waiting>,
 
     writer: Writer,
     /// Writes that failed for good, reported by the writer.
@@ -743,6 +940,12 @@ impl Room {
                 }
             }
         }
+        // Kept as stored, out of the doc (snapshots keep them): never
+        // dropped, never applied in someone else's transaction.
+        let waiting = waiting_of(&mut doc.transact_mut());
+        if waiting.is_some() {
+            tracing::error!(draft = %id, "collab: stored updates wait on structs never stored; kept waiting");
+        }
         // The doc's note of the mode wins: only rooms write it, in the
         // transaction of the switch; `drafts.mode` is written after, and a
         // write of it that was lost is repaired below.
@@ -785,8 +988,12 @@ impl Room {
             inactive,
             touched_sql: Arc::new(AtomicBool::new(false)),
             touched_migration: Arc::new(AtomicBool::new(false)),
+            comment_changes: Arc::default(),
+            op_budgets: HashMap::new(),
             conns: HashMap::new(),
             clients: HashMap::new(),
+            owners: Owners::default(),
+            waiting,
             pending: Vec::new(),
             flush_at: None,
             rows_since_snapshot: loaded.rows_since_snapshot,
@@ -864,7 +1071,8 @@ impl Room {
     }
 
     /// Notes each change of a text, for [`Room::apply`] to tell an edit of
-    /// the one that is not the source.
+    /// the one that is not the source, and of the threads and comments, for
+    /// [`Room::check_comments`].
     fn watch_texts(&self) {
         for (text, flag) in [
             (&self.roots.sql, &self.touched_sql),
@@ -873,6 +1081,11 @@ impl Room {
             let flag = Arc::clone(flag);
             text.observe("room", move |_, _| flag.store(true, Ordering::Relaxed));
         }
+        comments::observe(
+            &self.roots.threads,
+            &self.roots.comments,
+            &self.comment_changes,
+        );
     }
 
     fn handle(&mut self, command: Command) {
@@ -897,6 +1110,7 @@ impl Room {
                 self.flush_pending();
                 let _ = reply.send(self.content());
             }
+            Command::ThreadExists { thread, reply } => drop(reply.send(self.has_thread(thread))),
             Command::Freeze { by, purpose, reply } => self.freeze(by, purpose, reply),
             Command::Unfreeze => self.unfreeze(),
             Command::Published { version, by } => {
@@ -912,9 +1126,7 @@ impl Room {
                     None,
                 );
             }
-            Command::Renamed { name } => {
-                self.broadcast_event(&ServerEvent::Renamed { name }, None);
-            }
+            Command::Renamed { name } => self.broadcast_event(&ServerEvent::Renamed { name }, None),
             Command::Delete { by, reply } => {
                 if self.status.is_frozen() {
                     let _ = reply.send(Err(super::Publishing));
@@ -991,6 +1203,19 @@ impl Room {
             // Joined as it was being deleted: let go at once.
             out.frame(welcome);
             out.close(close::DELETED, "the draft was deleted");
+            return;
+        }
+        let tabs = self
+            .conns
+            .values()
+            .filter(|c| c.peer.user_id == peer.user_id)
+            .count();
+        if tabs >= MAX_TABS {
+            tracing::info!(draft = %self.id, user = %peer.user_id, "collab: too many tabs");
+            out.close(
+                close::TOO_MANY,
+                "the draft is open in too many of your tabs",
+            );
             return;
         }
         let mut first = vec![welcome];
@@ -1127,23 +1352,39 @@ impl Room {
                 let update = self.doc.transact().encode_state_as_update_v1(&sv);
                 self.send(conn, protocol::sync_step2(update));
             }
-            Incoming::Update(bytes, update) => self.apply(conn, bytes, update),
+            Incoming::Update(bytes, update) => self.apply(conn, &bytes, update),
             Incoming::Awareness(update) => self.awareness(conn, update),
             Incoming::AwarenessQuery => {
                 if let Some(everyone) = self.awareness_of(self.clients.keys().copied()) {
                     self.send(conn, everyone);
                 }
             }
+            Incoming::Comment(request) => self.comment(conn, request),
+            Incoming::CommentRefused { id } => {
+                let event = ServerEvent::CommentResult {
+                    id,
+                    ok: false,
+                    code: Some("rate_limited".to_owned()),
+                    message: Some(
+                        "That is a lot of comments at once. Wait a moment, then send it again."
+                            .to_owned(),
+                    ),
+                };
+                self.send(conn, protocol::event(&event));
+            }
         }
     }
 
-    fn apply(&mut self, conn: ConnId, bytes: Bytes, update: Update) {
+    fn apply(&mut self, conn: ConnId, bytes: &Bytes, update: Update) {
         let Some(c) = self.conns.get(&conn) else {
             return;
         };
         let user_id = c.peer.user_id;
         if !c.peer.can_edit() {
-            tracing::debug!(draft = %self.id, user = %c.peer.user_id, "collab: dropped an update from a reviewer");
+            // Reviewers comment through operations (`Incoming::Comment`):
+            // their updates could carry anything, other people's client ids
+            // included, and are never applied.
+            tracing::debug!(draft = %self.id, user = %user_id, "collab: dropped an update from a reviewer");
             return;
         }
         if self.status != LiveStatus::Open {
@@ -1151,6 +1392,11 @@ impl Room {
             return;
         }
         if update.is_empty() {
+            return;
+        }
+        let before = self.doc.transact().state_vector();
+        let extended = extended_clients(&update, &before);
+        if self.refused_for_clients(conn, user_id, &extended) {
             return;
         }
         if self.doc_bytes + bytes.len() > self.settings.max_doc_bytes {
@@ -1171,16 +1417,51 @@ impl Room {
             DraftMode::Migration => &self.touched_sql,
         });
         touched.store(false, Ordering::Relaxed);
+        self.take_comment_changes();
+        let Some((waited, applied)) = self.integrate(update, bytes, &before) else {
+            return;
+        };
+        // A tab's own id: the one its edits extend alone, or one its
+        // connection announced, now extended.
+        if let [client] = extended[..]
+            && self.owners.owner(client).is_none()
         {
-            let mut txn = self.doc.transact_mut();
-            if let Err(err) = txn.apply_update(update) {
-                tracing::warn!(draft = %self.id, error = %err, "collab: an update does not apply");
-                return;
+            self.take_over(client, conn, user_id);
+        }
+        let announced = self
+            .conns
+            .get(&conn)
+            .map(|c| c.clients.clone())
+            .unwrap_or_default();
+        for &client in &extended {
+            if self.owners.owner(client).is_none() && announced.contains(&client) {
+                self.owners.bind(client, user_id);
             }
         }
-        self.doc_bytes += bytes.len();
-        self.broadcast(&protocol::update(bytes.to_vec()), Some(conn));
-        self.queue_write(bytes);
+        // Whose edits these are: this person's ids, or (alone) one nobody
+        // holds; anything else was carried for someone.
+        let carried_others = extended
+            .iter()
+            .any(|&client| match self.owners.owner(client) {
+                Some(person) => person != user_id,
+                None => extended.len() > 1,
+            });
+        self.doc_bytes += applied.len();
+        self.queue_write(applied.clone());
+        // What the threads and comments may not hold is written back, and
+        // goes out with the update: nobody sees it as the client wrote it.
+        match self.check_comments((!carried_others).then_some(conn)) {
+            None => self.broadcast(&protocol::update(applied.to_vec()), Some(conn)),
+            Some(fix) => {
+                if let Ok(merged) = yrs::merge_updates_v1([&applied[..], &fix[..]]) {
+                    self.broadcast(&protocol::update(merged), Some(conn));
+                } else {
+                    self.broadcast(&protocol::update(applied.to_vec()), Some(conn));
+                    self.broadcast(&protocol::update(fix.clone()), Some(conn));
+                }
+                self.send(conn, protocol::update(fix));
+            }
+        }
         if touched.load(Ordering::Relaxed) {
             self.undo_inactive_edit(conn);
         }
@@ -1192,23 +1473,389 @@ impl Room {
         if self.source_may_have_changed() {
             self.edited_by(user_id);
         }
+        self.retry_waiting();
+        if waited {
+            // A tab typing before its step 2 (after a reconnect): its step 2
+            // brings what waited with what it waited on.
+            tracing::info!(draft = %self.id, conn, "collab: an update waited on structs the doc lacks; asked for a step 2");
+            let sv = self.doc.transact().state_vector();
+            self.send(conn, protocol::sync_step1(&sv));
+        }
+    }
+
+    /// Refuses (and says so) an update extending a client id that is not
+    /// the connection's to write with: the room's own or one bound to
+    /// another person (4409, reload), or, among several, one another
+    /// editor's open tab announced (4003, sync again). Whether it did.
+    fn refused_for_clients(&mut self, conn: ConnId, user_id: Uuid, extended: &[u64]) -> bool {
+        let own = self.doc.client_id().get();
+        if let Some(client) = extended.iter().copied().find(|&client| {
+            client == own || self.owners.owner(client).is_some_and(|p| p != user_id)
+        }) {
+            tracing::warn!(draft = %self.id, conn, client, "collab: refused an update written with another person's client id");
+            self.out_of_step(conn, "this tab wrote as someone else: reload");
+            return true;
+        }
+        // Several ids, one of them another editor's open tab announced: a
+        // relay racing that tab's own step 2 (or a forgery). One id alone
+        // is that id's tab writing: it takes it over, after applying.
+        if let Some(client) = extended
+            .iter()
+            .copied()
+            .find(|&client| extended.len() > 1 && self.held_by_another(client, user_id))
+        {
+            tracing::info!(draft = %self.id, conn, client, "collab: an update carries a client id another person's tab announced; sync again");
+            if let Some(c) = self.conns.get(&conn) {
+                c.out
+                    .close(close::RESYNC, "another tab writes with this id: sync again");
+            }
+            self.leave(conn);
+            return true;
+        }
+        false
+    }
+
+    /// Applies an update: whether some of it waited on structs the doc
+    /// lacks (dropped), and what applied (the update, or what it added).
+    fn integrate(
+        &mut self,
+        update: Update,
+        bytes: &Bytes,
+        before: &StateVector,
+    ) -> Option<(bool, Bytes)> {
+        let mut txn = self.doc.transact_mut();
+        if let Err(err) = txn.apply_update(update) {
+            tracing::warn!(draft = %self.id, error = %err, "collab: an update does not apply");
+            return None;
+        }
+        // Structs waiting on others the doc lacks would land later, in
+        // whoever's transaction brings those: dropped, and the tab asked for
+        // them again with what they wait on.
+        let waited = yrs::WriteTxn::prune_pending(&mut txn).is_some();
+        let applied: Bytes = if waited {
+            txn.encode_state_as_update_v1(before).into()
+        } else {
+            bytes.clone()
+        };
+        Some((waited, applied))
+    }
+
+    /// Tries the stored updates that wait again, once the doc has some of
+    /// what they wait on: in a transaction of their own, sent to everyone,
+    /// their comment changes taken back (whose they were is unknown).
+    fn retry_waiting(&mut self) {
+        let before = self.doc.transact().state_vector();
+        if !self
+            .waiting
+            .as_ref()
+            .is_some_and(|waiting| reached(&before, &waiting.missing))
+        {
+            return;
+        }
+        let Some(waiting) = self.waiting.take() else {
+            return;
+        };
+        let Ok(update) = Update::decode_v1(&waiting.bytes) else {
+            return;
+        };
+        self.take_comment_changes();
+        {
+            let mut txn = self.doc.transact_mut();
+            if let Err(err) = txn.apply_update(update) {
+                tracing::warn!(draft = %self.id, error = %err, "collab: stored updates that waited do not apply");
+            }
+            self.waiting = waiting_of(&mut txn);
+        }
+        if self.doc.transact().state_vector() == before {
+            return;
+        }
+        tracing::info!(draft = %self.id, still = self.waiting.is_some(), "collab: stored updates that waited landed");
+        let landed = self.doc.transact().encode_state_as_update_v1(&before);
+        let message = match self.check_comments(None) {
+            None => landed,
+            Some(fix) => yrs::merge_updates_v1([&landed[..], &fix[..]]).unwrap_or(landed),
+        };
+        self.broadcast(&protocol::update(message), None);
+    }
+
+    /// Whether another editor's connection announced `client` (its tab's
+    /// own id, until its first edit binds it). Reviewers never hold an id:
+    /// they never write with one.
+    fn held_by_another(&self, client: u64, user: Uuid) -> bool {
+        self.clients
+            .get(&client)
+            .and_then(|state| self.conns.get(&state.conn))
+            .is_some_and(|c| c.peer.user_id != user && c.peer.can_edit())
+    }
+
+    /// `client` is the tab's that just wrote with it alone: a connection of
+    /// someone else that only announced it loses it (its cursor goes; an
+    /// editor's is closed 4409, having never written with it), and the id
+    /// is bound to `user`.
+    fn take_over(&mut self, client: u64, conn: ConnId, user: Uuid) {
+        if let Some(state) = self.clients.get(&client)
+            && state.conn != conn
+            && let Some(holder) = self
+                .conns
+                .get(&state.conn)
+                .map(|c| (state.conn, c.peer.user_id, c.peer.can_edit()))
+            && holder.1 != user
+        {
+            let (held_by, _, editor) = holder;
+            tracing::warn!(draft = %self.id, conn = held_by, client, "collab: a connection announced a client id another tab writes with; it loses it");
+            let clock = state.clock.wrapping_add(1);
+            self.clients.remove(&client);
+            if let Some(c) = self.conns.get_mut(&held_by) {
+                c.clients.remove(&client);
+            }
+            self.broadcast(
+                &protocol::awareness(AwarenessUpdate {
+                    clients: HashMap::from([(
+                        yrs::block::ClientID::new(client),
+                        AwarenessUpdateEntry {
+                            clock,
+                            json: "null".into(),
+                        },
+                    )]),
+                }),
+                None,
+            );
+            if editor {
+                self.out_of_step(held_by, "another tab writes with this tab's id: reload");
+            }
+        }
+        self.owners.bind(client, user);
+    }
+
+    /// Lets a connection go that wrote with someone else's client id: told
+    /// (4409, final), never silently ignored.
+    fn out_of_step(&mut self, conn: ConnId, reason: &'static str) {
+        if let Some(c) = self.conns.get(&conn) {
+            c.out.close(close::OUT_OF_STEP, reason);
+        }
+        self.leave(conn);
+    }
+
+    /// A comment operation: written by the room as a server edit, with the
+    /// connection's person as its author, if they may; answered either way.
+    fn comment(&mut self, conn: ConnId, request: Request) {
+        let Some(c) = self.conns.get(&conn) else {
+            return;
+        };
+        let (user, name, can_edit) = (c.peer.user_id, c.peer.name.clone(), c.peer.can_edit());
+        let result = self.plan_comment(&request, user, &name, can_edit);
+        let event = match result {
+            Ok(planned) => {
+                let fix = &planned.fix;
+                if !fix.is_empty()
+                    && let Some(update) = self.server_edit_quiet(|roots, txn| {
+                        fix.apply(&roots.threads, &roots.comments, txn)
+                    })
+                {
+                    self.take_comment_changes();
+                    self.broadcast(&protocol::update(update), None);
+                }
+                if let Some(moderation) = planned.moderation {
+                    self.audit_deletion(user, &name, moderation);
+                }
+                ServerEvent::CommentResult {
+                    id: request.id,
+                    ok: true,
+                    code: None,
+                    message: None,
+                }
+            }
+            Err(refusal) => ServerEvent::CommentResult {
+                id: request.id,
+                ok: false,
+                code: Some(refusal.code.to_owned()),
+                message: Some(refusal.message),
+            },
+        };
+        self.send(conn, protocol::event(&event));
+    }
+
+    /// Someone else's comments a developer or an admin deleted: in the
+    /// audit log (written by this room's writer).
+    fn audit_deletion(&self, user: Uuid, name: &str, moderation: comments::Moderation) {
+        let (Some(&org_id), Some(&database_id)) =
+            (self.shared.org_id.get(), self.shared.database_id.get())
+        else {
+            return;
+        };
+        self.writer.send(Job::Audit(Box::new(audit::Entry {
+            org_id,
+            database_id: Some(database_id),
+            action: AuditAction::CommentDeleted,
+            actor_id: Some(user),
+            actor_name: Some(name.to_owned()),
+            version_number: None,
+            reason: None,
+            details: audit::AuditDetails {
+                draft_id: Some(self.id),
+                thread_id: Some(moderation.thread),
+                comments: Some(i32::try_from(moderation.comments).unwrap_or(i32::MAX)),
+                authors: Some(moderation.authors),
+                excerpt: Some(moderation.excerpt),
+                ..audit::AuditDetails::default()
+            },
+        })));
+    }
+
+    fn plan_comment(
+        &mut self,
+        request: &Request,
+        user: Uuid,
+        name: &str,
+        can_edit: bool,
+    ) -> Result<comments::Planned, comments::Refusal> {
+        let refusal = |code, message: &str| comments::Refusal {
+            code,
+            message: message.to_owned(),
+        };
+        match self.status {
+            LiveStatus::Open => {}
+            LiveStatus::Publishing | LiveStatus::Updating => {
+                return Err(refusal(
+                    "closed",
+                    "The draft is being published or updated. Send it again in a moment.",
+                ));
+            }
+            LiveStatus::Published | LiveStatus::Deleted => {
+                return Err(refusal("closed", "This draft is closed."));
+            }
+        }
+        if !self
+            .op_budgets
+            .entry(user)
+            .or_insert_with(Budget::new)
+            .take()
+        {
+            return Err(refusal(
+                "rate_limited",
+                "That is a lot of comments at once. Wait a moment, then send it again.",
+            ));
+        }
+        // A comment is a few kilobytes at most: room for it, or none.
+        if self.doc_bytes + 64 * 1024 > self.settings.max_doc_bytes {
+            self.doc_bytes = self.state().len();
+            if self.doc_bytes + 64 * 1024 > self.settings.max_doc_bytes {
+                return Err(refusal(
+                    "too_large",
+                    "This draft is as large as a draft may be: delete some comments first.",
+                ));
+            }
+        }
+        let txn = self.doc.transact();
+        let threads = comments::read_map(&self.roots.threads, &txn);
+        let all = comments::read_map(&self.roots.comments, &txn);
+        drop(txn);
+        comments::plan(
+            &request.op,
+            &comments::Writer {
+                id: user,
+                name,
+                can_edit,
+            },
+            chrono::Utc::now(),
+            &comments::State {
+                threads: &threads,
+                comments: &all,
+            },
+        )
+    }
+
+    /// Forgets the changes to the threads and comments noted so far (the
+    /// server's own edits).
+    fn take_comment_changes(&self) -> Changes {
+        std::mem::take(
+            &mut *self
+                .comment_changes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Checks what the connection's update changed in the threads and
+    /// comments (`comments::check`) and writes back what it may not have
+    /// (stored, not sent): the fix's update, if there is one. Without a
+    /// `writer` (an update carrying others' structs, stored updates that
+    /// waited), none of the changes stays: they could be anyone's, and
+    /// would be stamped with whoever brought them.
+    fn check_comments(&mut self, writer: Option<ConnId>) -> Option<Vec<u8>> {
+        let changes = self.take_comment_changes();
+        // List content (keyless items) is no key change: looked for apart.
+        let stray = comments::stray_content(&self.roots.threads)
+            || comments::stray_content(&self.roots.comments);
+        if changes.is_empty() && !stray {
+            return None;
+        }
+        let writer = match writer {
+            Some(conn) => Some(self.conns.get(&conn)?),
+            None => None,
+        };
+        let fix = {
+            let txn = self.doc.transact();
+            let threads = comments::read_map(&self.roots.threads, &txn);
+            let all = comments::read_map(&self.roots.comments, &txn);
+            if let Some(c) = writer {
+                comments::check(
+                    &changes,
+                    &comments::Writer {
+                        id: c.peer.user_id,
+                        name: &c.peer.name,
+                        can_edit: c.peer.can_edit(),
+                    },
+                    chrono::Utc::now(),
+                    &comments::State {
+                        threads: &threads,
+                        comments: &all,
+                    },
+                )
+            } else {
+                comments::revert(&changes)
+            }
+        };
+        if fix.is_empty() && !stray {
+            return None;
+        }
+        tracing::info!(draft = %self.id, threads = fix.threads.len(), comments = fix.comments.len(), stray, "collab: wrote back comment changes a client may not make");
+        let update = self.server_edit_quiet(|roots, txn| {
+            let mut wrote = fix.apply(&roots.threads, &roots.comments, txn);
+            wrote |= comments::remove_stray(&roots.threads, txn);
+            wrote |= comments::remove_stray(&roots.comments, txn);
+            wrote
+        });
+        self.take_comment_changes();
+        update
     }
 
     /// A change the server makes itself (moving a renamed table's entries,
     /// a rewrite), sent to everyone and stored like any other.
     fn server_edit(&mut self, edit: impl FnOnce(&Roots, &mut TransactionMut) -> bool) {
+        if let Some(update) = self.server_edit_quiet(edit) {
+            self.broadcast(&protocol::update(update), None);
+        }
+    }
+
+    /// [`Room::server_edit`], stored but not sent: its update, if it changed
+    /// anything (the caller sends it).
+    fn server_edit_quiet(
+        &mut self,
+        edit: impl FnOnce(&Roots, &mut TransactionMut) -> bool,
+    ) -> Option<Vec<u8>> {
         let before = self.doc.transact().state_vector();
         let changed = {
             let mut txn = self.doc.transact_mut();
             edit(&self.roots, &mut txn)
         };
         if !changed {
-            return;
+            return None;
         }
         let update = self.doc.transact().encode_state_as_update_v1(&before);
         self.doc_bytes += update.len();
-        self.broadcast(&protocol::update(update.clone()), None);
-        self.queue_write(update.into());
+        self.queue_write(update.clone().into());
+        Some(update)
     }
 
     fn freeze(
@@ -1398,6 +2045,11 @@ impl Room {
         }
     }
 
+    fn has_thread(&self, thread: Uuid) -> bool {
+        let txn = self.doc.transact();
+        yrs::Map::get(&self.roots.threads, &txn, &thread.to_string()).is_some()
+    }
+
     fn content(&self) -> Content {
         let txn = self.doc.transact();
         let source = self.roots.source(&txn, self.mode);
@@ -1411,6 +2063,7 @@ impl Room {
             model: compiled_now.then(|| self.good_model.clone()).flatten(),
             merged: self.roots.merged(&txn),
             approved_by: self.review.approved_by(&input),
+            discussion: self.roots.discussion(&txn),
             sql: self.roots.sql(&txn),
             migration: self.roots.migration(&txn),
             base_version: self.base_version,
@@ -1502,7 +2155,12 @@ impl Room {
         for (client_id, entry) in update.clients {
             let client = client_id.get();
             let known = self.clients.get(&client);
-            if known.is_some_and(|state| state.conn != conn) {
+            if known.is_some_and(|state| state.conn != conn)
+                || self
+                    .owners
+                    .owner(client)
+                    .is_some_and(|person| person != c.peer.user_id)
+            {
                 // Someone else's client id: never theirs to change.
                 continue;
             }
@@ -1611,10 +2269,18 @@ impl Room {
     }
 
     /// The doc's whole state, encoded.
+    /// The doc's whole state, with the stored updates that still wait.
     fn state(&self) -> Vec<u8> {
-        self.doc
+        let state = self
+            .doc
             .transact()
-            .encode_state_as_update_v1(&StateVector::default())
+            .encode_state_as_update_v1(&StateVector::default());
+        match &self.waiting {
+            Some(waiting) => {
+                yrs::merge_updates_v1([&state[..], &waiting.bytes[..]]).unwrap_or(state)
+            }
+            None => state,
+        }
     }
 
     fn compact(&mut self) {
@@ -1685,7 +2351,16 @@ impl Room {
         tokio::spawn(async move {
             let sha256 = sha256_hex(&source);
             let input = compile::input_hash(mode, &base, &source);
+            // A `---` line typed and never posted: the SQL never keeps one.
+            let unposted = comments::comment_line_diagnostics(&source, &base);
             let (tables, result) = match mode {
+                _ if !unposted.is_empty() => (
+                    HashMap::new(),
+                    Ok(Compiled {
+                        model: None,
+                        diagnostics: unposted,
+                    }),
+                ),
                 DraftMode::Schema => (
                     compile::created_at(&source),
                     compiler.compile_for(major, &key, source).await,
@@ -1945,6 +2620,37 @@ fn unhex(hex: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_waits_is_tried_again_only_once_the_doc_has_what_it_waits_on() {
+        let missing = vec![(7, 5)];
+        let mut sv = StateVector::default();
+        assert!(!reached(&sv, &missing));
+        sv.set_max(yrs::block::ClientID::new(7), 5);
+        assert!(!reached(&sv, &missing), "clock 5 is not there yet");
+        sv.set_max(yrs::block::ClientID::new(8), 100);
+        assert!(
+            !reached(&sv, &missing),
+            "another client's clocks do not count"
+        );
+        sv.set_max(yrs::block::ClientID::new(7), 6);
+        assert!(reached(&sv, &missing));
+    }
+
+    #[test]
+    fn a_client_id_is_its_first_writer_s_and_a_person_keeps_so_many() {
+        let (alice, bob) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut owners = Owners::default();
+        owners.bind(1, alice);
+        owners.bind(1, bob);
+        assert_eq!(owners.owner(1), Some(alice), "never taken over");
+        for client in 2..=20 {
+            owners.bind(client, alice);
+        }
+        assert_eq!(owners.by_client.len(), MAX_TABS);
+        assert_eq!(owners.owner(1), None, "her oldest is forgotten");
+        assert_eq!(owners.owner(20), Some(alice));
+    }
 
     #[tokio::test]
     async fn a_socket_queue_holds_so_many_bytes() {

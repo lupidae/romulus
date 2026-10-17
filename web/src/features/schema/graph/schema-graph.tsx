@@ -102,9 +102,10 @@ export interface SchemaGraphProps {
   onSelectedChange?: (key: string | null) => void;
   /**
    * Zoomed to whenever a new object is passed (a change picked in a list):
-   * the table centered, at a zoom that shows it whole.
+   * the table centered, at a zoom that shows it whole; or a point of the
+   * canvas centered (a comment pinned there).
    */
-  focus?: { key: string } | null;
+  focus?: { key: string } | { point: { x: number; y: number } } | null;
   /**
    * Tables picked for an action on several (a draft's groups): shift- or
    * ⌘-click adds or removes one, Esc clears. Without `onPickedChange`, those
@@ -404,12 +405,21 @@ function GraphCanvas({
   const zooming = useRef<string | null>(null);
   useEffect(() => {
     if (!focus || !initialized) return;
+    if ("point" in focus) {
+      autoFit.current = false;
+      const { x, y } = focus.point;
+      const zoom = Math.max(flow.getViewport().zoom, 0.75);
+      void flow.setCenter(x, y, { zoom, duration: travel(x, y, zoom, 400) });
+      return;
+    }
     zooming.current = focus.key;
     const frame = requestAnimationFrame(() => {
       zooming.current = null;
       zoomTo.current(focus.key);
     });
     return () => cancelAnimationFrame(frame);
+    // A new focus object moves the view; the rest are read then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, initialized]);
 
   // Read when the selection changes, not a reason to run again: a new model

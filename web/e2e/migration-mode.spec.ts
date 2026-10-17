@@ -136,14 +136,15 @@ test("two developers write a migration; the graph follows; the version keeps it"
     await expect.poll(() => textOf(p, "Migration")).toContain("CREATE TABLE public.coupons");
   }
   // A mistake is underlined where it is, in the migration.
+  const beforeMistake = await textOf(alice, "Migration");
   await alice.page.keyboard.type("\nALTER TABLE public.refunds ADD COLUMN reason text;");
   await expect(alice.page.getByTestId("compile-status")).toHaveText("1 error");
   await expect(panel(carol, "Migration").locator(".cm-lintRange-error")).toHaveText("refunds");
-  // Undone (typing spans several undo steps when the machine is slow).
+  // Undone, all of it (typing spans several undo steps when the machine is slow).
   await expect(async () => {
-    if ((await textOf(alice, "Migration")).includes("refunds"))
+    if ((await textOf(alice, "Migration")) !== beforeMistake)
       await alice.page.keyboard.press("ControlOrMeta+z");
-    expect(await textOf(alice, "Migration")).not.toContain("refunds");
+    expect(await textOf(alice, "Migration")).toBe(beforeMistake);
   }).toPass();
   await compiled(alice);
 

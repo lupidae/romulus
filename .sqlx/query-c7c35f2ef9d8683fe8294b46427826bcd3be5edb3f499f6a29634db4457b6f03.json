@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE versions SET removed_at = now() - interval '31 days', removal_reason = 'gone'\n         WHERE number = 2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c7c35f2ef9d8683fe8294b46427826bcd3be5edb3f499f6a29634db4457b6f03"
+}

@@ -464,6 +464,43 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/reads": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Up to when the caller read each thread of the draft (threads never
+     *     opened are not listed).
+     */
+    get: operations["list_draft_reads"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/reads/{thread}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Marks a thread of the draft read up to `at` (never back). */
+    put: operations["read_draft_thread"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request": {
     parameters: {
       query?: never;
@@ -775,6 +812,119 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/threads": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The version's discussion: its draft's review, frozen, then the threads
+     *     started on its page; oldest first.
+     */
+    get: operations["list_version_threads"];
+    put?: never;
+    /**
+     * Starts a thread on the version, pinned to a table, a column, a point of
+     *     the graph or a statement.
+     */
+    post: operations["create_version_thread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/comments": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Replies in a thread. */
+    post: operations["reply_version_thread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/comments/{comment}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Deletes a comment: the caller's, or anyone's for developers and admins
+     *     (recorded in the audit log); the thread goes with its last one.
+     */
+    delete: operations["delete_version_comment"];
+    options?: never;
+    head?: never;
+    /** Edits one of the caller's comments. */
+    patch: operations["edit_version_comment"];
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/read": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Marks a thread read up to `at` (never back: an older `at` changes nothing). */
+    put: operations["read_version_thread"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/reopen": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reopens a resolved thread (anyone in the organization). */
+    post: operations["reopen_version_thread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/resolve": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Resolves a thread (anyone in the organization). */
+    post: operations["resolve_version_thread"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/drafts/{id}/ws": {
     parameters: {
       query?: never;
@@ -918,6 +1068,39 @@ export interface components {
        */
       next_before?: string | null;
     };
+    /** @description What a thread is pinned to. */
+    Anchor:
+      | {
+          /** @enum {string} */
+          kind: "table";
+          /**
+           * @description The head of the statement it was written above, when that is not
+           *     the table's `CREATE` (an index, a comment…): where the SQL pane
+           *     shows it.
+           */
+          statement?: string | null;
+          table: string;
+        }
+      | {
+          column: string;
+          /** @enum {string} */
+          kind: "column";
+          statement?: string | null;
+          table: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: "point";
+          /** Format: double */
+          x: number;
+          /** Format: double */
+          y: number;
+        }
+      | {
+          /** @enum {string} */
+          kind: "statement";
+          statement: string;
+        };
     /** @description An API token, without its secret. */
     ApiToken: {
       /** Format: date-time */
@@ -980,7 +1163,8 @@ export interface components {
       | "version_published"
       | "approvals_overridden"
       | "approvals_required_changed"
-      | "major_changed";
+      | "major_changed"
+      | "comment_deleted";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1016,12 +1200,22 @@ export interface components {
       approvals?: number | null;
       /** @description Who approved the text published, when. */
       approved_by?: components["schemas"]["AuditApprover"][] | null;
+      /** @description Whose they were, by name as it was (comments deleted). */
+      authors?: string[] | null;
+      /**
+       * Format: int32
+       * @description How many comments went (comments deleted).
+       */
+      comments?: number | null;
       /**
        * Format: uuid
-       * @description The draft published (approvals overridden).
+       * @description The draft published (approvals overridden), or whose discussion
+       *     lost comments (comments deleted).
        */
       draft_id?: string | null;
       draft_name?: string | null;
+      /** @description The beginning of the first one (comments deleted). */
+      excerpt?: string | null;
       /**
        * Format: int32
        * @description The approvals required before and after a change.
@@ -1031,6 +1225,11 @@ export interface components {
       message?: string | null;
       /** Format: int32 */
       required?: number | null;
+      /**
+       * Format: uuid
+       * @description The thread a deletion was in (comments deleted).
+       */
+      thread_id?: string | null;
       /** Format: int32 */
       to?: number | null;
     };
@@ -1122,7 +1321,8 @@ export interface components {
       | "unavailable"
       | "provided_by_extension"
       | "conflict"
-      | "not_run";
+      | "not_run"
+      | "comment_line";
     /**
      * @description A change to one column.
      *
@@ -1206,6 +1406,11 @@ export interface components {
       name: string;
       position: components["schemas"]["Positions"];
       status: components["schemas"]["Status"];
+    };
+    CommentText: {
+      /** @description 1 to 4000 characters. */
+      body: string;
+      mentions?: string[];
     };
     /** @description A dry run: whether the SQL compiles, and what it would change. */
     CompileReport: {
@@ -2186,6 +2391,13 @@ export interface components {
       | "empty_schema"
       | "guessed_names"
       | "newer_postgres";
+    NewThread: {
+      anchor: components["schemas"]["Anchor"];
+      /** @description The first comment: 1 to 4000 characters. */
+      body: string;
+      /** @description Members @mentioned (others are dropped), 20 at most. */
+      mentions?: string[];
+    };
     /** @description An organization, as one of its members sees it. */
     Org: {
       /**
@@ -2475,6 +2687,13 @@ export interface components {
     };
     /** @enum {string} */
     PushStatus: "created" | "unchanged";
+    ReadUpTo: {
+      /**
+       * Format: date-time
+       * @description The newest comment the person saw.
+       */
+      at: string;
+    };
     /** @description A schema-qualified relation name, unquoted. */
     Relation: {
       name: string;
@@ -2708,6 +2927,18 @@ export interface components {
           type: "save_failed";
         }
       | {
+          /**
+           * @description Why not (`not_yours`, `not_found`, `invalid`, `too_many`,
+           *     `exists`, `rate_limited`, `closed`, `too_large`).
+           */
+          code?: string | null;
+          id: string;
+          message?: string | null;
+          ok: boolean;
+          /** @enum {string} */
+          type: "comment_result";
+        }
+      | {
           by: string;
           /** Format: int32 */
           conflicts: number;
@@ -2863,6 +3094,27 @@ export interface components {
       /** Format: double */
       y: number;
     };
+    /** @description Up to when the caller read a thread. */
+    ThreadRead: {
+      /** Format: date-time */
+      read_at: string;
+      /**
+       * Format: uuid
+       * @description The thread's id in the draft's doc.
+       */
+      thread: string;
+    };
+    ThreadResolution: {
+      /** Format: date-time */
+      at: string;
+      /**
+       * Format: uuid
+       * @description `null` once their account is gone.
+       */
+      by?: string | null;
+      /** @description Their name then. */
+      name: string;
+    };
     /** @description What Tidy did. */
     Tidied: {
       /** @description Whether the SQL changed (false: it was tidy already). */
@@ -2933,6 +3185,24 @@ export interface components {
        * @description `null` once their account is gone.
        */
       user_id?: string | null;
+    };
+    VersionComment: {
+      /**
+       * Format: uuid
+       * @description `null` once their account is gone.
+       */
+      author?: string | null;
+      /** @description Their name when they wrote it. */
+      author_name: string;
+      body: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      edited_at?: string | null;
+      /** Format: uuid */
+      id: string;
+      /** @description Members @mentioned. */
+      mentions: string[];
     };
     /** @description One version, whole. */
     VersionDetail: {
@@ -3094,6 +3364,32 @@ export interface components {
        *     and imported migrations.
        */
       sql: string;
+    };
+    /** @description A thread of a version's discussion. */
+    VersionThread: {
+      anchor: components["schemas"]["Anchor"];
+      /** @description Oldest first. */
+      comments: components["schemas"]["VersionComment"][];
+      /** Format: date-time */
+      created_at: string;
+      /**
+       * Format: uuid
+       * @description Who started it (`null` once their account is gone).
+       */
+      created_by?: string | null;
+      /**
+       * @description From the review of the draft the version was published from, as it
+       *     was then: read-only.
+       */
+      frozen: boolean;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: date-time
+       * @description Up to when the caller read it (`null`: never opened).
+       */
+      read_at?: string | null;
+      resolved?: components["schemas"]["ThreadResolution"] | null;
     };
     /**
      * @description The migration a version was written as, in a draft in migration mode:
@@ -4810,6 +5106,73 @@ export interface operations {
       };
     };
   };
+  list_draft_reads: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ThreadRead"][];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  read_draft_thread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+        thread: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReadUpTo"];
+      };
+    };
+    responses: {
+      /** @description Marked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description No such draft, or no such thread in it */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   request_review: {
     parameters: {
       query?: never;
@@ -5981,6 +6344,426 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_version_threads: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionThread"][];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_version_thread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["NewThread"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionThread"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `too_many_threads`, `too_much`, `discussion_full` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  reply_version_thread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+        thread: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CommentText"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionThread"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `thread_frozen`, `too_many_comments`, `too_much`, `discussion_full` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_version_comment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+        thread: string;
+        comment: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Deleted (with the thread, when it was its last comment) */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description `not_yours` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `thread_frozen` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  edit_version_comment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+        thread: string;
+        comment: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CommentText"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionThread"];
+        };
+      };
+      /** @description `not_yours` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `thread_frozen`, `too_much`, `discussion_full` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  read_version_thread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+        thread: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ReadUpTo"];
+      };
+    };
+    responses: {
+      /** @description Marked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  reopen_version_thread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+        thread: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionThread"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `thread_frozen` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  resolve_version_thread: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        number: number;
+        thread: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["VersionThread"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `thread_frozen` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
         headers: {
           [name: string]: unknown;
         };

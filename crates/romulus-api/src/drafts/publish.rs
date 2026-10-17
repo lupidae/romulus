@@ -339,6 +339,7 @@ async fn store(
             created_by: by,
             approvals,
             compiled_on: content.major,
+            discussion: content.discussion.clone(),
         },
     )
     .await;
@@ -373,6 +374,12 @@ pub(super) async fn compiled(
     hub: &Hub,
     content: &Content,
 ) -> ApiResult<(Option<Schema>, Vec<Diagnostic>)> {
+    // A `---` line typed and never posted: the SQL never keeps one.
+    let unposted =
+        crate::collab::comments::comment_line_diagnostics(content.source(), &content.base_sql);
+    if !unposted.is_empty() {
+        return Ok((None, unposted));
+    }
     if let Some(model) = &content.model {
         let model = Schema::deserialize(&**model).map_err(ApiError::internal)?;
         return Ok((Some(model), Vec::new()));

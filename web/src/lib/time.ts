@@ -1,10 +1,10 @@
-const dateFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-const dateYearFormat = new Intl.DateTimeFormat(undefined, {
+const dateFormat = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+const dateYearFormat = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
   year: "numeric",
 });
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const relative = new Intl.RelativeTimeFormat("en-US", { numeric: "auto" });
 
 /** "Oct 15", with the year only when it is not this year. */
 export function formatDate(iso: string, now = new Date()): string {
@@ -27,7 +27,7 @@ export function timeAgo(iso: string, now = new Date()): string {
   return fromNow(iso, now);
 }
 
-const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const fullFormat = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" });
 
 /** "Oct 15, 2026, 2:05 PM": the exact time, for a tooltip or `title`. */
 export function formatDateTime(iso: string): string {

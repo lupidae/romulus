@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM version_threads WHERE frozen",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "229d5e70118e80878a568d362e5dff50f2d828e61a93e210709ef47afae3b751"
+}

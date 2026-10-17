@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_threads (version_id, draft_thread, frozen, anchor)\n         VALUES ($1, $2, true, '{\"kind\": \"point\", \"x\": 0, \"y\": 0}') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a58d543a9e1e216cc9acb994c535dc692647f9add7d2c54c9d253cbc6f60b5d7"
+}

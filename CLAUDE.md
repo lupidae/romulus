@@ -344,7 +344,8 @@ src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field
                          Sidebar* (items take `icon`/`label`; a rail inside SidebarRail),
                          TabNav (link tabs, one URL each), CodeBlock (copyable
                          lines), FileButton (opens the file picker), Checkbox, Combobox
-                         (a field with suggestions: ARIA combobox, the field keeps focus)
+                         (a field with suggestions: ARIA combobox, the field keeps focus),
+                         MentionTextarea (`@` suggests people); Sheet takes `side` (left, right)
 src/components/shell/    AppShell (top bar, org switcher, user menu, nav: a rail by default,
                          opened with ⌘\, remembered per user; panel), PageHeader,
                          PageBody, status pages (404/500), the sign-in preview
@@ -366,6 +367,9 @@ src/features/imports/    the migration import page (ImportFlow: drop, review, pr
 src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; no router, no
                          queries: reuse it wherever two models are compared), CompareBar,
                          diffQuery; /app/<org>/<db>/diff/<from>...<to>, /app/dev/diff shows it
+src/features/comments/   comment threads (see "Comments" below): the model (anchors, `---`
+                         lines, SQL placement), Discussion sources (draft: Yjs; version: REST),
+                         CommentsPanel, CommentPins (graph + comment mode), sqlThreads (CodeMirror)
 src/features/migration/  MigrationView (tool picker, concurrently, warnings, files with destructive
                          lines tinted, Copy, Download/.zip; no router): the diff page's Migration
                          view (?view=migration) and the publish dialog's Migration tab
@@ -555,7 +559,9 @@ docs/MVP.md "Review round 1" items 3 and 4 have the decisions.
 - **Audit log** (`audit`): `audit::record(tx, &Entry)` in the transaction
   of what it records, with the actor's name as it is (kept);
   `audit_events` refuses updates, deletes and truncates. Org-level events
-  (`database_id` NULL) show in every database's Activity.
+  (`database_id` NULL) show in every database's Activity. A draft's room
+  writes its own (`store::Job::Audit`: someone else's comments deleted,
+  `comment_deleted`, with the draft's name filled in then).
 - **Approvals** (`drafts::approvals`, `collab::review`): the room tracks
   editors (first update changing `sql` → `draft_editors`) and approvals
   (rows in `draft_approvals`, each with the SHA-256 of the text approved),
@@ -592,7 +598,11 @@ side (list with presence, one-click create, rename, soft delete, publish).
   (results never live in the doc: clients could forge them). Decoding runs in the socket task behind
   `catch_unwind` (yrs debug-asserts on client ids past 2^53). Close codes:
   1012 restart, 4000 too slow, 4001 membership changed (reconnect), 4404
-  deleted (final: y-websocket treats 4400–4499 as such).
+  deleted, 4003 sync again (carried another editor's announced id:
+  reconnect, 3 times a minute at most), 4409 out of step (wrote with an id
+  bound to someone else, or lost an id it only announced: reload), 4429 open
+  in too many of the person's tabs (final: y-websocket
+  treats 4400–4499 as such).
 - **Rights**: reviewers' (and everyone's, unless the draft is open) document
   updates are dropped; awareness passes, sanitized (`collab::awareness`):
   `user` = the server's stamp `{id, name, role, presence, color, colorLight}`
@@ -736,6 +746,115 @@ side (list with presence, one-click create, rename, soft delete, publish).
   node. Drafts are seeded with their version's model as the first compile:
   a test whose fake compiler disagrees with the version's model sees that
   model until the text changes.
+
+## Comments (`collab::comments`, `versions::discussion`, `features/comments`)
+
+docs/MVP.md "Review round 1" item 6 has the decisions. Figma-like threads
+pinned to a table, a column, a canvas point (graph coordinates) or a
+statement; replies, @mentions, resolve; never `COMMENT ON`.
+
+- **In a draft they are collaborative data**: the doc's `threads` and
+  `comments` Y.Maps (plain JSON values, UUID keys; a reply is its own key).
+  **The panel and the graph send operations** (socket tag 101,
+  `comments::Request { id, op }`: start, reply, edit, delete, delete_thread,
+  resolve): `comments::plan` checks one against the doc and the room writes
+  it as a server edit, then answers `ServerEvent::CommentResult` (refusals:
+  `exists`, `invalid`, `too_many`, `too_much`, `discussion_full`,
+  `not_found`, `not_yours`, `rate_limited`, `too_large`, `closed`).
+  Developers and admins delete anyone's comment or thread
+  (`Planned::moderation` → `Job::Audit`, `comment_deleted` in the
+  database's Activity). The discussion weighs at most
+  `MAX_DISCUSSION_BYTES` (1 MiB of JSON) and a person's part of it
+  `MAX_PERSON_BYTES` (256 KiB), far below the doc's 16 MB: comments never
+  make a draft uneditable. Before any query, the socket refuses comment
+  operations past 8 a frame or its own budget (`ration`:
+  `Incoming::CommentRefused`), truncates mentions at decode, and looks a
+  frame's mentions up in one query (`members_among`); the room budgets per
+  person and room again (`Budget`: 30, then 2 a second). Web:
+  `DraftSession.sendComment` (promises answered by the result; a local
+  draft writes them itself).
+- **Editors' own writes** (a `---` line, a rename carrying anchors) go in
+  their transactions and are checked (`comments::check`, pure,
+  unit-tested): authors and resolvers stamped from the connection, no
+  mentions, times within `CLOCK_SKEW`, only the author edits or deletes a
+  comment, a thread with someone else's comment never goes (decided before
+  the update's own deletes), anchors move for editors, sizes and weights
+  capped (an empty new thread goes too), list content in the maps removed.
+  What may not stand is written back in a server edit merged into the
+  update everyone else receives.
+- **Reviewers never write the doc**: their document updates are dropped;
+  they comment through operations only. Commenting never makes anyone an
+  editor (approvals).
+- **Client ids are a person's**: the person whose update extends one
+  alone (a tab's first edit), or whose connection announced one and then
+  extended it, keeps it for the room's life (`room::Owners`, `MAX_TABS`
+  ids each, the oldest forgotten). An update extending an id bound to
+  another person (or the room's own) is refused and closed 4409
+  (`close::OUT_OF_STEP`, final; the editor says reload). Writing with an
+  id alone takes it over from a connection that only announced it
+  (`Room::take_over`: an editor's is closed 4409, having never written with
+  it; a reviewer's announcement never holds an id). An update carrying
+  several ids, one announced by another editor's open tab and not bound,
+  is closed 4003 (`close::RESYNC`: a relay racing that tab's own step 2;
+  y-websocket reconnects; the web stops after 3 in a minute, `syncStuck`,
+  with "Try again"). Others' structs an editor carries (edits a restart
+  lost, in a sync step 2) are kept, but not that update's comment changes
+  (`comments::revert`: they could be anyone's). An update whose structs
+  wait on clocks the doc lacks (a tab typing before its step 2 after a
+  reconnect) keeps what applied, drops what waited and sends that tab a
+  `SyncStep1`: its step 2 brings both, nothing is lost and nothing waits to
+  land in someone else's transaction (`Room::integrate`). Stored updates
+  that wait on structs never stored (`room::Waiting`) stay out of the doc,
+  in every snapshot (`Room::state`), and are retried only once the doc has
+  what they wait on, in a transaction of their own: sent to everyone,
+  their comment changes taken back (`Room::retry_waiting`). Never a silent
+  drop. At most `room::MAX_TABS` connections per person and room (4429).
+- **Anchors follow renames**: typed in the text, `Roots::rename` moves them
+  with the layout (server edit); from the graph, `DraftSession.editSchema`
+  moves them in its `LOCAL` transaction (table and column renames), so one
+  ⌘Z takes both back. A dropped table or column leaves its threads
+  "Outdated" (the panel's section), never deleted.
+- **The SQL pane** draws open threads as read-only `--- name: …` block
+  widgets (`sqlThreads(feed)`, a `ThreadFeed` React fills) above their
+  statement (`placeInSql`: the statement head the anchor keeps, else the
+  table's `CREATE`, a column's own line in it, else the first statement
+  about the table); never text in the Y.Text. In an editable source, Enter
+  after a `--- words` (`commentLine` of what is before the caret: at the
+  line's end, or splitting the line) makes a thread on the statement below
+  (`anchorBelow`) and removes the words, one `LOCAL` step
+  (`DraftSession.commentFromLine`); pasted `---` lines too
+  (`pasteWithoutComments`, `DraftSession.pasteWithComments`). The server
+  never keeps one: a source with a `---` line its base version did not have
+  does not compile (`comments::comment_line_diagnostics`, `comment_line`),
+  so it cannot be published. Panel comments are never undone by ⌘Z.
+- **Overlays**: `SchemaViewer`'s `sqlOverlay` (CodeView `overlay`) draws over
+  a read-only SQL without owning it (a version, a migration's derived SQL);
+  `sqlExtensions` stays for a bound editor. `graphFocus` moves the graph to a
+  table or a point; `textActions` adds buttons to the text pane's bar.
+- **Publishing freezes them**: `Content.discussion` goes into
+  `version_threads`/`version_comments` (`frozen`, `draft_thread` = the doc's
+  key) in the version's transaction, with `draft_thread_reads` copied to
+  `version_thread_reads`; triggers keep frozen rows unchanged (only an
+  author's `SET NULL`), and only threads from a draft are frozen. A version's
+  page also takes new threads over REST (`versions::discussion`, any
+  member; 409 `thread_frozen` on frozen ones), polled every 20 s, with the
+  drafts' limits: weights of the page's own discussion per version and per
+  person (409 `too_much`, `discussion_full`), developers and admins delete
+  anyone's comment (audited), changes rate limited per person
+  (`rate::Limits::version_comments`).
+- **Unread markers** are per person, server-side: `…/drafts/{id}/reads`
+  (only threads the doc has: `Hub::thread_exists`),
+  `…/versions/{n}/threads/{thread}/read` (never back in time).
+- **Presence**: awareness `typing` (a thread id, `new`), shown as
+  "Bob is typing…". Times are English (`lib/time.ts` formats in `en-US`).
+- Tests: `collab::comments` unit tests, `tests/api/comments.rs`,
+  `tests/api/comment_attacks.rs` (raw y-sync clients: forged client ids,
+  awareness claims, reviewers' bytes, list content, budgets, frames of
+  operations, tabs, a reviewer filling the discussion, moderation, another
+  editor's unsaved edits in a step 2, pending structs; `Client::op`,
+  `Client::edit_as`), `features/comments/model.test.ts`,
+  `sql-threads.test.ts`, `e2e/comments.spec.ts`; the dev editor
+  (`/app/dev/editor`) seeds a discussion (`?comments=none` for none).
 
 ## Testing
 

@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox } from "@/components/ui/combobox";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CodeBlock } from "@/components/ui/code-block";
 import { CopyField } from "@/components/ui/copy-field";
@@ -94,7 +95,7 @@ const sections = [
   ["type", "Type"],
   ["shape", "Radius and depth"],
   ["buttons", "Button"],
-  ["forms", "Input, Select, Combobox, Field"],
+  ["forms", "Input, Select, Combobox, MentionTextarea, Field"],
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
@@ -402,7 +403,7 @@ function Buttons() {
 
 function Forms() {
   return (
-    <Section id="forms" title="Input, Select, Combobox, Field">
+    <Section id="forms" title="Input, Select, Combobox, MentionTextarea, Field">
       <Card className="grid gap-5 p-4 sm:grid-cols-2">
         <Field label="Database name" description="Lowercase, used in links.">
           <Input placeholder="billing" />
@@ -442,6 +443,7 @@ function Forms() {
           <Textarea placeholder="Add billing tables" />
         </Field>
         <ComboboxDemo />
+        <MentionDemo />
       </Card>
     </Section>
   );
@@ -468,6 +470,21 @@ function ComboboxDemo() {
         className="font-mono"
         empty="No type matches."
       />
+    </Field>
+  );
+}
+
+const PEOPLE = [
+  { id: "1", name: "Alice Martin", detail: "admin" },
+  { id: "2", name: "Bob Chen", detail: "reviewer" },
+  { id: "3", name: "Carol Diaz", detail: "developer" },
+];
+
+function MentionDemo() {
+  const [value, setValue] = React.useState("Looks good, @");
+  return (
+    <Field label="MentionTextarea" description="@ suggests people; Enter or Tab inserts the name.">
+      <MentionTextarea value={value} onValueChange={setValue} people={PEOPLE} />
     </Field>
   );
 }

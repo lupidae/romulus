@@ -20,4 +20,9 @@ describe("time", () => {
     expect(formatDate("2026-03-02T12:00:00Z", now)).not.toMatch(/2026/);
     expect(formatDate("2025-03-02T12:00:00Z", now)).toMatch(/2025/);
   });
+
+  it("speaks English whatever the browser's locale", () => {
+    expect(formatDate("2025-03-02T12:00:00Z", now)).toBe("Mar 2, 2025");
+    expect(timeAgo("2026-10-12T12:00:00Z", now)).toBe("3 days ago");
+  });
 });

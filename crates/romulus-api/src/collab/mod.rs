@@ -10,9 +10,11 @@
 //!
 //! - each draft someone has open is a room ([`room`]): its doc, the
 //!   connections in it, its writes and compiles, run by one task;
-//! - reviewers' document updates are dropped server-side, their awareness
-//!   (cursor, pointer) goes through; the server stamps every awareness
-//!   state with the user's id, name and color ([`awareness`]);
+//! - reviewers' document updates are dropped server-side, but for comment
+//!   threads (theirs to write: [`comments`]); their awareness (cursor,
+//!   pointer, typing in a thread) goes through; the server stamps every
+//!   awareness state with the user's id, name and color ([`awareness`]),
+//!   and every comment with its author;
 //! - a role change or removal closes that member's sockets (the client
 //!   reconnects with the rights it has now, or is refused);
 //! - compile results, status changes and renames are [`protocol::ServerEvent`]s,
@@ -29,6 +31,7 @@
 //! clients reconnect after the restart) and writes every room first.
 
 pub mod awareness;
+pub mod comments;
 pub mod compile;
 pub mod doc;
 pub mod patch;
@@ -221,6 +224,14 @@ impl Hub {
     pub async fn content(&self, draft: Uuid) -> Result<Content, HubError> {
         let (reply, wait) = oneshot::channel();
         self.0.send(draft, Command::Content { reply })?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
+    /// Whether the draft's doc has this comment thread (loading it if needed).
+    pub async fn thread_exists(&self, draft: Uuid, thread: Uuid) -> Result<bool, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0
+            .send(draft, Command::ThreadExists { thread, reply })?;
         wait.await.map_err(|_| HubError::Unavailable)
     }
 

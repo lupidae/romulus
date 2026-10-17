@@ -1,11 +1,21 @@
-import { describe, expect, it } from "vitest";
+import * as decoding from "lib0/decoding";
+import * as encoding from "lib0/encoding";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 
 import blogJson from "@/features/schema/fixtures/blog.json";
 import { MARKER } from "@/features/schema/edits/append";
 import { parseSchema } from "@/features/schema/model";
 
-import { DraftSession, eventPatch, mayEdit, type SessionState } from "./session";
+import {
+  CommentRefused,
+  DraftSession,
+  eventPatch,
+  MESSAGE_COMMENT,
+  MESSAGE_EVENT,
+  mayEdit,
+  type SessionState,
+} from "./session";
 
 const initial: SessionState = {
   connection: "connected",
@@ -27,6 +37,9 @@ const initial: SessionState = {
   deleted: false,
   signedOut: false,
   tooLarge: false,
+  tooManyTabs: false,
+  outOfStep: false,
+  syncStuck: false,
   saveFailed: false,
   updated: null,
   unsynced: false,
@@ -408,5 +421,260 @@ describe("migration mode", () => {
   it("hears when an edit reached the text that is not the source", () => {
     const patched = apply(initial, { type: "stale_edit", mode: "migration" });
     expect(patched.staleEdit).toMatchObject({ mode: "migration" });
+  });
+});
+
+describe("comments", () => {
+  const blog = parseSchema(blogJson);
+  const users = { schema: "public", name: "users", kind: "r" as const };
+  const me = { id: "u-alice", name: "Alice" };
+  const SQL = "CREATE TABLE users (\n    id bigint,\n    email text\n);\n";
+  const local = () =>
+    new DraftSession("acme", "draft", {
+      local: { sql: SQL, role: "developer", compile: () => ({ model: null, diagnostics: [] }) },
+    });
+  const threads = (session: DraftSession) =>
+    Object.values(session.threads.toJSON()) as { anchor: Record<string, unknown> }[];
+
+  it("turns a --- line into a thread in one step that one undo takes back", () => {
+    const session = local();
+    session.sql.insert(0, "--- why text?\n");
+    session.undo.stopCapturing();
+    const id = session.commentFromLine(
+      { from: 0, to: "--- why text?\n".length },
+      "why text?",
+      { kind: "table", table: "public.users" },
+      me,
+    );
+    expect(session.sql.toJSON()).toBe(SQL);
+    expect(session.threads.get(id)).toMatchObject({ by: "u-alice", resolved: null });
+    expect(Object.values(session.comments.toJSON())).toEqual([
+      expect.objectContaining({ thread: id, body: "why text?", author: me }),
+    ]);
+
+    session.undo.undo();
+    expect(session.sql.toJSON()).toBe(`--- why text?\n${SQL}`);
+    expect(session.threads.size).toBe(0);
+    expect(session.comments.size).toBe(0);
+    session.destroy();
+  });
+
+  it("pastes text without its --- lines, their threads in the same undo step", () => {
+    const session = local();
+    session.pasteWithComments(
+      { from: SQL.length, to: SQL.length },
+      "CREATE TABLE orders ();\n",
+      [{ body: "orders?", anchor: { kind: "table", table: "public.orders" } }],
+      me,
+    );
+    expect(session.sql.toJSON()).toBe(`${SQL}CREATE TABLE orders ();\n`);
+    expect(Object.values(session.comments.toJSON())).toEqual([
+      expect.objectContaining({ body: "orders?", author: me }),
+    ]);
+    session.undo.undo();
+    expect(session.sql.toJSON()).toBe(SQL);
+    expect(session.threads.size).toBe(0);
+    session.destroy();
+  });
+
+  it("never undoes a comment sent from the panel", async () => {
+    const session = local();
+    await session.startThread({ kind: "point", x: 0, y: 0 }, "billing goes here", [], me);
+    session.undo.undo();
+    expect(session.threads.size).toBe(1);
+    session.destroy();
+  });
+
+  it("moves threads with a table or a column renamed from the graph, and back on undo", async () => {
+    const session = local();
+    await session.startThread(
+      { kind: "column", table: "public.users", column: "email" },
+      "unique?",
+      [],
+      me,
+    );
+    session.editSchema({ kind: "renameColumn", table: users, column: "email", to: "mail" }, blog);
+    expect(threads(session)[0]!.anchor).toEqual({
+      kind: "column",
+      table: "public.users",
+      column: "mail",
+    });
+    session.editSchema({ kind: "renameTable", table: users, to: "members" }, blog);
+    expect(threads(session)[0]!.anchor).toEqual({
+      kind: "column",
+      table: "public.members",
+      column: "mail",
+    });
+    session.undo.undo();
+    session.undo.undo();
+    expect(threads(session)[0]!.anchor).toEqual({
+      kind: "column",
+      table: "public.users",
+      column: "email",
+    });
+    session.destroy();
+  });
+
+  it("deletes a whole thread here too, without a server", async () => {
+    const session = local();
+    const id = await session.startThread({ kind: "table", table: "public.users" }, "hm", [], me);
+    await session.reply(id, "more", [], me);
+    await session.deleteThread(id, me);
+    expect(session.threads.size).toBe(0);
+    expect(session.comments.size).toBe(0);
+    session.destroy();
+  });
+
+  it("deletes a thread with its last comment, its author's own", async () => {
+    const session = local();
+    const id = await session.startThread({ kind: "table", table: "public.users" }, "hm", [], me);
+    const comment = [...session.comments.keys()][0]!;
+    await session.deleteComment(comment, me);
+    expect(session.threads.has(id)).toBe(false);
+    session.destroy();
+  });
+});
+
+describe("comments with a server", () => {
+  /** A socket that keeps what is sent and lets the test answer. */
+  class FakeSocket {
+    static last: FakeSocket | null = null;
+    readonly OPEN = 1;
+    readyState = 0;
+    binaryType = "";
+    sent: Uint8Array[] = [];
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: ArrayBuffer }) => void) | null = null;
+    onclose: ((event: { code: number; reason: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor() {
+      FakeSocket.last = this;
+    }
+    send(data: Uint8Array) {
+      this.sent.push(data);
+    }
+    close() {}
+    open() {
+      this.readyState = 1;
+      this.onopen?.();
+    }
+    event(event: object) {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_EVENT);
+      encoding.writeVarUint8Array(encoder, new TextEncoder().encode(JSON.stringify(event)));
+      this.onmessage?.({ data: encoding.toUint8Array(encoder).buffer });
+    }
+    /** The comment operations sent so far. */
+    operations() {
+      return this.sent.flatMap((bytes) => {
+        const decoder = decoding.createDecoder(bytes);
+        if (decoding.readVarUint(decoder) !== MESSAGE_COMMENT) return [];
+        const body = decoding.readVarUint8Array(decoder);
+        return [JSON.parse(new TextDecoder().decode(body)) as { id: string; op: unknown }];
+      });
+    }
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  function connected() {
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const session = new DraftSession("acme", "draft", { origin: "ws://romulus.test" });
+    const socket = FakeSocket.last!;
+    socket.open();
+    return { session, socket };
+  }
+  const me = { id: "u-bob", name: "Bob" };
+
+  it("asks the server to write a reply, and never writes the doc itself", async () => {
+    const { session, socket } = connected();
+    const reply = session.reply("t1", "Yes", ["u-alice"], me);
+    const [sent] = socket.operations();
+    expect(sent!.op).toMatchObject({
+      type: "reply",
+      thread: "t1",
+      body: "Yes",
+      mentions: ["u-alice"],
+    });
+    expect(session.comments.size).toBe(0);
+    socket.event({ type: "comment_result", id: sent!.id, ok: true });
+    await expect(reply).resolves.toBeUndefined();
+    session.destroy();
+  });
+
+  it("says why the server refused an operation", async () => {
+    const { session, socket } = connected();
+    const removal = session.deleteComment("c1", me);
+    const [sent] = socket.operations();
+    socket.event({
+      type: "comment_result",
+      id: sent!.id,
+      ok: false,
+      code: "not_yours",
+      message: "Only its author can delete a comment.",
+    });
+    await expect(removal).rejects.toEqual(
+      new CommentRefused("not_yours", "Only its author can delete a comment."),
+    );
+    session.destroy();
+  });
+
+  it("refuses at once while offline, and lets waiting ones go when the socket drops", async () => {
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const session = new DraftSession("acme", "draft", { origin: "ws://romulus.test" });
+    await expect(session.setResolved("t1", true, me)).rejects.toMatchObject({ code: "offline" });
+    const socket = FakeSocket.last!;
+    socket.open();
+    const resolving = session.setResolved("t1", true, me);
+    socket.onclose?.({ code: 1006, reason: "" });
+    await expect(resolving).rejects.toMatchObject({ code: "disconnected" });
+    session.destroy();
+  });
+
+  it("asks the server to delete a whole thread", async () => {
+    const { session, socket } = connected();
+    const removal = session.deleteThread("t1", me);
+    const [sent] = socket.operations();
+    expect(sent!.op).toEqual({ type: "delete_thread", thread: "t1" });
+    socket.event({ type: "comment_result", id: sent!.id, ok: true });
+    await expect(removal).resolves.toBeUndefined();
+    session.destroy();
+  });
+
+  it("stops reconnecting after a few refusals to sync, says so, and tries again on demand", async () => {
+    const { session, socket } = connected();
+    let current = socket;
+    for (let i = 0; i < 3; i++) {
+      current.onclose?.({ code: 4003, reason: "sync again" });
+      if (i === 2) break;
+      const closed = current;
+      await vi.waitFor(() => expect(FakeSocket.last).not.toBe(closed), { timeout: 3000 });
+      current = FakeSocket.last!;
+      current.open();
+      expect(session.getState().syncStuck).toBe(false);
+    }
+    expect(session.getState().syncStuck).toBe(true);
+    expect(session.getState().connection).toBe("stopped");
+    const last = FakeSocket.last;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect(FakeSocket.last).toBe(last);
+    session.retrySync();
+    await vi.waitFor(() => expect(FakeSocket.last).not.toBe(last), { timeout: 3000 });
+    expect(session.getState().syncStuck).toBe(false);
+    session.destroy();
+  });
+
+  it("knows when the server let this tab go, out of step", () => {
+    const { session, socket } = connected();
+    socket.onclose?.({ code: 4409, reason: "this tab wrote as someone else: reload" });
+    expect(session.getState().outOfStep).toBe(true);
+    session.destroy();
+  });
+
+  it("knows the draft is open in too many tabs", () => {
+    const { session, socket } = connected();
+    socket.onclose?.({ code: 4429, reason: "too many tabs" });
+    expect(session.getState().tooManyTabs).toBe(true);
+    session.destroy();
   });
 });

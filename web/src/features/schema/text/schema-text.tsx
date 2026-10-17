@@ -71,6 +71,8 @@ export interface SchemaTextProps {
    * the text: `texts.sql` only seeds the editor and must match the Y.Text.
    */
   sqlExtensions?: Extension[];
+  /** Extensions drawing over the SQL without owning it (comment threads); read once, like `sqlExtensions`. */
+  sqlOverlay?: Extension[];
   /** Mermaid node names carry the schema when the model spans several. */
   multiSchema?: boolean;
   /** More buttons at the end of the tab bar (hide the pane, full screen…). */
@@ -101,6 +103,7 @@ export function SchemaText({
   sqlKey,
   readOnly = true,
   sqlExtensions,
+  sqlOverlay,
   multiSchema = false,
   actions,
   className,
@@ -306,6 +309,7 @@ export function SchemaText({
               label={`Schema as ${labelOf(f)}`}
               readOnly={f.id === "sql" ? readOnly : true}
               extensions={f.id === "sql" ? sqlExtensions : undefined}
+              overlay={f.id === "sql" ? sqlOverlay : undefined}
               highlights={f.id === "sql" ? sqlHighlights : otherHighlights[f.id]}
               reveal={reveals[f.id]}
               active={format === f.id}

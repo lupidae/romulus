@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT thread, read_at FROM draft_thread_reads WHERE draft_id = $1 AND user_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "thread",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "draft_thread_reads",
+            "name": "thread"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "read_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "draft_thread_reads",
+            "name": "read_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "d1935ab7b1fdc17f232d3227c414334b5f995065cae94347604ea6e98d36b13e"
+}

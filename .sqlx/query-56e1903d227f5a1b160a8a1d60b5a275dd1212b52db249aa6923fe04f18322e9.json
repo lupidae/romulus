@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_threads (version_id, draft_id, draft_thread, frozen, anchor, created_by,\n                                        created_at, resolved_at, resolved_by, resolved_by_name)\n           SELECT $1, $2, t.draft_thread, false, t.anchor, u.id, t.created_at,\n                  t.resolved_at, r.id, CASE WHEN t.resolved_at IS NULL THEN NULL ELSE t.resolved_name END\n           FROM unnest($3::uuid[], $4::jsonb[], $5::uuid[], $6::timestamptz[], $7::timestamptz[],\n                       $8::uuid[], $9::text[])\n                AS t(draft_thread, anchor, created_by, created_at, resolved_at, resolved_by, resolved_name)\n           LEFT JOIN users u ON u.id = t.created_by\n           LEFT JOIN users r ON r.id = t.resolved_by",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "UuidArray",
+        "JsonbArray",
+        "UuidArray",
+        "TimestamptzArray",
+        "TimestamptzArray",
+        "UuidArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56e1903d227f5a1b160a8a1d60b5a275dd1212b52db249aa6923fe04f18322e9"
+}

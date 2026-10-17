@@ -2,6 +2,7 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 
 import {
   ActivityIcon,
+  ChatLinesIcon,
   CheckCircleIcon,
   DatabaseIcon,
   EyeClosedIcon,
@@ -35,7 +36,8 @@ export function Activity({ org, db }: { org: string; db: string }) {
           <CardTitle>Activity</CardTitle>
           <p className="text-sm text-muted-foreground">
             Removed and restored versions, drafts published and who approved them, the approvals
-            publishing needs, and moves to another Postgres version.
+            publishing needs, moves to another Postgres version, and comments deleted by someone
+            other than their author.
           </p>
         </div>
       </CardHeader>
@@ -109,6 +111,7 @@ const icons = {
   approvals_overridden: ShieldCheckIcon,
   approvals_required_changed: SettingsIcon,
   major_changed: DatabaseIcon,
+  comment_deleted: ChatLinesIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -137,6 +140,12 @@ function sentence(event: AuditEvent): string {
       return event.version_number == null
         ? `${who} moved the database from Postgres ${details.from ?? "?"} to ${details.to ?? "?"}`
         : `${who} moved the database from Postgres ${details.from ?? "?"} to ${details.to ?? "?"}, after ${v} compiled there`;
+    case "comment_deleted": {
+      const whose = names((details.authors ?? []).map((name) => ({ name })));
+      return details.comments && details.comments > 1
+        ? `${who} deleted a thread of ${details.comments} comments (${whose || "others"})`
+        : `${who} deleted ${whose ? `${whose}'s` : "a"} comment`;
+    }
   }
 }
 
@@ -150,8 +159,13 @@ function Event({ event }: { event: AuditEvent }) {
         <p className="text-base text-foreground">{sentence(event)}</p>
         {(details.message || details.draft_name) && (
           <p className="truncate text-sm text-muted-foreground">
-            {details.draft_name ? `From the draft “${details.draft_name}”` : details.message}
+            {details.draft_name
+              ? `${event.action === "comment_deleted" ? "In" : "From"} the draft “${details.draft_name}”`
+              : details.message}
           </p>
+        )}
+        {details.excerpt && (
+          <p className="line-clamp-2 text-sm text-muted-foreground">“{details.excerpt}”</p>
         )}
         {details.approved_by && details.approved_by.length > 0 && (
           <p className="flex items-center gap-1.5 text-sm text-muted-foreground">

@@ -8,6 +8,10 @@
 //!                                          canonical in migration mode
 //! layout:    Y.Map<qualified name, {x, y}> positions, in graph coordinates
 //! groups:    Y.Map<group id, {name, color, members: qualified names[]}>
+//! threads:   Y.Map<thread id, {anchor, by, at, resolved}>   comment threads
+//! comments:  Y.Map<comment id, {thread, author, body…}>     and their comments
+//!                                          (see `comments`: checked and stamped
+//!                                          by the room, reviewers write them too)
 //! meta:      Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`),
 //!            `merged` = the version "Update draft" merged last (`Roots::note_merged`),
 //!            `mode` = "schema" | "migration" (absent: schema), written by the
@@ -25,9 +29,10 @@
 //! The server writes to a doc in a few places only: the initial content of a
 //! new draft, moving a table's layout and group entries when a rename is
 //! typed in the text (see `room`), rewriting the SQL as a minimal edit
-//! (Tidy, see `patch`), and switching modes (the migration seeded or
-//! cleared, `meta.mode`, in one transaction). Everything else comes from
-//! clients.
+//! (Tidy, see `patch`), switching modes (the migration seeded or
+//! cleared, `meta.mode`, in one transaction), and writing back what a
+//! client may not change in the threads and comments (`comments::check`).
+//! Everything else comes from clients.
 
 use std::collections::BTreeMap;
 
@@ -47,6 +52,7 @@ pub const MIGRATION: &str = "migration";
 pub const LAYOUT: &str = "layout";
 pub const GROUPS: &str = "groups";
 pub const META: &str = "meta";
+pub use super::comments::{COMMENTS, THREADS};
 
 /// The line above the statements graph edits append (web/src/features/
 /// schema/edits/append.ts `MARKER`).
@@ -69,6 +75,8 @@ pub struct Roots {
     pub layout: MapRef,
     pub groups: MapRef,
     pub meta: MapRef,
+    pub threads: MapRef,
+    pub comments: MapRef,
 }
 
 impl Roots {
@@ -79,6 +87,8 @@ impl Roots {
             layout: doc.get_or_insert_map(LAYOUT),
             groups: doc.get_or_insert_map(GROUPS),
             meta: doc.get_or_insert_map(META),
+            threads: doc.get_or_insert_map(THREADS),
+            comments: doc.get_or_insert_map(COMMENTS),
         }
     }
 
@@ -175,9 +185,9 @@ impl Roots {
         }
     }
 
-    /// Moves the layout entry and group memberships of each `(old, new)`
-    /// name, unless `new` already has a position of its own. Returns whether
-    /// anything changed.
+    /// Moves the layout entry, group memberships and comment threads of each
+    /// `(old, new)` name (a position only when `new` has none of its own).
+    /// Returns whether anything changed.
     pub fn rename(&self, txn: &mut TransactionMut, renames: &[(String, String)]) -> bool {
         let mut changed = false;
         for (old, new) in renames {
@@ -207,7 +217,13 @@ impl Roots {
                 changed = true;
             }
         }
+        changed |= super::comments::rename(&self.threads, txn, renames);
         changed
+    }
+
+    /// The threads with their comments, oldest first (`comments::discussion`).
+    pub fn discussion<T: ReadTxn>(&self, txn: &T) -> Vec<super::comments::DocThread> {
+        super::comments::discussion(&self.threads, &self.comments, txn)
     }
 }
 

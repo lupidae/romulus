@@ -53,6 +53,9 @@ pub struct NewVersion {
     /// lock: a database that moved meanwhile refuses it
     /// ([`StoreError::MajorChanged`]).
     pub compiled_on: Option<PgMajor>,
+    /// The comment threads of the draft it publishes: kept with it, frozen,
+    /// in the same transaction (`discussion::freeze`).
+    pub discussion: Vec<crate::collab::comments::DocThread>,
 }
 
 /// Why [`store`] stored nothing.
@@ -256,6 +259,9 @@ pub async fn store(
     }
     if let Some(approvals) = &new.approvals {
         crate::drafts::approvals::freeze(&mut tx, approvals, database_id, id, number).await?;
+    }
+    if let Some(draft) = new.publishes_draft {
+        super::discussion::freeze(&mut tx, id, draft, &new.discussion).await?;
     }
     tx.commit().await?;
     tracing::info!(database = %database_id, number, origin = ?new.origin, "version created");

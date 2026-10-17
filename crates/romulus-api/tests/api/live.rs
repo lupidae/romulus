@@ -35,6 +35,9 @@ use yrs::{
 
 use super::harness::{ORIGIN, Session, TestApp};
 
+/// The tag of comment operations (`collab::protocol::MESSAGE_COMMENT`).
+pub const MESSAGE_COMMENT: u8 = 101;
+
 /// Short timings, so tests wait milliseconds, not seconds.
 pub fn quick() -> Settings {
     Settings {
@@ -195,6 +198,31 @@ impl Client {
         client
     }
 
+    /// Closes the socket (a laptop going to sleep); the doc stays, for
+    /// [`Client::reconnect`].
+    pub async fn hang_up(&mut self) {
+        let _ = self.socket.close(None).await;
+        while let Ok(Some(_)) =
+            tokio::time::timeout(Duration::from_millis(200), self.socket.next()).await
+        {}
+    }
+
+    /// Connects again with this doc (a tab whose socket dropped, which
+    /// y-websocket reconnects), and syncs: its step 2 carries what the
+    /// server lacks.
+    pub async fn reconnect(self, addr: SocketAddr, path: &str, session: &Session) -> Self {
+        let fresh = Self::connect(addr, path, Some(session), ORIGIN)
+            .await
+            .expect("upgrade");
+        let mut again = Self {
+            doc: self.doc,
+            roots: self.roots,
+            ..fresh
+        };
+        again.sync().await;
+        again
+    }
+
     pub fn sql(&self) -> String {
         self.roots.sql(&self.doc.transact())
     }
@@ -238,6 +266,52 @@ impl Client {
             edit(&self.roots, &mut txn);
         }
         let update = self.doc.transact().encode_state_as_update_v1(&before);
+        self.send(&Message::Sync(SyncMessage::Update(update))).await;
+    }
+
+    /// Sends a comment operation (tag 101) and waits for its answer (the
+    /// `comment_result` event).
+    pub async fn op(&mut self, op: Value) -> Value {
+        let id = Uuid::new_v4().to_string();
+        let body = serde_json::to_vec(&json!({"id": id, "op": op})).expect("json");
+        self.send(&Message::Custom(MESSAGE_COMMENT, body)).await;
+        let answered = |c: &Self| {
+            c.events
+                .iter()
+                .any(|e| e["type"] == "comment_result" && e["id"] == id.as_str())
+        };
+        self.until(answered).await;
+        self.events
+            .iter()
+            .rev()
+            .find(|e| e["type"] == "comment_result" && e["id"] == id.as_str())
+            .cloned()
+            .expect("answered")
+    }
+
+    /// Sends an update made by `edit` on a copy of this client's doc that
+    /// writes as `client`: someone else's Yjs client id (an attack).
+    pub async fn edit_as(&mut self, client: u64, edit: impl FnOnce(&Roots, &mut TransactionMut)) {
+        let forged = Doc::with_options(yrs::Options {
+            client_id: yrs::block::ClientID::new(client),
+            offset_kind: yrs::OffsetKind::Utf16,
+            ..yrs::Options::default()
+        });
+        let roots = Roots::of(&forged);
+        let state = self
+            .doc
+            .transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default());
+        forged
+            .transact_mut()
+            .apply_update(Update::decode_v1(&state).expect("state"))
+            .expect("apply");
+        let before = forged.transact().state_vector();
+        {
+            let mut txn = forged.transact_mut();
+            edit(&roots, &mut txn);
+        }
+        let update = forged.transact().encode_state_as_update_v1(&before);
         self.send(&Message::Sync(SyncMessage::Update(update))).await;
     }
 

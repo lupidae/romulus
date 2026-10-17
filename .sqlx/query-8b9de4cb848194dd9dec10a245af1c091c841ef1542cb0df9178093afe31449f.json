@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.anchor, t.frozen, t.created_by, t.created_at,\n                  t.resolved_at, t.resolved_by, t.resolved_by_name, r.read_at AS \"read_at?\"\n           FROM version_threads t\n           LEFT JOIN version_thread_reads r ON r.thread_id = t.id AND r.user_id = $2\n           WHERE t.version_id = $1\n           ORDER BY t.created_at, t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "anchor",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "anchor"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "frozen",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "frozen"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "resolved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "resolved_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "resolved_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "resolved_by"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "resolved_by_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "resolved_by_name"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "read_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "version_thread_reads",
+            "name": "read_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "8b9de4cb848194dd9dec10a245af1c091c841ef1542cb0df9178093afe31449f"
+}

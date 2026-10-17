@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import type { SchemaDiffInput } from "../diff";
 import type { GraphEditor } from "../graph/editing/types";
 import { graphOf } from "../graph/graph-of";
-import { SchemaGraph } from "../graph/schema-graph";
+import { SchemaGraph, type SchemaGraphProps } from "../graph/schema-graph";
 import type { Groups, Layout } from "../layout";
 import { qualifiedName, type RelationRef, type Schema } from "../model";
 import type { SchemaTexts } from "../text/formats";
@@ -38,6 +38,8 @@ export interface SchemaViewerProps {
   /** SQL can be edited (with `sqlExtensions` binding it to a draft). */
   readOnly?: boolean;
   sqlExtensions?: Extension[];
+  /** Drawn over the SQL without owning it (comment threads): see `SchemaText`. */
+  sqlOverlay?: Extension[];
   /** Qualified name of the selected table; leave undefined to let the viewer own it. */
   selected?: string | null;
   onSelectedChange?: (key: string | null) => void;
@@ -63,6 +65,10 @@ export interface SchemaViewerProps {
   onPickedChange?: (keys: string[]) => void;
   /** Schema editing from the graph (a draft's editors): see `SchemaGraph`. */
   editor?: GraphEditor;
+  /** Where the graph goes whenever a new object is passed: see `SchemaGraph`'s `focus`. */
+  graphFocus?: SchemaGraphProps["focus"];
+  /** More buttons in the text pane's tab bar, before the layout menu. */
+  textActions?: ReactNode;
   className?: string;
 }
 
@@ -87,6 +93,7 @@ export function SchemaViewer({
   editable,
   readOnly,
   sqlExtensions,
+  sqlOverlay,
   selected: controlled,
   onSelectedChange,
   format,
@@ -101,6 +108,8 @@ export function SchemaViewer({
   picked,
   onPickedChange,
   editor,
+  graphFocus,
+  textActions,
   className,
 }: SchemaViewerProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
@@ -185,6 +194,7 @@ export function SchemaViewer({
       picked={picked}
       onPickedChange={onPickedChange}
       editor={editor}
+      focus={graphFocus}
       empty={graphEmpty}
       controls={
         <>
@@ -211,8 +221,14 @@ export function SchemaViewer({
       sqlKey={sqlKey}
       readOnly={readOnly}
       sqlExtensions={sqlExtensions}
+      sqlOverlay={sqlOverlay}
       multiSchema={graph.multiSchema}
-      actions={wide && layoutMenu}
+      actions={
+        <>
+          {textActions}
+          {wide && layoutMenu}
+        </>
+      }
     />
   );
 

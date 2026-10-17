@@ -26,7 +26,7 @@ use super::{
     Hub,
     awareness::Peer,
     protocol::{self, ServerEvent},
-    room::{Incoming, Outgoing, close, queue},
+    room::{Budget, Incoming, Outgoing, close, queue},
 };
 use crate::{
     ApiError, ApiResult, AppState,
@@ -43,6 +43,9 @@ use crate::{
 const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// How long a closing socket waits for the client's close frame.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
+/// Comment operations one frame may carry (a browser sends one); those past
+/// it are refused unread.
+pub const MAX_COMMENTS_PER_FRAME: usize = 8;
 
 /// What a socket must hear about from the moment its request arrives:
 /// membership changes and sign-outs. Taken as the handler's first extractor,
@@ -178,6 +181,9 @@ impl Socket {
         let mut check = tokio::time::interval(settings.session_check);
         check.reset();
         let mut heard = Instant::now();
+        // Comment operations this socket may still have looked up (before
+        // any query; the room budgets them per person again).
+        let mut comments = Budget::new();
 
         let closing = loop {
             tokio::select! {
@@ -189,7 +195,11 @@ impl Socket {
                             // reads no more (backpressure on the client). A
                             // room that is gone left its last word (a close)
                             // in the inbox, or closed it.
-                            Some(messages) => {
+                            Some(mut messages) => {
+                                ration(&mut messages, &mut comments);
+                                if members_only(&self.db, org_id, &mut messages).await.is_err() {
+                                    break Some((close::UNAVAILABLE, "the database is unavailable"));
+                                }
                                 let _ = connection.incoming(messages).await;
                             }
                             None => connection.malformed(),
@@ -270,6 +280,55 @@ async fn shut(
         }
     })
     .await;
+}
+
+/// Refuses, unread, the comment operations of a frame past
+/// [`MAX_COMMENTS_PER_FRAME`] or past the socket's budget: nothing is looked
+/// up for them.
+fn ration(messages: &mut [Incoming], budget: &mut Budget) {
+    let mut seen = 0;
+    for message in messages {
+        if let Incoming::Comment(request) = message {
+            seen += 1;
+            if seen > MAX_COMMENTS_PER_FRAME || !budget.take() {
+                *message = Incoming::CommentRefused {
+                    id: std::mem::take(&mut request.id),
+                };
+            }
+        }
+    }
+}
+
+/// Keeps, in the comment operations of `messages`, only the mentions of
+/// members of the organization (the room has no database to ask): one
+/// query for the whole frame.
+async fn members_only(
+    db: &PgPool,
+    org: Uuid,
+    messages: &mut [Incoming],
+) -> Result<(), sqlx::Error> {
+    let mut asked: Vec<Uuid> = Vec::new();
+    for message in messages.iter_mut() {
+        if let Incoming::Comment(request) = message
+            && let Some(mentions) = request.op.mentions_mut()
+        {
+            asked.extend(mentions.iter().copied());
+        }
+    }
+    if asked.is_empty() {
+        return Ok(());
+    }
+    asked.sort_unstable();
+    asked.dedup();
+    let members = crate::versions::discussion::members_among(db, org, &asked).await?;
+    for message in messages {
+        if let Incoming::Comment(request) = message
+            && let Some(mentions) = request.op.mentions_mut()
+        {
+            mentions.retain(|id| members.contains(id));
+        }
+    }
+    Ok(())
 }
 
 /// The y-sync messages of a frame, or `None` when it is not y-sync. yrs

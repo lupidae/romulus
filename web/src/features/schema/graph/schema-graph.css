@@ -98,3 +98,9 @@
 .schema-graph[data-linking] .react-flow__pane {
   cursor: crosshair;
 }
+
+/* Comment mode (features/comments): whatever is clicked gets a thread. */
+.schema-graph .react-flow[data-commenting] .react-flow__pane,
+.schema-graph .react-flow[data-commenting] .react-flow__node {
+  cursor: crosshair;
+}

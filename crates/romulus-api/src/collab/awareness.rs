@@ -20,8 +20,10 @@ use crate::domain::Role;
 /// - `cursor`: the text selection, as y-codemirror.next writes it
 ///   (`{anchor, head}`, Yjs relative positions);
 /// - `pointer`: `{x, y}` in graph coordinates, or null off the graph;
-/// - `selection`: the qualified name of the table selected in the graph.
-const FIELDS: [&str; 3] = ["cursor", "pointer", "selection"];
+/// - `selection`: the qualified name of the table selected in the graph;
+/// - `typing`: the id of the comment thread they are writing in (`new` for
+///   one they are starting), or null.
+const FIELDS: [&str; 4] = ["cursor", "pointer", "selection", "typing"];
 
 /// Larger states are refused (a cursor and a pointer take a few hundred bytes).
 pub const MAX_STATE_BYTES: usize = 8 * 1024;

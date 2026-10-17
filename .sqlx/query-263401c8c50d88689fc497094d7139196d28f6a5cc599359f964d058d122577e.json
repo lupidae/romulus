@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_comments (thread_id, author_id, author_name, body, mentions, created_at, edited_at)\n           SELECT t.id, u.id, c.author_name, c.body,\n                  ARRAY(SELECT jsonb_array_elements_text(c.mentions)::uuid), c.created_at, c.edited_at\n           FROM unnest($2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::jsonb[], $7::timestamptz[],\n                       $8::timestamptz[])\n                AS c(draft_thread, author_id, author_name, body, mentions, created_at, edited_at)\n           JOIN version_threads t ON t.version_id = $1 AND t.draft_thread = c.draft_thread\n           LEFT JOIN users u ON u.id = c.author_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray",
+        "TextArray",
+        "TextArray",
+        "JsonbArray",
+        "TimestamptzArray",
+        "TimestamptzArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "263401c8c50d88689fc497094d7139196d28f6a5cc599359f964d058d122577e"
+}

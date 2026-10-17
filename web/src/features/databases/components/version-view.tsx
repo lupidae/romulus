@@ -24,11 +24,19 @@ import {
   MenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { meQuery } from "@/features/auth/queries";
+import { CommentModeButton, CommentPins } from "@/features/comments/components/comment-pins";
+import { CommentsAside, CommentsToggle } from "@/features/comments/components/comments-layer";
+import { CommentsPanel } from "@/features/comments/components/comments-panel";
+import { useVersionDiscussion } from "@/features/comments/discussion";
+import { sqlThreads } from "@/features/comments/sql-threads";
+import { useComments } from "@/features/comments/use-comments";
+import { useCommentsUi } from "@/features/comments/use-comments-ui";
 import { CompareWith } from "@/features/diff/components/compare-with";
 import { MigrationButton } from "@/features/imports/components/migration-dialog";
 import { names } from "@/features/draft/review";
 import { orgQuery } from "@/features/orgs/queries";
-import { canManageMembers } from "@/features/orgs/roles";
+import { canManageMembers, canWrite } from "@/features/orgs/roles";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { SchemaViewer } from "@/features/schema/viewer/schema-viewer";
 import { SchemaViewerSkeleton } from "@/features/schema/viewer/viewer-skeleton";
@@ -57,13 +65,17 @@ interface VersionViewProps {
 
 /**
  * One version, read-only: a strip saying which one it is (with the way to
- * the others), then the schema viewer, graph and text.
+ * the others), then the schema viewer, graph and text, and its discussion
+ * (the review of the draft it came from, frozen; threads started since).
  */
 export function VersionView({ org, database, number }: VersionViewProps) {
   const db = database.slug;
   const version = useQuery(versionQuery(org, db, database.id, number));
   const texts = useQuery(versionTextsQuery(org, db, database.id, number));
   const latest = database.latest?.number ?? number;
+  const { data: me } = useSuspenseQuery(meQuery);
+  const { data: orgData } = useSuspenseQuery(orgQuery(org));
+  const [selected, setSelected] = React.useState<string | null>(null);
 
   const model = React.useMemo(() => {
     if (!version.data) return undefined;
@@ -75,6 +87,25 @@ export function VersionView({ org, database, number }: VersionViewProps) {
     }
   }, [version.data]);
 
+  const commentsUi = useCommentsUi();
+  const discussion = useVersionDiscussion({
+    org,
+    db,
+    number,
+    me: { id: me.id, name: me.name },
+    canModerate: canWrite(orgData.role),
+  });
+  const comments = useComments({
+    discussion,
+    ui: commentsUi,
+    schema: model && "schema" in model ? (model.schema ?? null) : null,
+    sql: texts.data?.sql ?? null,
+    selected,
+    onSelect: setSelected,
+  });
+  const overlay = React.useMemo(() => [sqlThreads(comments.feed)], [comments.feed]);
+  const frozen = discussion.threads?.some((t) => t.frozen) ?? false;
+
   const failed = version.error ?? texts.error;
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -84,46 +115,90 @@ export function VersionView({ org, database, number }: VersionViewProps) {
         number={number}
         latest={latest}
         version={version.data}
-      />
-      <div className="relative min-h-0 flex-1">
-        {failed ? (
-          <div className="p-4 md:p-6">
-            <Alert
-              variant="destructive"
-              title={`Could not load v${number}`}
-              action={
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    void version.refetch();
-                    void texts.refetch();
-                  }}
-                >
-                  Retry
-                </Button>
-              }
-            >
-              {failed.message}
-            </Alert>
-          </div>
-        ) : model && "error" in model ? (
-          <div className="p-4 md:p-6">
-            <Alert variant="destructive" title={`v${number} cannot be drawn`}>
-              Its model is not one this viewer understands ({model.error}).
-            </Alert>
-          </div>
-        ) : model && texts.data ? (
-          <SchemaViewer
-            schema={model.schema}
-            texts={texts.data}
-            layout={model.layout}
-            groups={model.groups}
-            readOnly
-            storageKey="romulus:version-viewer"
+        discussion={
+          <CommentsToggle
+            ui={commentsUi}
+            label="Discussion"
+            open={comments.pinned.length}
+            unread={comments.unreadCount}
           />
-        ) : (
-          <SchemaViewerSkeleton />
-        )}
+        }
+      />
+      <div className="flex min-h-0 flex-1">
+        <div className="relative min-h-0 min-w-0 flex-1">
+          {failed ? (
+            <div className="p-4 md:p-6">
+              <Alert
+                variant="destructive"
+                title={`Could not load v${number}`}
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      void version.refetch();
+                      void texts.refetch();
+                    }}
+                  >
+                    Retry
+                  </Button>
+                }
+              >
+                {failed.message}
+              </Alert>
+            </div>
+          ) : model && "error" in model ? (
+            <div className="p-4 md:p-6">
+              <Alert variant="destructive" title={`v${number} cannot be drawn`}>
+                Its model is not one this viewer understands ({model.error}).
+              </Alert>
+            </div>
+          ) : model && texts.data ? (
+            <SchemaViewer
+              schema={model.schema}
+              texts={texts.data}
+              layout={model.layout}
+              groups={model.groups}
+              readOnly
+              storageKey="romulus:version-viewer"
+              selected={selected}
+              onSelectedChange={setSelected}
+              sqlOverlay={overlay}
+              graphFocus={comments.focus}
+              graphControls={
+                <CommentModeButton on={commentsUi.commentMode} onChange={comments.setCommentMode} />
+              }
+              graphChildren={
+                <CommentPins
+                  threads={comments.pinned}
+                  unread={comments.unread}
+                  active={commentsUi.open ? commentsUi.active : null}
+                  composing={commentsUi.open ? commentsUi.composing : null}
+                  onOpen={commentsUi.openThread}
+                  commentMode={commentsUi.commentMode}
+                  onPick={commentsUi.compose}
+                  onExitCommentMode={() => commentsUi.setCommentMode(false)}
+                />
+              }
+            />
+          ) : (
+            <SchemaViewerSkeleton />
+          )}
+        </div>
+        <CommentsAside ui={commentsUi} title="Discussion">
+          <CommentsPanel
+            discussion={discussion}
+            ui={commentsUi}
+            title="Discussion"
+            outdated={comments.outdated}
+            onShow={comments.show}
+            onNew={comments.startNew}
+            note={
+              frozen
+                ? `Threads with a lock are from the review of the draft that became v${number}, kept as they were. New threads are about this version.`
+                : undefined
+            }
+          />
+        </CommentsAside>
       </div>
     </div>
   );
@@ -135,12 +210,15 @@ function VersionStrip({
   number,
   latest,
   version,
+  discussion,
 }: {
   org: string;
   database: Database;
   number: number;
   latest: number;
   version?: VersionDetail;
+  /** The discussion panel's button. */
+  discussion?: React.ReactNode;
 }) {
   const navigate = useNavigate();
   const { data: orgData } = useSuspenseQuery(orgQuery(org));
@@ -225,6 +303,7 @@ function VersionStrip({
         <span className="flex-1" />
       )}
       <div className="ml-auto flex items-center gap-1">
+        {discussion}
         {version && <MigrationButton version={version} />}
         {version && <WrittenMigrationButton org={org} database={database} version={version} />}
         <CompareWith org={org} db={db} number={number} latest={latest} previous={older} />

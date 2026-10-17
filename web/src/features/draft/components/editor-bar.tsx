@@ -83,6 +83,8 @@ interface EditorBarProps {
   role: Role | null;
   /** Live, the draft is open (not being published or updated). */
   liveOpen: boolean;
+  /** The comments panel's button. */
+  comments?: React.ReactNode;
 }
 
 /**
@@ -149,6 +151,7 @@ export function EditorBar(props: EditorBarProps) {
 
       <div className="ml-auto flex shrink-0 items-center gap-1 md:gap-1.5">
         <Presence peers={peers} meId={meId} />
+        {props.comments}
         {isWriter && open && (
           <div className="hidden items-center sm:flex">
             <Tooltip content="Undo" shortcut={[modKey, "Z"]}>
@@ -478,13 +481,22 @@ function ConnectionStatus({
   unsynced: boolean;
 }) {
   if (!synced || connection === "connected" || connection === "connecting") return null;
-  const label = unsynced
-    ? "Edits not sent yet"
-    : connection === "offline"
-      ? "Offline"
-      : "Reconnecting…";
+  const stopped = connection === "stopped";
+  const label = stopped
+    ? "Not syncing"
+    : unsynced
+      ? "Edits not sent yet"
+      : connection === "offline"
+        ? "Offline"
+        : "Reconnecting…";
   return (
-    <Tooltip content="Your edits are kept here and sent as soon as you are back online.">
+    <Tooltip
+      content={
+        stopped
+          ? "This tab stopped syncing: see the note below the bar."
+          : "Your edits are kept here and sent as soon as you are back online."
+      }
+    >
       <Button
         variant="ghost"
         size="sm"

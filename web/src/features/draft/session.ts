@@ -9,6 +9,10 @@
 //                                        source in migration mode
 //   layout:    Y.Map<qualified name, {x, y}>
 //   groups:    Y.Map<group id, {name, color, members}>
+//   threads:   Y.Map<thread id, {anchor, by, at, resolved}>  comment threads
+//   comments:  Y.Map<comment id, {thread, author, body…}>    and their comments
+//              (features/comments/model.ts; the server checks and stamps them,
+//              reviewers write them too)
 //   meta:      Y.Map: `rewrite` = {count, reason}, bumped by the server in the
 //              same transaction as each rewrite of the SQL (Tidy, Update draft);
 //              `mode` = "schema" | "migration" (absent: schema), written by
@@ -17,13 +21,22 @@
 // sent with each compile) and the graph are what the migration makes of
 // the base version, and graph edits append to the migration.
 // Awareness carries this client's `cursor` (y-codemirror), `pointer` (graph
-// coordinates) and `selection` (a table); the server stamps `user`.
+// coordinates), `selection` (a table) and `typing` (the comment thread being
+// written in, `new` for one being started); the server stamps `user`.
 
 import * as decoding from "lib0/decoding";
+import * as encoding from "lib0/encoding";
 import { Awareness } from "y-protocols/awareness";
 import { WebsocketProvider } from "y-websocket";
 import * as Y from "yjs";
 
+import {
+  type Anchor,
+  type DocComment,
+  type DocThread,
+  renameColumn,
+  renameTable,
+} from "@/features/comments/model";
 import { appendTo } from "@/features/schema/edits/append";
 import { applyEdit, layoutChange, type LayoutChange } from "@/features/schema/edits/apply";
 import { type GraphEdit, sqlFor } from "@/features/schema/edits/edits";
@@ -39,13 +52,26 @@ import type { Review } from "./review";
 
 /** The server's own messages on the socket (crates/romulus-api/src/collab/protocol.rs). */
 export const MESSAGE_EVENT = 100;
+/** Comment operations, from this client: the server writes what they mean. */
+export const MESSAGE_COMMENT = 101;
 
 /** Final close codes (collab::room::close): the session ended… */
 export const CLOSE_SESSION = 4401;
 /** …the draft is gone… */
 export const CLOSE_DELETED = 4404;
-/** …an update made it larger than a draft may be (it was not applied). */
+/** …an update made it larger than a draft may be (it was not applied)… */
 export const CLOSE_TOO_LARGE = 4413;
+/** …the person has it open in too many tabs already. */
+export const CLOSE_TOO_MANY = 4429;
+/** …this tab's copy no longer matches the server's: reload. */
+export const CLOSE_OUT_OF_STEP = 4409;
+/**
+ * …this tab wrote with an id another tab announced: reconnect and sync
+ * again (y-websocket does), a few times at most (`syncStuck`).
+ */
+export const CLOSE_RESYNC = 4003;
+/** Refusals to sync (4003) within a minute before this tab stops trying. */
+const MAX_RESYNCS = 3;
 
 /**
  * Transaction origins. Graph edits made here are `LOCAL`: the undo manager
@@ -57,8 +83,51 @@ export const CLOSE_TOO_LARGE = 4413;
  */
 export const LOCAL = { origin: "local" } as const;
 export const PLACED = { origin: "placed" } as const;
+/**
+ * Comments written here without a server (a local draft): not undone by ⌘Z.
+ * With a server, comments from the panel or the graph are operations the
+ * server writes (`sendComment`); a `---` line turned into a comment is
+ * `LOCAL`: one step with the text it removes.
+ */
+export const COMMENT = { origin: "comment" } as const;
 
-export type Connection = "connecting" | "connected" | "reconnecting" | "offline";
+/** An operation on the discussion (collab::comments::Op). */
+export type CommentOp =
+  | {
+      type: "start";
+      thread: string;
+      comment: string;
+      anchor: Anchor;
+      body: string;
+      mentions: string[];
+    }
+  | { type: "reply"; thread: string; comment: string; body: string; mentions: string[] }
+  | { type: "edit"; comment: string; body: string; mentions: string[] }
+  | { type: "delete"; comment: string }
+  | { type: "delete_thread"; thread: string }
+  | { type: "resolve"; thread: string; resolved: boolean };
+
+/** The server refused a comment operation, or never answered. */
+export class CommentRefused extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "CommentRefused";
+    this.code = code;
+  }
+}
+
+/** How long a comment operation waits for the server's answer. */
+const COMMENT_TIMEOUT = 10_000;
+
+/** Who writes comments here (the server stamps it anyway). */
+export interface Me {
+  id: string;
+  name: string;
+}
+
+/** `stopped`: no longer reconnecting (`syncStuck`) until asked to. */
+export type Connection = "connecting" | "connected" | "reconnecting" | "offline" | "stopped";
 
 export interface CompileView {
   /** `waiting`: no result yet. */
@@ -113,6 +182,12 @@ export interface SessionState {
   signedOut: boolean;
   /** The last update would have made the draft too large: it was refused. */
   tooLarge: boolean;
+  /** Refused: the draft is open in too many of this person's tabs. */
+  tooManyTabs: boolean;
+  /** Let go: this tab's copy no longer matches the server's (reload). */
+  outOfStep: boolean;
+  /** Stopped reconnecting: the server kept asking it to sync again (4003). */
+  syncStuck: boolean;
   /** The server could not store some edits. */
   saveFailed: boolean;
   /** The last "Update draft" while this tab was open. */
@@ -189,6 +264,9 @@ export function eventPatch(
       return { majorChanged: { major: event.pg_major, by: event.by } };
     case "stale_edit":
       return { staleEdit: { mode: event.mode, at: Date.now() } };
+    case "comment_result":
+      // The session answers its own operations (`sendComment`).
+      return {};
   }
 }
 
@@ -207,6 +285,8 @@ export interface Peer {
   pointer: Position | null;
   /** The table selected in their graph. */
   selection: string | null;
+  /** The comment thread they are writing in (`new`: starting one). */
+  typing: string | null;
 }
 
 async function sha256(text: string): Promise<string> {
@@ -253,6 +333,9 @@ export interface LocalDraft {
   migration?: string;
   layout?: Layout;
   groups?: Record<string, Group>;
+  /** Comment threads and comments, by id, to start with. */
+  threads?: Record<string, DocThread>;
+  comments?: Record<string, DocComment>;
   role: Role;
   /** Compiles the text, as the server would, when typing pauses. */
   compile: (sql: string) => { model: unknown; diagnostics: Diagnostic[] };
@@ -280,12 +363,15 @@ export class DraftSession {
   readonly migration: Y.Text;
   readonly layout: Y.Map<Position>;
   readonly groups: Y.Map<Group>;
+  /** Comment threads and their comments (features/comments/model.ts). */
+  readonly threads: Y.Map<unknown>;
+  readonly comments: Y.Map<unknown>;
   /** Notes from the server about the doc (see `onMeta`). */
   readonly meta: Y.Map<unknown>;
   /** Null for a local draft. */
   readonly provider: WebsocketProvider | null;
   readonly awareness: Awareness;
-  /** One per client, over the texts, the layout and the groups; local origins only. */
+  /** One per client, over the texts, the layout, the groups and comment anchors; local origins only. */
   readonly undo: Y.UndoManager;
 
   private state: SessionState = {
@@ -308,6 +394,9 @@ export class DraftSession {
     deleted: false,
     signedOut: false,
     tooLarge: false,
+    tooManyTabs: false,
+    outOfStep: false,
+    syncStuck: false,
     saveFailed: false,
     updated: null,
     unsynced: false,
@@ -316,12 +405,21 @@ export class DraftSession {
   };
   /** Each schema edit's entry in the undo history. */
   private undoItems = new Map<number, unknown>();
+  /** No server: comments are written here. */
+  private readonly isLocal: boolean;
+  /** Comment operations waiting for the server's answer, by id. */
+  private answers = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void; timer: number }
+  >();
   /** This tab asked for a rewrite (Tidy) that has not arrived yet. */
   private rewriteExpected = false;
   private lastEdit = 0;
   private listeners = new Set<() => void>();
   private destroyed = false;
   private opened = false;
+  /** When the server last asked this tab to sync again (4003). */
+  private resyncs: number[] = [];
   /** Compile events are read in order: a slow hash never lets an older one win. */
   private compiles = 0;
   private lastCompile: Extract<ServerEvent, { type: "compile" }> | null = null;
@@ -332,12 +430,16 @@ export class DraftSession {
     this.migration = this.doc.getText("migration");
     this.layout = this.doc.getMap("layout");
     this.groups = this.doc.getMap("groups");
+    this.threads = this.doc.getMap("threads");
+    this.comments = this.doc.getMap("comments");
     this.meta = this.doc.getMap("meta");
     this.meta.observe(this.onMeta);
-    this.undo = new Y.UndoManager([this.sql, this.migration, this.layout, this.groups], {
-      trackedOrigins: new Set([LOCAL]),
-    });
+    this.undo = new Y.UndoManager(
+      [this.sql, this.migration, this.layout, this.groups, this.threads, this.comments],
+      { trackedOrigins: new Set([LOCAL]) },
+    );
 
+    this.isLocal = options.local !== undefined;
     if (options.local) {
       this.provider = null;
       this.awareness = new Awareness(this.doc);
@@ -389,11 +491,21 @@ export class DraftSession {
     provider.on("connection-close", (event) => {
       if (!this.opened && event) options.onConnectionFailed?.();
       this.opened = false;
+      if (event?.code === CLOSE_RESYNC) this.onResync();
+      // The server may have written them or not: the doc tells once back.
+      this.refuseWaiting(
+        new CommentRefused(
+          "disconnected",
+          "The connection dropped before the server answered. If it is not there once reconnected, send it again.",
+        ),
+      );
     });
     provider.on("closed", ({ code }) => {
       if (code === CLOSE_DELETED) this.set({ deleted: true, status: "deleted" });
       else if (code === CLOSE_SESSION) this.set({ signedOut: true });
       else if (code === CLOSE_TOO_LARGE) this.set({ tooLarge: true });
+      else if (code === CLOSE_TOO_MANY) this.set({ tooManyTabs: true });
+      else if (code === CLOSE_OUT_OF_STEP) this.set({ outOfStep: true });
     });
     window.addEventListener("online", this.onNetwork);
     window.addEventListener("offline", this.onNetwork);
@@ -424,6 +536,7 @@ export class DraftSession {
   private connection(status: "connected" | "disconnected" | "connecting"): Connection {
     if (typeof navigator !== "undefined" && !navigator.onLine) return "offline";
     if (status === "connected") return "connected";
+    if (this.state.syncStuck) return "stopped";
     return this.state.synced ? "reconnecting" : "connecting";
   }
 
@@ -450,6 +563,8 @@ export class DraftSession {
       }
       for (const [key, p] of Object.entries(local.layout ?? {})) this.layout.set(key, p);
       for (const [id, g] of Object.entries(local.groups ?? {})) this.groups.set(id, g);
+      for (const [id, t] of Object.entries(local.threads ?? {})) this.threads.set(id, t);
+      for (const [id, c] of Object.entries(local.comments ?? {})) this.comments.set(id, c);
     });
     this.set({ connection: "connected", synced: true });
     this.onEvent({
@@ -485,6 +600,18 @@ export class DraftSession {
   private onEvent(event: ServerEvent) {
     if (event.type === "compile") {
       this.onCompile(event);
+      return;
+    }
+    if (event.type === "comment_result") {
+      const waiting = this.answers.get(event.id);
+      if (!waiting) return;
+      this.answers.delete(event.id);
+      window.clearTimeout(waiting.timer);
+      if (event.ok) waiting.resolve();
+      else
+        waiting.reject(
+          new CommentRefused(event.code ?? "refused", event.message ?? "The server refused it."),
+        );
       return;
     }
     this.set(eventPatch(this.state, event));
@@ -562,6 +689,7 @@ export class DraftSession {
         user: state.user,
         pointer: isPosition(state.pointer) ? state.pointer : null,
         selection: typeof state.selection === "string" ? state.selection : null,
+        typing: typeof state.typing === "string" ? state.typing : null,
       });
     });
     return out;
@@ -579,6 +707,218 @@ export class DraftSession {
   setSelection(key: string | null) {
     if ((this.awareness.getLocalState()?.selection ?? null) === key) return;
     this.awareness.setLocalStateField("selection", key);
+  }
+
+  /** The thread this person is writing in (`new`: starting one), or null. */
+  setTyping(thread: string | null) {
+    if ((this.awareness.getLocalState()?.typing ?? null) === thread) return;
+    this.awareness.setLocalStateField("typing", thread);
+  }
+
+  // ---- Comments ----------------------------------------------------------------------
+
+  /**
+   * Sends a comment operation; resolves once the server wrote it (its update
+   * comes first), rejects with a `CommentRefused` saying why not. Without a
+   * server (a local draft), writes it here.
+   */
+  private sendComment(op: CommentOp, me: Me): Promise<void> {
+    if (this.isLocal) {
+      this.doc.transact(() => this.writeLocally(op, me), COMMENT);
+      return Promise.resolve();
+    }
+    const provider = this.provider;
+    const ws = provider?.ws;
+    if (!provider?.wsconnected || !ws || ws.readyState !== ws.OPEN) {
+      return Promise.reject(
+        new CommentRefused("offline", "Not connected. Send it again once the draft reconnects."),
+      );
+    }
+    const id = crypto.randomUUID();
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_COMMENT);
+    encoding.writeVarUint8Array(encoder, new TextEncoder().encode(JSON.stringify({ id, op })));
+    return new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.answers.delete(id);
+        reject(
+          new CommentRefused(
+            "timeout",
+            "The server did not answer. Check your connection, then send it again.",
+          ),
+        );
+      }, COMMENT_TIMEOUT);
+      this.answers.set(id, { resolve, reject, timer });
+      ws.send(encoding.toUint8Array(encoder));
+    });
+  }
+
+  private refuseWaiting(error: CommentRefused) {
+    for (const { reject, timer } of this.answers.values()) {
+      window.clearTimeout(timer);
+      reject(error);
+    }
+    this.answers.clear();
+  }
+
+  /** A local draft: what the server would write for `op` (no checks to make). */
+  private writeLocally(op: CommentOp, me: Me) {
+    const at = new Date().toISOString();
+    const comment = (thread: string, body: string, mentions: string[]): DocComment => ({
+      thread,
+      author: { id: me.id, name: me.name },
+      body,
+      mentions,
+      at,
+      edited: null,
+    });
+    switch (op.type) {
+      case "start":
+        this.threads.set(op.thread, { anchor: op.anchor, by: me.id, at, resolved: null });
+        this.comments.set(op.comment, comment(op.thread, op.body, op.mentions));
+        break;
+      case "reply":
+        this.comments.set(op.comment, comment(op.thread, op.body, op.mentions));
+        break;
+      case "edit": {
+        const old = this.comments.get(op.comment) as DocComment | undefined;
+        if (old)
+          this.comments.set(op.comment, {
+            ...old,
+            body: op.body,
+            mentions: op.mentions,
+            edited: at,
+          });
+        break;
+      }
+      case "delete": {
+        const old = this.comments.get(op.comment) as DocComment | undefined;
+        if (!old) break;
+        this.comments.delete(op.comment);
+        const left = [...this.comments.values()].some(
+          (c) => (c as DocComment).thread === old.thread,
+        );
+        if (!left) this.threads.delete(old.thread);
+        break;
+      }
+      case "delete_thread": {
+        for (const [id, c] of [...this.comments.entries()]) {
+          if ((c as DocComment).thread === op.thread) this.comments.delete(id);
+        }
+        this.threads.delete(op.thread);
+        break;
+      }
+      case "resolve": {
+        const old = this.threads.get(op.thread) as DocThread | undefined;
+        if (old)
+          this.threads.set(op.thread, {
+            ...old,
+            resolved: op.resolved ? { by: me.id, name: me.name, at } : null,
+          });
+        break;
+      }
+    }
+  }
+
+  /** A new thread with its first comment; its id, once the server wrote it. */
+  async startThread(anchor: Anchor, body: string, mentions: string[], me: Me): Promise<string> {
+    const thread = crypto.randomUUID();
+    const comment = crypto.randomUUID();
+    await this.sendComment({ type: "start", thread, comment, anchor, body, mentions }, me);
+    return thread;
+  }
+
+  reply(thread: string, body: string, mentions: string[], me: Me): Promise<void> {
+    const comment = crypto.randomUUID();
+    return this.sendComment({ type: "reply", thread, comment, body, mentions }, me);
+  }
+
+  /** One's own comment, rewritten. */
+  editComment(comment: string, body: string, mentions: string[], me: Me): Promise<void> {
+    return this.sendComment({ type: "edit", comment, body, mentions }, me);
+  }
+
+  /**
+   * One's own comment (anyone's, for developers and admins); the thread
+   * goes with its last one (never others' replies).
+   */
+  deleteComment(comment: string, me: Me): Promise<void> {
+    return this.sendComment({ type: "delete", comment }, me);
+  }
+
+  /** A thread and every comment in it (others' too, for developers and admins). */
+  deleteThread(thread: string, me: Me): Promise<void> {
+    return this.sendComment({ type: "delete_thread", thread }, me);
+  }
+
+  setResolved(thread: string, resolved: boolean, me: Me): Promise<void> {
+    return this.sendComment({ type: "resolve", thread, resolved }, me);
+  }
+
+  /** A thread and its first comment written in this tab's own transaction (`---` lines). */
+  private writeThread(id: string, anchor: Anchor, body: string, me: Me) {
+    const at = new Date().toISOString();
+    const thread: DocThread = { anchor, by: me.id, at, resolved: null };
+    this.threads.set(id, thread);
+    const comment: DocComment = {
+      thread: id,
+      author: { id: me.id, name: me.name },
+      body,
+      mentions: [],
+      at,
+      edited: null,
+    };
+    this.comments.set(crypto.randomUUID(), comment);
+  }
+
+  /**
+   * A `---` line typed in the source becomes a comment pinned to `anchor`
+   * (the statement below it): the line leaves the text in the same
+   * transaction, one undo step, so the SQL never holds it. `from`/`to`: the
+   * line, its line break included.
+   */
+  commentFromLine(range: { from: number; to: number }, body: string, anchor: Anchor, me: Me) {
+    const text = this.source();
+    const id = crypto.randomUUID();
+    this.undo.stopCapturing();
+    this.doc.transact(() => {
+      text.delete(range.from, range.to - range.from);
+      this.writeThread(id, anchor, body, me);
+    }, LOCAL);
+    this.undo.stopCapturing();
+    return id;
+  }
+
+  /**
+   * Text pasted with `---` lines in it: the text without them replaces
+   * `range`, and each becomes a thread on the statement below it, in one
+   * transaction (one undo step).
+   */
+  pasteWithComments(
+    range: { from: number; to: number },
+    insert: string,
+    comments: { body: string; anchor: Anchor }[],
+    me: Me,
+  ) {
+    const text = this.source();
+    this.undo.stopCapturing();
+    this.doc.transact(() => {
+      if (range.to > range.from) text.delete(range.from, range.to - range.from);
+      if (insert) text.insert(range.from, insert);
+      for (const { body, anchor } of comments)
+        this.writeThread(crypto.randomUUID(), anchor, body, me);
+    }, LOCAL);
+    this.undo.stopCapturing();
+  }
+
+  /** Threads pinned to a renamed table or column follow it (in the edit's transaction). */
+  private moveAnchors(rename: (anchor: Anchor) => Anchor) {
+    for (const [id, value] of this.threads.entries()) {
+      const thread = value as DocThread;
+      if (!thread?.anchor) continue;
+      const anchor = rename(thread.anchor);
+      if (anchor !== thread.anchor) this.threads.set(id, { ...thread, anchor });
+    }
   }
 
   // ---- Edits -----------------------------------------------------------------------
@@ -750,6 +1090,10 @@ export class DraftSession {
     this.doc.transact(() => {
       text.insert(append.at, append.insert);
       this.moveLayout(change);
+      if (edit.kind === "renameColumn") {
+        const table = `${edit.table.schema}.${edit.table.name}`;
+        this.moveAnchors((a) => renameColumn(a, table, edit.column, edit.to));
+      }
     }, LOCAL);
     this.undo.stopCapturing();
     const entry: EditEntry = {
@@ -789,6 +1133,11 @@ export class DraftSession {
     this.doc.transact(() => {
       source.delete(at, end - at);
       if (change.rename) this.moveLayout({ rename: [change.rename[1], change.rename[0]] });
+      const edit = entry.edit;
+      if (edit.kind === "renameColumn") {
+        const table = `${edit.table.schema}.${edit.table.name}`;
+        this.moveAnchors((a) => renameColumn(a, table, edit.to, edit.column));
+      }
     }, LOCAL);
     this.undo.stopCapturing();
   }
@@ -806,6 +1155,7 @@ export class DraftSession {
         const members = [...new Set(group.members.map((m) => (m === from ? to : m)))];
         this.groups.set(id, { ...group, members });
       }
+      this.moveAnchors((a) => renameTable(a, from, to));
     }
     if (change.place) {
       const { key, x, y } = change.place;
@@ -813,8 +1163,30 @@ export class DraftSession {
     }
   }
 
+  /**
+   * The server asked this tab to sync again (another tab announced the id
+   * it writes with): y-websocket reconnects; past a few times in a minute,
+   * it stops and says so (`syncStuck`), never looping unseen.
+   */
+  private onResync() {
+    const now = Date.now();
+    this.resyncs = [...this.resyncs.filter((at) => now - at < 60_000), now];
+    if (this.resyncs.length < MAX_RESYNCS) return;
+    // After y-websocket has finished closing (it schedules the reconnect).
+    queueMicrotask(() => this.provider?.disconnect());
+    this.set({ syncStuck: true, connection: "stopped" });
+  }
+
+  /** Tries again after `syncStuck`. */
+  retrySync() {
+    this.resyncs = [];
+    this.set({ syncStuck: false });
+    this.provider?.connect();
+  }
+
   destroy() {
     this.destroyed = true;
+    this.refuseWaiting(new CommentRefused("closed", "The draft was closed."));
     window.clearTimeout(this.recheck);
     window.removeEventListener("online", this.onNetwork);
     window.removeEventListener("offline", this.onNetwork);

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT frozen FROM version_threads WHERE id = $1 AND version_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "frozen",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "frozen"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "91acddd04f0f10edaef9837ba107259816ce566e9ce6ba3528fe4a8ed3d2d093"
+}

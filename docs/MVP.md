@@ -645,6 +645,38 @@ Two features, built in this order:
    the SQL pane shows them as `--- alice: …` lines above the statement they're attached to,
    and typing a `---` line creates a comment there. They travel into the published version as
    review history; never into `COMMENT ON` (database comments stay as they are).
+   Built (task R1-COM); what the build decided on top:
+   - **The server writes them.** Threads and comments are two Y.Maps of the draft's doc
+     (`threads`, `comments`: a reply is a key of its own, so concurrent replies never collide).
+     The panel and the graph send operations (start, reply, edit, delete, resolve) that the
+     server checks and writes as its own edits: authors stamped, only one's own comments
+     edited (and deleted, but developers and admins delete anyone's: in the database's
+     Activity), a thread never deleted with someone else's reply, sizes capped (500 threads, 200
+     comments a thread, 4000 characters), and what the discussion weighs (1 MiB a draft, 256 KiB
+     a person: far below the SQL's room, so comments never make a draft uneditable), a budget
+     per person. Editors' own
+     transactions (a `---` line removed as it becomes a thread, so one undo takes both back; a
+     rename carrying anchors) are checked the same way, and what may not stand is written back
+     in the update the others receive.
+   - **Reviewers comment** through operations only: their document updates are never applied.
+     A client id belongs to the person whose tab writes with it (writing with someone else's is
+     refused and that tab told to reload; a tab that only announced an id yields it to the one
+     writing with it, and a reviewer's announcement never holds one). Nothing is dropped
+     silently, and a tab typing as it reconnects, or coming back from sleep with offline edits,
+     loses nothing. Commenting does not make anyone an editor.
+   - **`---` lines never stay in the SQL**: Enter after the words (at the end of the line or
+     splitting it) and pasting turn them into threads; a draft whose text keeps one does not
+     compile ("a comment that was never posted"), so it cannot be published.
+   - **Anchors**: a table, a column (qualified names), a point of the canvas, or a statement's
+     head (a `---` line above an index or a type keeps where it was written). Renames carry
+     them, from the graph (the edit's transaction) or typed in the text (the server's layout
+     move); a drop leaves them outdated, listed apart. The SQL pane shows open threads as
+     read-only `--- name: …` lines drawn by the editor, never text in the document.
+   - **Versions keep them**: publishing freezes the draft's threads into the version
+     (read-only, with everyone's unread marks); a version's page also takes new threads
+     (cheap: the same panel over REST), so released schemas can still be discussed, with the
+     drafts' limits (weights, moderation, a rate limit).
+   - Unread markers are per person, stored server-side; "who is typing" is awareness.
 
 **Ideas, after the round:** several Postgres majors per database (sandbox per major; built,
 below), then a **playground** (a real throwaway database per draft with generated fake data,

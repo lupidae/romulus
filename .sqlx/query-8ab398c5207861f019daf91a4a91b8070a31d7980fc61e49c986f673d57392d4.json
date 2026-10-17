@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE version_threads SET resolved_at = NULL, resolved_by = NULL, resolved_by_name = NULL\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8ab398c5207861f019daf91a4a91b8070a31d7980fc61e49c986f673d57392d4"
+}

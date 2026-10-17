@@ -18,6 +18,11 @@ export interface CodeViewProps {
   readOnly: boolean;
   /** Read once, when the editor is created (memoize them; a new array is ignored, with a warning in dev). */
   extensions?: Extension[];
+  /**
+   * Extensions that draw over the text without owning it (comment threads):
+   * read once like `extensions`, but `doc` still sets the text.
+   */
+  overlay?: Extension[];
   highlights?: Highlights;
   /** Scrolled to whenever a new object is passed (and the view is visible). */
   reveal?: Range | null;
@@ -42,6 +47,7 @@ export function CodeView({
   label,
   readOnly,
   extensions,
+  overlay,
   highlights = NO_HIGHLIGHTS,
   reveal,
   active,
@@ -59,6 +65,7 @@ export function CodeView({
   // Extensions are the editor's for its life: a binding torn down and rebuilt
   // on every render would drop the collaboration. The first value is kept.
   const [fixedExtensions] = useState(extensions);
+  const [fixedOverlay] = useState(overlay);
   const warned = useRef(false);
   useEffect(() => {
     if (import.meta.env.DEV && extensions !== fixedExtensions && !warned.current) {
@@ -87,7 +94,7 @@ export function CodeView({
         language,
         readOnly: latest.current.readOnly,
         label,
-        extensions: fixedExtensions,
+        extensions: [...(fixedExtensions ?? []), ...(fixedOverlay ?? [])],
         onCursor: (offset) => latest.current.onCursor?.(offset),
       });
       setEditor(created);
@@ -99,7 +106,7 @@ export function CodeView({
       setEditor(null);
       latest.current.onEditor?.(null);
     };
-  }, [wanted, language, label, fixedExtensions]);
+  }, [wanted, language, label, fixedExtensions, fixedOverlay]);
 
   useEffect(() => {
     if (!owned) editor?.setDoc(doc);

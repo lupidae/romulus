@@ -12,6 +12,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/components/ui/toaster";
 import { meQuery } from "@/features/auth/queries";
 import { databaseKeys } from "@/features/databases/queries";
+import { CommentModeButton, CommentPins } from "@/features/comments/components/comment-pins";
+import { CommentsAside, CommentsToggle } from "@/features/comments/components/comments-layer";
+import { CommentsPanel } from "@/features/comments/components/comments-panel";
+import { useDraftDiscussion } from "@/features/comments/discussion";
+import { sqlThreads } from "@/features/comments/sql-threads";
+import { useComments } from "@/features/comments/use-comments";
+import { useCommentsUi } from "@/features/comments/use-comments-ui";
+import type { MentionPerson } from "@/components/ui/mention-textarea";
 import { orgKeys, orgQuery } from "@/features/orgs/queries";
 import { canWrite } from "@/features/orgs/roles";
 import type { Schema } from "@/features/schema/model";
@@ -25,7 +33,7 @@ import { findConflicts } from "../conflicts";
 import { useSwitchMode, useUpdateDraft } from "../mutations";
 import { type Diagnostic, type Draft, type DraftMode, draftKeys, draftQuery } from "../queries";
 import { names, resetApprovals } from "../review";
-import { type DraftSession, mayEdit, type SessionState } from "../session";
+import { type DraftSession, mayEdit, type Me, type SessionState } from "../session";
 import { useGraphEdits } from "../use-graph-edits";
 import {
   useDraftSession,
@@ -248,7 +256,7 @@ export function DraftEditor({ org, db, draftId }: { org: string; db: string; dra
       org={org}
       db={db}
       draft={draft}
-      meId={me.id}
+      me={{ id: me.id, name: me.name }}
       isWriter={isWriter}
       session={session}
       state={state}
@@ -270,7 +278,9 @@ export interface WorkspaceProps {
   org: string;
   db: string;
   draft: Draft;
-  meId: string;
+  me: Me;
+  /** A draft without a server (dev screens): who `@` suggests, nothing fetched. */
+  local?: { people: MentionPerson[] };
   isWriter: boolean;
   session: DraftSession | null;
   state: SessionState | null;
@@ -282,13 +292,15 @@ export function Workspace({
   org,
   db,
   draft,
-  meId,
+  me,
+  local,
   isWriter,
   session,
   state,
   onPublished,
   onDeleted,
 }: WorkspaceProps) {
+  const meId = me.id;
   const peers = usePeers(session);
   const layout = useYMap(session?.layout);
   const groups = useYMap(session?.groups);
@@ -338,18 +350,63 @@ export function Workspace({
   });
   const schema = shown ?? emptySchema(db);
 
+  // Comment threads (docs/MVP.md "Review round 1", item 6): reviewers write
+  // them too; nobody while the draft is frozen or closed.
+  const commentsUi = useCommentsUi();
+  const discussion = useDraftDiscussion({
+    session,
+    org,
+    db,
+    draftId: draft.id,
+    me,
+    canComment:
+      draft.status === "open" &&
+      status === "open" &&
+      !(state?.tooLarge ?? false) &&
+      !(state?.outOfStep ?? false),
+    canModerate: isWriter,
+    local: local !== undefined,
+    people: local?.people,
+  });
+  const comments = useComments({
+    discussion,
+    ui: commentsUi,
+    schema: shown,
+    sql: source,
+    selected,
+    onSelect: (key) => select(key),
+    sqlView: view,
+    commentLine: canEdit
+      ? (range, body, anchor) => {
+          session?.commentFromLine(range, body, anchor, me);
+          return !!session;
+        }
+      : undefined,
+    pasteComments: canEdit
+      ? (range, insert, threads) => {
+          session?.pasteWithComments(range, insert, threads, me);
+          return !!session;
+        }
+      : undefined,
+  });
+  // The schema SQL derived from a migration shows them too, read-only.
+  const derivedOverlay = React.useMemo(() => [sqlThreads(comments.feed)], [comments.feed]);
+
   // Bound to the doc while the SQL is the source; a new editor, read-only,
   // once it is derived (`sqlKey`).
   const sqlExtensions = React.useMemo(
-    () => (session && mode === "schema" ? draftExtensions(session, setSqlView) : undefined),
-    [session, mode],
+    () =>
+      session && mode === "schema"
+        ? draftExtensions(session, setSqlView, session.sql, comments.feed)
+        : undefined,
+    [session, mode, comments.feed],
   );
   const migrationExtensions = React.useMemo(
     () =>
       session && mode === "migration"
-        ? draftExtensions(session, setMigrationView, session.migration)
+        ? draftExtensions(session, setMigrationView, session.migration, comments.feed)
         : undefined,
-    [session, mode],
+    [session, mode, comments.feed],
   );
 
   React.useEffect(() => {
@@ -589,6 +646,13 @@ export function Workspace({
         review={state?.review ?? null}
         role={state?.role ?? null}
         liveOpen={status === "open"}
+        comments={
+          <CommentsToggle
+            ui={commentsUi}
+            open={comments.pinned.length}
+            unread={comments.unreadCount}
+          />
+        }
       />
       <Notice
         org={org}
@@ -599,78 +663,122 @@ export function Workspace({
         conflicts={conflicts.length}
         conflictsWith={conflicts[0]?.label ?? null}
         onNextConflict={toNextConflict}
+        onRetrySync={() => session?.retrySync()}
         mode={mode}
       />
-      <main className="min-h-0 flex-1">
-        {session && state?.synced ? (
-          <SchemaViewer
-            schema={schema}
-            texts={{
-              // Migration mode: the schema the migration makes, as SQL.
-              sql: mode === "migration" ? (state.schemaSql ?? "") : sql,
-              json: compile.model ? JSON.stringify(compile.model, null, 2) : undefined,
-            }}
-            format={textTab}
-            onFormatChange={setTextTab}
-            textTabs={textTabs}
-            sqlKey={mode}
-            sqlTab={
-              mode === "migration"
-                ? {
-                    locked: "Derived from the migration",
-                    notice: (
-                      <PaneNotice icon={<LockIcon aria-hidden />}>
-                        {state.schemaSql === null
-                          ? "The schema appears here once the migration compiles."
-                          : `Read-only: what the migration makes of ${draft.base_version ? `v${draft.base_version}` : "an empty database"}. Edit the migration to change it.`}
-                      </PaneNotice>
-                    ),
-                  }
-                : undefined
+      <main className="flex min-h-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1">
+          {session && state?.synced ? (
+            <SchemaViewer
+              schema={schema}
+              texts={{
+                // Migration mode: the schema the migration makes, as SQL.
+                sql: mode === "migration" ? (state.schemaSql ?? "") : sql,
+                json: compile.model ? JSON.stringify(compile.model, null, 2) : undefined,
+              }}
+              format={textTab}
+              onFormatChange={setTextTab}
+              textTabs={textTabs}
+              sqlKey={mode}
+              sqlTab={
+                mode === "migration"
+                  ? {
+                      locked: "Derived from the migration",
+                      notice: (
+                        <PaneNotice icon={<LockIcon aria-hidden />}>
+                          {state.schemaSql === null
+                            ? "The schema appears here once the migration compiles."
+                            : `Read-only: what the migration makes of ${draft.base_version ? `v${draft.base_version}` : "an empty database"}. Edit the migration to change it.`}
+                        </PaneNotice>
+                      ),
+                    }
+                  : undefined
+              }
+              layout={layout}
+              groups={groups}
+              // Reviewers write nothing, but place new tables exactly as editors
+              // do (the persisted first layout's shape).
+              onLayoutChange={
+                canEdit ? (positions) => session.setPositions(positions) : noLayoutChange
+              }
+              editable={canEdit}
+              readOnly={mode === "migration" || !canEdit}
+              sqlExtensions={sqlExtensions}
+              selected={selected}
+              onSelectedChange={select}
+              picked={canEdit ? picked : undefined}
+              onPickedChange={canEdit ? setPicked : undefined}
+              editor={editor}
+              storageKey="romulus:draft-editor"
+              graphEmpty={
+                editor ? (
+                  <FirstTable
+                    onCreate={(name) =>
+                      editor.onEdit(
+                        { kind: "addTable", table: { schema: "public", name } },
+                        { position: { x: 0, y: 0 } },
+                      )
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<TableIcon />}
+                    title="No tables yet"
+                    description={
+                      mode === "migration"
+                        ? "Tables appear here as soon as the migration creates them."
+                        : "Tables appear here as soon as someone writes them in the SQL."
+                    }
+                  />
+                )
+              }
+              graphChildren={
+                <>
+                  <LiveGraph session={session} peers={peers} />
+                  <CommentPins
+                    threads={comments.pinned}
+                    unread={comments.unread}
+                    active={commentsUi.open ? commentsUi.active : null}
+                    composing={commentsUi.open ? commentsUi.composing : null}
+                    onOpen={commentsUi.openThread}
+                    commentMode={commentsUi.commentMode}
+                    onPick={commentsUi.compose}
+                    onExitCommentMode={() => commentsUi.setCommentMode(false)}
+                  />
+                </>
+              }
+              graphControls={
+                discussion.canComment && (
+                  <CommentModeButton
+                    on={commentsUi.commentMode}
+                    onChange={comments.setCommentMode}
+                  />
+                )
+              }
+              graphFocus={comments.focus}
+              sqlOverlay={mode === "migration" ? derivedOverlay : undefined}
+            />
+          ) : (
+            <SchemaViewerSkeleton />
+          )}
+        </div>
+        <CommentsAside ui={commentsUi} title="Comments">
+          <CommentsPanel
+            discussion={discussion}
+            ui={commentsUi}
+            title="Comments"
+            outdated={comments.outdated}
+            onShow={comments.show}
+            onNew={comments.startNew}
+            note={
+              discussion.canComment
+                ? undefined
+                : draft.status === "open"
+                  ? "Comments are paused while the draft is being published or updated."
+                  : undefined
             }
-            layout={layout}
-            groups={groups}
-            // Reviewers write nothing, but place new tables exactly as editors
-            // do (the persisted first layout's shape).
-            onLayoutChange={
-              canEdit ? (positions) => session.setPositions(positions) : noLayoutChange
-            }
-            editable={canEdit}
-            readOnly={mode === "migration" || !canEdit}
-            sqlExtensions={sqlExtensions}
-            selected={selected}
-            onSelectedChange={select}
-            picked={canEdit ? picked : undefined}
-            onPickedChange={canEdit ? setPicked : undefined}
-            editor={editor}
-            storageKey="romulus:draft-editor"
-            graphEmpty={
-              editor ? (
-                <FirstTable
-                  onCreate={(name) =>
-                    editor.onEdit(
-                      { kind: "addTable", table: { schema: "public", name } },
-                      { position: { x: 0, y: 0 } },
-                    )
-                  }
-                />
-              ) : (
-                <EmptyState
-                  icon={<TableIcon />}
-                  title="No tables yet"
-                  description={
-                    mode === "migration"
-                      ? "Tables appear here as soon as the migration creates them."
-                      : "Tables appear here as soon as someone writes them in the SQL."
-                  }
-                />
-              )
-            }
-            graphChildren={<LiveGraph session={session} peers={peers} />}
           />
-        ) : (
-          <SchemaViewerSkeleton />
-        )}
+        </CommentsAside>
       </main>
       <ConfirmDialog
         open={switching !== null}
@@ -707,6 +815,10 @@ export function Workspace({
           open={publishing}
           onOpenChange={setPublishing}
           onJump={(d) => requestAnimationFrame(() => jump(d))}
+          threads={{
+            open: discussion.threads?.filter((t) => !t.resolved).length ?? 0,
+            resolved: discussion.threads?.filter((t) => t.resolved).length ?? 0,
+          }}
           onPublished={(number) => {
             setPublishing(false);
             onPublished(number);
@@ -732,12 +844,15 @@ function Notice({
   conflicts,
   conflictsWith,
   onNextConflict,
+  onRetrySync,
   mode,
 }: {
   org: string;
   db: string;
   draft: Draft;
   state: SessionState | null;
+  /** Reconnects a tab that stopped after the server kept asking it to sync again. */
+  onRetrySync: () => void;
   isWriter: boolean;
   conflicts: number;
   conflictsWith: string | null;
@@ -759,6 +874,56 @@ function Notice({
       >
         Your last change was too large to keep and was not saved. Reload to continue from what
         everyone has.
+      </Alert>
+    );
+  }
+  if (state?.outOfStep) {
+    return (
+      <Alert
+        variant="destructive"
+        className={strip}
+        title="This tab is out of step with the draft"
+        action={
+          <Button size="sm" onClick={() => window.location.reload()}>
+            Reload
+          </Button>
+        }
+      >
+        Its copy no longer matches the server's, so its edits cannot be saved. Copy anything you
+        need from the SQL, then reload.
+      </Alert>
+    );
+  }
+  if (state?.syncStuck) {
+    return (
+      <Alert
+        variant="warning"
+        className={strip}
+        title="This tab could not sync its edits"
+        action={
+          <Button size="sm" onClick={onRetrySync}>
+            Try again
+          </Button>
+        }
+      >
+        Another tab of this draft is writing with this tab's identity. Try again in a moment; if it
+        keeps happening, copy anything you need from the SQL, then reload.
+      </Alert>
+    );
+  }
+  if (state?.tooManyTabs) {
+    return (
+      <Alert
+        variant="warning"
+        className={strip}
+        title="This draft is open in too many of your tabs"
+        action={
+          <Button size="sm" onClick={() => window.location.reload()}>
+            Try again
+          </Button>
+        }
+      >
+        This tab is not connected. Close a few of the others, then try again.
       </Alert>
     );
   }

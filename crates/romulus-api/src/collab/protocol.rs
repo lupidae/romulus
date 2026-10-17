@@ -7,6 +7,7 @@
 //! | 1 | awareness update | both; the server stamps `user` (see `awareness`) |
 //! | 3 | awareness query | client |
 //! | 100 | [`ServerEvent`], JSON | **server only** |
+//! | 101 | a comment operation, JSON (`comments::Request`) | client |
 //!
 //! Compile results, the draft's status and renames travel as
 //! [`ServerEvent`]s rather than in the Y.Doc (a `compiled` Y.Map). A Y.Map is
@@ -35,6 +36,10 @@ use crate::domain::{DraftMode, PgMajor, Role};
 
 /// The tag of [`ServerEvent`] messages.
 pub const MESSAGE_EVENT: u8 = 100;
+/// The tag of comment operations (`comments::Request`, JSON): start a
+/// thread, reply, edit, delete, resolve. The room writes what they mean
+/// and answers [`ServerEvent::CommentResult`].
+pub const MESSAGE_COMMENT: u8 = 101;
 
 /// The messages in one websocket frame (y-websocket sends one per frame;
 /// the protocol allows several). Decoding stops at the first malformed one.
@@ -175,6 +180,18 @@ pub enum ServerEvent {
     /// The server could not store some edits (its database failing): they
     /// live in the open tabs only.
     SaveFailed,
+    /// To one connection: what became of its comment operation `id`
+    /// (`MESSAGE_COMMENT`). When `ok`, the doc's update came first.
+    CommentResult {
+        id: String,
+        ok: bool,
+        /// Why not (`not_yours`, `not_found`, `invalid`, `too_many`,
+        /// `exists`, `rate_limited`, `closed`, `too_large`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
     /// The draft was updated to a newer version ("Update draft"): its base
     /// is now `version`; `conflicts` blocks are left to resolve.
     Updated {

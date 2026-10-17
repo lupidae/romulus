@@ -271,6 +271,9 @@ pub enum AuditAction {
     /// A developer moved the database to another Postgres major (`from`,
     /// `to` in the details).
     MajorChanged,
+    /// A developer or an admin deleted someone else's comment (or a thread
+    /// others wrote in) in a draft's discussion.
+    CommentDeleted,
 }
 
 /// What a draft is edited as (`draft_mode`): one source of truth at a time

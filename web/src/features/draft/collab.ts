@@ -35,6 +35,8 @@ import type * as Y from "yjs";
 
 import { buttonVariants } from "@/components/ui/button";
 
+import { sqlThreads, type ThreadFeed } from "@/features/comments/sql-threads";
+
 import { type Choice, type ConflictBlock, findConflicts, resolution } from "./conflicts";
 import type { Diagnostic } from "./queries";
 import type { DraftSession } from "./session";
@@ -290,13 +292,17 @@ const seedGuard = (ytext: Y.Text) =>
  * The extensions of a draft's source editor: its SQL, or (migration mode)
  * its migration. Create once per editor. `onView` hears of the editor view
  * when it exists (and null when it goes): diagnostics and jumps need it.
+ * With `threads`, comment threads show above their statements, and `---`
+ * lines typed become threads (features/comments/sql-threads.ts).
  */
 export function draftExtensions(
   session: DraftSession,
   onView: (view: EditorView | null) => void,
   text: Y.Text = session.sql,
+  threads?: ThreadFeed,
 ): Extension[] {
   return [
+    ...(threads ? [sqlThreads(threads)] : []),
     yCollab(text, session.awareness, { undoManager: session.undo }),
     seedGuard(text),
     Prec.high(keymap.of(yUndoManagerKeymap)),

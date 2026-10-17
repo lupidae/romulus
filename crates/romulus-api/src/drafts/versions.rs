@@ -95,6 +95,8 @@ pub struct DraftVersion {
     /// The major `model` was compiled on (the room's): still the
     /// database's when it is stored, or 409 `major_changed`.
     pub compiled_on: PgMajor,
+    /// Its comment threads, frozen with the version as review history.
+    pub discussion: Vec<crate::collab::comments::DocThread>,
 }
 
 pub struct Created {
@@ -124,6 +126,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             approvals: new.approvals,
             migration_sql: new.migration_sql,
             compiled_on: Some(new.compiled_on),
+            discussion: new.discussion,
         },
         false,
     )

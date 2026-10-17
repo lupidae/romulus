@@ -7,6 +7,8 @@
 mod approvals;
 mod auth;
 mod collab;
+mod comment_attacks;
+mod comments;
 mod csrf;
 mod databases;
 mod diff;

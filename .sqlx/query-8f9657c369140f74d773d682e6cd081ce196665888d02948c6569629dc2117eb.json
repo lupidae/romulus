@@ -28,7 +28,8 @@
                 "version_published",
                 "approvals_overridden",
                 "approvals_required_changed",
-                "major_changed"
+                "major_changed",
+                "comment_deleted"
               ]
             }
           }

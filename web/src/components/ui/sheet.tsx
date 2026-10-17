@@ -8,12 +8,16 @@ export const SheetTrigger = SheetPrimitive.Trigger;
 export const SheetClose = SheetPrimitive.Close;
 export const SheetTitle = SheetPrimitive.Title;
 
-/** A panel sliding in from the left edge: the app's navigation on small screens. */
+/**
+ * A panel sliding in from an edge: the app's navigation on small screens
+ * (left), a side panel such as comments on a phone (right).
+ */
 export function SheetContent({
   className,
   children,
+  side = "left",
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content>) {
+}: React.ComponentProps<typeof SheetPrimitive.Content> & { side?: "left" | "right" }) {
   return (
     <SheetPrimitive.Portal>
       <SheetPrimitive.Overlay
@@ -27,10 +31,12 @@ export function SheetContent({
         data-slot="sheet-content"
         aria-describedby={undefined}
         className={cn(
-          "fixed inset-y-0 left-0 z-(--z-overlay) flex w-72 max-w-[85vw] flex-col overscroll-contain",
-          "border-r border-border bg-sidebar text-sidebar-foreground shadow-dialog outline-none",
-          "duration-(--duration-base) data-[state=open]:animate-in data-[state=open]:slide-in-from-left",
-          "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-left",
+          "fixed inset-y-0 z-(--z-overlay) flex w-72 max-w-[85vw] flex-col overscroll-contain",
+          "bg-sidebar text-sidebar-foreground shadow-dialog outline-none",
+          "duration-(--duration-base) data-[state=closed]:animate-out data-[state=open]:animate-in",
+          side === "left"
+            ? "left-0 border-r border-border data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left"
+            : "right-0 border-l border-border data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
           className,
         )}
         {...props}

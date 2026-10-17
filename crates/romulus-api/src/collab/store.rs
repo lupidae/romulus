@@ -378,6 +378,20 @@ pub async fn save_mode(
     Ok(())
 }
 
+/// Records `entry`, with the draft's name as it is now.
+async fn record_audit(
+    db: &PgPool,
+    draft_id: Uuid,
+    entry: &crate::audit::Entry,
+) -> Result<(), sqlx::Error> {
+    let name = sqlx::query_scalar!("SELECT name FROM drafts WHERE id = $1", draft_id)
+        .fetch_optional(db)
+        .await?;
+    let mut entry = entry.clone();
+    entry.details.draft_name = name;
+    crate::audit::record(db, &entry).await
+}
+
 pub enum Job {
     Append(Vec<u8>),
     /// After a mode switch's update: `drafts.mode` and `base_sql`.
@@ -390,6 +404,8 @@ pub enum Job {
     Compile(Box<CompileRow>),
     /// Someone's first edit of the SQL (`draft_editors`).
     Editor(Uuid),
+    /// An event for the audit log (the draft's name is filled in then).
+    Audit(Box<crate::audit::Entry>),
     /// Answered once every job queued before it is done.
     Flush(oneshot::Sender<()>),
 }
@@ -477,6 +493,12 @@ async fn run(
             Job::Editor(user_id) => {
                 retry("record an editor", draft_id, || {
                     mark_editor(&db, draft_id, user_id)
+                })
+                .await;
+            }
+            Job::Audit(entry) => {
+                retry("record an audit event", draft_id, || {
+                    record_audit(&db, draft_id, &entry)
                 })
                 .await;
             }

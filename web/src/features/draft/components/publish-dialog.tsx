@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  ChatLinesIcon,
   CheckIcon,
   CopyIcon,
   DatabaseScriptIcon,
@@ -59,6 +60,8 @@ interface PublishDialogProps {
   /** Close and show an error in the SQL. */
   onJump: (diagnostic: Diagnostic) => void;
   onPublished: (number: number) => void;
+  /** Comment threads, open and resolved: kept with the version as its review. */
+  threads?: { open: number; resolved: number };
 }
 
 interface Change {
@@ -120,6 +123,7 @@ function PublishBody({
   onOpenChange,
   onJump,
   onPublished,
+  threads,
 }: PublishDialogProps) {
   const queryClient = useQueryClient();
   const preview = useQuery(publishPreviewQuery(org, db, draftId));
@@ -252,6 +256,15 @@ function PublishBody({
         className="grid gap-4"
       >
         {data && !data.stale && errors.length === 0 && gate.element}
+        {threads && threads.open + threads.resolved > 0 && (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <ChatLinesIcon aria-hidden className="size-4 shrink-0" />
+            <span>
+              {reviewLine(threads)} {threads.open + threads.resolved === 1 ? "stays" : "stay"} with
+              v{number} as its review history, read-only. They never become database comments.
+            </span>
+          </p>
+        )}
         <Field label="Message" description="Optional. What changed, in a line, for the history.">
           <Input
             value={message}
@@ -280,6 +293,13 @@ function PublishBody({
       </form>
     </>
   );
+}
+
+/** "3 comment threads (1 open)". */
+function reviewLine({ open, resolved }: { open: number; resolved: number }) {
+  const all = open + resolved;
+  const threads = all === 1 ? "The comment thread" : `The ${all} comment threads`;
+  return open === 0 || resolved === 0 ? threads : `${threads} (${open} open)`;
 }
 
 function Changes({

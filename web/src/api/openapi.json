@@ -2407,6 +2407,135 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/reads": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Up to when the caller read each thread of the draft (threads never\nopened are not listed).",
+        "operationId": "list_draft_reads",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ThreadRead"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/reads/{thread}": {
+      "put": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Marks a thread of the draft read up to `at` (never back).",
+        "operationId": "read_draft_thread",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadUpTo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Marked"
+          },
+          "404": {
+            "description": "No such draft, or no such thread in it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request": {
       "post": {
         "tags": [
@@ -4205,6 +4334,720 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/threads": {
+      "get": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "The version's discussion: its draft's review, frozen, then the threads\nstarted on its page; oldest first.",
+        "operationId": "list_version_threads",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VersionThread"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Starts a thread on the version, pinned to a table, a column, a point of\nthe graph or a statement.",
+        "operationId": "create_version_thread",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewThread"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionThread"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`too_many_threads`, `too_much`, `discussion_full`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/comments": {
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Replies in a thread.",
+        "operationId": "reply_version_thread",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionThread"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`thread_frozen`, `too_many_comments`, `too_much`, `discussion_full`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/comments/{comment}": {
+      "delete": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Deletes a comment: the caller's, or anyone's for developers and admins\n(recorded in the audit log); the thread goes with its last one.",
+        "operationId": "delete_version_comment",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "comment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted (with the thread, when it was its last comment)"
+          },
+          "403": {
+            "description": "`not_yours`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`thread_frozen`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Edits one of the caller's comments.",
+        "operationId": "edit_version_comment",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "comment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionThread"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`not_yours`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`thread_frozen`, `too_much`, `discussion_full`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/read": {
+      "put": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Marks a thread read up to `at` (never back: an older `at` changes nothing).",
+        "operationId": "read_version_thread",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadUpTo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Marked"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/reopen": {
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Reopens a resolved thread (anyone in the organization).",
+        "operationId": "reopen_version_thread",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionThread"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`thread_frozen`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/versions/{number}/threads/{thread}/resolve": {
+      "post": {
+        "tags": [
+          "versions"
+        ],
+        "summary": "Resolves a thread (anyone in the organization).",
+        "operationId": "resolve_version_thread",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionThread"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`thread_frozen`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/drafts/{id}/ws": {
       "get": {
         "tags": [
@@ -4701,6 +5544,109 @@
           }
         }
       },
+      "Anchor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A table (or view): `schema.name`.",
+            "required": [
+              "table",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "table"
+                ]
+              },
+              "statement": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The head of the statement it was written above, when that is not\nthe table's `CREATE` (an index, a comment…): where the SQL pane\nshows it."
+              },
+              "table": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "table",
+              "column",
+              "kind"
+            ],
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "column"
+                ]
+              },
+              "statement": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "table": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A point of the graph's canvas, in graph coordinates.",
+            "required": [
+              "x",
+              "y",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "point"
+                ]
+              },
+              "x": {
+                "type": "number",
+                "format": "double"
+              },
+              "y": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A statement about no table (a type, an extension…), by its head.",
+            "required": [
+              "statement",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "statement"
+                ]
+              },
+              "statement": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "What a thread is pinned to."
+      },
       "ApiToken": {
         "type": "object",
         "description": "An API token, without its secret.",
@@ -4848,7 +5794,8 @@
           "version_published",
           "approvals_overridden",
           "approvals_required_changed",
-          "major_changed"
+          "major_changed",
+          "comment_deleted"
         ]
       },
       "AuditActor": {
@@ -4918,19 +5865,44 @@
             },
             "description": "Who approved the text published, when."
           },
+          "authors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Whose they were, by name as it was (comments deleted)."
+          },
+          "comments": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many comments went (comments deleted)."
+          },
           "draft_id": {
             "type": [
               "string",
               "null"
             ],
             "format": "uuid",
-            "description": "The draft published (approvals overridden)."
+            "description": "The draft published (approvals overridden), or whose discussion\nlost comments (comments deleted)."
           },
           "draft_name": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "excerpt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The beginning of the first one (comments deleted)."
           },
           "from": {
             "type": [
@@ -4953,6 +5925,14 @@
               "null"
             ],
             "format": "int32"
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The thread a deletion was in (comments deleted)."
           },
           "to": {
             "type": [
@@ -5159,7 +6139,8 @@
           "unavailable",
           "provided_by_extension",
           "conflict",
-          "not_run"
+          "not_run",
+          "comment_line"
         ]
       },
       "ColumnChange": {
@@ -5471,6 +6452,25 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "CommentText": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "1 to 4000 characters."
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         }
       },
@@ -7966,6 +8966,30 @@
           "newer_postgres"
         ]
       },
+      "NewThread": {
+        "type": "object",
+        "required": [
+          "anchor",
+          "body"
+        ],
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/Anchor"
+          },
+          "body": {
+            "type": "string",
+            "description": "The first comment: 1 to 4000 characters."
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Members @mentioned (others are dropped), 20 at most."
+          }
+        }
+      },
       "Org": {
         "type": "object",
         "description": "An organization, as one of its members sees it.",
@@ -8726,6 +9750,19 @@
           "unchanged"
         ]
       },
+      "ReadUpTo": {
+        "type": "object",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The newest comment the person saw."
+          }
+        }
+      },
       "Relation": {
         "type": "object",
         "description": "A schema-qualified relation name, unquoted.",
@@ -9333,6 +10370,42 @@
           },
           {
             "type": "object",
+            "description": "To one connection: what became of its comment operation `id`\n(`MESSAGE_COMMENT`). When `ok`, the doc's update came first.",
+            "required": [
+              "id",
+              "ok",
+              "type"
+            ],
+            "properties": {
+              "code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why not (`not_yours`, `not_found`, `invalid`, `too_many`,\n`exists`, `rate_limited`, `closed`, `too_large`)."
+              },
+              "id": {
+                "type": "string"
+              },
+              "message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "comment_result"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "The draft was updated to a newer version (\"Update draft\"): its base\nis now `version`; `conflicts` blocks are left to resolve.",
             "required": [
               "version",
@@ -9684,6 +10757,50 @@
           }
         }
       },
+      "ThreadRead": {
+        "type": "object",
+        "description": "Up to when the caller read a thread.",
+        "required": [
+          "thread",
+          "read_at"
+        ],
+        "properties": {
+          "read_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "thread": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The thread's id in the draft's doc."
+          }
+        }
+      },
+      "ThreadResolution": {
+        "type": "object",
+        "required": [
+          "name",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once their account is gone."
+          },
+          "name": {
+            "type": "string",
+            "description": "Their name then."
+          }
+        }
+      },
       "Tidied": {
         "type": "object",
         "description": "What Tidy did.",
@@ -9849,6 +10966,56 @@
             ],
             "format": "uuid",
             "description": "`null` once their account is gone."
+          }
+        }
+      },
+      "VersionComment": {
+        "type": "object",
+        "required": [
+          "id",
+          "author_name",
+          "body",
+          "mentions",
+          "created_at"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once their account is gone."
+          },
+          "author_name": {
+            "type": "string",
+            "description": "Their name when they wrote it."
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edited_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Members @mentioned."
           }
         }
       },
@@ -10185,6 +11352,67 @@
           "sql": {
             "type": "string",
             "description": "The source for SQL versions; rendered from the model for pushed JSON\nand imported migrations."
+          }
+        }
+      },
+      "VersionThread": {
+        "type": "object",
+        "description": "A thread of a version's discussion.",
+        "required": [
+          "id",
+          "anchor",
+          "frozen",
+          "created_at",
+          "comments"
+        ],
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/Anchor"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VersionComment"
+            },
+            "description": "Oldest first."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Who started it (`null` once their account is gone)."
+          },
+          "frozen": {
+            "type": "boolean",
+            "description": "From the review of the draft the version was published from, as it\nwas then: read-only."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Up to when the caller read it (`null`: never opened)."
+          },
+          "resolved": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ThreadResolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
