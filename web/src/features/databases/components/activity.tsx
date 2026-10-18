@@ -5,11 +5,15 @@ import {
   ChatLinesIcon,
   CheckCircleIcon,
   DatabaseIcon,
+  DatabaseScriptIcon,
   EyeClosedIcon,
+  FlaskIcon,
+  RefreshDoubleIcon,
   SettingsIcon,
   ShieldCheckIcon,
   TrashIcon,
   UndoIcon,
+  WarningTriangleIcon,
 } from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -36,8 +40,8 @@ export function Activity({ org, db }: { org: string; db: string }) {
           <CardTitle>Activity</CardTitle>
           <p className="text-sm text-muted-foreground">
             Removed and restored versions, drafts published and who approved them, the approvals
-            publishing needs, moves to another Postgres version, and comments deleted by someone
-            other than their author.
+            publishing needs, moves to another Postgres version, comments deleted by someone other
+            than their author, and playgrounds: created, reset, migrated, deleted.
           </p>
         </div>
       </CardHeader>
@@ -112,6 +116,11 @@ const icons = {
   approvals_required_changed: SettingsIcon,
   major_changed: DatabaseIcon,
   comment_deleted: ChatLinesIcon,
+  playground_created: FlaskIcon,
+  playground_deleted: TrashIcon,
+  playground_reset: RefreshDoubleIcon,
+  playground_migration_run: DatabaseScriptIcon,
+  playground_restarted: WarningTriangleIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -146,6 +155,16 @@ function sentence(event: AuditEvent): string {
         ? `${who} deleted a thread of ${details.comments} comments (${whose || "others"})`
         : `${who} deleted ${whose ? `${whose}'s` : "a"} comment`;
     }
+    case "playground_created":
+      return `${who} created a playground of ${v}`;
+    case "playground_deleted":
+      return `${who} deleted a playground of ${v}`;
+    case "playground_reset":
+      return `${who} reset the rows of a playground of ${v}`;
+    case "playground_migration_run":
+      return `${who} ran a migration on a playground of ${v}${details.outcome ? `: ${details.outcome}` : ""}`;
+    case "playground_restarted":
+      return `A playground of ${v} restarted to undo a role changed from inside it`;
   }
 }
 
@@ -160,7 +179,7 @@ function Event({ event }: { event: AuditEvent }) {
         {(details.message || details.draft_name) && (
           <p className="truncate text-sm text-muted-foreground">
             {details.draft_name
-              ? `${event.action === "comment_deleted" ? "In" : "From"} the draft “${details.draft_name}”`
+              ? `${event.action === "comment_deleted" ? "In" : event.action.startsWith("playground_") ? "For" : "From"} the draft “${details.draft_name}”`
               : details.message}
           </p>
         )}

@@ -17,23 +17,37 @@ remus-sql = "0.2.0"
 remus-dbml = "0.2.0"
 remus-mermaid = "0.2.0"
 romulus-diff = { path = "crates/romulus-diff" }
+romulus-fakedata = { path = "crates/romulus-fakedata" }
 romulus-migration = { path = "crates/romulus-migration" }
+romulus-play-runner = { path = "crates/romulus-play-runner", default-features = false }
+romulus-playground = { path = "crates/romulus-playground", default-features = false }
 romulus-sandbox = { path = "crates/romulus-sandbox" }
 
 axum = { version = "0.8.9", features = ["macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
 base64 = "0.22.1"
+bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
 cookie = "0.18.2"
 dotenvy = "0.15.7"
 futures-util = { version = "0.3.31", default-features = false, features = ["sink", "std"] }
 getrandom = "0.4.3"
+# Playground passwords and the API → playground service signatures.
+hmac = "0.12.1"
 http-body-util = "0.1.5"
+# HTTP over Unix sockets: the runner (Docker's API) and the service (the runner's).
+hyper = { version = "1.12.0", features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 # multipart/form-data bodies: migration folders uploaded from the browser.
 multer = "3.1.0"
 openidconnect = "4.0.1"
+# The playground service's own Postgres client (console sessions: every value
+# as Postgres's text, notices, transaction state, cancel, COPY).
+postgres-protocol = "0.6.12"
 # Tests only: the fake IdP signs ID tokens with a key made at test time.
 rand = "0.8.5"
+# The API calling the playground service (signed, on the private link).
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "stream"] }
 rsa = "0.9.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE playgrounds SET last_used_at = now(), expires_at = now() + make_interval(days => $2)\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2f2e74a4391fe04be26165b85feb3c830c2d9a6e61b361a38145af3909c38838"
+}

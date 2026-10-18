@@ -1,0 +1,78 @@
+#!/bin/sh
+# The runner's file helper: the only code that touches a playground's
+# directories. The runner (crates/romulus-play-runner) runs it as root in a
+# short-lived container of this image, with no network, only the CHOWN,
+# DAC_OVERRIDE and FOWNER capabilities, and the playground volume at /play:
+#
+#   /play/pg/<id>/data     the cluster (mounted into the playground's container)
+#   /play/pg/<id>/golden   the generated copy, taken stopped (Reset restores it)
+#   /play/run/<id>         the socket directory (mounted into the playground's
+#                          container and, read-only with every other, the service's)
+#
+# Copies use reflinks where the filesystem has them (XFS, docs/playground.md):
+# instant, blocks shared until one changes; elsewhere (local development) a
+# plain copy. The id is a playground's UUID, checked here too.
+#
+#   play-files create|snapshot|restore|clean|destroy <id>
+#   play-files fstype
+#   play-files space          "<available> <size>" of the volume, in bytes
+#   play-files usage <id>     bytes used by the playground's data and copy
+set -eu
+
+op=${1:-}
+id=${2:-}
+fail() { echo "play-files: $*" >&2; exit 1; }
+
+if [ "$op" = fstype ]; then
+    exec stat -f -c %T /play
+fi
+if [ "$op" = space ]; then
+    df -P -B1 /play | awk 'NR == 2 { print $4, $2 }'
+    exit 0
+fi
+case "$id" in
+    *[!0-9a-f-]* | "") fail "not a playground id: '$id'" ;;
+esac
+[ "${#id}" -eq 36 ] || fail "not a playground id: '$id'"
+
+pg=/play/pg/$id
+run=/play/run/$id
+
+case "$op" in
+create)
+    mkdir -p /play/pg /play/run "$pg/data" "$run"
+    chmod 0711 /play/pg /play/run "$pg"
+    chown 999:999 "$pg/data" "$run"
+    chmod 0700 "$pg/data"
+    chmod 0755 "$run"
+    ;;
+snapshot)
+    [ -s "$pg/data/PG_VERSION" ] || fail "no cluster to copy"
+    [ ! -e "$pg/data/postmaster.pid" ] || fail "the cluster is running"
+    rm -rf "$pg/golden.next"
+    cp -a --reflink=auto "$pg/data" "$pg/golden.next"
+    rm -rf "$pg/golden"
+    mv "$pg/golden.next" "$pg/golden"
+    ;;
+restore)
+    [ -d "$pg/golden" ] || fail "no generated copy"
+    rm -rf "$pg/data.old"
+    if [ -e "$pg/data" ]; then mv "$pg/data" "$pg/data.old"; fi
+    cp -a --reflink=auto "$pg/golden" "$pg/data"
+    rm -rf "$pg/data.old"
+    find "$run" -mindepth 1 -delete
+    ;;
+clean)
+    # A stale socket or lock file from a container that did not stop cleanly.
+    find "$run" -mindepth 1 -delete
+    ;;
+destroy)
+    rm -rf "$pg" "$run"
+    ;;
+usage)
+    du -s -B1 "$pg" | cut -f1
+    ;;
+*)
+    fail "unknown operation '$op'"
+    ;;
+esac

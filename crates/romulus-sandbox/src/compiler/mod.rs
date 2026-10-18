@@ -239,7 +239,7 @@ impl Compilation {
         self.diagnostics.iter().filter(|d| d.is_error())
     }
 
-    fn failed(sha256: String, statements: usize, diagnostics: Vec<Diagnostic>) -> Self {
+    pub(crate) fn failed(sha256: String, statements: usize, diagnostics: Vec<Diagnostic>) -> Self {
         Self {
             model: None,
             diagnostics,

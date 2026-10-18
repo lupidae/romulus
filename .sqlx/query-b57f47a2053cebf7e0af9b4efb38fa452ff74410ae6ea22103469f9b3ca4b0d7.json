@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO playgrounds (org_id, database_id, version_id, model_sha256, size, profile, seed, status, ready_at)\n         SELECT $1, $2, v.id, sha256(''::bytea), 'small', 'realistic', 1, 'ready', now()\n         FROM versions v WHERE v.database_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b57f47a2053cebf7e0af9b4efb38fa452ff74410ae6ea22103469f9b3ca4b0d7"
+}

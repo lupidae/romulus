@@ -35,6 +35,7 @@ import { Route as OrgDbDiffIndexRouteImport } from './routes/$org/$db/diff/index
 import { Route as OrgDbDiffRangeRouteImport } from './routes/$org/$db/diff/$range'
 import { Route as OrgDbVNumberRouteImport } from './routes/$org/$db/v/$number'
 import { Route as OrgDbDraftsDraftRouteImport } from './routes/$org_.$db.drafts.$draft'
+import { Route as OrgDbPlaygroundsPlaygroundRouteImport } from './routes/$org_.$db.playgrounds.$playground'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -166,6 +167,12 @@ const OrgDbDraftsDraftRoute = OrgDbDraftsDraftRouteImport.update({
   path: '/$org/$db/drafts/$draft',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OrgDbPlaygroundsPlaygroundRoute =
+  OrgDbPlaygroundsPlaygroundRouteImport.update({
+    id: '/$org_/$db/playgrounds/$playground',
+    path: '/$org/$db/playgrounds/$playground',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -193,6 +200,7 @@ export interface FileRoutesByFullPath {
   '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
+  '/$org/$db/playgrounds/$playground': typeof OrgDbPlaygroundsPlaygroundRoute
   '/$org/$db/diff/': typeof OrgDbDiffIndexRoute
 }
 export interface FileRoutesByTo {
@@ -218,6 +226,7 @@ export interface FileRoutesByTo {
   '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
+  '/$org/$db/playgrounds/$playground': typeof OrgDbPlaygroundsPlaygroundRoute
   '/$org/$db/diff': typeof OrgDbDiffIndexRoute
 }
 export interface FileRoutesById {
@@ -247,6 +256,7 @@ export interface FileRoutesById {
   '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org_/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
+  '/$org_/$db/playgrounds/$playground': typeof OrgDbPlaygroundsPlaygroundRoute
   '/$org/$db/diff/': typeof OrgDbDiffIndexRoute
 }
 export interface FileRouteTypes {
@@ -277,6 +287,7 @@ export interface FileRouteTypes {
     | '/$org/$db/diff/$range'
     | '/$org/$db/v/$number'
     | '/$org/$db/drafts/$draft'
+    | '/$org/$db/playgrounds/$playground'
     | '/$org/$db/diff/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -302,6 +313,7 @@ export interface FileRouteTypes {
     | '/$org/$db/diff/$range'
     | '/$org/$db/v/$number'
     | '/$org/$db/drafts/$draft'
+    | '/$org/$db/playgrounds/$playground'
     | '/$org/$db/diff'
   id:
     | '__root__'
@@ -330,6 +342,7 @@ export interface FileRouteTypes {
     | '/$org/$db/diff/$range'
     | '/$org/$db/v/$number'
     | '/$org_/$db/drafts/$draft'
+    | '/$org_/$db/playgrounds/$playground'
     | '/$org/$db/diff/'
   fileRoutesById: FileRoutesById
 }
@@ -345,6 +358,7 @@ export interface RootRouteChildren {
   DevViewerRoute: typeof DevViewerRoute
   InviteTokenRoute: typeof InviteTokenRoute
   OrgDbDraftsDraftRoute: typeof OrgDbDraftsDraftRoute
+  OrgDbPlaygroundsPlaygroundRoute: typeof OrgDbPlaygroundsPlaygroundRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -531,6 +545,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgDbDraftsDraftRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$org_/$db/playgrounds/$playground': {
+      id: '/$org_/$db/playgrounds/$playground'
+      path: '/$org/$db/playgrounds/$playground'
+      fullPath: '/$org/$db/playgrounds/$playground'
+      preLoaderRoute: typeof OrgDbPlaygroundsPlaygroundRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -602,6 +623,7 @@ const rootRouteChildren: RootRouteChildren = {
   DevViewerRoute: DevViewerRoute,
   InviteTokenRoute: InviteTokenRoute,
   OrgDbDraftsDraftRoute: OrgDbDraftsDraftRoute,
+  OrgDbPlaygroundsPlaygroundRoute: OrgDbPlaygroundsPlaygroundRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

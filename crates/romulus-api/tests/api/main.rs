@@ -25,6 +25,7 @@ mod members;
 mod migration;
 mod oidc;
 mod orgs;
+mod playgrounds;
 mod push;
 mod removal;
 mod schema;

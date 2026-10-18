@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id, p.org_id\n           FROM playgrounds p\n           JOIN databases b ON b.id = p.database_id\n           LEFT JOIN drafts d ON d.id = p.draft_id\n           WHERE p.status = 'ready'\n             AND (p.expires_at < now()\n                  OR b.deleted_at IS NOT NULL\n                  OR (p.draft_id IS NOT NULL AND d.status <> 'open'))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "playgrounds",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "playgrounds",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cfe89d77f3749b7e5b3ea1574a0052385987918d3cb3ce6267b1ebff3d1213fd"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE playgrounds SET status = 'failed', failure = $2 WHERE id = $1 AND status = 'building'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "679bf0a71b8afdab946bb9af649be1efc07d0b2852fdb59d3320106602d164de"
+}

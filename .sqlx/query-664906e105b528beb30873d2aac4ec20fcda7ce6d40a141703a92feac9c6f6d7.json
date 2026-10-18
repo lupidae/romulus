@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE databases SET pg_major = 15 WHERE slug = 'shop'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "664906e105b528beb30873d2aac4ec20fcda7ce6d40a141703a92feac9c6f6d7"
+}

@@ -32,6 +32,7 @@ import { modKey } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 import type { Role } from "@/features/orgs/queries";
+import { PlaygroundButton } from "@/features/playground/components/entry";
 
 import { useDeleteDraft, useRenameDraft, useTidyDraft } from "../mutations";
 import type { Diagnostic, Draft, DraftMode } from "../queries";
@@ -229,6 +230,21 @@ export function EditorBar(props: EditorBarProps) {
               </MenuItem>
             </MenuContent>
           </Menu>
+        )}
+        {open && typeof draft.base_version === "number" && (
+          <PlaygroundButton
+            org={org}
+            db={db}
+            source={{
+              kind: "draft",
+              draftId: draft.id,
+              draftName: draft.name,
+              version: draft.base_version,
+            }}
+            canCreate={isWriter}
+            variant="ghost"
+            compact
+          />
         )}
         {reviewing(props.review) && open && (
           <ReviewControl

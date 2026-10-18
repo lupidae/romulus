@@ -1,0 +1,171 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, kind AS \"kind: PlaygroundRunKind\", user_id, user_name, sql, started_at,\n                  duration_ms, status AS \"status: PlaygroundRunStatus\", rows, error, report\n           FROM playground_runs WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kind: PlaygroundRunKind",
+        "type_info": {
+          "Custom": {
+            "name": "playground_run_kind",
+            "kind": {
+              "Enum": [
+                "query",
+                "explain",
+                "migration",
+                "reset"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "user_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "sql"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "duration_ms",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "status: PlaygroundRunStatus",
+        "type_info": {
+          "Custom": {
+            "name": "playground_run_status",
+            "kind": {
+              "Enum": [
+                "ok",
+                "error",
+                "cancelled"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "rows",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "rows"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "error",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "report",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "playground_runs",
+            "name": "report"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ab6ebdd6d452ba3d1de1efc80cdba8f28f1a228f268e6a9d1fd25beeb5114e52"
+}

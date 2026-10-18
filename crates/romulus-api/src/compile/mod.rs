@@ -241,6 +241,35 @@ impl SqlCompiler {
         }
     }
 
+    /// What a playground (Postgres `major`, its image's) runs to hold the
+    /// schema `sql` describes ([`romulus_sandbox::playground::script`]):
+    /// compiled on that major's sandbox first, for the stubs it needs.
+    /// `None` when it does not compile. Tests (a function compiler): the
+    /// text itself.
+    pub async fn playground_script(&self, major: PgMajor, sql: &str) -> ApiResult<Option<String>> {
+        match &self.0 {
+            Backend::None => Err(unavailable(major)),
+            Backend::Sandbox(_) => {
+                let compiler = self.ready(major)?;
+                let compilation = compiler.compile(sql).await.map_err(|err| {
+                    tracing::warn!(error = %Chain(&err), %major, "sandbox compile failed");
+                    unavailable(major)
+                })?;
+                if !compilation.is_ok() {
+                    return Ok(None);
+                }
+                let (text, catalog) = (sql.to_owned(), compiler.catalog().clone());
+                let script = tokio::task::spawn_blocking(move || {
+                    romulus_sandbox::playground::script(&text, &compilation, &catalog)
+                })
+                .await
+                .map_err(ApiError::internal)?;
+                Ok(Some(script))
+            }
+            Backend::Function(_) => Ok(Some(sql.to_owned())),
+        }
+    }
+
     /// [`SqlCompiler::compile`] of a draft's text: refused while it has
     /// conflict blocks (publishing, Tidy).
     pub async fn compile_draft(&self, major: PgMajor, sql: &str) -> ApiResult<Compiled> {

@@ -47,6 +47,49 @@ pub struct Config {
     /// (the preview's Pages Function), the secret that proxy sends; requests
     /// without it are refused (the `edge` module). At least 32 characters.
     pub edge_key: Option<Secret>,
+    /// `ROMULUS_PLAY_URL` and `ROMULUS_PLAY_KEY`: the playground service on
+    /// the private link, and the key the API signs its calls with (at least
+    /// 32 characters, the service holds the same). Both or neither; neither:
+    /// playgrounds are off.
+    pub playground: Option<PlaygroundConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaygroundConfig {
+    pub url: Url,
+    pub key: Secret,
+}
+
+impl PlaygroundConfig {
+    fn from_lookup(
+        get: &impl Fn(&'static str) -> Option<String>,
+    ) -> Result<Option<Self>, ConfigError> {
+        match (get("ROMULUS_PLAY_URL"), get("ROMULUS_PLAY_KEY")) {
+            (None, None) => Ok(None),
+            (Some(service), Some(key)) => {
+                if key.len() < 32 {
+                    return Err(ConfigError::Invalid {
+                        var: "ROMULUS_PLAY_KEY",
+                        reason: "use at least 32 characters (openssl rand -hex 32)".to_owned(),
+                    });
+                }
+                let mut url = Url::parse(&service).map_err(|err| ConfigError::Invalid {
+                    var: "ROMULUS_PLAY_URL",
+                    reason: err.to_string(),
+                })?;
+                // Paths join under it.
+                if !url.path().ends_with('/') {
+                    url.set_path(&format!("{}/", url.path()));
+                }
+                Ok(Some(Self {
+                    url,
+                    key: Secret(key),
+                }))
+            }
+            (Some(_), None) => Err(ConfigError::Missing("ROMULUS_PLAY_KEY")),
+            (None, Some(_)) => Err(ConfigError::Missing("ROMULUS_PLAY_URL")),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +151,7 @@ impl Config {
             dev_signin: false,
             web_dir: None,
             edge_key: None,
+            playground: None,
         }
     }
 
@@ -210,6 +254,8 @@ impl Config {
             });
         }
 
+        let playground = PlaygroundConfig::from_lookup(&get)?;
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             api_addr,
@@ -222,6 +268,7 @@ impl Config {
             dev_signin,
             web_dir,
             edge_key,
+            playground,
         })
     }
 }
@@ -284,6 +331,43 @@ mod tests {
         assert_eq!(config.api_addr.port(), 41001);
         assert_eq!(config.public_origin(), "http://localhost:41000");
         assert!(config.oidc.is_none());
+    }
+
+    #[test]
+    fn playgrounds_need_both_their_url_and_a_long_key() {
+        assert!(config(&BASE).unwrap().playground.is_none());
+        let key = "k".repeat(32);
+        let on = config(&[
+            BASE[0],
+            BASE[1],
+            ("ROMULUS_PLAY_URL", "http://playground:8080"),
+            ("ROMULUS_PLAY_KEY", &key),
+        ])
+        .unwrap();
+        assert_eq!(
+            on.playground.unwrap().url.as_str(),
+            "http://playground:8080/"
+        );
+        assert!(matches!(
+            config(&[
+                BASE[0],
+                BASE[1],
+                ("ROMULUS_PLAY_URL", "http://playground:8080")
+            ]),
+            Err(ConfigError::Missing("ROMULUS_PLAY_KEY"))
+        ));
+        assert!(matches!(
+            config(&[
+                BASE[0],
+                BASE[1],
+                ("ROMULUS_PLAY_URL", "http://p"),
+                ("ROMULUS_PLAY_KEY", "short")
+            ]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_PLAY_KEY",
+                ..
+            })
+        ));
     }
 
     #[test]

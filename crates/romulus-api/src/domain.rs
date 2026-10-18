@@ -274,6 +274,76 @@ pub enum AuditAction {
     /// A developer or an admin deleted someone else's comment (or a thread
     /// others wrote in) in a draft's discussion.
     CommentDeleted,
+    /// A playground was created (it costs the host's capacity).
+    PlaygroundCreated,
+    /// A playground was deleted by someone (expiry is not recorded).
+    PlaygroundDeleted,
+    /// A playground's rows were put back to the generated ones.
+    PlaygroundReset,
+    /// A draft's migration ran on a playground's rows.
+    PlaygroundMigrationRun,
+    /// A playground restarted to undo a role changed from inside it (its
+    /// password or settings), pausing everyone in it. By romulus itself.
+    PlaygroundRestarted,
+}
+
+/// Where a playground is (`playground_status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "playground_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PlaygroundStatus {
+    /// Its schema and rows are being made.
+    Building,
+    Ready,
+    /// The build failed (`failure` says why); nothing is left on the host.
+    Failed,
+    /// Deleted after 7 days unused, or with its draft.
+    Expired,
+}
+
+/// How many rows a playground is generated with (`playground_size`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "playground_size", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PlaygroundSize {
+    /// ~50 k rows, ~10 s.
+    Small,
+    /// ~1 M rows, ~1 min.
+    Medium,
+}
+
+/// What a playground's rows aim at (`playground_profile`).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema,
+)]
+#[sqlx(type_name = "playground_profile", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PlaygroundProfile {
+    #[default]
+    Realistic,
+    /// NULLs, maximum lengths, duplicates, extremes: what breaks migrations.
+    EdgeCases,
+}
+
+/// What an entry of a playground's history is (`playground_run_kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "playground_run_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PlaygroundRunKind {
+    Query,
+    Explain,
+    Migration,
+    Reset,
+}
+
+/// How an entry of a playground's history ended (`playground_run_status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "playground_run_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PlaygroundRunStatus {
+    Ok,
+    Error,
+    Cancelled,
 }
 
 /// What a draft is edited as (`draft_mode`): one source of truth at a time

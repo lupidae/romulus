@@ -24,6 +24,9 @@
 //!   schema cannot hold (data, `BEGIN`/`COMMIT`, `CONCURRENTLY`) blanked
 //!   in place; [`draft_migration::Script::relocate`] puts the diagnostics
 //!   back in the migration.
+//! - [`playground::script`] is what a playground runs to hold a schema
+//!   that compiled: the stubs the compile settled on, without extensions
+//!   (the playground's init installs them).
 //! - [`merge::merge`] is "Update draft": the statement-level three-way merge
 //!   of a draft with a newer version, conflicts as blocks the compile
 //!   refuses ([`merge::conflict_diagnostics`]).
@@ -67,6 +70,7 @@ pub mod key;
 pub mod merge;
 mod names;
 mod parse;
+pub mod playground;
 pub mod prepare;
 mod refine;
 mod render;

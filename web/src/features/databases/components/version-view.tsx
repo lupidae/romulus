@@ -34,6 +34,7 @@ import { useComments } from "@/features/comments/use-comments";
 import { useCommentsUi } from "@/features/comments/use-comments-ui";
 import { CompareWith } from "@/features/diff/components/compare-with";
 import { MigrationButton } from "@/features/imports/components/migration-dialog";
+import { PlaygroundButton } from "@/features/playground/components/entry";
 import { names } from "@/features/draft/review";
 import { orgQuery } from "@/features/orgs/queries";
 import { canManageMembers, canWrite } from "@/features/orgs/roles";
@@ -61,6 +62,12 @@ interface VersionViewProps {
   org: string;
   database: Database;
   number: number;
+}
+
+/** Tables (and partitioned ones) in a model, as remus writes it. */
+function tableCount(model: unknown): number | undefined {
+  const entities = (model as { entities?: { kind?: string }[] } | null)?.entities;
+  return entities?.filter((e) => e.kind === "r" || e.kind === "p").length;
 }
 
 /**
@@ -304,6 +311,16 @@ function VersionStrip({
       )}
       <div className="ml-auto flex items-center gap-1">
         {discussion}
+        {version && (
+          <PlaygroundButton
+            org={org}
+            db={db}
+            source={{ kind: "version", version: number, tables: tableCount(version.model) }}
+            canCreate={canWrite(orgData.role)}
+            variant="ghost"
+            compact
+          />
+        )}
         {version && <MigrationButton version={version} />}
         {version && <WrittenMigrationButton org={org} database={database} version={version} />}
         <CompareWith org={org} db={db} number={number} latest={latest} previous={older} />

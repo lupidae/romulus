@@ -12,7 +12,11 @@ crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tes
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
 crates/romulus-migration/ model → model migration (ALTER … in dependency order), tool files; no I/O; oracle in tests/
 crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, allowlist, stubs, compile pool
+crates/romulus-playground/ the playground service (lib + bin): builds playgrounds, console sessions, migration
+                      runs; its `protocol` and `signing` (no `server` feature) are what the API shares
+crates/romulus-play-runner/ the playground runner: the only process with the Docker socket, fixed operations
 deploy/sandbox/       the sandbox image, one per Postgres major (PG_MAJOR 15–18) + PostGIS + pgvector, allowlisted extensions trusted
+deploy/playground/    a playground's Postgres image (17): the sandbox's, nothing trusted, init then scram-only
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
 site/                 the static homepage (tokens copied from web/; see site/README.md); its Pages
@@ -44,6 +48,8 @@ just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,s
 just site        # the homepage on $ROMULUS_SITE_PORT; `just site-check` = its CI gate
 just sandbox 15   # another Postgres major's sandbox (15, 16, 18, or all); `just up` runs 17 only
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
+just play        # only the playground runner and service (the API and web elsewhere)
+just playground-image   # the playground Postgres image (`just up` builds it too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
 ```
 
@@ -72,6 +78,7 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
 | +7 | `ROMULUS_SITE_PORT` | the static homepage (`just site`, site/'s Playwright) |
 | +8 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel sends (sign-up codes) |
+| +9 | `ROMULUS_PLAY_PORT` | the playground service (`ROMULUS_PLAY_URL`; `just dev` or `just play` runs it) |
 | 40000 + 10·N + M − 10 | `ROMULUS_SANDBOX_PG15_PORT`, `…PG16…`, `…PG18…` | the other Postgres majors' sandboxes (`ROMULUS_SANDBOX_URL_PG15`…), on demand |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
@@ -855,6 +862,51 @@ statement; replies, @mentions, resolve; never `COMMENT ON`.
   `Client::edit_as`), `features/comments/model.test.ts`,
   `sql-threads.test.ts`, `e2e/comments.spec.ts`; the dev editor
   (`/app/dev/editor`) seeds a discussion (`?comments=none` for none).
+
+## Playgrounds (`playgrounds`, `romulus-playground`, `romulus-play-runner`)
+
+docs/playground.md (its decisions block first) has the design; deploy/preview/README.md
+"Playground host" the operations and how each threat is handled.
+
+- **Three processes.** The API owns durable state and who may do what (`playgrounds`:
+  tables `playgrounds`, `playground_runs`; caps on playgrounds existing; audit events;
+  the console's websocket, proxied). The service (`romulus-playground`, unprivileged)
+  builds, runs console sessions and migration runs, caps running playgrounds and
+  statements, stops idle ones; it trusts only calls the API signed
+  (`romulus_playground::signing`, `ROMULUS_PLAY_KEY`). The runner
+  (`romulus-play-runner`) is the only process with the Docker socket: fixed
+  operations on `romulus-play-<id>`; nothing from a request becomes a Docker argument.
+- **Read-only is privileges**: the console runs as `play_read` (deploy/playground/play-init.sql),
+  never a parse of the SQL. Migration runs run as `play_owner`. Never give either a
+  superuser power, `CREATEROLE`, a trusted extension or an untrusted language.
+- **The API's host seam**: `playgrounds::host::Backend` (`Remote` in production; API tests
+  use a fake, `AppState::with_playgrounds`). Without `ROMULUS_PLAY_URL`/`_KEY`, playgrounds
+  answer 503 `host_unavailable`. Roles: create, reset, run migration, delete →
+  `Member<min::Developer>`; read, history, console → `Member` (reviewers read only, with
+  the shorter deadline: the API signs their access as `read`).
+- **The generator** is `romulus-fakedata`, behind a seam of its shape (`server::seed`:
+  `Seeder::plan`, `Plan::steps`, `Step::{CopyTable, Sql, Outcome}`, `Report::record_outcome`;
+  `FakeData` is the adapter): tests stand their own seeder in. The report is stored as the
+  crate serializes it, plus its sentences as `lines`.
+- **One Postgres major**: playgrounds run 17, their image's (`playgrounds::MAJOR`, a test reads
+  the Dockerfile). A database on another major gets 422 `major_unsupported` (the button says
+  why): its migration's locks and rewrites would be 17's.
+- **Lifecycle rules**: one operation per playground at a time, a second refused at once
+  (`Host::try_op`, 409 `busy`, never queued past the API's timeout); destroy aborts a build or
+  migration in progress. Idleness counts from the last statement (`Entry::statement`), not open
+  tabs: a stopped tab hears `stopped` and its next run starts the playground; a failed start is
+  `unavailable` with its code, and `open` tries again. Caps on creation are counted again in the
+  insert's transaction under an advisory lock (`playgrounds::build::CREATE_LOCK`). Roles changed
+  from inside are put back by a restart (the entrypoint resets them on every start).
+- **Local development** runs playgrounds with `runc` and reaches Postgres by TCP on
+  loopback (`ROMULUS_PLAY_TCP`, refused with gVisor); the preview with `runsc-uds` and the
+  socket. The runner keeps playgrounds' files in a named volume (`<project>_play`) through
+  `play-files` helper containers. `just down` stops this worktree's playgrounds,
+  `just nuke` removes them.
+- **Tests**: `crates/romulus-playground/tests/service.rs` against real playground
+  containers (the runner in process; skipped without Docker or the image, fails in CI),
+  `crates/romulus-api/tests/api/playgrounds.rs` (the fake host),
+  `web/e2e/playground.spec.ts`.
 
 ## Testing
 

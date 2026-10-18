@@ -1,0 +1,74 @@
+[package]
+name = "romulus-playground"
+description = "The playground service: builds playgrounds (schema, generated rows), runs their read-only console and migration runs over each playground's socket. Trusts only calls the API signed."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = ["server"]
+# The service itself (the binary). Without it, the crate is the wire
+# protocol and the signatures, which the API shares.
+server = [
+    "dep:axum",
+    "dep:dotenvy",
+    "dep:fallible-iterator",
+    "dep:futures-util",
+    "dep:postgres-protocol",
+    "dep:remus-core",
+    "dep:romulus-fakedata",
+    "dep:romulus-play-runner",
+    "dep:romulus-sandbox",
+    "dep:tracing-subscriber",
+    "tokio/net",
+    "tokio/rt-multi-thread",
+    "tokio/signal",
+    "tokio/io-util",
+]
+# `utoipa::ToSchema` on the protocol types the API puts in its OpenAPI document.
+utoipa = ["dep:utoipa"]
+
+[[bin]]
+name = "romulus-playground"
+required-features = ["server"]
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle = "2.6.1"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
+tracing.workspace = true
+uuid.workspace = true
+
+axum = { workspace = true, features = ["ws"], optional = true }
+dotenvy = { workspace = true, optional = true }
+fallible-iterator = { version = "0.2.0", optional = true }
+futures-util = { workspace = true, optional = true }
+postgres-protocol = { workspace = true, optional = true }
+remus-core = { workspace = true, optional = true }
+# The generator (docs/playground.md, section 2): `server::seed::FakeData`.
+romulus-fakedata = { workspace = true, optional = true }
+romulus-play-runner = { workspace = true, optional = true }
+romulus-sandbox = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+dotenvy.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+romulus-play-runner = { workspace = true, features = ["server"] }
+remus-core = { workspace = true, features = ["fixtures"] }
+tokio-tungstenite.workspace = true
+uuid = { workspace = true, features = ["v4", "v7"] }
+
+[lints]
+workspace = true

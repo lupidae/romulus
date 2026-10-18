@@ -87,6 +87,10 @@ pub enum ApiError {
     /// 503: a dependency (the database, the sandbox) is unreachable.
     #[error("{0}")]
     Unavailable(String),
+    /// 503 with a specific code (`host_unavailable`): what one feature needs
+    /// (the playground host) is down or not configured.
+    #[error("{message}")]
+    Down { code: &'static str, message: String },
     /// 503: the request did not finish within the server's time limit.
     #[error("the request took too long")]
     Timeout,
@@ -120,7 +124,9 @@ impl ApiError {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
-            Self::Unavailable(_) | Self::Timeout => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Unavailable(_) | Self::Down { .. } | Self::Timeout => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -138,7 +144,8 @@ impl ApiError {
             Self::MethodNotAllowed => "method_not_allowed",
             Self::Denied { code, .. }
             | Self::Conflict { code, .. }
-            | Self::Unprocessable { code, .. } => code,
+            | Self::Unprocessable { code, .. }
+            | Self::Down { code, .. } => code,
             Self::PayloadTooLarge => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::RateLimited { .. } => "rate_limited",

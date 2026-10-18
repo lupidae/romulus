@@ -29,10 +29,10 @@ function decorations(
       if (to < length) to += 1;
       else if (from > 0) from -= 1;
     }
-    ranges.push(Decoration.line({ class: "cm-diagnostic-line" }).range(view.doc.lineAt(from).from));
+    ranges.push(Decoration.line({ class: "cm-error-line" }).range(view.doc.lineAt(from).from));
     if (to > from) {
       ranges.push(
-        Decoration.mark({ class: "cm-diagnostic", attributes: { title: mark.message } }).range(
+        Decoration.mark({ class: "cm-error-mark", attributes: { title: mark.message } }).range(
           from,
           to,
         ),
@@ -54,13 +54,13 @@ const marksField = StateField.define<DecorationSet>({
 });
 
 const theme = EditorView.theme({
-  ".cm-diagnostic": {
+  ".cm-error-mark": {
     textDecoration: "underline wavy var(--color-destructive)",
     textDecorationSkipInk: "none",
     textUnderlineOffset: "0.1875rem",
     backgroundColor: "color-mix(in oklab, var(--color-destructive) 10%, transparent)",
   },
-  ".cm-diagnostic-line": {
+  ".cm-error-line": {
     backgroundColor: "color-mix(in oklab, var(--color-destructive) 5%, transparent)",
   },
   ".cm-placeholder": { color: "var(--color-faint-foreground)", fontStyle: "normal" },

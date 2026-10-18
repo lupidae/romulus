@@ -79,6 +79,11 @@ jobs:
           for _ in $(seq 60); do docker exec sandbox pg_isready -U sandbox_admin -d postgres && exit 0; sleep 1; done
           docker logs sandbox; exit 1
 
+      # romulus-playground's service tests start playgrounds of it (they fail
+      # without it in CI).
+      - name: Build the playground image
+        run: just playground-image
+
       - run: cargo sqlx migrate run --source migrations
       - run: just check
 

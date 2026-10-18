@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE playgrounds SET status = 'expired' WHERE id = $1 AND status = 'ready'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b572a206e4a706de631bd89284ab34928ec346b4d473882948e6142c26cfe8b1"
+}

@@ -151,6 +151,13 @@ async fn serve() -> Result<(), MainError> {
         state.imports.clone(),
         romulus_api::imports::staging::SWEEP_EVERY,
     );
+    // Playgrounds past their lifetime, builds that will never finish,
+    // orphans on the host: now, and every 5 minutes.
+    let playground_sweeper = romulus_api::playgrounds::sweeper::sweeper(
+        state.clone(),
+        romulus_api::playgrounds::sweeper::SWEEP_EVERY,
+    );
+    let playgrounds = state.playgrounds.clone();
     // Versions removed more than 30 days ago: now, and every hour.
     let purger = romulus_api::versions::removal::purger(
         state.db.clone(),
@@ -163,11 +170,13 @@ async fn serve() -> Result<(), MainError> {
             shutdown_signal().await;
             // Websockets outlive their request: close them (the clients
             // reconnect after the restart) and write every open draft.
+            playgrounds.shutdown();
             collab.shutdown().await;
         })
         .await?;
     sweeper.abort();
     purger.abort();
+    playground_sweeper.abort();
     compiler.close().await;
     tracing::info!("shut down cleanly");
     Ok(())

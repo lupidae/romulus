@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FILTER (WHERE kind = 'query') AS \"queries!\",\n                  count(*) FILTER (WHERE kind = 'reset') AS \"resets!\",\n                  count(*) FILTER (WHERE sql = 'SELECT ''oldest''') AS \"oldest!\"\n           FROM playground_runs WHERE playground_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "queries!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "resets!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "oldest!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5eb4b285359d49ecb37daf19841451fd3efa5e743b9a193b1f529439d53b3ccd"
+}

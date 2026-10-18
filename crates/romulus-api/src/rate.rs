@@ -100,6 +100,14 @@ pub struct Limits {
     /// Changes to versions' discussions per person (a draft's are budgeted
     /// by its room): someone commenting writes a few at a time.
     pub version_comments: Limiter<Uuid>,
+    /// Playgrounds created per person: each builds a cluster on the host.
+    pub playgrounds: Limiter<Uuid>,
+    /// Resets and migration runs per playground: each copies its cluster
+    /// back and restarts it.
+    pub playground_actions: Limiter<Uuid>,
+    /// Console runs per person, across playgrounds (each takes a statement
+    /// slot on the host and a history row).
+    pub playground_console: Limiter<Uuid>,
 }
 
 impl Default for Limits {
@@ -111,6 +119,9 @@ impl Default for Limits {
             imports: Limiter::new(6, Duration::from_secs(30)),
             import_previews: Limiter::new(6, Duration::from_secs(5)),
             version_comments: Limiter::new(30, Duration::from_millis(500)),
+            playgrounds: Limiter::new(5, Duration::from_mins(2)),
+            playground_actions: Limiter::new(10, Duration::from_secs(6)),
+            playground_console: Limiter::new(20, Duration::from_secs(1)),
         }
     }
 }

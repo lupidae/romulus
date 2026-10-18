@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
 # The API image, ghcr.io/lupidae/romulus-api: the API (release build) and the
 # web app's production build, which the API serves at /app (ROMULUS_WEB_DIR,
-# crates/romulus-api/src/web.rs) beside itself at /api. Built and pushed by
+# crates/romulus-api/src/web.rs) beside itself at /api. Target `play`:
+# ghcr.io/lupidae/romulus-play, the playground runner and service. Built and pushed by
 # CI (.github/workflows/images.yml), run by deploy/preview/compose.yaml.
 # Context: the repository root (.dockerignore keeps local state out).
 
@@ -40,6 +41,25 @@ COPY . .
 # The query macros check against .sqlx/, not a database.
 ENV SQLX_OFFLINE=true
 RUN cargo build --release --locked --package romulus-api
+
+# --- the playground runner and service (crates/romulus-play-runner, -playground)
+# One image for both: `docker build --target play` (deploy/preview/deploy.sh
+# build). The runner also runs it, privileged and for a moment, for
+# `xfs_quota` (docs/playground.md): hence xfsprogs.
+FROM build AS play-build
+RUN cargo build --release --locked --package romulus-play-runner --package romulus-playground
+
+FROM debian:trixie-slim AS play
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates xfsprogs \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin romulus
+COPY --from=play-build /src/target/release/romulus-play-runner /usr/local/bin/romulus-play-runner
+COPY --from=play-build /src/target/release/romulus-playground /usr/local/bin/romulus-playground
+ENV ROMULUS_LOG_FORMAT=json \
+    RUST_LOG=romulus_playground=info,romulus_play_runner=info
+USER romulus
+CMD ["romulus-playground"]
 
 # --- runtime ------------------------------------------------------------------
 FROM debian:trixie-slim

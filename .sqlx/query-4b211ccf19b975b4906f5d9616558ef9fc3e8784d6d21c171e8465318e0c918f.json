@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM playgrounds\n         WHERE status IN ('expired', 'failed') AND last_used_at < now() - interval '30 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "4b211ccf19b975b4906f5d9616558ef9fc3e8784d6d21c171e8465318e0c918f"
+}

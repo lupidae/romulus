@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE playgrounds SET status = 'ready', ready_at = now(), row_counts = $2,\n                        report = $3, generator_version = $4\n                 WHERE id = $1 AND status = 'building'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "02f54849d77f069b02cabbfed0429efc3c17524432ccacbdcb06feb8189e48e8"
+}

@@ -19,7 +19,12 @@
                 "approvals_overridden",
                 "approvals_required_changed",
                 "major_changed",
-                "comment_deleted"
+                "comment_deleted",
+                "playground_created",
+                "playground_deleted",
+                "playground_reset",
+                "playground_migration_run",
+                "playground_restarted"
               ]
             }
           }

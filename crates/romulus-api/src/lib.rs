@@ -1,7 +1,7 @@
 //! The romulus API: one axum app under `/api`, documented with utoipa.
 //!
 //! Feature modules (`auth`, `orgs`, `databases`, `versions`, `imports`,
-//! `drafts`, `collab`, `compile`) each expose `router()`, an [`OpenApiRouter`] whose
+//! `drafts`, `collab`, `compile`, `playgrounds`) each expose `router()`, an [`OpenApiRouter`] whose
 //! paths are relative to `/api`. [`routes`] merges them; it is the only place
 //! that lists every module, so adding endpoints never means editing it.
 //! With `ROMULUS_WEB_DIR` set, [`app`] also serves the web app at `/app`
@@ -25,6 +25,7 @@ pub mod health;
 pub mod imports;
 mod layers;
 pub mod orgs;
+pub mod playgrounds;
 pub mod rate;
 pub mod state;
 pub mod token;
@@ -50,7 +51,13 @@ pub use crate::{
         title = "romulus",
         description = "DBA as a service: versioned Postgres schemas, diffs and collaborative drafts."
     ),
-    components(schemas(error::ErrorBody, imports::ImportFailure))
+    components(schemas(
+        error::ErrorBody,
+        imports::ImportFailure,
+        playgrounds::ConsoleNotice,
+        romulus_playground::protocol::ConsoleRequest,
+        romulus_playground::protocol::ConsoleEvent,
+    ))
 )]
 struct ApiDoc;
 
@@ -67,6 +74,7 @@ fn routes() -> OpenApiRouter<AppState> {
         .merge(drafts::router())
         .merge(collab::router())
         .merge(compile::router())
+        .merge(playgrounds::router())
 }
 
 fn router_and_spec() -> (Router<AppState>, utoipa::openapi::OpenApi) {

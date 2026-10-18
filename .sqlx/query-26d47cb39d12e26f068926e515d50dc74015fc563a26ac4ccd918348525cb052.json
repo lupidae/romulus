@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"total!\",\n                  count(*) FILTER (WHERE org_id = $1) AS \"org!\",\n                  count(*) FILTER (WHERE database_id = $2) AS \"database!\",\n                  count(*) FILTER (WHERE created_by = $3) AS \"person!\",\n                  count(*) FILTER (WHERE (draft_id IS NOT NULL AND draft_id = $4)\n                                      OR (draft_id IS NULL AND $4::uuid IS NULL AND version_id = $5)) AS \"same!\",\n                  count(*) FILTER (WHERE size = 'small') AS \"small!\",\n                  count(*) FILTER (WHERE size = 'medium') AS \"medium!\"\n           FROM playgrounds WHERE status IN ('building', 'ready')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "org!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "database!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "person!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "same!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "small!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "medium!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "26d47cb39d12e26f068926e515d50dc74015fc563a26ac4ccd918348525cb052"
+}

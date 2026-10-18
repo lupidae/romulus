@@ -3553,6 +3553,652 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/playgrounds": {
+      "get": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "The database's live playgrounds (building, ready, failed), newest first.",
+        "operationId": "list_playgrounds",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Playground"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "Creates a playground for a draft (its base version) or a version, and\nbuilds it in the background: `GET` it for the progress. Developers and\nadmins.",
+        "operationId": "create_playground",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePlayground"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Playground"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`playground_exists` (`details.id`: open it), `playground_limit`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`; `no_version`: nothing to hold yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/playgrounds/{id}": {
+      "get": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "One playground, with what its host says now.",
+        "operationId": "get_playground",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Playground"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "Deletes a playground: its cluster on the host, its history. Developers\nand admins.",
+        "operationId": "delete_playground",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {},
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/playgrounds/{id}/console": {
+      "get": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "Opens the playground's console: one Postgres session (read-only) per\nsocket. Text frames: `ConsoleRequest` in, `ConsoleEvent` and\n`ConsoleNotice` out. Close codes: 1011 the host is unavailable, 1012\nserver restarting, 4001 membership changed (reconnect), 4401 session\nended, 4404 deleted, 4429 too many consoles open.",
+        "operationId": "playground_console",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Switching to the websocket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleEvent"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Another origin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`playground_not_ready`, `playground_expired`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/playgrounds/{id}/migration": {
+      "post": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "Runs the draft's migration on the playground's rows (reset first). The\nanswer streams `PlaygroundMigrationEvent`s, one JSON per line (blank\nlines keep the connection alive), the last one `done` (the report) or\n`failed`. Developers and admins.",
+        "operationId": "run_playground_migration",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunMigration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The progress, one event per line",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaygroundMigrationEvent"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`playground_not_ready`, `playground_expired`, `playground_busy`, `migration_in_progress` (yours, elsewhere), `draft_not_open`, `playground_stale` (the draft moved to another base), `draft_changed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`no_migration` (a version's playground), `compile_failed`, `nothing_to_migrate`, `migration_too_long`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/playgrounds/{id}/reset": {
+      "post": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "Puts the generated rows back. Developers and admins.",
+        "operationId": "reset_playground",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Playground"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`playground_not_ready`, `playground_expired`, `playground_busy`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/playgrounds/{id}/runs": {
+      "get": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "The playground's history, newest first. Every member.",
+        "operationId": "list_playground_runs",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Entries older than this one (from `next_before`).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 100; 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunsPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/tokens": {
       "get": {
         "tags": [
@@ -5647,6 +6293,16 @@
         ],
         "description": "What a thread is pinned to."
       },
+      "Announcement": {
+        "type": "string",
+        "enum": [
+          "resetting",
+          "reset",
+          "migrating",
+          "migrated",
+          "deleted"
+        ]
+      },
       "ApiToken": {
         "type": "object",
         "description": "An API token, without its secret.",
@@ -5795,7 +6451,12 @@
           "approvals_overridden",
           "approvals_required_changed",
           "major_changed",
-          "comment_deleted"
+          "comment_deleted",
+          "playground_created",
+          "playground_deleted",
+          "playground_reset",
+          "playground_migration_run",
+          "playground_restarted"
         ]
       },
       "AuditActor": {
@@ -5918,6 +6579,21 @@
               "null"
             ],
             "description": "The version's message (versions removed, restored, purged)."
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A migration run's outcome: `passed`, or the statement it failed at\n(`failed at statement 4 of 7`)."
+          },
+          "playground_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The playground (created, deleted, reset, migrated)."
           },
           "required": {
             "type": [
@@ -6061,6 +6737,35 @@
           }
         ],
         "description": "Who made a version: a person (uploads, drafts) or an API token (pushes)."
+      },
+      "BuildProgress": {
+        "type": "object",
+        "description": "Where a build is (while `building`).",
+        "required": [
+          "stage",
+          "tables_done",
+          "tables_total"
+        ],
+        "properties": {
+          "stage": {
+            "$ref": "#/components/schemas/PlaygroundStage"
+          },
+          "table": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The table whose rows came in last."
+          },
+          "tables_done": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tables_total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "Category": {
         "type": "string",
@@ -6609,6 +7314,629 @@
           }
         }
       },
+      "ConsoleColumn": {
+        "type": "object",
+        "description": "A result column: its name and type, as `format_type` prints it.",
+        "required": [
+          "name",
+          "type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "numeric": {
+            "type": "boolean",
+            "description": "Numbers align right."
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ConsoleEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The playground's database is starting (it stops when unused): a few\nseconds.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "starting"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The session is up (again, after a reset): a fresh transaction.",
+            "required": [
+              "txn",
+              "type"
+            ],
+            "properties": {
+              "txn": {
+                "$ref": "#/components/schemas/ConsoleTxn"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ready"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The session is gone for now: someone is resetting or migrating the\nplayground (`reason` says so). `Ready` follows by itself when it is\nback.",
+            "required": [
+              "reason",
+              "type"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "paused"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The playground's database was stopped (nothing ran for a while, or\nanother playground needed the room): a `run` or `open` starts it\nagain, in a few seconds.",
+            "required": [
+              "reason",
+              "type"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "stopped"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The playground is being deleted: the API closes the socket (4404)\nonce it is done.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "deleting"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "This session found a role changed from inside the playground (its\npassword or settings) and restarted it to undo that (the API audits\nit; the others heard a pause).",
+            "required": [
+              "reason",
+              "type"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "restarted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "It could not start or be reached: `code` is `host_full`, `org_full`,\n`not_starting` or `unreachable`. `open` (Try again) or a `run`\ntries again.",
+            "required": [
+              "code",
+              "reason",
+              "type"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Waiting for a free slot (statements run a few at a time per host).",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "queued"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Statement `index` of the run starts; `span` is where it is in `sql`.",
+            "required": [
+              "id",
+              "index",
+              "span",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "span": {
+                "$ref": "#/components/schemas/PlaygroundTextSpan"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "statement"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "index",
+              "columns",
+              "type"
+            ],
+            "properties": {
+              "columns": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConsoleColumn"
+                }
+              },
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "columns"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "At most 500 rows each; values as Postgres prints them, NULL as null.",
+            "required": [
+              "id",
+              "index",
+              "rows",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rows"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A statement's plan (Explain).",
+            "required": [
+              "id",
+              "index",
+              "text",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "plan"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "index",
+              "severity",
+              "message",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "notice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A statement finished.",
+            "required": [
+              "id",
+              "index",
+              "tag",
+              "rows",
+              "truncated",
+              "ms",
+              "type"
+            ],
+            "properties": {
+              "cells_cut": {
+                "type": "boolean",
+                "description": "Some values were longer than 64 KiB and are cut."
+              },
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ms": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "rows": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "tag": {
+                "type": "string",
+                "description": "Postgres's command tag (`SELECT 212`)."
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "It returned more rows than were kept (1 000, or 16 MiB a run)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "index",
+              "error",
+              "type"
+            ],
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/PlaygroundSqlError"
+              },
+              "id": {
+                "type": "string"
+              },
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The run is over (the history entry the API records).",
+            "required": [
+              "id",
+              "status",
+              "statements",
+              "ms",
+              "type"
+            ],
+            "properties": {
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "ms": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "rows": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "The last statement's rows.",
+                "minimum": 0
+              },
+              "statements": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "status": {
+                "$ref": "#/components/schemas/ConsoleRunStatus"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "finished"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "txn",
+              "type"
+            ],
+            "properties": {
+              "txn": {
+                "$ref": "#/components/schemas/ConsoleTxn"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "txn"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "To the browser. Every result belongs to a run (`id`) and a statement of\nit (`index`, in the text the run sent)."
+      },
+      "ConsoleNotice": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Someone's run ended: the shared history's newest entry.",
+            "required": [
+              "run",
+              "type"
+            ],
+            "properties": {
+              "run": {
+                "$ref": "#/components/schemas/PlaygroundRun"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "history"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Who has the console open now.",
+            "required": [
+              "people",
+              "type"
+            ],
+            "properties": {
+              "people": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Person"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "presence"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Someone reset the rows, ran the migration, or deleted the playground.",
+            "required": [
+              "event",
+              "by",
+              "type"
+            ],
+            "properties": {
+              "by": {
+                "$ref": "#/components/schemas/Person"
+              },
+              "event": {
+                "$ref": "#/components/schemas/Announcement"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "announcement"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the people in a playground's console hear, besides their own\nresults."
+      },
+      "ConsoleRequest": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Run every statement of `sql`, in order, stopping at the first error.\nWith `explain`, `sql` must be one statement: its plan, analyzed.",
+            "required": [
+              "id",
+              "sql",
+              "type"
+            ],
+            "properties": {
+              "explain": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "sql": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "run"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Stop the run `id`.",
+            "required": [
+              "id",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cancel"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Start the session again after `stopped` or `unavailable` (a `run`\ndoes it too).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "open"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "From the browser, through the API (which checks and re-encodes it)."
+      },
+      "ConsoleRunStatus": {
+        "type": "string",
+        "description": "How a run ended.",
+        "enum": [
+          "ok",
+          "error",
+          "cancelled"
+        ]
+      },
+      "ConsoleTxn": {
+        "type": "string",
+        "description": "The session's transaction.",
+        "enum": [
+          "idle",
+          "in_transaction",
+          "failed"
+        ]
+      },
       "ConstraintChange": {
         "oneOf": [
           {
@@ -6820,6 +8148,48 @@
           "slug": {
             "type": "string",
             "description": "Lowercase letters, digits and single hyphens, at most 63 characters,\nnot one of the app's own routes."
+          }
+        }
+      },
+      "CreatePlayground": {
+        "type": "object",
+        "properties": {
+          "draft_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "For this draft: it holds the draft's base version. Or:"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/PlaygroundProfile"
+          },
+          "seed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hex, at most 15 digits; random when absent."
+          },
+          "size": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundSize",
+                "description": "`small` unless given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "for this version (its number). The latest version when neither."
           }
         }
       },
@@ -7989,12 +9359,17 @@
           "database",
           "sandbox",
           "sandboxes",
+          "playgrounds",
           "version"
         ],
         "properties": {
           "database": {
             "type": "string",
             "description": "`ok` when a query round-trips."
+          },
+          "playgrounds": {
+            "type": "string",
+            "description": "The playground host: `ok`, `unavailable` (it does not answer, or its\nrunner is not ready) or `off` (not configured). Not part of the\nstatus either."
           },
           "sandbox": {
             "type": "string",
@@ -8785,6 +10160,180 @@
           }
         }
       },
+      "MigrationRunLock": {
+        "type": "object",
+        "description": "A lock a statement held, from `pg_locks` before its `COMMIT`.",
+        "required": [
+          "relation",
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "`AccessExclusiveLock`…"
+          },
+          "relation": {
+            "type": "string",
+            "description": "`schema.name` of the relation."
+          }
+        }
+      },
+      "MigrationRunOffending": {
+        "type": "object",
+        "description": "Rows that make a statement fail.",
+        "required": [
+          "count",
+          "query",
+          "sample"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many rows break it."
+          },
+          "query": {
+            "type": "string",
+            "description": "A query that lists them (run it in the console)."
+          },
+          "sample": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The first few, each as Postgres prints its key."
+          }
+        }
+      },
+      "MigrationRunReport": {
+        "type": "object",
+        "description": "A migration run, whole.",
+        "required": [
+          "passed",
+          "statements",
+          "duration_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The index of the statement that failed.",
+            "minimum": 0
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationRunStatement"
+            }
+          }
+        }
+      },
+      "MigrationRunStatement": {
+        "type": "object",
+        "description": "What one statement of a migration run did.",
+        "required": [
+          "index",
+          "sql",
+          "status",
+          "duration_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundSqlError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hazard": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "locks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationRunLock"
+            },
+            "description": "Exact, for statements in a transaction."
+          },
+          "locks_documented": {
+            "type": "boolean",
+            "description": "Outside a transaction (`CONCURRENTLY`): the documented lock, not a\nmeasured one."
+          },
+          "offending": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationRunOffending",
+                "description": "Rows of the table that broke it (a NOT NULL, a unique key…), when the\nerror says which, at most 5, as `column = value` text."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rewrote": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tables (and materialized views) rewritten: their files changed."
+          },
+          "rows_changed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rows inserted, updated or deleted, from `pg_stat_xact_user_tables`."
+          },
+          "sql": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationRunStatus"
+          },
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres's command tag (`ALTER TABLE`, `UPDATE 12`)."
+          }
+        }
+      },
+      "MigrationRunStatus": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "failed",
+          "not_run",
+          "skipped"
+        ]
+      },
       "MigrationSection": {
         "type": "string",
         "description": "The parts of a migration, in order.",
@@ -9298,6 +10847,524 @@
             ],
             "format": "int32",
             "description": "The version it became, when imported already (or removed since)."
+          }
+        }
+      },
+      "Playground": {
+        "type": "object",
+        "description": "A playground, as its page shows it.",
+        "required": [
+          "id",
+          "status",
+          "version",
+          "size",
+          "profile",
+          "seed",
+          "tables",
+          "present",
+          "created_at",
+          "last_used_at",
+          "expires_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "`null` once their account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "draft": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundDraft",
+                "description": "The draft it was made for (it holds the draft's base version);\n`null` for a version's own."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Deleted then unless used again."
+          },
+          "failure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the build failed."
+          },
+          "generator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The generator's version (rows differ between versions)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "live": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundLive",
+                "description": "What its host says now; `null` when it is not ready or the host did\nnot answer."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "migrated_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundRun",
+                "description": "The migration run whose rows it holds; `null` while it holds the\ngenerated rows."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "present": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            },
+            "description": "Who has its console open now."
+          },
+          "profile": {
+            "$ref": "#/components/schemas/PlaygroundProfile"
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BuildProgress",
+                "description": "While building."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "report": {
+            "description": "What the generator could not satisfy, as it wrote it."
+          },
+          "seed": {
+            "type": "string",
+            "description": "The seed, in hex: the same model, size, profile, seed and generator\ngive the same rows."
+          },
+          "size": {
+            "$ref": "#/components/schemas/PlaygroundSize"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlaygroundStatus"
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundTableRows"
+            },
+            "description": "Rows per table once generated."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version whose schema it holds."
+          }
+        }
+      },
+      "PlaygroundDraft": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mode",
+          "status",
+          "moved"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode"
+          },
+          "moved": {
+            "type": "boolean",
+            "description": "The draft is on another base now: its migration no longer starts from\nthis playground's rows (create a new playground)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DraftStatus"
+          }
+        }
+      },
+      "PlaygroundLive": {
+        "type": "object",
+        "description": "A playground as the host sees it now.",
+        "required": [
+          "running",
+          "sessions"
+        ],
+        "properties": {
+          "busy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is doing, if anything: `building`, `resetting`, `migrating`,\n`stopping`, `restarting`. Reset, Run migration and Delete wait."
+          },
+          "oom_killed": {
+            "type": "boolean",
+            "description": "The last stop was its memory limit."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Its Postgres runs (it stops after a while without a statement)."
+          },
+          "sessions": {
+            "type": "integer",
+            "description": "Console sessions open.",
+            "minimum": 0
+          }
+        }
+      },
+      "PlaygroundMigrationEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The generated rows are being put back first.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "resetting"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Statement `index` (of `total`) started.",
+            "required": [
+              "index",
+              "total",
+              "type"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "running"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "result",
+              "type"
+            ],
+            "properties": {
+              "result": {
+                "$ref": "#/components/schemas/MigrationRunStatement"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "statement"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "report",
+              "type"
+            ],
+            "properties": {
+              "report": {
+                "$ref": "#/components/schemas/MigrationRunReport"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The run itself could not happen (the playground failed).",
+            "required": [
+              "message",
+              "type"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "PlaygroundProfile": {
+        "type": "string",
+        "description": "What a playground's rows aim at (`playground_profile`).",
+        "enum": [
+          "realistic",
+          "edge_cases"
+        ]
+      },
+      "PlaygroundRun": {
+        "type": "object",
+        "description": "One entry of the history.",
+        "required": [
+          "id",
+          "kind",
+          "by",
+          "started_at",
+          "duration_ms",
+          "status"
+        ],
+        "properties": {
+          "by": {
+            "$ref": "#/components/schemas/RunBy",
+            "description": "Who: their name as it was (`id` is `null` once their account is gone)."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What went wrong, in one sentence."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PlaygroundRunKind"
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationRunReport",
+                "description": "A migration run's report, statement by statement."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rows the last statement returned or changed."
+          },
+          "sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What ran (its first 64 KiB); `null` for a reset."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlaygroundRunStatus"
+          }
+        }
+      },
+      "PlaygroundRunKind": {
+        "type": "string",
+        "description": "What an entry of a playground's history is (`playground_run_kind`).",
+        "enum": [
+          "query",
+          "explain",
+          "migration",
+          "reset"
+        ]
+      },
+      "PlaygroundRunStatus": {
+        "type": "string",
+        "description": "How an entry of a playground's history ended (`playground_run_status`).",
+        "enum": [
+          "ok",
+          "error",
+          "cancelled"
+        ]
+      },
+      "PlaygroundSize": {
+        "type": "string",
+        "description": "How many rows a playground is generated with (`playground_size`).",
+        "enum": [
+          "small",
+          "medium"
+        ]
+      },
+      "PlaygroundSqlError": {
+        "type": "object",
+        "description": "A Postgres error, located.",
+        "required": [
+          "sqlstate",
+          "message"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "span": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundTextSpan",
+                "description": "Where in the text the request sent (this statement for a migration,\nthe whole console text for a run)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sqlstate": {
+            "type": "string"
+          }
+        }
+      },
+      "PlaygroundStage": {
+        "type": "string",
+        "description": "Where a build is.",
+        "enum": [
+          "starting",
+          "schema",
+          "rows",
+          "analyze",
+          "snapshot"
+        ]
+      },
+      "PlaygroundStatus": {
+        "type": "string",
+        "description": "Where a playground is (`playground_status`).",
+        "enum": [
+          "building",
+          "ready",
+          "failed",
+          "expired"
+        ]
+      },
+      "PlaygroundTableRows": {
+        "type": "object",
+        "description": "One table's rows.",
+        "required": [
+          "schema",
+          "table",
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "table": {
+            "type": "string"
+          }
+        }
+      },
+      "PlaygroundTextSpan": {
+        "type": "object",
+        "description": "A range of a text: bytes, and UTF-16 code units (the browser's).",
+        "required": [
+          "start",
+          "end",
+          "utf16_start",
+          "utf16_end"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "utf16_end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "utf16_start": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -9903,6 +11970,59 @@
           "developer",
           "reviewer"
         ]
+      },
+      "RunBy": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RunMigration": {
+        "type": "object",
+        "required": [
+          "sha256"
+        ],
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "description": "What the person reviewed: the draft's live compile SHA-256 (the\nmigration tab's), so a run is never of a text nobody saw (409\n`draft_changed` when the draft moved on)."
+          }
+        }
+      },
+      "RunsPage": {
+        "type": "object",
+        "description": "A page of the history, newest first.",
+        "required": [
+          "runs"
+        ],
+        "properties": {
+          "next_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Pass as `before` for the next page; `null` on the last one."
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaygroundRun"
+            }
+          }
+        }
       },
       "SchemaDiff": {
         "type": "object",

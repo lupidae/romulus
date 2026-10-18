@@ -423,10 +423,10 @@ impl Script {
 }
 
 /// What a `CREATE`/`ALTER POLICY … TO …` needs.
-struct PolicyRoles {
+pub(crate) struct PolicyRoles {
     /// The role list, to rewrite as `PUBLIC` (the roles do not exist in the
     /// sandbox); `None` when it already is just `PUBLIC`.
-    rewrite: Option<Range<usize>>,
+    pub(crate) rewrite: Option<Range<usize>>,
     /// The roles to record for the model; `Some(vec![])` resets them to
     /// PUBLIC (an `ALTER POLICY … TO PUBLIC`).
     record: Option<Vec<String>>,
@@ -436,7 +436,7 @@ struct PolicyRoles {
 /// list names it alongside other roles (with a warning), and remus reports
 /// PUBLIC as no roles: the model must say the same. `CURRENT_USER` and the
 /// like are refused by the allowlist (no name to restore).
-fn policy_roles(statement: &Statement, parsed: &ParsedSql) -> Option<PolicyRoles> {
+pub(crate) fn policy_roles(statement: &Statement, parsed: &ParsedSql) -> Option<PolicyRoles> {
     let (roles, alter) = match &statement.node {
         NodeEnum::CreatePolicyStmt(s) => (&s.roles, false),
         NodeEnum::AlterPolicyStmt(s) => (&s.roles, true),
@@ -531,7 +531,7 @@ fn materialized_view_without_data(
 /// Statements that create (or comment on, alter, index…) an object an
 /// extension created earlier in the text provides: (statement, extension,
 /// object name).
-fn provided_by_extensions(
+pub(crate) fn provided_by_extensions(
     statements: &[Statement],
     catalog: &Catalog,
 ) -> Vec<(usize, String, String)> {

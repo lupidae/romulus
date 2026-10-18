@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM playground_runs\n         WHERE playground_id = $1 AND kind IN ('query', 'explain')\n           AND id < (SELECT id FROM playground_runs\n                     WHERE playground_id = $1 AND kind IN ('query', 'explain')\n                     ORDER BY id DESC OFFSET $2::int8 - 1 LIMIT 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6a8953e1af421139d45b2d11f9f6a8373b98ae3e19f2fee16138bdabac39a135"
+}

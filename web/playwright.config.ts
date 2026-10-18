@@ -22,6 +22,21 @@ const env = (extra: Record<string, string>) => ({
   ...extra,
 });
 
+// The playground runner and service cost memory (and start playgrounds):
+// started only for a run that includes the playground spec, or every spec.
+// ROMULUS_E2E_PLAYGROUNDS=1 or 0 decides instead.
+const command = process.argv.indexOf("test");
+const named =
+  command < 0
+    ? []
+    : process.argv
+        .slice(command + 1)
+        .filter((arg) => !arg.startsWith("-") && /\.spec(\.ts)?$|\.ts$|\//.test(arg));
+const playgrounds =
+  process.env.ROMULUS_E2E_PLAYGROUNDS !== undefined
+    ? process.env.ROMULUS_E2E_PLAYGROUNDS === "1"
+    : named.length === 0 || named.some((arg) => arg.includes("playground"));
+
 export default defineConfig({
   testDir: "./e2e",
   // Dev-only screens run against the dev server (playwright.dev.config.ts),
@@ -37,6 +52,22 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
+    ...(playgrounds
+      ? [
+          {
+            // The playground runner and service (playground.spec.ts), on this
+            // worktree's ports and volume (.env), or the ones `just play` runs.
+            command:
+              "cargo build -q -p romulus-play-runner -p romulus-playground && (target/debug/romulus-play-runner & exec target/debug/romulus-playground)",
+            cwd: "..",
+            env: env({ RUST_LOG: process.env.RUST_LOG ?? "warn" }),
+            url: `http://127.0.0.1:${process.env.ROMULUS_PLAY_PORT ?? "41009"}/health`,
+            reuseExistingServer: true,
+            timeout: 300_000,
+            stdout: "ignore" as const,
+          },
+        ]
+      : []),
     {
       command: "cargo run -q -p romulus-api",
       cwd: "..",

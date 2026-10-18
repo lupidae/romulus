@@ -651,6 +651,128 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/playgrounds": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The database's live playgrounds (building, ready, failed), newest first. */
+    get: operations["list_playgrounds"];
+    put?: never;
+    /**
+     * Creates a playground for a draft (its base version) or a version, and
+     *     builds it in the background: `GET` it for the progress. Developers and
+     *     admins.
+     */
+    post: operations["create_playground"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/playgrounds/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One playground, with what its host says now. */
+    get: operations["get_playground"];
+    put?: never;
+    post?: never;
+    /**
+     * Deletes a playground: its cluster on the host, its history. Developers
+     *     and admins.
+     */
+    delete: operations["delete_playground"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/playgrounds/{id}/console": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Opens the playground's console: one Postgres session (read-only) per
+     *     socket. Text frames: `ConsoleRequest` in, `ConsoleEvent` and
+     *     `ConsoleNotice` out. Close codes: 1011 the host is unavailable, 1012
+     *     server restarting, 4001 membership changed (reconnect), 4401 session
+     *     ended, 4404 deleted, 4429 too many consoles open.
+     */
+    get: operations["playground_console"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/playgrounds/{id}/migration": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Runs the draft's migration on the playground's rows (reset first). The
+     *     answer streams `PlaygroundMigrationEvent`s, one JSON per line (blank
+     *     lines keep the connection alive), the last one `done` (the report) or
+     *     `failed`. Developers and admins.
+     */
+    post: operations["run_playground_migration"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/playgrounds/{id}/reset": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Puts the generated rows back. Developers and admins. */
+    post: operations["reset_playground"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/playgrounds/{id}/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The playground's history, newest first. Every member. */
+    get: operations["list_playground_runs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/tokens": {
     parameters: {
       query?: never;
@@ -1101,6 +1223,8 @@ export interface components {
           kind: "statement";
           statement: string;
         };
+    /** @enum {string} */
+    Announcement: "resetting" | "reset" | "migrating" | "migrated" | "deleted";
     /** @description An API token, without its secret. */
     ApiToken: {
       /** Format: date-time */
@@ -1164,7 +1288,12 @@ export interface components {
       | "approvals_overridden"
       | "approvals_required_changed"
       | "major_changed"
-      | "comment_deleted";
+      | "comment_deleted"
+      | "playground_created"
+      | "playground_deleted"
+      | "playground_reset"
+      | "playground_migration_run"
+      | "playground_restarted";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1223,6 +1352,16 @@ export interface components {
       from?: number | null;
       /** @description The version's message (versions removed, restored, purged). */
       message?: string | null;
+      /**
+       * @description A migration run's outcome: `passed`, or the statement it failed at
+       *     (`failed at statement 4 of 7`).
+       */
+      outcome?: string | null;
+      /**
+       * Format: uuid
+       * @description The playground (created, deleted, reset, migrated).
+       */
+      playground_id?: string | null;
       /** Format: int32 */
       required?: number | null;
       /**
@@ -1269,6 +1408,14 @@ export interface components {
           kind: "token";
           name: string;
         };
+    /** @description Where a build is (while `building`). */
+    BuildProgress: {
+      stage: components["schemas"]["PlaygroundStage"];
+      /** @description The table whose rows came in last. */
+      table?: string | null;
+      tables_done: number;
+      tables_total: number;
+    };
     /**
      * @description What [`Summary`] counts. Partitioned tables count as tables; an entity whose
      *     kind changed counts under its new kind.
@@ -1453,6 +1600,185 @@ export interface components {
       sql: components["schemas"]["Sides"];
       status: components["schemas"]["Status"];
     };
+    /** @description A result column: its name and type, as `format_type` prints it. */
+    ConsoleColumn: {
+      name: string;
+      /** @description Numbers align right. */
+      numeric?: boolean;
+      type: string;
+    };
+    /**
+     * @description To the browser. Every result belongs to a run (`id`) and a statement of
+     *     it (`index`, in the text the run sent).
+     */
+    ConsoleEvent:
+      | {
+          /** @enum {string} */
+          type: "starting";
+        }
+      | {
+          txn: components["schemas"]["ConsoleTxn"];
+          /** @enum {string} */
+          type: "ready";
+        }
+      | {
+          reason: string;
+          /** @enum {string} */
+          type: "paused";
+        }
+      | {
+          reason: string;
+          /** @enum {string} */
+          type: "stopped";
+        }
+      | {
+          /** @enum {string} */
+          type: "deleting";
+        }
+      | {
+          reason: string;
+          /** @enum {string} */
+          type: "restarted";
+        }
+      | {
+          code: string;
+          reason: string;
+          /** @enum {string} */
+          type: "unavailable";
+        }
+      | {
+          id: string;
+          /** @enum {string} */
+          type: "queued";
+        }
+      | {
+          id: string;
+          index: number;
+          span: components["schemas"]["PlaygroundTextSpan"];
+          /** @enum {string} */
+          type: "statement";
+        }
+      | {
+          columns: components["schemas"]["ConsoleColumn"][];
+          id: string;
+          index: number;
+          /** @enum {string} */
+          type: "columns";
+        }
+      | {
+          id: string;
+          index: number;
+          rows: (string | null)[][];
+          /** @enum {string} */
+          type: "rows";
+        }
+      | {
+          id: string;
+          index: number;
+          text: string;
+          /** @enum {string} */
+          type: "plan";
+        }
+      | {
+          id: string;
+          index: number;
+          message: string;
+          severity: string;
+          /** @enum {string} */
+          type: "notice";
+        }
+      | {
+          /** @description Some values were longer than 64 KiB and are cut. */
+          cells_cut?: boolean;
+          id: string;
+          index: number;
+          /** Format: int64 */
+          ms: number;
+          /** Format: int64 */
+          rows: number;
+          /** @description Postgres's command tag (`SELECT 212`). */
+          tag: string;
+          /** @description It returned more rows than were kept (1 000, or 16 MiB a run). */
+          truncated: boolean;
+          /** @enum {string} */
+          type: "done";
+        }
+      | {
+          error: components["schemas"]["PlaygroundSqlError"];
+          id: string;
+          index: number;
+          /** @enum {string} */
+          type: "error";
+        }
+      | {
+          error?: string | null;
+          id: string;
+          /** Format: int64 */
+          ms: number;
+          /**
+           * Format: int64
+           * @description The last statement's rows.
+           */
+          rows?: number | null;
+          statements: number;
+          status: components["schemas"]["ConsoleRunStatus"];
+          /** @enum {string} */
+          type: "finished";
+        }
+      | {
+          txn: components["schemas"]["ConsoleTxn"];
+          /** @enum {string} */
+          type: "txn";
+        };
+    /**
+     * @description What the people in a playground's console hear, besides their own
+     *     results.
+     */
+    ConsoleNotice:
+      | {
+          run: components["schemas"]["PlaygroundRun"];
+          /** @enum {string} */
+          type: "history";
+        }
+      | {
+          people: components["schemas"]["Person"][];
+          /** @enum {string} */
+          type: "presence";
+        }
+      | {
+          by: components["schemas"]["Person"];
+          event: components["schemas"]["Announcement"];
+          /** @enum {string} */
+          type: "announcement";
+        };
+    /** @description From the browser, through the API (which checks and re-encodes it). */
+    ConsoleRequest:
+      | {
+          explain?: boolean;
+          id: string;
+          sql: string;
+          /** @enum {string} */
+          type: "run";
+        }
+      | {
+          id: string;
+          /** @enum {string} */
+          type: "cancel";
+        }
+      | {
+          /** @enum {string} */
+          type: "open";
+        };
+    /**
+     * @description How a run ended.
+     * @enum {string}
+     */
+    ConsoleRunStatus: "ok" | "error" | "cancelled";
+    /**
+     * @description The session's transaction.
+     * @enum {string}
+     */
+    ConsoleTxn: "idle" | "in_transaction" | "failed";
     /**
      * @description A change to one constraint.
      *
@@ -1534,6 +1860,22 @@ export interface components {
        *     not one of the app's own routes.
        */
       slug: string;
+    };
+    CreatePlayground: {
+      /**
+       * Format: uuid
+       * @description For this draft: it holds the draft's base version. Or:
+       */
+      draft_id?: string | null;
+      profile?: components["schemas"]["PlaygroundProfile"];
+      /** @description Hex, at most 15 digits; random when absent. */
+      seed?: string | null;
+      size?: components["schemas"]["PlaygroundSize"] | null;
+      /**
+       * Format: int32
+       * @description for this version (its number). The latest version when neither.
+       */
+      version?: number | null;
     };
     CreateToken: {
       /** @description 1 to 100 characters. */
@@ -1963,6 +2305,12 @@ export interface components {
       /** @description `ok` when a query round-trips. */
       database: string;
       /**
+       * @description The playground host: `ok`, `unavailable` (it does not answer, or its
+       *     runner is not ready) or `off` (not configured). Not part of the
+       *     status either.
+       */
+      playgrounds: string;
+      /**
        * @description The default major's SQL compiler (17): `ok`, `unavailable` (starting,
        *     or the sandbox is down) or `off` (no sandbox configured). Not part of
        *     the status: the rest of the API works without it.
@@ -2280,6 +2628,63 @@ export interface components {
       /** Format: int32 */
       to: number;
     };
+    /** @description A lock a statement held, from `pg_locks` before its `COMMIT`. */
+    MigrationRunLock: {
+      /** @description `AccessExclusiveLock`… */
+      mode: string;
+      /** @description `schema.name` of the relation. */
+      relation: string;
+    };
+    /** @description Rows that make a statement fail. */
+    MigrationRunOffending: {
+      /**
+       * Format: int64
+       * @description How many rows break it.
+       */
+      count: number;
+      /** @description A query that lists them (run it in the console). */
+      query: string;
+      /** @description The first few, each as Postgres prints its key. */
+      sample: string[];
+    };
+    /** @description A migration run, whole. */
+    MigrationRunReport: {
+      /** Format: int64 */
+      duration_ms: number;
+      /** @description The index of the statement that failed. */
+      failed_at?: number | null;
+      passed: boolean;
+      statements: components["schemas"]["MigrationRunStatement"][];
+    };
+    /** @description What one statement of a migration run did. */
+    MigrationRunStatement: {
+      /** Format: int64 */
+      duration_ms: number;
+      error?: components["schemas"]["PlaygroundSqlError"] | null;
+      hazard?: string | null;
+      index: number;
+      /** @description Exact, for statements in a transaction. */
+      locks?: components["schemas"]["MigrationRunLock"][];
+      /**
+       * @description Outside a transaction (`CONCURRENTLY`): the documented lock, not a
+       *     measured one.
+       */
+      locks_documented?: boolean;
+      offending?: components["schemas"]["MigrationRunOffending"] | null;
+      /** @description Tables (and materialized views) rewritten: their files changed. */
+      rewrote?: string[];
+      /**
+       * Format: int64
+       * @description Rows inserted, updated or deleted, from `pg_stat_xact_user_tables`.
+       */
+      rows_changed?: number | null;
+      sql: string;
+      status: components["schemas"]["MigrationRunStatus"];
+      /** @description Postgres's command tag (`ALTER TABLE`, `UPDATE 12`). */
+      tag?: string | null;
+    };
+    /** @enum {string} */
+    MigrationRunStatus: "passed" | "failed" | "not_run" | "skipped";
     /**
      * @description The parts of a migration, in order.
      * @enum {string}
@@ -2523,6 +2928,177 @@ export interface components {
        */
       version?: number | null;
     };
+    /** @description A playground, as its page shows it. */
+    Playground: {
+      /** Format: date-time */
+      created_at: string;
+      created_by?: components["schemas"]["Person"] | null;
+      draft?: components["schemas"]["PlaygroundDraft"] | null;
+      /**
+       * Format: date-time
+       * @description Deleted then unless used again.
+       */
+      expires_at: string;
+      /** @description Why the build failed. */
+      failure?: string | null;
+      /** @description The generator's version (rows differ between versions). */
+      generator?: string | null;
+      /** Format: uuid */
+      id: string;
+      /** Format: date-time */
+      last_used_at: string;
+      live?: components["schemas"]["PlaygroundLive"] | null;
+      migrated_by?: components["schemas"]["PlaygroundRun"] | null;
+      /** @description Who has its console open now. */
+      present: components["schemas"]["Person"][];
+      profile: components["schemas"]["PlaygroundProfile"];
+      progress?: components["schemas"]["BuildProgress"] | null;
+      /** Format: date-time */
+      ready_at?: string | null;
+      /** @description What the generator could not satisfy, as it wrote it. */
+      report?: unknown;
+      /**
+       * @description The seed, in hex: the same model, size, profile, seed and generator
+       *     give the same rows.
+       */
+      seed: string;
+      size: components["schemas"]["PlaygroundSize"];
+      status: components["schemas"]["PlaygroundStatus"];
+      /** @description Rows per table once generated. */
+      tables: components["schemas"]["PlaygroundTableRows"][];
+      /**
+       * Format: int32
+       * @description The version whose schema it holds.
+       */
+      version: number;
+    };
+    PlaygroundDraft: {
+      /** Format: uuid */
+      id: string;
+      mode: components["schemas"]["DraftMode"];
+      /**
+       * @description The draft is on another base now: its migration no longer starts from
+       *     this playground's rows (create a new playground).
+       */
+      moved: boolean;
+      name: string;
+      status: components["schemas"]["DraftStatus"];
+    };
+    /** @description A playground as the host sees it now. */
+    PlaygroundLive: {
+      /**
+       * @description What it is doing, if anything: `building`, `resetting`, `migrating`,
+       *     `stopping`, `restarting`. Reset, Run migration and Delete wait.
+       */
+      busy?: string | null;
+      /** @description The last stop was its memory limit. */
+      oom_killed?: boolean;
+      /** @description Its Postgres runs (it stops after a while without a statement). */
+      running: boolean;
+      /** @description Console sessions open. */
+      sessions: number;
+    };
+    PlaygroundMigrationEvent:
+      | {
+          /** @enum {string} */
+          type: "resetting";
+        }
+      | {
+          index: number;
+          total: number;
+          /** @enum {string} */
+          type: "running";
+        }
+      | {
+          result: components["schemas"]["MigrationRunStatement"];
+          /** @enum {string} */
+          type: "statement";
+        }
+      | {
+          report: components["schemas"]["MigrationRunReport"];
+          /** @enum {string} */
+          type: "done";
+        }
+      | {
+          message: string;
+          /** @enum {string} */
+          type: "failed";
+        };
+    /**
+     * @description What a playground's rows aim at (`playground_profile`).
+     * @enum {string}
+     */
+    PlaygroundProfile: "realistic" | "edge_cases";
+    /** @description One entry of the history. */
+    PlaygroundRun: {
+      /** @description Who: their name as it was (`id` is `null` once their account is gone). */
+      by: components["schemas"]["RunBy"];
+      /** Format: int64 */
+      duration_ms: number;
+      /** @description What went wrong, in one sentence. */
+      error?: string | null;
+      /** Format: uuid */
+      id: string;
+      kind: components["schemas"]["PlaygroundRunKind"];
+      report?: components["schemas"]["MigrationRunReport"] | null;
+      /**
+       * Format: int64
+       * @description Rows the last statement returned or changed.
+       */
+      rows?: number | null;
+      /** @description What ran (its first 64 KiB); `null` for a reset. */
+      sql?: string | null;
+      /** Format: date-time */
+      started_at: string;
+      status: components["schemas"]["PlaygroundRunStatus"];
+    };
+    /**
+     * @description What an entry of a playground's history is (`playground_run_kind`).
+     * @enum {string}
+     */
+    PlaygroundRunKind: "query" | "explain" | "migration" | "reset";
+    /**
+     * @description How an entry of a playground's history ended (`playground_run_status`).
+     * @enum {string}
+     */
+    PlaygroundRunStatus: "ok" | "error" | "cancelled";
+    /**
+     * @description How many rows a playground is generated with (`playground_size`).
+     * @enum {string}
+     */
+    PlaygroundSize: "small" | "medium";
+    /** @description A Postgres error, located. */
+    PlaygroundSqlError: {
+      detail?: string | null;
+      hint?: string | null;
+      message: string;
+      span?: components["schemas"]["PlaygroundTextSpan"] | null;
+      sqlstate: string;
+    };
+    /**
+     * @description Where a build is.
+     * @enum {string}
+     */
+    PlaygroundStage: "starting" | "schema" | "rows" | "analyze" | "snapshot";
+    /**
+     * @description Where a playground is (`playground_status`).
+     * @enum {string}
+     */
+    PlaygroundStatus: "building" | "ready" | "failed" | "expired";
+    /** @description One table's rows. */
+    PlaygroundTableRows: {
+      /** Format: int64 */
+      rows: number;
+      schema: string;
+      table: string;
+    };
+    /** @description A range of a text: bytes, and UTF-16 code units (the browser's). */
+    PlaygroundTextSpan: {
+      end: number;
+      start: number;
+      utf16_end: number;
+      utf16_start: number;
+    };
     /**
      * @description A change to one row level security policy.
      *
@@ -2749,6 +3325,28 @@ export interface components {
      * @enum {string}
      */
     Role: "admin" | "developer" | "reviewer";
+    RunBy: {
+      /** Format: uuid */
+      id?: string | null;
+      name: string;
+    };
+    RunMigration: {
+      /**
+       * @description What the person reviewed: the draft's live compile SHA-256 (the
+       *     migration tab's), so a run is never of a text nobody saw (409
+       *     `draft_changed` when the draft moved on).
+       */
+      sha256: string;
+    };
+    /** @description A page of the history, newest first. */
+    RunsPage: {
+      /**
+       * Format: uuid
+       * @description Pass as `before` for the next page; `null` on the last one.
+       */
+      next_before?: string | null;
+      runs: components["schemas"]["PlaygroundRun"][];
+    };
     /**
      * @description Everything that differs between two schemas, matched by schema and name:
      *     a rename is a removal plus an addition.
@@ -5842,6 +6440,429 @@ export interface operations {
       };
       /** @description `validation`: a number below 1 */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_playgrounds: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Playground"][];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_playground: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreatePlayground"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Playground"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `playground_exists` (`details.id`: open it), `playground_limit` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`; `no_version`: nothing to hold yet */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_playground: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Playground"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_playground: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  playground_console: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Switching to the websocket */
+      101: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConsoleEvent"];
+        };
+      };
+      /** @description Another origin */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `playground_not_ready`, `playground_expired` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  run_playground_migration: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RunMigration"];
+      };
+    };
+    responses: {
+      /** @description The progress, one event per line */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/x-ndjson": components["schemas"]["PlaygroundMigrationEvent"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `playground_not_ready`, `playground_expired`, `playground_busy`, `migration_in_progress` (yours, elsewhere), `draft_not_open`, `playground_stale` (the draft moved to another base), `draft_changed` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `no_migration` (a version's playground), `compile_failed`, `nothing_to_migrate`, `migration_too_long` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  reset_playground: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Playground"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `playground_not_ready`, `playground_expired`, `playground_busy` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_playground_runs: {
+    parameters: {
+      query?: {
+        /** @description Entries older than this one (from `next_before`). */
+        before?: string;
+        /** @description 1 to 100; 50 by default. */
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunsPage"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

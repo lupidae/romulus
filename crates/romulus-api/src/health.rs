@@ -33,6 +33,10 @@ pub struct Health {
     /// Every supported major's compiler, by major (`"15"`…`"18"`), as
     /// `sandbox` says it: a database compiles on its own major's.
     pub sandboxes: BTreeMap<String, String>,
+    /// The playground host: `ok`, `unavailable` (it does not answer, or its
+    /// runner is not ready) or `off` (not configured). Not part of the
+    /// status either.
+    pub playgrounds: String,
     /// The API's crate version.
     pub version: String,
 }
@@ -62,6 +66,7 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
                     .cloned()
                     .unwrap_or_else(|| "unavailable".to_owned()),
                 sandboxes,
+                playgrounds: playground_status(&state).await.to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
             }))
         }
@@ -96,4 +101,14 @@ async fn sandbox_statuses(state: &AppState) -> BTreeMap<String, String> {
         .await
         .into_iter()
         .collect()
+}
+
+async fn playground_status(state: &AppState) -> &'static str {
+    let Ok(backend) = state.playgrounds.host.backend() else {
+        return "off";
+    };
+    match tokio::time::timeout(Duration::from_secs(2), backend.health()).await {
+        Ok(Ok(health)) if health.ok => "ok",
+        _ => "unavailable",
+    }
 }

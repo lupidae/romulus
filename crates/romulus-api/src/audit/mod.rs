@@ -12,9 +12,10 @@
 //! organization or database). Written by `versions::removal` (a version
 //! removed, restored, purged), `drafts::approvals` (a draft published, with
 //! who approved it, or without the approvals it needed), `orgs` (the
-//! approvals required changed) and `collab` (someone else's comments
-//! deleted in a draft, by its room's writer). The actor's name is kept as it
-//! was.
+//! approvals required changed), `collab` (someone else's comments deleted
+//! in a draft, by its room's writer) and `playgrounds` (one created,
+//! deleted, reset, or a migration run on its rows). The actor's name is kept
+//! as it was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -75,6 +76,13 @@ pub struct AuditDetails {
     /// The beginning of the first one (comments deleted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
+    /// The playground (created, deleted, reset, migrated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playground_id: Option<Uuid>,
+    /// A migration run's outcome: `passed`, or the statement it failed at
+    /// (`failed at statement 4 of 7`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
 }
 
 /// One approval, as it was when the draft was published.

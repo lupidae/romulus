@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE playgrounds SET migrated_by_run = NULL WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e5736e4933b6aeab7ec30160863fc381df7ca4a55f0bcce8ceec9e74c172216c"
+}

@@ -21,6 +21,8 @@ up: env
     # Created here so it belongs to you, not to the container (Linux bind mounts).
     mkdir -p .dev/zitadel
     {{compose}} up -d --wait || { {{compose}} logs zitadel-provision; exit 1; }
+    # The playground image (deploy/playground), rebuilt only when its files changed.
+    just playground-image
     # --wait returns once the one-shot provisioner is running, not once it is done.
     status=$(docker wait "$({{compose}} ps -aq zitadel-provision)")
     if [ "$status" != 0 ]; then
@@ -43,27 +45,55 @@ sandbox major="17": env
         *) echo "sandbox: 15, 16, 17, 18 or all, not {{major}}" >&2; exit 1 ;;
     esac
 
-# stop the stack (every major's sandbox included), keep its data
+# stop the stack (every major's sandbox included), keep its data (playgrounds
+# too: they are not compose's)
 down:
     {{compose}} --profile majors down --remove-orphans
+    -docker ps -q --filter "label=romulus.play.scope=$(scripts/dev-env --project-name)" | xargs docker stop >/dev/null 2>&1
 
 # stop the stack and delete its data and the provisioned credentials
 nuke:
     {{compose}} --profile majors down -v --remove-orphans
+    -docker ps -aq --filter "label=romulus.play.scope=$(scripts/dev-env --project-name)" | xargs docker rm -f >/dev/null 2>&1
+    -docker volume rm "$(scripts/dev-env --project-name)_play" >/dev/null 2>&1
     rm -rf .dev
 
 # apply migrations to DATABASE_URL (the API also applies them on start)
 migrate:
     cargo run -q -p romulus-api -- migrate
 
-# the stack, the API and the web dev server; ctrl-c stops the API and web
+# the stack, the API, the playground runner and service, and the web dev server; ctrl-c stops them
 dev: up
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'kill 0' EXIT
+    cargo build -q -p romulus-play-runner -p romulus-playground
+    cargo run -q -p romulus-play-runner &
+    cargo run -q -p romulus-playground &
     cargo run -p romulus-api &
     npm --prefix web run dev &
     wait
+
+# only the playground runner and service (the API and web run elsewhere); needs `just up`
+play:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT
+    cargo build -q -p romulus-play-runner -p romulus-playground
+    cargo run -q -p romulus-play-runner &
+    cargo run -q -p romulus-playground &
+    wait
+
+# build the playground Postgres image (deploy/playground) as local development and tests use it
+playground-image:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Labelled with a hash of its files: built again only when they change.
+    hash=$(cd deploy/playground && find . -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -c1-16)
+    built=$(docker image inspect -f '{{{{ index .Config.Labels "romulus.sources" }}}}' romulus-playground:dev 2>/dev/null || true)
+    if [ "$built" != "$hash" ]; then
+        docker build -q --label "romulus.sources=$hash" -t romulus-playground:dev deploy/playground >/dev/null
+    fi
 
 # regenerate the web app's API types from the Rust OpenAPI document
 gen:

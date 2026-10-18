@@ -72,6 +72,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toaster";
+import { RadioCard, RadioGroup } from "@/components/ui/radio-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -99,7 +100,7 @@ const sections = [
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
-  ["toggles", "ToggleGroup, Checkbox"],
+  ["toggles", "ToggleGroup, Checkbox, RadioGroup"],
   ["overlays", "Menu, Popover, Dialog, Toast"],
   ["feedback", "Alert, Spinner, Progress, Skeleton"],
   ["empty", "Empty state"],
@@ -594,8 +595,9 @@ function TabsDemo() {
 function Toggles() {
   const [layout, setLayout] = React.useState("split");
   const [picked, setPicked] = React.useState<Record<string, boolean>>({ v3: true });
+  const [size, setSize] = React.useState("small");
   return (
-    <Section id="toggles" title="ToggleGroup, Checkbox">
+    <Section id="toggles" title="ToggleGroup, Checkbox, RadioGroup">
       <Card className="grid gap-5 p-4">
         <div className="grid gap-2">
           <p className="text-sm text-muted-foreground">
@@ -633,6 +635,25 @@ function Toggles() {
               <Label htmlFor="kit-disabled">Disabled</Label>
             </div>
           </div>
+        </div>
+        <div className="grid gap-2">
+          <p className="text-sm text-muted-foreground">
+            One choice among a few, each worth a sentence (a size, a profile): cards.
+          </p>
+          <RadioGroup
+            aria-label="Rows"
+            value={size}
+            onValueChange={setSize}
+            className="max-w-lg sm:grid-cols-2"
+          >
+            <RadioCard value="small" label="Small" description="up to 50,000 rows, about 10 s" />
+            <RadioCard
+              value="medium"
+              label="Medium"
+              description="up to 1,000,000 rows, about a minute"
+            />
+            <RadioCard value="large" label="Large" description="not on this server" disabled />
+          </RadioGroup>
         </div>
       </Card>
     </Section>

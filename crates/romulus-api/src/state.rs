@@ -10,6 +10,10 @@ use crate::{
     compile::SqlCompiler,
     imports::Turns,
     orgs::events::MembershipEvents,
+    playgrounds::{
+        Playgrounds,
+        host::{Host, Remote},
+    },
     rate::Limits,
     versions::diff::DiffCache,
 };
@@ -38,11 +42,14 @@ pub struct AppState {
     pub diffs: Arc<DiffCache>,
     /// Migration imports waiting for the sandbox, organizations in turn.
     pub imports: Turns,
+    /// The playground host, builds in progress, who has which console open.
+    pub playgrounds: Playgrounds,
 }
 
 impl AppState {
     /// Without a SQL compiler (see [`AppState::with_compiler`]).
     pub fn new(db: PgPool, config: Config) -> Self {
+        let config_playground = config.playground.clone();
         Self {
             collab: Hub::new(db.clone(), SqlCompiler::unavailable()),
             db,
@@ -54,7 +61,18 @@ impl AppState {
             limits: Arc::new(Limits::default()),
             diffs: Arc::new(DiffCache::default()),
             imports: Turns::default(),
+            playgrounds: Playgrounds::new(match &config_playground {
+                Some(play) => Host::new(Remote::new(play.url.clone(), play.key.clone())),
+                None => Host::off(),
+            }),
         }
+    }
+
+    /// A playground host of one's own (tests: a fake).
+    #[must_use]
+    pub fn with_playgrounds(mut self, host: Host) -> Self {
+        self.playgrounds = Playgrounds::new(host);
+        self
     }
 
     /// Uploads, pushes and drafts compile with `compiler` (the sandbox in
