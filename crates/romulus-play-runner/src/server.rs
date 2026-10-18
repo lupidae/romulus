@@ -264,6 +264,19 @@ fn project_id(id: Uuid, which: &str) -> u32 {
     10_000 + u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) % 2_000_000_000
 }
 
+/// `xfs_quota`'s arguments for one directory's project quota: one project
+/// per invocation (paths given to `project -s -p` accumulate within one).
+fn quota_command(dir: &str, project: u32, limit: u64) -> Vec<String> {
+    vec![
+        "-x".to_owned(),
+        "-c".to_owned(),
+        format!("project -s -p {dir} {project}"),
+        "-c".to_owned(),
+        format!("limit -p bhard={}m {project}", limit / (1024 * 1024)),
+        "/play".to_owned(),
+    ]
+}
+
 impl Runner {
     pub fn new(config: Config) -> Self {
         Self(Arc::new(Inner {
@@ -408,32 +421,34 @@ impl Runner {
             return Ok(());
         };
         let (pg, run) = (project_id(id, "pg"), project_id(id, "run"));
-        let spec = json!({
-            "Image": image,
-            "User": "0:0",
-            "Entrypoint": ["xfs_quota"],
-            "Cmd": [
-                "-x",
-                "-c", format!("project -s -p /play/pg/{id} {pg}"),
-                "-c", format!("limit -p bhard={}m {pg}", bytes / (1024 * 1024)),
-                "-c", format!("project -s -p /play/run/{id} {run}"),
-                "-c", format!("limit -p bhard={}m {run}", RUN_DIR_BYTES / (1024 * 1024)),
-                "/play",
-            ],
-            "Labels": self.labels(None),
-            "NetworkDisabled": true,
-            "HostConfig": {
-                "Privileged": true,
-                "NetworkMode": "none",
-                "Mounts": [self.0.config.root.mount(None, "/play", false)],
-                "LogConfig": Self::log_config(),
-            },
-        });
-        self.0
-            .docker
-            .run_once(&format!("romulus-play-quota-{id}"), &spec)
-            .await
-            .map(drop)
+        // One xfs_quota per project: within one invocation, `project -s -p`
+        // paths accumulate, so a second `project -s` would tag the first
+        // directory too (the data directory then got the socket directory's
+        // 16 MiB and initdb ran out of space).
+        for (which, dir, project, limit) in [
+            ("pg", format!("/play/pg/{id}"), pg, bytes),
+            ("run", format!("/play/run/{id}"), run, RUN_DIR_BYTES),
+        ] {
+            let spec = json!({
+                "Image": image,
+                "User": "0:0",
+                "Entrypoint": ["xfs_quota"],
+                "Cmd": quota_command(&dir, project, limit),
+                "Labels": self.labels(None),
+                "NetworkDisabled": true,
+                "HostConfig": {
+                    "Privileged": true,
+                    "NetworkMode": "none",
+                    "Mounts": [self.0.config.root.mount(None, "/play", false)],
+                    "LogConfig": Self::log_config(),
+                },
+            });
+            self.0
+                .docker
+                .run_once(&format!("romulus-play-quota-{which}-{id}"), &spec)
+                .await?;
+        }
+        Ok(())
     }
 
     /// The playground's container (stopped): the flags of
@@ -876,6 +891,14 @@ mod tests {
             spec["Cmd"],
             json!(["restore", "00000000-0000-0000-0000-000000000007"])
         );
+    }
+
+    #[test]
+    fn each_quota_command_names_one_directory() {
+        let cmd = quota_command("/play/pg/x", 12_345, 1024 * 1024 * 1024);
+        let setups: Vec<&String> = cmd.iter().filter(|a| a.starts_with("project -s")).collect();
+        assert_eq!(setups, ["project -s -p /play/pg/x 12345"]);
+        assert!(cmd.contains(&"limit -p bhard=1024m 12345".to_owned()));
     }
 
     #[test]
