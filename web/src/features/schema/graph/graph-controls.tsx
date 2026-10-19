@@ -142,6 +142,8 @@ export function DiffLegend({
   );
 }
 
+const ERA_SWATCHES = ["bg-era-1", "bg-era-2", "bg-era-3", "bg-era-4", "bg-era-5", "bg-era-6"];
+
 function Mark({ mark }: { mark: "||" | "|o" | "o{" }) {
   return (
     <svg
@@ -167,7 +169,7 @@ function KeyRow({ icon, children }: { icon: React.ReactNode; children: React.Rea
 }
 
 /** What the marks on the graph mean, and its keyboard shortcuts. */
-export function GraphKey({ diff }: { diff: boolean }) {
+export function GraphKey({ diff, time = false }: { diff: boolean; time?: boolean }) {
   return (
     <Popover>
       <Tooltip content="Legend and shortcuts" side="bottom">
@@ -238,6 +240,37 @@ export function GraphKey({ diff }: { diff: boolean }) {
                   {s === "added" ? "Added" : s === "removed" ? "Removed" : "Changed"}
                 </KeyRow>
               ))}
+            </ul>
+          </section>
+        )}
+        {time && (
+          <section className="grid gap-2">
+            <h3 className="text-xs font-medium text-muted-foreground">Over time</h3>
+            <ul className="grid gap-1.5">
+              <KeyRow
+                icon={
+                  <span aria-hidden className="flex h-2.5 w-10 overflow-hidden rounded-xs">
+                    {ERA_SWATCHES.map((c) => (
+                      <span key={c} className={cn("flex-1", c)} />
+                    ))}
+                  </span>
+                }
+              >
+                When it appeared, earlier to later
+              </KeyRow>
+              <KeyRow
+                icon={
+                  <span className="font-mono text-xs text-muted-foreground line-through">name</span>
+                }
+              >
+                Removed by then
+              </KeyRow>
+              <KeyRow icon={<span className="font-mono font-semibold text-warning">~</span>}>
+                Changed in the range
+              </KeyRow>
+              <KeyRow icon={<KbdGroup keys={["[", "]"]} />}>Previous, next version</KeyRow>
+              <KeyRow icon={<Kbd>K</Kbd>}>Play or pause</KeyRow>
+              <KeyRow icon={<Kbd>M</Kbd>}>Superposed or at cursor</KeyRow>
             </ul>
           </section>
         )}

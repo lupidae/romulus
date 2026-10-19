@@ -36,6 +36,13 @@
   pointer-events: none;
 }
 
+/* A table's box is sized by the graph, never by its content: what changes
+   inside one (a row coming in, its tint) lays out and restyles that table
+   alone, not the 300 around it (the time machine redraws a few per step). */
+.schema-graph .react-flow__node-table {
+  contain: layout style;
+}
+
 /* Zoomed out, where the area labels are drawn (see group-node.tsx), a
    group's label is the handle that drags it. */
 .schema-graph[data-far] .sg-area-handle {
@@ -89,6 +96,29 @@
 }
 .schema-graph[data-lod="overview"] .sg-marks {
   display: none;
+}
+/* The time machine: zoomed out, a table's age tints it whole, so where the
+   schema grew reads like a map; a table gone is only its dashed outline. */
+.schema-graph[data-lod="overview"] .sg-node[data-era="1"] {
+  background: color-mix(in oklab, var(--color-era-1) 24%, var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era="2"] {
+  background: color-mix(in oklab, var(--color-era-2) 24%, var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era="3"] {
+  background: color-mix(in oklab, var(--color-era-3) 24%, var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era="4"] {
+  background: color-mix(in oklab, var(--color-era-4) 24%, var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era="5"] {
+  background: color-mix(in oklab, var(--color-era-5) 24%, var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era="6"] {
+  background: color-mix(in oklab, var(--color-era-6) 24%, var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-ghost] {
+  background: transparent;
 }
 
 /* Drawing a foreign key: every table is a possible target, none steps back. */

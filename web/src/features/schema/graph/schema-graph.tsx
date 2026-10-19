@@ -80,6 +80,7 @@ import { RelationEdge, type RelationFlowEdge } from "./relation-edge";
 import { affectedEdges, type Point, type Rect, type Route, route } from "./routing";
 import { TableNode, type TableFlowNode, type TableNodeData } from "./table-node";
 import { TableSearch } from "./table-search";
+import { timeWords } from "./time-words";
 import { useAutoLayout } from "./use-auto-layout";
 
 export interface SchemaGraphProps {
@@ -87,6 +88,13 @@ export interface SchemaGraphProps {
   schema: Schema;
   /** Diff mode: draw the union with `diff.base`, styled by `diff.status`. */
   diff?: SchemaDiffInput;
+  /**
+   * The graph drawn, built by the caller (the time machine's frames) instead
+   * of from `schema` and `diff`. Tables and edges handed again as the same
+   * objects are neither drawn nor routed again: a new graph costs what
+   * changed in it.
+   */
+  graph?: GraphModel;
   /** Known positions by qualified name. Missing tables are placed automatically. */
   layout?: Layout;
   groups?: Groups;
@@ -157,6 +165,13 @@ const SCHEMA_COLORS: GroupColor[] = [
 ];
 
 const MINIMAP_FILL: Record<string, string> = {
+  "era-0": "fill-era-1",
+  "era-1": "fill-era-2",
+  "era-2": "fill-era-3",
+  "era-3": "fill-era-4",
+  "era-4": "fill-era-5",
+  "era-5": "fill-era-6",
+  ghost: "fill-transparent stroke-faint-foreground [stroke-dasharray:3_2]",
   added: "fill-success",
   removed: "fill-destructive",
   changed: "fill-warning",
@@ -193,6 +208,7 @@ function isEditableTarget(target: EventTarget | null) {
 function GraphCanvas({
   schema,
   diff,
+  graph: prebuilt,
   layout,
   groups,
   onLayoutChange,
@@ -211,7 +227,7 @@ function GraphCanvas({
   followNewTables = false,
   className,
 }: SchemaGraphProps) {
-  const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
+  const graph = useMemo(() => prebuilt ?? graphOf(schema, diff), [prebuilt, schema, diff]);
   const canEdit = editor !== undefined;
   const [store] = useState<GraphUiStore>(() => createGraphUiStore({ selected: selected ?? null }));
   const nodeState = useSyncExternalStore(store.subscribe, () => store.get().nodeState);
@@ -523,34 +539,43 @@ function GraphCanvas({
     return new Map(names.map((s, i) => [s, SCHEMA_COLORS[i % SCHEMA_COLORS.length]!]));
   }, [graph]);
 
+  // A table's data is kept (the same object) while the table, its edges and
+  // the rest of what it draws are: a graph handing the same table again
+  // (the time machine's next frame) does not redraw it.
+  const dataCache = useRef(new Map<string, TableNodeData>());
   const nodeData = useMemo(() => {
     const byTable = new Map<string, EdgeModel[]>();
     for (const e of graph.edges) {
       byTable.set(e.source, [...(byTable.get(e.source) ?? []), e]);
       if (e.target !== e.source) byTable.set(e.target, [...(byTable.get(e.target) ?? []), e]);
     }
-    return new Map<string, TableNodeData>(
-      graph.tables.map((table) => [
-        table.key,
-        {
-          table,
-          multiSchema: graph.multiSchema,
-          schemaColor: schemaColors.get(table.schema),
-          edges: byTable.get(table.key) ?? [],
-          diffMode: diff !== undefined,
-          editable: canEdit && editableKind(table.entity),
-        },
-      ]),
-    );
+    const out = new Map<string, TableNodeData>();
+    for (const table of graph.tables) {
+      const data: TableNodeData = {
+        table,
+        multiSchema: graph.multiSchema,
+        schemaColor: schemaColors.get(table.schema),
+        edges: byTable.get(table.key) ?? NO_EDGES,
+        diffMode: diff !== undefined,
+        timeMode: graph.time !== undefined,
+        editable: canEdit && editableKind(table.entity),
+      };
+      const kept = dataCache.current.get(table.key);
+      out.set(table.key, kept && sameData(kept, data) ? kept : data);
+    }
+    dataCache.current = out;
+    return out;
   }, [graph, schemaColors, diff, canEdit]);
 
-  const nodeCache = useRef({ graph, nodes: new Map<string, TableFlowNode>() });
-  // A new model makes every entry miss (new `data`): start over with it.
-  if (nodeCache.current.graph !== graph) nodeCache.current = { graph, nodes: new Map() };
+  // Node objects by table: one whose data, place and size are unchanged is
+  // kept, so React Flow skips it (data objects are kept as above).
+  const nodeCache = useRef({ nodes: new Map<string, TableFlowNode>() });
   const nodes = useMemo(() => {
     const out: (TableFlowNode | GroupFlowNode | AreaLabelFlowNode)[] = [];
     const sizes = new Map<string, { width: number; height: number }>();
     const tables: TableFlowNode[] = [];
+    // Rebuilt from the tables drawn now: a table gone leaves nothing behind.
+    const cache = new Map<string, TableFlowNode>();
     for (const table of graph.tables) {
       const position = moved[table.key] ?? positions[table.key];
       if (!position) continue;
@@ -572,6 +597,7 @@ function GraphCanvas({
         kept.zIndex === zIndex
       ) {
         tables.push(kept);
+        cache.set(table.key, kept);
         continue;
       }
       // `data` objects are stable per table, so the memoized nodes skip
@@ -588,13 +614,16 @@ function GraphCanvas({
         data,
         draggable: editable,
         selectable: false,
-        ariaLabel: `${KIND_LABEL[table.kind] ?? "table"} ${table.key}, ${table.columns.length} columns`,
+        ariaLabel: `${KIND_LABEL[table.kind] ?? "table"} ${
+          table.time?.label ? `${table.schema}.${table.time.label}` : table.key
+        }, ${table.columns.length} columns${table.time?.note || table.time?.changed ? `, ${timeWords(table.time)}` : ""}`,
         // Unfolded partitions overlap what is below: draw them on top.
         zIndex,
       };
-      nodeCache.current.nodes.set(table.key, node);
+      cache.set(table.key, node);
       tables.push(node);
     }
+    nodeCache.current.nodes = cache;
     // Groups behind their tables, sized to the members placed so far. Without
     // groups, a graph over several schemas shows each schema's area instead,
     // as long as no two areas overlap (hand-made layouts can mix them).
@@ -750,6 +779,27 @@ function GraphCanvas({
       if (!affected) return last.routes;
       routes = new Map(last.routes);
       for (const [id, r] of routeAll(graph, routedRects, nodeState, affected)) routes.set(id, r);
+    } else if (last && last.nodeState === nodeState) {
+      // Another graph: an edge handed again (the same object) between tables
+      // handed again, away from every table that appeared, went or moved,
+      // keeps its route.
+      const before = new Map(last.graph.edges.map((e) => [e.id, e]));
+      const redrawn = (key: string) => last.graph.byKey.get(key) !== graph.byKey.get(key);
+      const near = new Set(affectedEdges(graph.edges, last.rects, routedRects) ?? []);
+      const affected = graph.edges.filter(
+        (e) =>
+          near.has(e) ||
+          before.get(e.id) !== e ||
+          !last.routes.has(e.id) ||
+          redrawn(e.source) ||
+          redrawn(e.target),
+      );
+      routes = new Map();
+      for (const e of graph.edges) {
+        const kept = last.routes.get(e.id);
+        if (kept) routes.set(e.id, kept);
+      }
+      for (const [id, r] of routeAll(graph, routedRects, nodeState, affected)) routes.set(id, r);
     } else {
       routes = routeAll(graph, routedRects, nodeState, graph.edges);
     }
@@ -796,8 +846,10 @@ function GraphCanvas({
     // Routes made for this frame are kept for the next: the frame of a drop
     // draws what the last drag frame drew, with the same objects (nothing
     // re-renders). Around their ends only, a route depends on its two boxes.
+    // Edge objects are kept across graphs (an edge model and its route
+    // again are the same edge); routes made while dragging are not.
     if (edgeCache.current.graph !== graph) {
-      edgeCache.current = { graph, edges: new Map() };
+      edgeCache.current = { graph, edges: edgeCache.current.edges };
       routeReuse.current.clear();
     }
     const reuse = routeReuse.current;
@@ -834,14 +886,19 @@ function GraphCanvas({
       reuse.set(e.id, { key: keyOf(e), base: null, route: made, ends, graph, nodeState });
       return made;
     };
-    return graph.edges
+    // Rebuilt from the edges drawn now: an edge gone leaves nothing behind.
+    const cache = new Map<string, RelationFlowEdge>();
+    const drawn = graph.edges
       .filter((e) => live.has(e.source) && live.has(e.target))
       .map((e) => {
         const route = routeOf(e);
         if (!route) return null;
         // Unchanged, the same object: React Flow skips the edge.
         const kept = edgeCache.current.edges.get(e.id);
-        if (kept?.data?.route === route && kept.data.model === e) return kept;
+        if (kept?.data?.route === route && kept.data.model === e) {
+          cache.set(e.id, kept);
+          return kept;
+        }
         const edge: RelationFlowEdge = {
           id: e.id,
           source: e.source,
@@ -852,10 +909,12 @@ function GraphCanvas({
           focusable: false,
           zIndex: 1,
         };
-        edgeCache.current.edges.set(e.id, edge);
+        cache.set(e.id, edge);
         return edge;
       })
       .filter((e) => e !== null);
+    edgeCache.current.edges = cache;
+    return drawn;
   }, [graph, dragging, moved, rectsOf, settledRects, routedRects, settledRoutes, nodeState]);
 
   // ---- Editing: moving tables ----------------------------------------------
@@ -1486,7 +1545,7 @@ function GraphCanvas({
                       </Tooltip>
                     )}
                     <GroupsPanel />
-                    <GraphKey diff={graph.counts !== undefined} />
+                    <GraphKey diff={graph.counts !== undefined} time={graph.time !== undefined} />
                     {controls}
                   </div>
                 </div>
@@ -1505,7 +1564,12 @@ function GraphCanvas({
                 nodeClassName={(node) => {
                   if (node.type !== "table") return "fill-transparent";
                   const data = node.data as TableNodeData;
-                  const key = data.table.status ?? data.schemaColor;
+                  const time = data.table.time;
+                  const key = time?.ghost
+                    ? "ghost"
+                    : time?.era !== undefined
+                      ? `era-${time.era}`
+                      : (data.table.status ?? data.schemaColor);
                   return key ? (MINIMAP_FILL[key] ?? "") : "";
                 }}
               />
@@ -1561,6 +1625,21 @@ function GraphCanvas({
 }
 
 const NO_MARKS: ReadonlyMap<string, ElementMark> = new Map();
+const NO_EDGES: EdgeModel[] = [];
+
+/** Whether two node data say the same: the old object can be kept. */
+function sameData(a: TableNodeData, b: TableNodeData): boolean {
+  return (
+    a.table === b.table &&
+    a.multiSchema === b.multiSchema &&
+    a.schemaColor === b.schemaColor &&
+    a.diffMode === b.diffMode &&
+    a.timeMode === b.timeMode &&
+    a.editable === b.editable &&
+    a.edges.length === b.edges.length &&
+    a.edges.every((e, i) => e === b.edges[i])
+  );
+}
 const NO_GROUPS: Groups = {};
 const NO_LAYOUT: Layout = {};
 

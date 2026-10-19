@@ -20,7 +20,7 @@ import { type ChangeStatus, statusGlyph } from "../diff";
 import { columnNameTaken, relationNameTaken } from "../edits/inspect";
 import { targetOf } from "../edits/plan";
 import { nameProblem } from "../edits/quote";
-import type { ColumnModel, EdgeModel, TableModel } from "./build";
+import type { ColumnModel, EdgeModel, TableModel, TimeMark } from "./build";
 import { requestDetail } from "./detail-scheduler";
 import { type EditContextValue, useEdit } from "./editing/context";
 import { InlineName } from "./editing/inline-name";
@@ -29,6 +29,7 @@ import { hasFooter, NODE, showsNullable, visibleColumnCount } from "./geometry";
 import { useGraphUi, useGraphUiStore } from "./graph-ui";
 import { KIND_ICON, KIND_LABEL } from "./kind";
 import { StatusBadge } from "./status";
+import { timeWords } from "./time-words";
 
 export interface TableNodeData extends Record<string, unknown> {
   table: TableModel;
@@ -39,6 +40,8 @@ export interface TableNodeData extends Record<string, unknown> {
   edges: EdgeModel[];
   /** Diff mode: unchanged tables step back so changes stand out. */
   diffMode: boolean;
+  /** Time machine: rows keep room for the changed mark. */
+  timeMode?: boolean;
   /** Its schema can be edited from the graph (a draft's editors; not foreign tables). */
   editable?: boolean;
 }
@@ -62,6 +65,31 @@ const ROW_STATUS: Record<ChangeStatus, string> = {
   changed: "bg-warning/8 before:bg-warning",
 };
 
+/** The age scale (`TimeMark.era`, 0 to 5): a row's bar and wash, a dot. */
+const ERA_ROW = [
+  "bg-era-1/10 before:bg-era-1",
+  "bg-era-2/10 before:bg-era-2",
+  "bg-era-3/10 before:bg-era-3",
+  "bg-era-4/10 before:bg-era-4",
+  "bg-era-5/10 before:bg-era-5",
+  "bg-era-6/10 before:bg-era-6",
+];
+const ERA_DOT = ["bg-era-1", "bg-era-2", "bg-era-3", "bg-era-4", "bg-era-5", "bg-era-6"];
+
+/** How an element comes and goes between two of the time machine's frames. */
+const MOTION = {
+  enter:
+    "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 duration-(--duration-slow)",
+  leave:
+    "motion-safe:animate-out motion-safe:fade-out-0 motion-safe:zoom-out-95 fill-mode-forwards duration-(--duration-base)",
+} as const;
+const ROW_MOTION = {
+  enter:
+    "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-left-1 duration-(--duration-slow)",
+  leave:
+    "motion-safe:animate-out motion-safe:fade-out-0 fill-mode-forwards duration-(--duration-base)",
+} as const;
+
 const BORDER_STATUS: Record<ChangeStatus, string> = {
   added: "border-success/70",
   removed: "border-destructive/60 border-dashed",
@@ -73,6 +101,7 @@ const ELSEWHERE = "\u0000elsewhere";
 
 function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
   const { table, multiSchema, schemaColor, edges, diffMode } = data;
+  const time = table.time;
   const edit = useEdit();
   const canEdit = !!edit && data.editable === true;
   const renaming = useGraphUi(
@@ -109,14 +138,19 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
     <div
       data-selected={emphasis === "selected" ? "" : undefined}
       data-picked={picked ? "" : undefined}
+      data-era={time?.era !== undefined && !time.ghost ? time.era + 1 : undefined}
+      data-ghost={time?.ghost ? "" : undefined}
       className={cn(
         "sg-node relative flex flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-raised",
         "transition-[opacity,box-shadow,border-color] duration-(--duration-fast)",
         table.status ? BORDER_STATUS[table.status] : "border-border-strong",
+        time?.ghost && "border-dashed opacity-60 shadow-none",
         emphasis === "selected" && "border-primary shadow-popover ring-3 ring-primary/20",
         picked && "border-primary ring-2 ring-primary/45",
         emphasis === "dimmed" && "opacity-35",
         quiet && emphasis === "normal" && "opacity-60",
+        time?.muted && emphasis !== "selected" && "opacity-20",
+        time?.motion && MOTION[time.motion],
       )}
       style={{ width: width ?? undefined, height: height ?? undefined }}
     >
@@ -165,6 +199,7 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
             className={cn(
               "sg-name min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground",
               table.status === "removed" && "line-through decoration-destructive/60",
+              time?.ghost && "text-muted-foreground line-through decoration-faint-foreground",
             )}
             onDoubleClick={
               canEdit
@@ -178,9 +213,10 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
             {multiSchema && (
               <span className="font-normal text-faint-foreground">{table.schema}.</span>
             )}
-            {table.name}
+            {time?.label ?? table.name}
           </span>
         )}
+        {time && <TimeChip time={time} />}
         {kindLabel && (
           <span className="sg-kind shrink-0 rounded-sm px-1.5 text-xs text-muted-foreground ring-1 ring-border-strong ring-inset">
             {kindLabel === "materialized view"
@@ -200,11 +236,33 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
         id={id}
         table={table}
         edges={edges}
-        diffMode={diffMode}
+        diffMode={diffMode || data.timeMode === true}
         related={related}
         canEdit={canEdit}
       />
     </div>
+  );
+}
+
+/** The time machine's word on a table: when it came or went, whether it changed. */
+function TimeChip({ time }: { time: TimeMark }) {
+  if (!time.changed && !time.note) return null;
+  return (
+    <span className="sg-kind flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+      {time.changed && (
+        <span className="font-mono font-semibold text-warning" title="Changed in this range">
+          ~<span className="sr-only">changed</span>
+        </span>
+      )}
+      {time.note && (
+        <span className="flex items-center gap-1 rounded-sm px-1 tabular ring-1 ring-border-strong ring-inset">
+          {time.era !== undefined && !time.ghost && (
+            <span aria-hidden className={cn("size-1.5 rounded-full", ERA_DOT[time.era])} />
+          )}
+          {time.note}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -336,7 +394,7 @@ const DetailBody = memo(function DetailBody({
 function OverviewBody({ table, width }: { table: TableModel; width: number }) {
   // As large as legible at this zoom, never wider than the node (a monospace
   // character is 0.6em wide). Long snake_case names break at an underscore.
-  const lines = overviewLines(table.name);
+  const lines = overviewLines(table.time?.label ?? table.name);
   const longest = Math.max(...lines.map((l) => l.length));
   const fits = Math.floor((width - 32) / (longest * 0.62));
   return (
@@ -409,11 +467,17 @@ const ColumnRow = memo(function ColumnRow({
     <li
       data-column={c.name}
       data-pending={mark?.status === "pending" ? "" : undefined}
+      data-era={c.time?.era !== undefined && !c.time.ghost ? c.time.era + 1 : undefined}
+      data-ghost={c.time?.ghost ? "" : undefined}
       className={cn(
         "group/row relative flex items-center gap-1.5 pr-3 font-mono text-xs",
         diffMode ? "pl-4" : "pl-3",
         "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
         c.status && ROW_STATUS[c.status],
+        c.time?.era !== undefined && !c.time.ghost && ERA_ROW[c.time.era],
+        c.time?.ghost && "before:bg-faint-foreground/60",
+        c.time?.muted && "opacity-40",
+        c.time?.motion && ROW_MOTION[c.time.motion],
         joined && !c.status && "bg-primary/8",
         mark?.status === "pending" && "bg-primary/6",
         mark?.status === "failed" && "bg-destructive/8 before:bg-destructive",
@@ -429,10 +493,10 @@ const ColumnRow = memo(function ColumnRow({
             "absolute left-1.5 w-2 text-center font-semibold",
             c.status === "added" && "text-success",
             c.status === "removed" && "text-destructive",
-            c.status === "changed" && "text-warning",
+            (c.status === "changed" || c.time?.changed) && "text-warning",
           )}
         >
-          {c.status ? statusGlyph(c.status) : ""}
+          {c.status ? statusGlyph(c.status) : c.time?.changed ? "~" : ""}
         </span>
       )}
       <span className="flex w-3.5 shrink-0 justify-center [&_svg]:size-3.5">
@@ -465,10 +529,14 @@ const ColumnRow = memo(function ColumnRow({
             joined ? "font-semibold text-foreground" : "text-foreground",
             c.status === "removed" &&
               "text-muted-foreground line-through decoration-destructive/60",
+            c.time?.ghost && "text-muted-foreground line-through decoration-faint-foreground",
           )}
           onDoubleClick={editing ? start("renameColumn") : undefined}
         >
-          {c.name}
+          {c.time?.label ?? c.name}
+          {(c.time?.note || c.time?.changed) && (
+            <span className="sr-only">, {timeWords(c.time)}</span>
+          )}
         </span>
       )}
       {(c.unique || c.identity || c.generated) && (

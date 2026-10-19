@@ -6,6 +6,7 @@ import {
   CheckCircleIcon,
   CheckIcon,
   ClockIcon,
+  ClockRotateRightIcon,
   EyeClosedIcon,
   MoreHorizIcon,
   NavArrowDownIcon,
@@ -237,6 +238,16 @@ function VersionStrip({
       : navigate({ to: "/$org/$db/v/$number", params: { org, db, number: n } });
   // Removed versions leave gaps: older and newer skip them.
   const { older, newer } = neighbours(database, number);
+  useShortcut(
+    "t",
+    () =>
+      void navigate({
+        to: "/$org/$db/time-machine",
+        params: { org, db },
+        search: { at: number === latest ? undefined : number },
+      }),
+    database.versions > 1,
+  );
   useShortcut("[", () => older && void go(older), !!older);
   useShortcut("]", () => newer && void go(newer), !!newer);
   const admin = canManageMembers(orgData.role);
@@ -323,6 +334,21 @@ function VersionStrip({
         )}
         {version && <MigrationButton version={version} />}
         {version && <WrittenMigrationButton org={org} database={database} version={version} />}
+        {database.versions > 1 && (
+          <Tooltip content={`See v${number} in the time machine`} shortcut={["T"]}>
+            <Button variant="ghost" size="sm" asChild className="max-lg:px-2">
+              <Link
+                to="/$org/$db/time-machine"
+                params={{ org, db }}
+                search={{ at: number === latest ? undefined : number }}
+                aria-label="Time machine"
+              >
+                <ClockRotateRightIcon />
+                <span className="max-lg:hidden">Time machine</span>
+              </Link>
+            </Button>
+          </Tooltip>
+        )}
         <CompareWith org={org} db={db} number={number} latest={latest} previous={older} />
         {admin && version && (
           <Menu>

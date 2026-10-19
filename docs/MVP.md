@@ -750,6 +750,56 @@ Each database targets a Postgres major: 15, 16, 17 (the default, the one sandbox
   caught on 15); pg_query 18 when it ships (then 18's syntax compiles, and `VIRTUAL` columns
   round-trip).
 
+## The time machine (decided 2026-10-19, built: task TM)
+
+Several versions of a database superposed on one graph, with a timeline of its versions under
+it: `/app/<org>/<db>/time-machine`, from the history page and from every version's strip (T).
+
+- **Overlay and timeline.** A range of versions (two handles on the timeline) and a cursor in
+  it (a playhead: dragged, `[`/`]`, played with K). *Superposed* draws everything the range
+  had up to the cursor: what is gone by then as a ghost (struck through, dashed), what came
+  later not yet. *At cursor* draws exactly the version at the cursor (M switches). Each
+  table, column and foreign key is tinted by when it appeared in the range, on a one-hue age
+  scale of at most six steps (`--era-1`…`--era-6`, an ordinal ramp validated for contrast in
+  both themes; the dark theme flips its anchor), what was there at the range's start
+  untinted; changed things carry `~`. The timeline is the legend: a bar per version, as high
+  as what it changed, tinted by its step.
+- **History of an element.** Hovering a column (or a table header, or an enum through a
+  column) shows its history in the hover card; selecting a table lists its history and its
+  parts' (columns, keys, checks, indexes, policies), each version linking to its diff with
+  the version before it.
+- **Filters fade, never hide**: only changes, a group, a name; the layout stays.
+- **Layout computed once, for every table the history ever had** (the newest version's
+  positions, each older one's for tables it alone had, elk for the rest), so nothing jumps
+  when the cursor or the range moves; what appears or goes animates in and out. What elk
+  placed is kept in the browser per database (versions are immutable, their layouts too), so
+  the seconds of a large first layout are spent once; a version arriving while the view is
+  open places only its new tables, the rest staying on screen.
+- **Server-side history, one step per pair of versions.** `GET …/timeline` returns every
+  version and, per object (tables and their parts by name within their table, types,
+  partitions, extensions), its states: its value from one version to another and
+  romulus-diff's structured changes into it. A step (romulus-diff between two consecutive
+  versions) depends on its two models only, so it is cached by their ids: a version created,
+  removed or restored costs the steps it makes, never the history (the 120-version,
+  250-table fixture: 2 ms a step, 1.4 ms to fold, 1.1 MB of JSON). Chosen over computing it
+  in the browser, which would mean downloading every model (100 × a few hundred kB) and
+  shipping romulus-diff as wasm. The folded history is cached too, by the database and its
+  ordered list of version ids (the same versions are the same history, for everyone allowed
+  to see them). A build that misses takes its organization's turn (one at a time per
+  organization), then one of the process's two; past the steps' budget, the database
+  holding the most gives back first, so one long history cannot evict everyone else's. The client builds each frame from the states (2 ms at 220
+  tables) and hands unchanged tables and edges to the graph as the same objects, so a frame
+  redraws and reroutes only what changed.
+- **Removed versions** are left out, as everywhere; admins can bring them in (an eye in the
+  toolbar, `?removed=1`): flagged on the timeline, the history running through them, no diff
+  links to them.
+- **Renames** are a removal and an addition while romulus-diff matches by name; the
+  timeline reads renames through one seam (`timeline::history::reported_renames`), and when
+  the diff reports them a renamed object keeps its history under its new name (`renamed
+  users → customers`), drawn under the name it had at the cursor.
+- At most the newest 1000 versions (`earlier` counts the rest). One version: the page
+  explains what the time machine needs.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).

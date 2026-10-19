@@ -88,6 +88,17 @@
   --syntax-comment: #78716c;
   --syntax-punctuation: #57534e;
 
+  /* The time machine's age scale: when an element appeared within the range
+  drawn, oldest (lightest) to newest. One hue (away from the status colors
+  and the accent), lightness steps of 0.065+ in OKLCH, the light end at 2:1
+  on the card and the canvas (dataviz ordinal ramp, validated). */
+  --era-1: #afa7f5;
+  --era-2: #9b91e7;
+  --era-3: #887bda;
+  --era-4: #7463ca;
+  --era-5: #614abb;
+  --era-6: #502fab;
+
   /* Elevation: hairline + soft layered drops. Only floating surfaces lift. */
   --elevation-control: 0 0.0625rem 0.0625rem rgb(28 25 23 / 0.04);
   --elevation-1: 0 0 0 0.0625rem rgb(28 25 23 / 0.06), 0 0.0625rem 0.125rem rgb(28 25 23 / 0.05);
@@ -189,6 +200,14 @@
   --syntax-comment: #8a837d;
   --syntax-punctuation: #a8a29e;
 
+  /* Dark: the anchor flips, newest lightest; the dark end 2.5:1 on the card. */
+  --era-1: #5c4ca7;
+  --era-2: #7163bc;
+  --era-3: #867bd2;
+  --era-4: #9c93e7;
+  --era-5: #b4abfd;
+  --era-6: #cbc4ff;
+
   /* On dark, a drop shadow barely reads: a light rim draws the edge. */
   --elevation-control: inset 0 0.0625rem 0 rgb(255 255 255 / 0.04);
   --elevation-1: inset 0 0.0625rem 0 rgb(255 255 255 / 0.03), 0 0 0 0.0625rem rgb(0 0 0 / 0.3);
@@ -278,6 +297,14 @@
     --syntax-property: #93c5fd;
     --syntax-comment: #8a837d;
     --syntax-punctuation: #a8a29e;
+
+    /* Dark: the anchor flips, newest lightest; the dark end 2.5:1 on the card. */
+    --era-1: #5c4ca7;
+    --era-2: #7163bc;
+    --era-3: #867bd2;
+    --era-4: #9c93e7;
+    --era-5: #b4abfd;
+    --era-6: #cbc4ff;
 
     /* On dark, a drop shadow barely reads: a light rim draws the edge. */
     --elevation-control: inset 0 0.0625rem 0 rgb(255 255 255 / 0.04);

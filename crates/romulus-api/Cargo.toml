@@ -32,7 +32,8 @@ openidconnect.workspace = true
 reqwest.workspace = true
 # `rc`: compile results are shared, not copied, between the people in a draft.
 serde = { workspace = true, features = ["rc"] }
-serde_json.workspace = true
+# `raw_value`: the time machine's cached steps keep their values as JSON text.
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 similar.workspace = true
 sqlx.workspace = true

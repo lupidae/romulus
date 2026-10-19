@@ -178,6 +178,23 @@ function definition(
   return parts.join(" ");
 }
 
+/** The time machine's history of what is under the pointer. */
+function TimeHistory({ lines }: { lines?: readonly string[] }) {
+  if (!lines?.length) return null;
+  return (
+    <div className="grid gap-1 border-t border-border pt-2.5">
+      <p className="text-xs text-muted-foreground">History</p>
+      <ol className="grid gap-0.5 text-xs text-foreground">
+        {lines.map((line, i) => (
+          <li key={i} className="break-words">
+            {line}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function ColumnDetails({
   table,
   column: c,
@@ -205,7 +222,9 @@ function ColumnDetails({
   return (
     <>
       <div className="flex items-baseline gap-2">
-        <span className="min-w-0 truncate font-mono text-sm font-semibold">{c.name}</span>
+        <span className="min-w-0 truncate font-mono text-sm font-semibold">
+          {c.time?.label ?? c.name}
+        </span>
         <span className="ml-auto shrink-0 font-mono text-xs text-syntax-type">{c.type}</span>
       </div>
       <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>
@@ -238,6 +257,7 @@ function ColumnDetails({
         <p className="text-xs text-muted-foreground">{describeCardinality(fks[0].cardinality)}.</p>
       )}
       {type && <TypeDetails type={type} />}
+      <TimeHistory lines={c.time?.history} />
       {c.status && (
         <div className="grid gap-1.5 border-t border-border pt-2.5">
           <StatusBadge status={c.status} className="justify-self-start" />
@@ -297,6 +317,15 @@ function TypeDetails({ type }: { type: TypeModel }) {
         </ul>
       )}
       {type.comment && <p className="text-xs text-muted-foreground">{type.comment}</p>}
+      {type.time?.history && type.time.history.length > 0 && (
+        <ol className="grid gap-0.5 text-xs text-muted-foreground">
+          {type.time.history.map((line, i) => (
+            <li key={i} className="break-words">
+              {line}
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
@@ -316,7 +345,9 @@ function TableDetails({ table }: { table: TableModel }) {
   return (
     <>
       <div className="flex items-center gap-2">
-        <span className="min-w-0 truncate font-mono text-sm font-semibold">{table.key}</span>
+        <span className="min-w-0 truncate font-mono text-sm font-semibold">
+          {table.time?.label ? `${table.schema}.${table.time.label}` : table.key}
+        </span>
         {table.status && <StatusBadge status={table.status} className="ml-auto" />}
       </div>
       <p className="text-xs text-muted-foreground">{facts.join(" · ")}</p>
@@ -334,6 +365,7 @@ function TableDetails({ table }: { table: TableModel }) {
           {e.view_definition.trim()}
         </pre>
       )}
+      <TimeHistory lines={table.time?.history} />
     </>
   );
 }

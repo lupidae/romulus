@@ -70,11 +70,12 @@ function DatabaseLayout() {
 
   const params = { org, db };
   const onVersion = !!matchRoute({ to: "/$org/$db/v/$number", params, fuzzy: true });
-  // A comparison is read from the history, an import adds to it: its tab
-  // stays current.
+  // A comparison and the time machine are read from the history, an import
+  // adds to it: its tab stays current.
   const onDiff =
     !!matchRoute({ to: "/$org/$db/diff", params, fuzzy: true }) ||
-    !!matchRoute({ to: "/$org/$db/import", params });
+    !!matchRoute({ to: "/$org/$db/import", params }) ||
+    !!matchRoute({ to: "/$org/$db/time-machine", params });
   const count = database.versions;
 
   return (

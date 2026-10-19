@@ -71,6 +71,12 @@
   --color-syntax-property: var(--syntax-property);
   --color-syntax-comment: var(--syntax-comment);
   --color-syntax-punctuation: var(--syntax-punctuation);
+  --color-era-1: var(--era-1);
+  --color-era-2: var(--era-2);
+  --color-era-3: var(--era-3);
+  --color-era-4: var(--era-4);
+  --color-era-5: var(--era-5);
+  --color-era-6: var(--era-6);
 
   /* Type: app scale. 0.875rem body, 0.8125rem dense UI, one display size. */
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;

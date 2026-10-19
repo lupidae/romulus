@@ -15,7 +15,7 @@ use crate::{
         host::{Host, Remote},
     },
     rate::Limits,
-    versions::diff::DiffCache,
+    versions::{diff::DiffCache, timeline::cache::TimelineCache},
 };
 
 /// Shared by every handler. Cheap to clone: a pool handle and `Arc`s.
@@ -40,6 +40,9 @@ pub struct AppState {
     pub collab: Hub,
     /// Diffs between versions, computed once (versions never change).
     pub diffs: Arc<DiffCache>,
+    /// Steps of version histories (the time machine), computed once per pair
+    /// of versions.
+    pub timelines: Arc<TimelineCache>,
     /// Migration imports waiting for the sandbox, organizations in turn.
     pub imports: Turns,
     /// The playground host, builds in progress, who has which console open.
@@ -60,6 +63,7 @@ impl AppState {
             compiler: SqlCompiler::unavailable(),
             limits: Arc::new(Limits::default()),
             diffs: Arc::new(DiffCache::default()),
+            timelines: Arc::new(TimelineCache::default()),
             imports: Turns::default(),
             playgrounds: Playgrounds::new(match &config_playground {
                 Some(play) => Host::new(Remote::new(play.url.clone(), play.key.clone())),

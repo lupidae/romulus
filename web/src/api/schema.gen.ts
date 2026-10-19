@@ -773,6 +773,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/timeline": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The history of the database's objects, version by version. */
+    get: operations["get_timeline"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/tokens": {
     parameters: {
       query?: never;
@@ -2328,6 +2345,14 @@ export interface components {
       /** @description The API's crate version. */
       version: string;
     };
+    /** @description Every object a history ever had, with its states. */
+    History: {
+      extensions: components["schemas"]["ObjectHistory"][];
+      partitions: components["schemas"]["ObjectHistory"][];
+      /** @description By schema, then name. */
+      tables: components["schemas"]["TableHistory"][];
+      types: components["schemas"]["TypeHistory"][];
+    };
     /**
      * @description `pg_attribute.attidentity`, as a word.
      * @enum {string}
@@ -2803,6 +2828,59 @@ export interface components {
       /** @description Members @mentioned (others are dropped), 20 at most. */
       mentions?: string[];
     };
+    /** @description A change, as romulus-diff structures it, or one it has no field for. */
+    ObjectChange:
+      | components["schemas"]["EntityChange"]
+      | components["schemas"]["ColumnChange"]
+      | components["schemas"]["ConstraintChange"]
+      | components["schemas"]["IndexChange"]
+      | components["schemas"]["PolicyChange"]
+      | components["schemas"]["PartitionChange"]
+      | components["schemas"]["EnumChange"]
+      | components["schemas"]["DomainChange"]
+      | components["schemas"]["CompositeChange"]
+      | components["schemas"]["ExtensionChange"]
+      | components["schemas"]["OtherChange"];
+    /**
+     * @description A partition (by its own schema and name) or an extension (by name; no
+     *     schema).
+     */
+    ObjectHistory: {
+      name: string;
+      schema: string | null;
+      states: components["schemas"]["ObjectState"][];
+    };
+    /**
+     * @description One state of an object: what it was from the version at `from` until the
+     *     version at `to`. Indexes are into the timeline's `versions`.
+     */
+    ObjectState: {
+      /**
+       * @description What changed from the state before, when this one directly follows it
+       *     (romulus-diff's changes, `{"field", "before", "after"}`, plus `name`,
+       *     `schema`, `labels` and `attributes`). Empty for an addition, and for a
+       *     table head whose only change is its columns' order (they say why).
+       */
+      changes: components["schemas"]["ObjectChange"][];
+      /**
+       * Format: int32
+       * @description The first version it is in, in this state.
+       */
+      from: number;
+      /**
+       * Format: int32
+       * @description The first version it is no longer in, in this state (removed, or
+       *     changed into the next state); `null` while the last version has it.
+       */
+      to: number | null;
+      /**
+       * @description The object as the remus model has it in this state. A table's is its
+       *     head: the entity without its columns, constraints, indexes and
+       *     policies (their own histories), plus `column_order`, the names of its
+       *     columns in table order.
+       */
+      value: Record<string, never>;
+    };
     /** @description An organization, as one of its members sees it. */
     Org: {
       /**
@@ -2848,6 +2926,38 @@ export interface components {
        *     on a side with none, and on both sides when nothing changed.
        */
       sql: components["schemas"]["Sides"];
+    };
+    /** @description Changes romulus-diff reports outside its per-object change lists. */
+    OtherChange:
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "name";
+        }
+      | {
+          after: string;
+          before: string;
+          /** @enum {string} */
+          field: "schema";
+        }
+      | {
+          after: string[];
+          before: string[];
+          /** @enum {string} */
+          field: "labels";
+        }
+      | {
+          after: string[];
+          before: string[];
+          /** @enum {string} */
+          field: "attributes";
+        };
+    /** @description A column, constraint, index or policy of a table: named within it. */
+    PartHistory: {
+      /** @description Unique within its table and kind: its name in its last state. */
+      id: string;
+      states: components["schemas"]["ObjectState"][];
     };
     /**
      * @description A change to one partition.
@@ -3686,6 +3796,22 @@ export interface components {
       members: string[];
       name: string;
     };
+    /** @description A table, view, materialized view or foreign table, and its parts. */
+    TableHistory: {
+      columns: components["schemas"]["PartHistory"][];
+      constraints: components["schemas"]["PartHistory"][];
+      /**
+       * @description Unique in the timeline: `schema.name` of its last state (a suffix
+       *     `#2`… in the rare case two objects end under one name).
+       */
+      id: string;
+      indexes: components["schemas"]["PartHistory"][];
+      name: string;
+      policies: components["schemas"]["PartHistory"][];
+      /** @description Its schema and name in its last state. */
+      schema: string;
+      states: components["schemas"]["ObjectState"][];
+    };
     TablePosition: {
       /** Format: double */
       x: number;
@@ -3720,11 +3846,45 @@ export interface components {
       /** @description SHA-256 of the SQL as Tidy left it. */
       sha256: string;
     };
+    /** @description A database's history, object by object. */
+    Timeline: {
+      /**
+       * Format: int64
+       * @description Versions older than the first one listed, left out (the timeline
+       *     holds the newest 1000).
+       */
+      earlier: number;
+      history: components["schemas"]["History"];
+      /**
+       * @description The newest version's positions and groups, then older versions'
+       *     positions for tables it does not have (each table where it last
+       *     was), and their groups for tables only older versions had.
+       */
+      layout: components["schemas"]["VersionLayout"];
+      /** @description Oldest first: the states' `from` and `to` are indexes in this list. */
+      versions: components["schemas"]["TimelineVersion"][];
+    };
+    /** @description A version in the timeline. */
+    TimelineVersion: components["schemas"]["VersionSummary"] & {
+      removal_reason: string | null;
+      /**
+       * Format: date-time
+       * @description Removed (only with `removed=true`): when, and why.
+       */
+      removed_at: string | null;
+    };
     /**
      * @description What an API token may do (`api_token_scope`).
      * @enum {string}
      */
     TokenScope: "push" | "full";
+    /** @description An enum, a domain or a composite type. */
+    TypeHistory: {
+      kind: components["schemas"]["UserTypeKind"];
+      name: string;
+      schema: string;
+      states: components["schemas"]["ObjectState"][];
+    };
     /**
      * @description `pg_type.typtype` of a column's type, as a word.
      * @enum {string}
@@ -3773,6 +3933,8 @@ export interface components {
       /** @description The schema as SQL DDL, at most 1 MiB. */
       sql: string;
     };
+    /** @enum {string} */
+    UserTypeKind: "enum" | "domain" | "composite";
     /** @description An approval of the draft a version was published from, as it was then. */
     VersionApproval: {
       /** Format: date-time */
@@ -6863,6 +7025,69 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_timeline: {
+    parameters: {
+      query?: {
+        /** @description Include the versions removed and not purged yet, flagged (admins). */
+        removed?: boolean;
+      };
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Timeline"];
+        };
+      };
+      /** @description `bad_request`: `removed` is not a boolean */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `forbidden`: removed versions are for admins */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `not_found`: no such database */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `timeout`: a very long history took too long; try again (what was computed is kept) */
+      503: {
         headers: {
           [name: string]: unknown;
         };

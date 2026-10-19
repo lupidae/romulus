@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
-import { ClockIcon, ImportIcon } from "@/components/icons";
+import { ClockIcon, ClockRotateRightIcon, ImportIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -48,7 +48,17 @@ function History() {
               Each one is an immutable snapshot of the schema. Open one to read it.
             </p>
           </div>
-          {importLink}
+          <div className="flex items-center gap-2">
+            {database.versions > 1 && (
+              <Button size="sm" asChild>
+                <Link to="/$org/$db/time-machine" params={{ org, db }}>
+                  <ClockRotateRightIcon />
+                  Time machine
+                </Link>
+              </Button>
+            )}
+            {importLink}
+          </div>
         </div>
         {database.latest ? (
           <VersionHistory org={org} database={database} />

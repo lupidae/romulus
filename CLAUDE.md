@@ -381,6 +381,8 @@ src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; n
 src/features/comments/   comment threads (see "Comments" below): the model (anchors, `---`
                          lines, SQL placement), Discussion sources (draft: Yjs; version: REST),
                          CommentsPanel, CommentPins (graph + comment mode), sqlThreads (CodeMirror)
+src/features/time-machine/  the time machine: versions superposed (history, scale, frames,
+                         timeline, history panel); /app/dev/time-machine shows it on fixtures
 src/features/migration/  MigrationView (tool picker, concurrently, warnings, files with destructive
                          lines tinted, Copy, Download/.zip; no router): the diff page's Migration
                          view (?view=migration) and the publish dialog's Migration tab
@@ -912,6 +914,41 @@ docs/playground.md (its decisions block first) has the design; deploy/preview/RE
   `crates/romulus-api/tests/api/playgrounds.rs` (the fake host),
   `web/e2e/playground.spec.ts`.
 
+## The time machine (`versions::timeline`, `features/time-machine`)
+
+docs/MVP.md "The time machine" has the decisions.
+
+- **API** (`GET …/databases/{db}/timeline`, `?removed=true` admins): `history::step(old,
+  new)` turns romulus-diff between two consecutive versions into events (added, removed,
+  changed, renamed; values as remus JSON text, `Arc<RawValue>`), `history::fold` replays them
+  into each object's `ObjectState`s (`from`/`to` are indexes into `versions`; a table's value
+  is its head, the entity without parts plus `column_order`). `AppState::timelines`
+  (`timeline::cache::TimelineCache`) keeps steps by the ids of their two versions
+  (immutable, so never invalidated: a new pair is a new key; past the budget the heaviest
+  database gives back first) and built histories by database + ordered version ids (the
+  authors are joined in per request); a build takes `build_turn(org)` (one per
+  organization, two per process). Models are streamed to a blocking task, two in memory
+  at a time.
+  Renames: `reported_renames` is the seam (none reported yet); `step_with` takes them.
+- **Web**: `history.ts` (parse, `stateAt`, `bornWithin`…), `scale.ts` (the age scale: steps
+  of `--era-1..6`), `frame.ts` (`Frames`: one frame per range, cursor, mode and filters;
+  tables keyed by their id, the name of the moment as `TimeMark.label`; unchanged tables
+  and edges handed again as the same objects; enter/leave motion, then `settle`),
+  `describe.ts` (changes and events in words), components (timeline, history panel, the
+  view). The graph draws `TimeMark`s (`build.ts`: era, ghost, changed, label, note, muted,
+  motion, history) on tables, columns, edges and types; `SchemaGraph`'s `graph` prop takes a
+  prebuilt model, and its caches are by table and edge identity, so a frame costs what
+  changed. `layout-store.ts` keeps elk's positions per database in localStorage
+  (`layoutKey`) and `placedOnly` leaves tables out until placed. The route keeps the
+  previous history as placeholder while the next loads and remaps the view by version
+  number (`state.ts` `carryOver`): the removed toggle and a pushed version never remount
+  it. `fixtures.ts` folds models into a timeline the way the API does (tests, the dev
+  route `/app/dev/time-machine?fixture=shop|large`).
+- **Tests**: `versions/timeline/history/tests.rs` (renames reported, gaps, labels),
+  `tests/api/timeline.rs` (roles, cross-org, removed versions, the cache),
+  `frame.test.ts`, `e2e/time-machine.spec.ts`, `e2e/perf/time-machine.perf.spec.ts`
+  (`npm --prefix web run perf`).
+
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 
 site/README.md "The live hero" has the design. The hero reuses the app's own
@@ -997,5 +1034,9 @@ draft session in `local` mode) in a browser-only island: no API calls.
   ("Unrecognized extension value"): restart with `npx vite --force`.
 - `openapi-fetch` must resolve `fetch` per call (it does in `client.ts`), or
   test stubs and mocks are ignored.
+- A kit `Tooltip` around a Radix item that styles itself by `data-state`
+  (a `ToggleGroupItem`, a tab) overwrites that attribute with its own
+  (`closed`): the item never looks chosen. Describe such items otherwise
+  (`aria-description`, a legend).
 - TypeScript stays on 5.x until typescript-eslint and openapi-typescript
   support 7; ESLint stays on 9 for jsx-a11y.

@@ -36,6 +36,13 @@
 //! [member] and their comments, resolve, reopen and read marks: the review
 //! of the draft it was published from (frozen) and threads started since.
 //!
+//! The time machine ([`timeline`]):
+//! - `GET /orgs/{org}/databases/{db}/timeline?removed=` [member;
+//!   `removed=true` admins]: every version, oldest first, and the history of
+//!   every object across them (when each appeared, changed and went, with
+//!   its value in each state), from romulus-diff between consecutive
+//!   versions, cached per pair of versions.
+//!
 //! Removing ([`removal`]):
 //! - `POST …/versions/{number}/remove` [admin], with a reason: hidden from
 //!   the history, diffs, imports and the latest version; `POST
@@ -55,6 +62,7 @@ pub mod migration;
 pub mod push;
 pub mod removal;
 pub mod store;
+pub mod timeline;
 
 use axum::{extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
@@ -93,6 +101,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .merge(migration::router())
         .merge(push::router())
         .merge(removal::router())
+        .merge(timeline::router())
 }
 
 /// Who made a version: a person (uploads, drafts) or an API token (pushes).

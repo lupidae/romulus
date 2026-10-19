@@ -19,12 +19,14 @@ import { Route as DevDiffRouteImport } from './routes/dev/diff'
 import { Route as DevEditorRouteImport } from './routes/dev/editor'
 import { Route as DevKitRouteImport } from './routes/dev/kit'
 import { Route as DevShellRouteImport } from './routes/dev/shell'
+import { Route as DevTimeMachineRouteImport } from './routes/dev/time-machine'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
 import { Route as OrgDbIndexRouteImport } from './routes/$org/$db/index'
 import { Route as OrgDbHistoryRouteImport } from './routes/$org/$db/history'
 import { Route as OrgDbImportRouteImport } from './routes/$org/$db/import'
 import { Route as OrgDbSettingsRouteImport } from './routes/$org/$db/settings'
+import { Route as OrgDbTimeMachineRouteImport } from './routes/$org/$db/time-machine'
 import { Route as OrgSettingsIndexRouteImport } from './routes/$org/settings/index'
 import { Route as OrgSettingsInvitationsRouteImport } from './routes/$org/settings/invitations'
 import { Route as OrgSettingsMembersRouteImport } from './routes/$org/settings/members'
@@ -87,6 +89,11 @@ const DevShellRoute = DevShellRouteImport.update({
   path: '/dev/shell',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DevTimeMachineRoute = DevTimeMachineRouteImport.update({
+  id: '/dev/time-machine',
+  path: '/dev/time-machine',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DevViewerRoute = DevViewerRouteImport.update({
   id: '/dev/viewer',
   path: '/dev/viewer',
@@ -115,6 +122,11 @@ const OrgDbImportRoute = OrgDbImportRouteImport.update({
 const OrgDbSettingsRoute = OrgDbSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => OrgDbRoute,
+} as any)
+const OrgDbTimeMachineRoute = OrgDbTimeMachineRouteImport.update({
+  id: '/time-machine',
+  path: '/time-machine',
   getParentRoute: () => OrgDbRoute,
 } as any)
 const OrgSettingsIndexRoute = OrgSettingsIndexRouteImport.update({
@@ -184,12 +196,14 @@ export interface FileRoutesByFullPath {
   '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
+  '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
   '/$org/': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
+  '/$org/$db/time-machine': typeof OrgDbTimeMachineRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
@@ -210,12 +224,14 @@ export interface FileRoutesByTo {
   '/dev/diff': typeof DevDiffRoute
   '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
+  '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
   '/$org': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
+  '/$org/$db/time-machine': typeof OrgDbTimeMachineRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
@@ -240,12 +256,14 @@ export interface FileRoutesById {
   '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
   '/dev/shell': typeof DevShellRouteWithChildren
+  '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
   '/$org/': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
+  '/$org/$db/time-machine': typeof OrgDbTimeMachineRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
@@ -271,12 +289,14 @@ export interface FileRouteTypes {
     | '/dev/editor'
     | '/dev/kit'
     | '/dev/shell'
+    | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
     | '/$org/'
     | '/$org/$db/history'
     | '/$org/$db/import'
     | '/$org/$db/settings'
+    | '/$org/$db/time-machine'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
@@ -297,12 +317,14 @@ export interface FileRouteTypes {
     | '/dev/diff'
     | '/dev/editor'
     | '/dev/kit'
+    | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
     | '/$org'
     | '/$org/$db/history'
     | '/$org/$db/import'
     | '/$org/$db/settings'
+    | '/$org/$db/time-machine'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
@@ -326,12 +348,14 @@ export interface FileRouteTypes {
     | '/dev/editor'
     | '/dev/kit'
     | '/dev/shell'
+    | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
     | '/$org/'
     | '/$org/$db/history'
     | '/$org/$db/import'
     | '/$org/$db/settings'
+    | '/$org/$db/time-machine'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
@@ -355,6 +379,7 @@ export interface RootRouteChildren {
   DevEditorRoute: typeof DevEditorRoute
   DevKitRoute: typeof DevKitRoute
   DevShellRoute: typeof DevShellRouteWithChildren
+  DevTimeMachineRoute: typeof DevTimeMachineRoute
   DevViewerRoute: typeof DevViewerRoute
   InviteTokenRoute: typeof InviteTokenRoute
   OrgDbDraftsDraftRoute: typeof OrgDbDraftsDraftRoute
@@ -433,6 +458,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevShellRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dev/time-machine': {
+      id: '/dev/time-machine'
+      path: '/dev/time-machine'
+      fullPath: '/dev/time-machine'
+      preLoaderRoute: typeof DevTimeMachineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dev/viewer': {
       id: '/dev/viewer'
       path: '/dev/viewer'
@@ -473,6 +505,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/$org/$db/settings'
       preLoaderRoute: typeof OrgDbSettingsRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
+    '/$org/$db/time-machine': {
+      id: '/$org/$db/time-machine'
+      path: '/time-machine'
+      fullPath: '/$org/$db/time-machine'
+      preLoaderRoute: typeof OrgDbTimeMachineRouteImport
       parentRoute: typeof OrgDbRoute
     }
     '/$org/settings/': {
@@ -559,6 +598,7 @@ interface OrgDbRouteChildren {
   OrgDbHistoryRoute: typeof OrgDbHistoryRoute
   OrgDbImportRoute: typeof OrgDbImportRoute
   OrgDbSettingsRoute: typeof OrgDbSettingsRoute
+  OrgDbTimeMachineRoute: typeof OrgDbTimeMachineRoute
   OrgDbIndexRoute: typeof OrgDbIndexRoute
   OrgDbDiffRangeRoute: typeof OrgDbDiffRangeRoute
   OrgDbVNumberRoute: typeof OrgDbVNumberRoute
@@ -569,6 +609,7 @@ const OrgDbRouteChildren: OrgDbRouteChildren = {
   OrgDbHistoryRoute: OrgDbHistoryRoute,
   OrgDbImportRoute: OrgDbImportRoute,
   OrgDbSettingsRoute: OrgDbSettingsRoute,
+  OrgDbTimeMachineRoute: OrgDbTimeMachineRoute,
   OrgDbIndexRoute: OrgDbIndexRoute,
   OrgDbDiffRangeRoute: OrgDbDiffRangeRoute,
   OrgDbVNumberRoute: OrgDbVNumberRoute,
@@ -620,6 +661,7 @@ const rootRouteChildren: RootRouteChildren = {
   DevEditorRoute: DevEditorRoute,
   DevKitRoute: DevKitRoute,
   DevShellRoute: DevShellRouteWithChildren,
+  DevTimeMachineRoute: DevTimeMachineRoute,
   DevViewerRoute: DevViewerRoute,
   InviteTokenRoute: InviteTokenRoute,
   OrgDbDraftsDraftRoute: OrgDbDraftsDraftRoute,

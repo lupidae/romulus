@@ -8,6 +8,7 @@ import type { EdgeModel } from "./build";
 import type { Cardinality } from "./cardinality";
 import { useGraphUi } from "./graph-ui";
 import { type Route, roundedPath } from "./routing";
+import { timeWords } from "./time-words";
 
 export interface RelationEdgeData extends Record<string, unknown> {
   model: EdgeModel;
@@ -16,6 +17,16 @@ export interface RelationEdgeData extends Record<string, unknown> {
 }
 
 export type RelationFlowEdge = Edge<RelationEdgeData, "relation">;
+
+/** The time machine's age scale (`TimeMark.era`, 0 to 5). */
+const ERA_STROKE = [
+  "stroke-era-1",
+  "stroke-era-2",
+  "stroke-era-3",
+  "stroke-era-4",
+  "stroke-era-5",
+  "stroke-era-6",
+];
 
 const STATUS_STROKE: Record<ChangeStatus, string> = {
   added: "stroke-success",
@@ -82,13 +93,18 @@ function RelationEdgeView({ id, source, target, data }: EdgeProps<RelationFlowEd
   const path = roundedPath(points);
   const reads = model.kind === "reads";
 
+  const time = model.time;
   const stroke = model.status
     ? STATUS_STROKE[model.status]
-    : emphasis === "active"
-      ? "stroke-primary"
-      : emphasis === "hover"
-        ? "stroke-foreground/60"
-        : "stroke-border-strong";
+    : time?.ghost
+      ? "stroke-faint-foreground"
+      : time?.era !== undefined && emphasis !== "active"
+        ? ERA_STROKE[time.era]
+        : emphasis === "active"
+          ? "stroke-primary"
+          : emphasis === "hover"
+            ? "stroke-foreground/60"
+            : "stroke-border-strong";
 
   return (
     <g
@@ -96,14 +112,24 @@ function RelationEdgeView({ id, source, target, data }: EdgeProps<RelationFlowEd
         "fill-none transition-opacity duration-(--duration-fast)",
         stroke,
         emphasis === "dimmed" && "opacity-20",
+        time?.muted && emphasis !== "active" && "opacity-15",
+        time?.motion === "enter" &&
+          "duration-(--duration-slow) motion-safe:animate-in motion-safe:fade-in-0",
+        time?.motion === "leave" &&
+          "duration-(--duration-base) fill-mode-forwards motion-safe:animate-out motion-safe:fade-out-0",
       )}
       data-edge={id}
     >
+      {(time?.note || time?.changed) && (
+        <title>
+          {model.name}: {timeWords(time)}
+        </title>
+      )}
       <path
         d={path}
         className={cn(
           emphasis === "active" ? "stroke-2" : "stroke-[1.5]",
-          (reads || model.status === "removed") && "[stroke-dasharray:5_4]",
+          (reads || model.status === "removed" || time?.ghost) && "[stroke-dasharray:5_4]",
         )}
       />
       {/* Hidden by CSS when zoomed out (`data-lod`): too small to read, costly to paint. */}

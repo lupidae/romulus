@@ -40,6 +40,33 @@ export interface UserType {
   name: string;
 }
 
+/**
+ * The time machine's marks on an element (a table, a column, an edge): where
+ * it stands in the range of versions drawn. Graphs without one draw nothing
+ * of it.
+ */
+export interface TimeMark {
+  /**
+   * The step of the range's age scale it appeared in (0: the first versions
+   * after the range's start); none when it was there at the start.
+   */
+  era?: number;
+  /** Not in the schema at the cursor (removed within the range): struck through, faded. */
+  ghost?: boolean;
+  /** Changed within the range (renamed, retyped, its default…). */
+  changed?: boolean;
+  /** The name it has at the cursor, when another than its last one (renamed later). */
+  label?: string;
+  /** A table's word on its header, after its age dot: `+v4`, `−v7`. */
+  note?: string;
+  /** A filter leaves it out: drawn faded back. */
+  muted?: boolean;
+  /** Just appeared, or about to go: animates in, or out. */
+  motion?: "enter" | "leave";
+  /** What happened to it, one line per event, oldest first (the hover card). */
+  history?: readonly string[];
+}
+
 export interface ColumnModel {
   name: string;
   /** As `format_type` prints it. */
@@ -60,6 +87,7 @@ export interface ColumnModel {
   status?: ChangeStatus;
   /** Diff mode, changed columns: the column as it was. */
   before?: Column;
+  time?: TimeMark;
 }
 
 export interface PartitionModel {
@@ -89,6 +117,7 @@ export interface TableModel {
   status?: ChangeStatus;
   /** The entity drawn: the new one, or the old one when removed. */
   entity: Entity;
+  time?: TimeMark;
 }
 
 export interface EdgeModel {
@@ -108,6 +137,7 @@ export interface EdgeModel {
   onDelete: Constraint["on_delete"];
   onUpdate: Constraint["on_update"];
   status?: ChangeStatus;
+  time?: TimeMark;
 }
 
 export interface TypeModel {
@@ -118,6 +148,7 @@ export interface TypeModel {
   lines: string[];
   comment: string | null;
   status?: ChangeStatus;
+  time?: TimeMark;
 }
 
 export interface DiffCounts {
@@ -136,6 +167,8 @@ export interface GraphModel {
   multiSchema: boolean;
   /** Diff mode only: tables by status. */
   counts?: DiffCounts;
+  /** Time machine: how many steps its age scale has (`TimeMark.era` below it). */
+  time?: { eras: number };
 }
 
 const TYPE_KINDS = { e: "enum", d: "domain", c: "composite" } as const;
