@@ -97,25 +97,69 @@
 .schema-graph[data-lod="overview"] .sg-marks {
   display: none;
 }
-/* The time machine: zoomed out, a table's age tints it whole, so where the
-   schema grew reads like a map; a table gone is only its dashed outline. */
-.schema-graph[data-lod="overview"] .sg-node[data-era="1"] {
-  background: color-mix(in oklab, var(--color-era-1) 24%, var(--color-card));
+/* The time machine: when a table appeared colors its header, a band along
+   the top and a tint layered over the header's own background (a view keeps
+   its muted one); faded (not at the cursor: `data-later`), both softer.
+   Zoomed out, its color fills it whole, its header a solid band, so where
+   the schema grew reads like a map; a table gone is only its dashed
+   outline. */
+.schema-graph [data-era="1"] {
+  --sg-era: var(--color-era-1);
 }
-.schema-graph[data-lod="overview"] .sg-node[data-era="2"] {
-  background: color-mix(in oklab, var(--color-era-2) 24%, var(--color-card));
+.schema-graph [data-era="2"] {
+  --sg-era: var(--color-era-2);
 }
-.schema-graph[data-lod="overview"] .sg-node[data-era="3"] {
-  background: color-mix(in oklab, var(--color-era-3) 24%, var(--color-card));
+.schema-graph [data-era="3"] {
+  --sg-era: var(--color-era-3);
 }
-.schema-graph[data-lod="overview"] .sg-node[data-era="4"] {
-  background: color-mix(in oklab, var(--color-era-4) 24%, var(--color-card));
+.schema-graph [data-era="4"] {
+  --sg-era: var(--color-era-4);
 }
-.schema-graph[data-lod="overview"] .sg-node[data-era="5"] {
-  background: color-mix(in oklab, var(--color-era-5) 24%, var(--color-card));
+.schema-graph [data-era="5"] {
+  --sg-era: var(--color-era-5);
 }
-.schema-graph[data-lod="overview"] .sg-node[data-era="6"] {
-  background: color-mix(in oklab, var(--color-era-6) 24%, var(--color-card));
+.schema-graph [data-era="6"] {
+  --sg-era: var(--color-era-6);
+}
+.schema-graph .sg-node[data-era] {
+  --sg-era-tint: color-mix(in oklab, var(--sg-era) var(--era-tint), transparent);
+}
+.schema-graph .sg-node[data-era][data-later] {
+  --sg-era-tint: color-mix(in oklab, var(--sg-era) var(--era-tint-away), transparent);
+}
+.schema-graph .sg-node[data-era] > .sg-header {
+  background-image: linear-gradient(var(--sg-era-tint), var(--sg-era-tint));
+}
+.schema-graph .sg-node[data-era] > .sg-header::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 0.25rem;
+  background: var(--sg-era);
+}
+.schema-graph .sg-node[data-era][data-later] > .sg-header::before {
+  opacity: 0.6;
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era] {
+  background: color-mix(in oklab, var(--sg-era) var(--era-fill), var(--color-card));
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era][data-later] {
+  background: color-mix(in oklab, var(--sg-era) var(--era-fill-away), var(--color-card));
+}
+/* The selected (or picked) table keeps its accent border. */
+.schema-graph[data-lod="overview"] .sg-node[data-era]:not([data-selected], [data-picked]) {
+  border-color: var(--sg-era);
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era] > .sg-header {
+  background: var(--sg-era);
+}
+.schema-graph[data-lod="overview"] .sg-node[data-era][data-later] > .sg-header {
+  background: color-mix(in oklab, var(--sg-era) var(--era-fill), var(--color-card));
+}
+.schema-graph[data-lod="overview"]
+  .sg-node[data-era][data-later]:not([data-selected], [data-picked]) {
+  border-color: color-mix(in oklab, var(--sg-era) var(--era-fill), var(--color-card));
 }
 .schema-graph[data-lod="overview"] .sg-node[data-ghost] {
   background: transparent;

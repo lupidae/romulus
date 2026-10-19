@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildGraph } from "@/features/schema/graph/build";
+import { timeWords } from "@/features/schema/graph/time-words";
 
 import { describeChange, eventLine, eventsOf } from "./describe";
 import { column, model, table, timelineFrom } from "./fixtures";
@@ -15,7 +16,7 @@ import {
   parseHistory,
   stateAt,
 } from "./history";
-import { scaleOf, stepOf } from "./scale";
+import { eraOf, scaleOf } from "./scale";
 
 // v1: customers, orders (orders → customers).
 // v2: customers gains `email`; `legacy` appears.
@@ -83,22 +84,24 @@ describe("history", () => {
 });
 
 describe("the age scale", () => {
-  it("gives each version of a short range its own step, the newest the darkest", () => {
+  it("gives each version of a short range its own color, oldest first", () => {
     const scale = scaleOf({ from: 2, to: 5 });
-    expect(scale.buckets.map((b) => [b.first, b.last, b.step])).toEqual([
-      [3, 3, 1],
-      [4, 4, 3],
-      [5, 5, 5],
+    expect(scale.buckets.map((b) => [b.first, b.last, b.slot])).toEqual([
+      [3, 3, 0],
+      [4, 4, 1],
+      [5, 5, 2],
     ]);
-    expect(stepOf(scale, 2)).toBeUndefined();
-    expect(stepOf(scale, 6)).toBeUndefined();
+    expect(eraOf(scale, 2)).toBeUndefined();
+    expect(eraOf(scale, 6)).toBeUndefined();
+    expect(eraOf(scale, 4)).toBe(1);
   });
 
-  it("groups a long range into six runs, oldest first", () => {
+  it("groups a long range into six runs, oldest first, one color each", () => {
     const scale = scaleOf({ from: 0, to: 60 });
     expect(scale.buckets).toHaveLength(6);
-    expect(scale.buckets[0]).toEqual({ first: 1, last: 10, step: 0 });
-    expect(scale.buckets[5]).toEqual({ first: 51, last: 60, step: 5 });
+    expect(scale.buckets[0]).toEqual({ first: 1, last: 10, slot: 0 });
+    expect(scale.buckets[5]).toEqual({ first: 51, last: 60, slot: 5 });
+    expect(new Set(scale.buckets.map((b) => b.slot)).size).toBe(6);
     expect(scaleOf({ from: 4, to: 4 }).buckets).toEqual([]);
   });
 });
@@ -176,27 +179,27 @@ describe("a frame", () => {
     const keys = frame.graph.tables.map((t) => t.key);
     expect(keys).toEqual(["public.customers", "public.invoices", "public.legacy", "public.orders"]);
     const legacy = frame.graph.byKey.get("public.legacy")!;
-    expect(legacy.time).toMatchObject({ ghost: true, note: "−v3" });
+    expect(legacy.time).toMatchObject({ ghost: true, added: 2, removed: 3, era: 0 });
     const invoices = frame.graph.byKey.get("public.invoices")!;
-    // Three steps after v1: v4 is the newest, the darkest step.
-    expect(invoices.time).toMatchObject({ era: 5, note: "+v4" });
+    // Three versions after v1, three colors: v4 is the third.
+    expect(invoices.time).toMatchObject({ era: 2, added: 4 });
     expect(invoices.time?.ghost).toBeUndefined();
     const customers = frame.graph.byKey.get("public.customers")!;
     expect(customers.time?.era).toBeUndefined();
     expect(customers.columns.map((c) => [c.name, c.time?.era])).toEqual([
       ["id", undefined],
       ["name", undefined],
-      ["email", 1],
+      ["email", 0],
     ]);
     const amount = frame.graph.byKey
       .get("public.orders")!
       .columns.find((c) => c.name === "amount")!;
     expect(amount.type).toBe("numeric");
-    expect(amount.time).toMatchObject({ era: 3, changed: true });
+    expect(amount.time).toMatchObject({ era: 1, changed: true });
     expect(amount.time?.history).toEqual(["v3 · added by Grace", "v4 · type bigint → numeric"]);
     // Edges of what is new are new too.
     const fk = frame.graph.edges.find((e) => e.source === "public.invoices")!;
-    expect(fk.time?.era).toBe(5);
+    expect(fk.time?.era).toBe(2);
     expect(frame.counts.tables).toEqual({ added: 1, removed: 0, changed: 0 });
     expect(frame.counts.columns).toEqual({ added: 2, removed: 0, changed: 0 });
   });
@@ -221,13 +224,109 @@ describe("a frame", () => {
     }
   });
 
-  it("replays up to the cursor: what comes later is not there yet, what went is a ghost", () => {
+  it("superposes the whole range whatever the cursor: later things faded, not hidden", () => {
     const frames = new Frames(history());
     const at1 = frames.frame(request({ at: 1 }));
-    expect(at1.graph.byKey.has("public.invoices")).toBe(false);
-    expect(at1.graph.byKey.get("public.legacy")?.time?.ghost).toBeUndefined();
-    const amount = at1.graph.byKey.get("public.orders")!.columns.map((c) => c.name);
-    expect(amount).toEqual(["id", "customers_id"]);
+    // invoices (v4) comes after the cursor (v2): drawn, faded, colored by when.
+    expect(at1.graph.byKey.get("public.invoices")?.time).toMatchObject({
+      later: true,
+      added: 4,
+      era: 2,
+    });
+    // legacy is there at v2: in full, though it goes in v3.
+    const legacy = at1.graph.byKey.get("public.legacy")!.time!;
+    expect(legacy.ghost).toBeUndefined();
+    expect(legacy.later).toBeUndefined();
+    expect(legacy.removed).toBe(3);
+    // amount (v3) is a column to come, after the columns it follows then.
+    const orders = at1.graph.byKey.get("public.orders")!;
+    expect(orders.columns.map((c) => [c.name, !!c.time?.later])).toEqual([
+      ["id", false],
+      ["customers_id", false],
+      ["amount", true],
+    ]);
+    // Drawn as it is at the cursor's version when there, else as it first comes.
+    expect(orders.columns.find((c) => c.name === "amount")?.type).toBe("bigint");
+    // The counts are the range's, wherever the cursor is.
+    expect(at1.counts).toEqual(frames.frame(request({ at: 3 })).counts);
+  });
+
+  it("draws the range's union at every cursor, the cursor's own graph in full within it", () => {
+    const h = history();
+    for (let at = 0; at < versions.length; at++) {
+      const superposed = new Frames(h).frame(request({ at }));
+      const cursor = new Frames(h).frame(request({ at, mode: "cursor" }));
+      const keys = (f: typeof cursor) => f.graph.tables.map((t) => t.key);
+      // What the cursor's version has is what superposed draws in full.
+      const here = superposed.graph.tables.filter((t) => !t.time?.ghost && !t.time?.later);
+      expect(here.map((t) => t.key)).toEqual(keys(cursor));
+      for (const t of here) {
+        const own = cursor.graph.byKey.get(t.key)!;
+        const full = t.columns.filter((c) => !c.time?.ghost && !c.time?.later);
+        expect(full.map((c) => [c.name, c.type])).toEqual(own.columns.map((c) => [c.name, c.type]));
+      }
+      // The union of the range is always there: the two modes differ unless
+      // the cursor's version has everything the range ever had.
+      expect(keys(superposed)).toEqual([
+        "public.customers",
+        "public.invoices",
+        "public.legacy",
+        "public.orders",
+      ]);
+      expect(keys(superposed)).not.toEqual(keys(cursor));
+    }
+  });
+
+  it("marks what is gone by the cursor as a ghost, what comes later as later", () => {
+    const frames = new Frames(history());
+    const at2 = frames.frame(request({ at: 2 }));
+    expect(at2.graph.byKey.get("public.legacy")?.time).toMatchObject({ ghost: true, removed: 3 });
+    expect(at2.graph.byKey.get("public.invoices")?.time).toMatchObject({ later: true });
+    const edge = at2.graph.edges.find((e) => e.source === "public.invoices")!;
+    expect(edge.time?.later).toBe(true);
+    // At the cursor, nothing of later: no ghost, no removal to come.
+    const cursor = new Frames(history()).frame(request({ at: 1, mode: "cursor" }));
+    expect(cursor.graph.byKey.has("public.invoices")).toBe(false);
+    expect(cursor.graph.byKey.get("public.legacy")?.time?.removed).toBeUndefined();
+  });
+
+  it("marks one gone by the cursor that comes back later: a ghost, −v5 +v8", () => {
+    const customers = table("customers", [column("name", "text")]);
+    const legacy = table("legacy", [column("code", "text")]);
+    // v1–v4 and v8 have legacy; v5, v6 and v7 do not.
+    const h = parseHistory(
+      timelineFrom(
+        Array.from({ length: 8 }, (_, i) => ({
+          model: model(i >= 4 && i < 7 ? [customers] : [customers, legacy]),
+        })),
+      ),
+    );
+    const at = (i: number, mode: "superposed" | "cursor" = "superposed") =>
+      new Frames(h)
+        .frame({ range: { from: 0, to: 7 }, at: i, mode })
+        .graph.byKey.get("public.legacy");
+
+    // The cursor on v6: gone since v5, back in v8 (colored by its return, the last run).
+    const v6 = at(5)!.time!;
+    expect(v6).toMatchObject({ ghost: true, removed: 5, added: 8, era: 5 });
+    expect(v6.later).toBeUndefined();
+    expect(timeWords(v6)).toBe("removed in v5, back in v8, gone at the cursor");
+    expect(at(5)!.columns.find((c) => c.name === "code")?.time).toMatchObject({
+      ghost: true,
+      removed: 5,
+      added: 8,
+    });
+    // On v2 it is there, and goes in v5; on v8 it is there again, since v8.
+    const v2 = at(1)!.time!;
+    expect(v2).toMatchObject({ removed: 5 });
+    expect(v2.added).toBeUndefined();
+    expect(v2.ghost).toBeUndefined();
+    const v8 = at(7)!.time!;
+    expect(v8).toMatchObject({ added: 8, era: 5 });
+    expect(v8.removed).toBeUndefined();
+    expect(v8.ghost).toBeUndefined();
+    // At the cursor on v6: not drawn at all.
+    expect(at(5, "cursor")).toBeUndefined();
   });
 
   it("keeps a removed column where it was, struck", () => {

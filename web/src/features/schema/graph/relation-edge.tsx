@@ -18,7 +18,7 @@ export interface RelationEdgeData extends Record<string, unknown> {
 
 export type RelationFlowEdge = Edge<RelationEdgeData, "relation">;
 
-/** The time machine's age scale (`TimeMark.era`, 0 to 5). */
+/** The time machine's age scale (`TimeMark.era`, 0 to 5, one hue each). */
 const ERA_STROKE = [
   "stroke-era-1",
   "stroke-era-2",
@@ -112,6 +112,8 @@ function RelationEdgeView({ id, source, target, data }: EdgeProps<RelationFlowEd
         "fill-none transition-opacity duration-(--duration-fast)",
         stroke,
         emphasis === "dimmed" && "opacity-20",
+        // Superposed, what is not at the cursor steps back, as its tables' frames do.
+        (time?.ghost || time?.later) && emphasis !== "active" && "opacity-60",
         time?.muted && emphasis !== "active" && "opacity-15",
         time?.motion === "enter" &&
           "duration-(--duration-slow) motion-safe:animate-in motion-safe:fade-in-0",
@@ -120,7 +122,7 @@ function RelationEdgeView({ id, source, target, data }: EdgeProps<RelationFlowEd
       )}
       data-edge={id}
     >
-      {(time?.note || time?.changed) && (
+      {timeWords(time) && (
         <title>
           {model.name}: {timeWords(time)}
         </title>

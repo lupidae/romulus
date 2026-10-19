@@ -930,13 +930,16 @@ docs/MVP.md "The time machine" has the decisions.
   organization, two per process). Models are streamed to a blocking task, two in memory
   at a time.
   Renames: `reported_renames` is the seam (none reported yet); `step_with` takes them.
-- **Web**: `history.ts` (parse, `stateAt`, `bornWithin`…), `scale.ts` (the age scale: steps
-  of `--era-1..6`), `frame.ts` (`Frames`: one frame per range, cursor, mode and filters;
+- **Web**: `history.ts` (parse, `stateAt`, `bornWithin`…), `scale.ts` (the age scale: runs of
+  versions, one categorical `--era-1..6` color each), `frame.ts` (`Frames`: one frame per
+  range, cursor, mode and filters; superposed = the range's union, each object `here`, `gone`
+  (ghost) or `later` at the cursor, the cursor's version in full; at cursor = that version;
   tables keyed by their id, the name of the moment as `TimeMark.label`; unchanged tables
   and edges handed again as the same objects; enter/leave motion, then `settle`),
   `describe.ts` (changes and events in words), components (timeline, history panel, the
-  view). The graph draws `TimeMark`s (`build.ts`: era, ghost, changed, label, note, muted,
-  motion, history) on tables, columns, edges and types; `SchemaGraph`'s `graph` prop takes a
+  view). The graph draws `TimeMark`s (`build.ts`: era, ghost, later, changed, label, added,
+  removed, muted, motion, history) on tables, columns, edges and types (zoomed out, nodes are
+  filled by `data-era` in schema-graph.css); `SchemaGraph`'s `graph` prop takes a
   prebuilt model, and its caches are by table and edge identity, so a frame costs what
   changed. `layout-store.ts` keeps elk's positions per database in localStorage
   (`layoutKey`) and `placedOnly` leaves tables out until placed. The route keeps the
@@ -946,8 +949,11 @@ docs/MVP.md "The time machine" has the decisions.
   route `/app/dev/time-machine?fixture=shop|large`).
 - **Tests**: `versions/timeline/history/tests.rs` (renames reported, gaps, labels),
   `tests/api/timeline.rs` (roles, cross-org, removed versions, the cache),
-  `frame.test.ts`, `e2e/time-machine.spec.ts`, `e2e/perf/time-machine.perf.spec.ts`
-  (`npm --prefix web run perf`).
+  `frame.test.ts`, `e2e/time-machine.spec.ts` (modes against the version page, playback),
+  `e2e/dev/time-machine.spec.ts` (fixtures: modes, handle cards, tab order, the palette's
+  contrast), `e2e/perf/time-machine.perf.spec.ts` (`npm --prefix web run perf`). The era
+  palette is validated with the dataviz skill's `validate_palette.js --pairs all` per theme:
+  re-run it after changing a color.
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 

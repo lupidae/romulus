@@ -26,6 +26,7 @@ import { TimeMachineSkeleton } from "@/features/time-machine/components/time-mac
 import { type History, parseHistory } from "@/features/time-machine/history";
 import { timelineQuery } from "@/features/time-machine/queries";
 import type { TimeMachineState } from "@/features/time-machine/state";
+import { preloadAutoLayout } from "@/features/schema/graph/use-auto-layout";
 import { SchemaParseError } from "@/features/schema/model";
 import { useDebounced } from "@/lib/use-debounced";
 
@@ -73,17 +74,28 @@ export const Route = createFileRoute("/$org/$db/time-machine")({
     ]);
     // Removed versions are an admin's: anyone else would only get a 403.
     const removed = deps.removed && canManageMembers(orgData.role);
-    if (database.versions > 1)
+    if (database.versions > 1) {
       void queryClient.prefetchQuery(timelineQuery(org, database, removed));
+      // The first visit lays out every table of the history: the layout
+      // engine loads while the history does.
+      preloadAutoLayout();
+    }
   },
   head: () => ({ meta: [{ title: "Time machine – romulus" }] }),
   component: TimeMachinePage,
 });
 
-/** Version numbers from the address, as indexes into the history (or the defaults). */
+/**
+ * Version numbers from the address, as indexes into the history (or the
+ * defaults). A version not in it (removed, the removed ones left out) is the
+ * nearest one before it, as when the history changes under an open view.
+ */
 function initialState(history: History, search: Search): TimeMachineState {
-  const index = (n: number | undefined) =>
-    n === undefined ? -1 : history.versions.findIndex((v) => v.number === n);
+  const index = (n: number | undefined) => {
+    if (n === undefined) return -1;
+    const exact = history.versions.findIndex((v) => v.number === n);
+    return exact >= 0 ? exact : history.versions.findLastIndex((v) => v.number < n);
+  };
   const last = history.versions.length - 1;
   let from = index(search.from);
   let to = index(search.to);
@@ -132,10 +144,12 @@ function TimeMachinePage() {
 
   // The address follows the view once it pauses (a played range would
   // otherwise write a history entry per version).
-  const toAddress = useDebounced((state: TimeMachineState) => {
-    if (!history || "error" in history) return;
-    const v = (i: number) => history.versions[i]?.number;
-    const last = history.versions.length - 1;
+  // The state's indexes are into the history it came with: a call made
+  // before the history changed (removed versions in or out) writes that
+  // history's version numbers, never the next one's.
+  const toAddress = useDebounced((state: TimeMachineState, shown: History) => {
+    const v = (i: number) => shown.versions[i]?.number;
+    const last = shown.versions.length - 1;
     void navigate({
       search: {
         from: state.range.from === 0 ? undefined : v(state.range.from),

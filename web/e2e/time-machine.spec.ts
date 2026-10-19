@@ -176,13 +176,14 @@ test("the time machine: a range superposed, a removed table ghosted, a new colum
     new RegExp(`/app/${slug}/shop/diff/1\\.\\.\\.2$`),
   );
 
-  // The cursor back to v2: legacy is alive again, total not there yet.
+  // The cursor back to v2: legacy is there again, total (v3) still to come:
+  // superposed, the range is all there, what is not at the cursor faded.
   const cursor = page.getByRole("slider", { name: "Cursor" });
   await cursor.focus();
   await page.keyboard.press("ArrowLeft");
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v2, Customer emails/);
   await expect(node(page, "legacy").locator(".sg-node")).not.toHaveAttribute("data-ghost", /.*/);
-  await expect(row(page, "orders", "total")).toHaveCount(0);
+  await expect(row(page, "orders", "total")).toHaveAttribute("data-later", "");
 
   // At the cursor: exactly v2, as v2's own page draws it.
   await page.getByRole("radio", { name: "At cursor" }).click();
@@ -197,6 +198,7 @@ test("the time machine: a range superposed, a removed table ghosted, a new colum
     "table public.orders, 2 columns",
   ]);
   await expect(row(page, "customers", "email")).toBeVisible();
+  await expect(row(page, "orders", "total")).toHaveCount(0);
   await shot(page, "at the cursor, v2");
 
   // Back to v1 and forward with the keyboard: ] steps.
@@ -322,8 +324,11 @@ test("an admin brings removed versions in, and the view keeps its place", async 
     data: { reason: "Pushed from staging" },
   });
   expect(removed.status()).toBe(200);
-  await page.goto(`./${slug}/shop/time-machine?at=2`);
+  // An address on the removed version (shared before it went): the one before it.
+  await page.goto(`./${slug}/shop/time-machine?at=3`);
   const cursor = page.getByRole("slider", { name: "Cursor" });
+  await expect(cursor).toHaveAttribute("aria-valuetext", /^v2, /);
+  await page.goto(`./${slug}/shop/time-machine?at=2`);
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v2, /);
   // v3 is not there: after v2 comes v4.
   await cursor.focus();
@@ -351,6 +356,93 @@ test("an admin brings removed versions in, and the view keeps its place", async 
     "2",
   );
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v2, /);
+});
+
+/** Table ids drawn, and those drawn in full (there at the cursor). */
+async function tables(page: Page) {
+  return page.locator(".react-flow__node[data-id^='public.']").evaluateAll((nodes) => {
+    const id = (n: Element) => n.getAttribute("data-id")!;
+    const box = (n: Element) => n.querySelector(".sg-node");
+    return {
+      all: nodes.map(id).sort(),
+      full: nodes
+        .filter((n) => !box(n)?.hasAttribute("data-ghost") && !box(n)?.hasAttribute("data-later"))
+        .map(id)
+        .sort(),
+    };
+  });
+}
+
+test("superposed draws the whole range at any cursor; at the cursor, that version as its page does", async ({
+  page,
+}) => {
+  const { slug } = await shop(page, "tm-modes");
+  await page.goto(`./${slug}/shop/time-machine?at=2`);
+  const cursor = page.getByRole("slider", { name: "Cursor" });
+  await expect(cursor).toHaveAttribute("aria-valuetext", /^v2, /);
+  const caption = page.locator("[data-mode-caption]:visible");
+  await expect(caption).toHaveText("All 4 versions superposed, v2 highlighted");
+
+  // Superposed at v2: invoices (v4) and orders.total (v3) are there, faded;
+  // legacy is there in full, its removal (v3) on its header.
+  await expect
+    .poll(async () => (await tables(page)).all)
+    .toEqual(["public.customers", "public.invoices", "public.legacy", "public.orders"]);
+  await expect(node(page, "invoices").locator(".sg-node")).toHaveAttribute("data-later", "");
+  const superposed = await tables(page);
+  await expect(node(page, "invoices")).toContainText("+v4");
+  await expect(row(page, "orders", "total")).toHaveAttribute("data-later", "");
+  await expect(node(page, "legacy")).toContainText("−v3");
+  await shot(page, "superposed, the cursor on v2");
+
+  // At the cursor: exactly what superposed drew in full, as v2's page draws it.
+  await page.getByRole("radio", { name: "At cursor" }).click();
+  await expect(caption).toHaveText("The schema at v2");
+  await expect(page).toHaveURL(/mode=cursor/);
+  // Once what leaves has gone (an animation: polled, not waited for).
+  await expect.poll(async () => (await tables(page)).all).toEqual(superposed.full);
+  expect(superposed.full).not.toEqual(superposed.all);
+  await expect(row(page, "orders", "total")).toHaveCount(0);
+  const labels = await drawn(page);
+  await page.goto(`./${slug}/shop/v/2`);
+  await expect(node(page, "customers")).toBeVisible();
+  expect(await drawn(page)).toEqual(labels);
+});
+
+test("playing: superposed, the highlight walks; at the cursor, the schema evolves", async ({
+  page,
+}) => {
+  const { slug } = await shop(page, "tm-playing");
+  await page.goto(`./${slug}/shop/time-machine?at=1`);
+  const cursor = page.getByRole("slider", { name: "Cursor" });
+  await expect(cursor).toHaveAttribute("aria-valuetext", /^v1, /);
+
+  // Superposed: the same four tables all along, the faded ones lighting up.
+  await expect(node(page, "invoices").locator(".sg-node")).toHaveAttribute("data-later", "");
+  await page.getByRole("button", { name: "Play the range" }).click();
+  const seen = new Set<string>();
+  while ((await cursor.getAttribute("aria-valuetext"))?.startsWith("v4") !== true) {
+    seen.add((await tables(page)).all.join(","));
+    expect(seen.size).toBe(1);
+  }
+  await expect(page.getByRole("button", { name: "Play the range" })).toBeVisible();
+  await expect(node(page, "invoices").locator(".sg-node")).not.toHaveAttribute("data-later");
+  await expect(node(page, "legacy").locator(".sg-node")).toHaveAttribute("data-ghost", "");
+
+  // At the cursor: from v1, tables come and go.
+  await page.locator("body").press("m");
+  await page.getByRole("slider", { name: "Cursor" }).focus();
+  await page.keyboard.press("Home");
+  await expect(cursor).toHaveAttribute("aria-valuetext", /^v1, /);
+  await expect
+    .poll(async () => (await tables(page)).all)
+    .toEqual(["public.customers", "public.legacy", "public.orders"]);
+  await page.locator("body").press("k");
+  await expect(cursor).toHaveAttribute("aria-valuetext", /^v4, /, { timeout: 8000 });
+  await expect(page.getByRole("button", { name: "Play the range" })).toBeVisible();
+  await expect
+    .poll(async () => (await tables(page)).all)
+    .toEqual(["public.customers", "public.invoices", "public.orders"]);
 });
 
 test.describe("on a phone", () => {

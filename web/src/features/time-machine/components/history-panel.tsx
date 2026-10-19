@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { EVENT_VERB, eventsOf, type HistoryEvent } from "../describe";
 import type { History, PartTrack, TableTrack } from "../history";
-import { type Range, type Scale, STEP_BG, stepOf } from "../scale";
+import { ERA_BG, eraOf, type Range, type Scale } from "../scale";
 
 /**
  * Links a version of the history to what it changed (its diff with the
@@ -173,7 +173,7 @@ function EventList({
         const v = history.versions[e.at];
         if (!v) return null;
         const inRange = e.at >= range.from && e.at <= range.to;
-        const step = stepOf(scale, e.at);
+        const slot = eraOf(scale, e.at);
         const what = e.details.length > 0 ? e.details.join("; ") : EVENT_VERB[e.kind];
         return (
           <li key={i} className={cn("flex items-start gap-2", !inRange && "opacity-60")}>
@@ -186,8 +186,8 @@ function EventList({
                 aria-hidden
                 className={cn(
                   "size-1.5 rounded-full",
-                  step !== undefined
-                    ? STEP_BG[step]
+                  slot !== undefined
+                    ? ERA_BG[slot]
                     : inRange
                       ? "bg-muted-foreground"
                       : "bg-border-strong",

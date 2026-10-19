@@ -20,6 +20,15 @@ function loadElk(): Promise<ElkLike> {
   return elk;
 }
 
+/**
+ * Starts loading elkjs and its worker now (1.6 MB to fetch and parse, most
+ * of a small graph's first layout): for a page that knows it will lay out a
+ * graph, called while its data loads.
+ */
+export function preloadAutoLayout(): void {
+  void loadElk();
+}
+
 /** A grid, when ELK cannot load: every table still shows up. */
 function gridFallback(request: LayoutRequest): Layout {
   const out: Layout = {};

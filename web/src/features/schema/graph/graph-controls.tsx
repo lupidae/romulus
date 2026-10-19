@@ -249,21 +249,30 @@ export function GraphKey({ diff, time = false }: { diff: boolean; time?: boolean
             <ul className="grid gap-1.5">
               <KeyRow
                 icon={
-                  <span aria-hidden className="flex h-2.5 w-10 overflow-hidden rounded-xs">
+                  <span aria-hidden className="flex h-2.5 w-10 gap-px overflow-hidden rounded-xs">
                     {ERA_SWATCHES.map((c) => (
                       <span key={c} className={cn("flex-1", c)} />
                     ))}
                   </span>
                 }
               >
-                When it appeared, earlier to later
+                When it appeared: the timeline says which versions each color covers
               </KeyRow>
               <KeyRow
                 icon={
                   <span className="font-mono text-xs text-muted-foreground line-through">name</span>
                 }
               >
-                Removed by then
+                Gone by the cursor
+              </KeyRow>
+              <KeyRow
+                icon={
+                  <span className="rounded-xs bg-card/60 px-1 font-mono text-xs text-muted-foreground ring-1 ring-border ring-inset">
+                    name
+                  </span>
+                }
+              >
+                Superposed: not at the cursor
               </KeyRow>
               <KeyRow icon={<span className="font-mono font-semibold text-warning">~</span>}>
                 Changed in the range

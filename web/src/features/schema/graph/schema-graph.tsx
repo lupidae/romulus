@@ -614,9 +614,15 @@ function GraphCanvas({
         data,
         draggable: editable,
         selectable: false,
-        ariaLabel: `${KIND_LABEL[table.kind] ?? "table"} ${
-          table.time?.label ? `${table.schema}.${table.time.label}` : table.key
-        }, ${table.columns.length} columns${table.time?.note || table.time?.changed ? `, ${timeWords(table.time)}` : ""}`,
+        ariaLabel: [
+          `${KIND_LABEL[table.kind] ?? "table"} ${
+            table.time?.label ? `${table.schema}.${table.time.label}` : table.key
+          }`,
+          `${table.columns.length} columns`,
+          timeWords(table.time),
+        ]
+          .filter(Boolean)
+          .join(", "),
         // Unfolded partitions overlap what is below: draw them on top.
         zIndex,
       };
@@ -1570,7 +1576,8 @@ function GraphCanvas({
                     : time?.era !== undefined
                       ? `era-${time.era}`
                       : (data.table.status ?? data.schemaColor);
-                  return key ? (MINIMAP_FILL[key] ?? "") : "";
+                  const fill = key ? (MINIMAP_FILL[key] ?? "") : "";
+                  return time?.later ? `${fill} opacity-40` : fill;
                 }}
               />
               {editor && (

@@ -70,9 +70,10 @@ describe("what the tint says, in words", () => {
   it("is on new rows and edges too", () => {
     const g = graph();
     const email = g.byKey.get("public.users")!.columns.find((c) => c.name === "email")!;
-    expect(email.time?.note).toBe("+v2");
+    expect(email.time?.added).toBe(2);
     expect(timeWords(email.time)).toBe("added in v2");
-    expect(timeWords({ note: "−v7", changed: true })).toBe("removed in v7, changed");
+    expect(timeWords({ removed: 7, changed: true })).toBe("removed in v7, changed");
+    expect(timeWords({ added: 3, later: true })).toBe("added in v3, not there yet at the cursor");
     expect(timeWords(undefined)).toBe("");
   });
 });

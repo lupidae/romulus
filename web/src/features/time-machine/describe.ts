@@ -193,7 +193,7 @@ export function versionName(v: TimelineVersion | undefined): string {
   return `v${v.number}${v.removed_at ? " (removed)" : ""}`;
 }
 
-/** "3 tables added, 1 removed · 5 columns changed": what the range did up to the cursor. */
+/** "3 tables added, 1 removed · 5 columns changed": what the range did, start to end. */
 export function summaryText(counts: Frame["counts"]): string {
   const part = (c: Counts, one: string, many: string) => {
     const entries = (
@@ -209,4 +209,31 @@ export function summaryText(counts: Frame["counts"]): string {
   };
   const parts = [part(counts.tables, "table", "tables"), part(counts.columns, "column", "columns")];
   return parts.filter(Boolean).join(" · ") || "No change";
+}
+
+/**
+ * What the graph shows, in a line: "All 8 versions superposed, v4
+ * highlighted", "The schema at v4". Superposed with nothing faded (the
+ * cursor's version has all the range had), it says so: the other mode then
+ * draws the same graph.
+ */
+export function modeCaption(
+  mode: Frame["request"]["mode"],
+  range: Frame["request"]["range"],
+  at: number,
+  versions: readonly TimelineVersion[],
+  away?: Frame["away"],
+): string {
+  const name = (i: number) => versionName(versions[i]);
+  if (mode === "cursor") return `The schema at ${name(at)}`;
+  const n = range.to - range.from + 1;
+  const what =
+    n === 2
+      ? `${name(range.from)} and ${name(range.to)}`
+      : range.from === 0 && range.to === versions.length - 1
+        ? `All ${n} versions`
+        : `${n} versions (${name(range.from)} → ${name(range.to)})`;
+  if (away && away.gone + away.later === 0)
+    return `${what} superposed: all of it is in ${name(at)}`;
+  return `${what} superposed, ${name(at)} highlighted`;
 }

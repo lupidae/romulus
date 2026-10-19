@@ -47,18 +47,23 @@ export interface UserType {
  */
 export interface TimeMark {
   /**
-   * The step of the range's age scale it appeared in (0: the first versions
-   * after the range's start); none when it was there at the start.
+   * The color of the range's age scale it appeared in (0: the first versions
+   * after the range's start, one distinct hue each); none when it was there
+   * at the start.
    */
   era?: number;
-  /** Not in the schema at the cursor (removed within the range): struck through, faded. */
+  /** Gone by the cursor (removed within the range): struck through, dashed, faded. */
   ghost?: boolean;
+  /** Not there yet at the cursor, later in the range (superposed): faded. */
+  later?: boolean;
   /** Changed within the range (renamed, retyped, its default…). */
   changed?: boolean;
   /** The name it has at the cursor, when another than its last one (renamed later). */
   label?: string;
-  /** A table's word on its header, after its age dot: `+v4`, `−v7`. */
-  note?: string;
+  /** The version (number) it appeared in, within the range: `+v4` on a table's header. */
+  added?: number;
+  /** The version (number) it went in, within the range: `−v7`. */
+  removed?: number;
   /** A filter leaves it out: drawn faded back. */
   muted?: boolean;
   /** Just appeared, or about to go: animates in, or out. */

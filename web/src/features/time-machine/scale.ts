@@ -1,7 +1,8 @@
-// The age scale of a range of versions: what tints an element by when it
-// appeared. One hue, light to dark (dark to light in the dark theme), six
-// steps at most (`--era-1` to `--era-6`): a range of more versions groups
-// them into runs, oldest first.
+// The age scale of a range of versions: what colors an element by when it
+// appeared. Six distinct hues at most (`--era-1` to `--era-6`, categorical
+// and color-blind safe, ≥ 3:1 on a table in both themes): a range of more
+// versions groups them into runs, oldest first, and the legend says which
+// versions each color covers.
 
 /** A range of versions, as indexes into the timeline (`from` ≤ `to`). */
 export interface Range {
@@ -9,27 +10,14 @@ export interface Range {
   to: number;
 }
 
-export const SCALE_STEPS = 6;
-
-/**
- * The ramp steps a scale of `n` buckets uses: few buckets take the darker,
- * more distinct end and stay apart.
- */
-const STEPS: Record<number, number[]> = {
-  1: [5],
-  2: [3, 5],
-  3: [1, 3, 5],
-  4: [2, 3, 4, 5],
-  5: [1, 2, 3, 4, 5],
-  6: [0, 1, 2, 3, 4, 5],
-};
+export const SCALE_SLOTS = 6;
 
 export interface Bucket {
   /** First and last version (indexes) it covers. */
   first: number;
   last: number;
-  /** Its step on the ramp, 0 (oldest) to 5. */
-  step: number;
+  /** Its color, 0 (`--era-1`, the oldest) to 5. */
+  slot: number;
 }
 
 export interface Scale {
@@ -42,23 +30,22 @@ export interface Scale {
 export function scaleOf(range: Range): Scale {
   const n = range.to - range.from;
   if (n <= 0) return { range, buckets: [] };
-  const k = Math.min(n, SCALE_STEPS);
-  const steps = STEPS[k]!;
+  const k = Math.min(n, SCALE_SLOTS);
   const buckets: Bucket[] = [];
   for (let i = range.from + 1; i <= range.to; i++) {
-    const b = Math.floor(((i - range.from - 1) * k) / n);
+    const slot = Math.floor(((i - range.from - 1) * k) / n);
     const last = buckets[buckets.length - 1];
-    if (last && last.step === steps[b]) last.last = i;
-    else buckets.push({ first: i, last: i, step: steps[b]! });
+    if (last && last.slot === slot) last.last = i;
+    else buckets.push({ first: i, last: i, slot });
   }
   return { range, buckets };
 }
 
-/** The ramp step of a version (index), `undefined` outside (`from`, `to`]. */
-export function stepOf(scale: Scale, index: number): number | undefined {
-  if (index <= scale.range.from || index > scale.range.to) return undefined;
-  return scale.buckets.find((b) => index >= b.first && index <= b.last)?.step;
+/** The color slot of a version (index), `undefined` outside (`from`, `to`]. */
+export function eraOf(scale: Scale, index: number | undefined): number | undefined {
+  if (index === undefined || index <= scale.range.from || index > scale.range.to) return undefined;
+  return scale.buckets.find((b) => index >= b.first && index <= b.last)?.slot;
 }
 
-/** Tailwind classes per ramp step: literal, so the build keeps them. */
-export const STEP_BG = ["bg-era-1", "bg-era-2", "bg-era-3", "bg-era-4", "bg-era-5", "bg-era-6"];
+/** Tailwind classes per color slot: literal, so the build keeps them. */
+export const ERA_BG = ["bg-era-1", "bg-era-2", "bg-era-3", "bg-era-4", "bg-era-5", "bg-era-6"];

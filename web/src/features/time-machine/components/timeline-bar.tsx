@@ -16,10 +16,10 @@ import { originLabel } from "@/features/databases/queries";
 import { formatDate } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
-import { versionName } from "../describe";
-import type { Mode } from "../frame";
+import { modeCaption, versionName } from "../describe";
+import type { Frame, Mode } from "../frame";
 import type { TimelineVersion } from "../history";
-import { type Range, type Scale, STEP_BG, stepOf } from "../scale";
+import { ERA_BG, eraOf, type Range, type Scale } from "../scale";
 
 /** Room at both ends of the track, so the end handles are whole. */
 const PAD = 14;
@@ -49,11 +49,14 @@ function describeVersion(v: TimelineVersion): string {
     .join(", ");
 }
 
+const THUMB_LABEL = { from: "Range start", to: "Range end", at: "Cursor" } as const;
+
 /**
- * The versions along a track: how much each changed (bars, tinted by the age
- * scale inside the range), the range between two handles and the cursor.
+ * The versions along a track: how much each changed (bars, colored by the
+ * age scale inside the range), the range between two handles and the cursor.
  * Click or drag anywhere to move the cursor, drag a handle to change the
- * range; each is a slider for the keyboard too.
+ * range; each is a slider for the keyboard too. Hovering says what a version
+ * is; dragging, what the handle dragged is on.
  */
 export function Track({ versions, activity, range, at, scale, onRange, onAt }: TimelineProps) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -123,9 +126,13 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
   const onPointerMove = (event: React.PointerEvent) => {
     const i = indexAt(event.clientX);
     if (drag) move(drag, i);
-    else if (event.pointerType !== "touch") setHover(i);
+    // Kept while dragging too: once dropped, the card is about where the pointer is.
+    if (event.pointerType !== "touch") setHover(i);
   };
-  const end = () => setDrag(null);
+  const end = (event: React.PointerEvent) => {
+    setDrag(null);
+    setHover(event.pointerType === "touch" ? null : indexAt(event.clientX));
+  };
 
   const keys = (target: "from" | "to" | "at", value: number) => (event: React.KeyboardEvent) => {
     const page = Math.max(1, Math.round(n / 10));
@@ -158,13 +165,17 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
     }
     labels.push(i);
   }
-  const shown = hover !== null && !drag ? versions[hover] : undefined;
+  // Dragging: the version the dragged handle is on, said to be its own.
+  const value = { from: range.from, to: range.to, at };
+  const card = drag !== null ? value[drag] : hover;
+  const shown = card !== null ? versions[card] : undefined;
   const barWidth = clamp(spacing * 0.56, 2, 10);
   const cursor = versions[at];
 
   return (
     <div
       ref={ref}
+      data-track=""
       className={cn(
         "relative h-[5.5rem] touch-none select-none",
         drag ? "cursor-grabbing" : "cursor-pointer",
@@ -180,7 +191,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
           {/* How much each version changed: tinted by when, within the range. */}
           <div aria-hidden className="absolute inset-x-0 top-[1.375rem] h-7">
             {versions.map((v, i) => {
-              const step = stepOf(scale, i);
+              const slot = eraOf(scale, i);
               const inRange = i >= range.from && i <= range.to;
               const height = 3 + Math.round(25 * Math.sqrt(Math.min(1, (activity[i] ?? 0) / max)));
               return (
@@ -188,8 +199,8 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
                   key={v.id}
                   className={cn(
                     "absolute bottom-0 rounded-t-xs transition-opacity duration-(--duration-fast)",
-                    step !== undefined
-                      ? STEP_BG[step]
+                    slot !== undefined
+                      ? ERA_BG[slot]
                       : i === range.from
                         ? "bg-muted-foreground"
                         : "bg-border-strong",
@@ -235,7 +246,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
 
           <Thumb
             target="from"
-            label="Range start"
+            label={THUMB_LABEL.from}
             left={x(range.from)}
             min={0}
             max={range.to - 1}
@@ -245,7 +256,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
           />
           <Thumb
             target="to"
-            label="Range end"
+            label={THUMB_LABEL.to}
             left={x(range.to)}
             min={range.from + 1}
             max={n - 1}
@@ -255,7 +266,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
           />
           <Thumb
             target="at"
-            label="Cursor"
+            label={THUMB_LABEL.at}
             left={clamp(x(at), 18, width - 18)}
             min={range.from}
             max={range.to}
@@ -278,15 +289,17 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
             ))}
           </div>
 
-          {shown && hover !== null && (
+          {shown && card !== null && (
             <div
               aria-hidden
+              data-track-card={drag ?? "hover"}
               className="pointer-events-none absolute bottom-full z-(--z-tooltip) mb-2 grid w-max max-w-72 gap-0.5 rounded-md bg-foreground px-2 py-1.5 text-xs text-background shadow-popover"
               style={{
-                left: clamp(x(hover), 120, Math.max(120, width - 120)),
+                left: clamp(x(card), 120, Math.max(120, width - 120)),
                 transform: "translateX(-50%)",
               }}
             >
+              {drag && <span className="text-background/70">{THUMB_LABEL[drag]}</span>}
               <span className="flex items-center gap-1.5 font-medium">
                 <span className="font-mono">{versionName(shown)}</span>
                 <span className="truncate">{shown.message ?? "No message"}</span>
@@ -294,7 +307,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
               <span className="text-background/70">
                 {originLabel[shown.origin]}
                 {shown.author ? ` by ${shown.author.name}` : ""} · {formatDate(shown.created_at)}
-                {activity[hover] ? ` · ${activity[hover]} changes` : ""}
+                {activity[card] ? ` · ${activity[card]} changes` : ""}
               </span>
               {shown.removal_reason && (
                 <span className="text-background/70">Removed: {shown.removal_reason}</span>
@@ -355,23 +368,32 @@ function Thumb({
   );
 }
 
-/** Play, pause and step: the cursor through the range. */
+/**
+ * Play, pause and step: the cursor through the range. Superposed, the
+ * highlight walks through the versions; at the cursor, the schema evolves.
+ */
 export function Transport({
+  mode,
   playing,
   onPlayingChange,
   canBack,
   canForward,
   onStep,
 }: {
+  mode: Mode;
   playing: boolean;
   onPlayingChange: (playing: boolean) => void;
   canBack: boolean;
   canForward: boolean;
   onStep: (by: -1 | 1) => void;
 }) {
+  const play =
+    mode === "cursor"
+      ? "Play the range: the schema evolves"
+      : "Play the range: the highlight walks through it";
   return (
     <div className="flex shrink-0 items-center gap-0.5">
-      <Tooltip content={playing ? "Pause" : "Play the range"} shortcut={["K"]} side="top">
+      <Tooltip content={playing ? "Pause" : play} shortcut={["K"]} side="top">
         <Button
           variant="primary"
           size="icon"
@@ -445,42 +467,89 @@ export function CursorReadout({
   );
 }
 
-export function ModeToggle({ mode, onMode }: { mode: Mode; onMode: (mode: Mode) => void }) {
+/**
+ * Superposed or at the cursor, with a line saying what the graph shows:
+ * "All 8 versions superposed, v4 highlighted", "The schema at v4".
+ */
+export function ModeToggle({
+  mode,
+  onMode,
+  range,
+  at,
+  versions,
+  away,
+  className,
+}: {
+  mode: Mode;
+  onMode: (mode: Mode) => void;
+  range: Range;
+  at: number;
+  versions: TimelineVersion[];
+  /** What the frame draws faded (superposed). */
+  away: Frame["away"];
+  className?: string;
+}) {
+  const caption = React.useId();
   // No tooltips on the items: a tooltip's trigger state would overwrite
-  // theirs (`data-state`), and the chosen mode would not show.
+  // theirs (`data-state`), and the chosen mode would not show. The chosen
+  // one is inverted: on the timeline's card, the kit's raised item would
+  // barely differ from its track.
+  const item =
+    "data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:shadow-raised data-[state=on]:hover:text-background";
   return (
-    <ToggleGroup
-      type="single"
-      value={mode}
-      onValueChange={(next) => next && onMode(next as Mode)}
-      aria-label="What the graph shows"
-      aria-keyshortcuts="M"
-      // On the timeline's card: the track sinks to the canvas so the chosen
-      // mode (the card's color) stands out in both themes.
-      className="bg-background ring-1 ring-border ring-inset"
-    >
-      <ToggleGroupItem
-        value="superposed"
-        aria-description="Everything in the range up to the cursor, what is gone as ghosts"
+    <div className={cn("flex min-w-0 flex-col items-start gap-1", className)}>
+      <ToggleGroup
+        type="single"
+        value={mode}
+        onValueChange={(next) => next && onMode(next as Mode)}
+        aria-label="What the graph shows"
+        aria-describedby={caption}
+        aria-keyshortcuts="M"
+        className="bg-background ring-1 ring-border-strong ring-inset"
       >
-        <CombineIcon />
-        Superposed
-      </ToggleGroupItem>
-      <ToggleGroupItem value="cursor" aria-description="Exactly the schema at the cursor">
-        <KeyframeIcon />
-        At cursor
-      </ToggleGroupItem>
-    </ToggleGroup>
+        <ToggleGroupItem
+          value="superposed"
+          className={item}
+          aria-description="Every version of the range at once, what is not at the cursor faded"
+        >
+          <CombineIcon />
+          Superposed
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          value="cursor"
+          className={item}
+          aria-description="Exactly the schema at the cursor"
+        >
+          <KeyframeIcon />
+          At cursor
+        </ToggleGroupItem>
+      </ToggleGroup>
+      <p id={caption} data-mode-caption="" className="truncate text-xs text-muted-foreground">
+        {modeCaption(mode, range, at, versions, away)}
+      </p>
+    </div>
   );
 }
 
 /**
  * What the colors say: when things appeared (the scale's runs, oldest
- * first), what was there at the start, what went, what changed.
+ * first, each color the versions it covers), what was there at the start,
+ * what went, what changed; superposed, what is not at the cursor.
  */
-export function Legend({ scale, versions }: { scale: Scale; versions: TimelineVersion[] }) {
+export function Legend({
+  scale,
+  versions,
+  mode,
+  at,
+}: {
+  scale: Scale;
+  versions: TimelineVersion[];
+  mode: Mode;
+  at: number;
+}) {
   const start = versions[scale.range.from];
   const name = (i: number) => `v${versions[i]?.number ?? "?"}`;
+  const cursor = name(at);
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
@@ -491,29 +560,45 @@ export function Legend({ scale, versions }: { scale: Scale; versions: TimelineVe
         In {start ? `v${start.number}` : "the first version"}
       </span>
       {scale.buckets.length > 0 && (
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span>Appeared</span>
-          <span className="flex items-center gap-1">
-            {scale.buckets.map((b) => (
-              <span key={b.first} className="flex items-center gap-1">
-                <span aria-hidden className={cn("size-2.5 rounded-xs", STEP_BG[b.step])} />
-                <span className="font-mono tabular">
-                  {b.first === b.last
-                    ? name(b.first)
-                    : `${name(b.first)}–${versions[b.last]?.number}`}
-                </span>
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span>Appeared in</span>
+          {scale.buckets.map((b) => (
+            <span
+              key={b.first}
+              data-era-key={b.slot + 1}
+              // After the cursor: faded, as their bars are.
+              className={cn("flex items-center gap-1", b.first > at && "opacity-50")}
+            >
+              <span aria-hidden className={cn("size-2.5 rounded-xs", ERA_BG[b.slot])} />
+              <span className="font-mono text-foreground tabular">
+                {b.first === b.last
+                  ? name(b.first)
+                  : `${name(b.first)}–${versions[b.last]?.number}`}
               </span>
-            ))}
-          </span>
+            </span>
+          ))}
         </span>
       )}
-      <span className="flex items-center gap-1.5">
-        <span
-          aria-hidden
-          className="h-2.5 w-4 rounded-xs border border-dashed border-faint-foreground"
-        />
-        <span className="line-through">Removed</span>
-      </span>
+      {/* Superposed, the two faded states: keys of the encoding, shown
+          whether or not the frame has one (playing never reflows them). */}
+      {mode === "superposed" && (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2.5 w-4 rounded-xs border border-dashed border-faint-foreground bg-card/60"
+          />
+          <span className="line-through">Gone by {cursor}</span>
+        </span>
+      )}
+      {mode === "superposed" && (
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2.5 w-4 rounded-xs bg-card/60 ring-1 ring-border ring-inset"
+          />
+          Not yet in {cursor}
+        </span>
+      )}
       <span className="flex items-center gap-1.5">
         <span aria-hidden className="font-mono font-semibold text-warning">
           ~

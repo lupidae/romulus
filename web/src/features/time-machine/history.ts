@@ -179,6 +179,15 @@ export function lastWithin<V>(
   return undefined;
 }
 
+/** The first state that existed between versions `from` and `to` (inclusive). */
+export function firstWithin<V>(
+  states: readonly State<V>[],
+  from: number,
+  to: number,
+): State<V> | undefined {
+  return states.find((s) => s.from <= to && (s.to === null || s.to > from));
+}
+
 /**
  * Where the object first appeared within (`from`, `to`]: the version index,
  * or `undefined` when it was there at `from` already, or never came then.
@@ -191,6 +200,21 @@ export function bornWithin(states: readonly State<unknown>[], from: number, to: 
 /** Whether the state follows the one before it directly (a change, not a return). */
 export function follows(states: readonly State<unknown>[], i: number): boolean {
   return i > 0 && states[i - 1]!.to === states[i]!.from;
+}
+
+/**
+ * The run of states the state at `index` belongs to: those around it, each
+ * directly following the one before (changes, not a removal and a return).
+ */
+export function runOf<V>(
+  states: readonly State<V>[],
+  index: number,
+): { first: State<V>; last: State<V> } {
+  let first = index;
+  let last = index;
+  while (first > 0 && follows(states, first)) first--;
+  while (last + 1 < states.length && follows(states, last + 1)) last++;
+  return { first: states[first]!, last: states[last]! };
 }
 
 /**

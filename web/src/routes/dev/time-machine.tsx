@@ -14,6 +14,7 @@ import {
 import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toaster";
 import type { VersionLink } from "@/features/time-machine/components/history-panel";
+import { preloadAutoLayout } from "@/features/schema/graph/use-auto-layout";
 import { TimeMachine } from "@/features/time-machine/components/time-machine";
 import { TimeMachineSkeleton } from "@/features/time-machine/components/time-machine-skeleton";
 import { largeHistory, shopHistory } from "@/features/time-machine/fixtures";
@@ -47,6 +48,7 @@ export const Route = createFileRoute("/dev/time-machine")({
   beforeLoad: () => {
     if (!devRoutes) throw notFound();
   },
+  loader: () => preloadAutoLayout(),
   head: () => ({ meta: [{ title: "Time machine – romulus" }] }),
   component: Preview,
 });

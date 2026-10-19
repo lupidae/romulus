@@ -1,9 +1,10 @@
 // One frame of the time machine: the graph of a range of versions at a
-// cursor. Superposed, every object of the range up to the cursor is drawn,
-// those gone by then as ghosts; at the cursor, exactly the schema of that
-// version. Either way each object is tinted by when it appeared in the range
-// (the age scale), marked when it changed, and faded back when a filter
-// leaves it out.
+// cursor. Superposed, every object the range ever had is drawn, whatever the
+// cursor: what is there at the cursor in full, the rest faded back (gone by
+// then: struck through and dashed; not there yet: plain). At the cursor,
+// exactly the schema of that version. Either way each object is colored by
+// when it appeared in the range (the age scale), marked when it changed, and
+// faded back when a filter leaves it out.
 //
 // `Frames` keeps what it built: a table whose picture did not change from
 // one frame to the next is handed again as the same `TableModel` (and its
@@ -37,16 +38,18 @@ import { historyLines } from "./describe";
 import {
   bornWithin,
   changesWithin,
+  firstWithin,
   goneWithin,
   type History,
   lastWithin,
   type PartTrack,
+  runOf,
   type State,
   stateAt,
   type TableHead,
   type TableTrack,
 } from "./history";
-import { type Range, type Scale, scaleOf, stepOf } from "./scale";
+import { eraOf, type Range, type Scale, scaleOf } from "./scale";
 
 export type Mode = "superposed" | "cursor";
 
@@ -83,9 +86,17 @@ export interface Frame {
   leaving: number;
   /** Objects drawn coming in: `settle` stills them. */
   entering: number;
-  /** What happened in the range up to the cursor. */
+  /** What the range changed, from its first version to its last (whatever the cursor and mode). */
   counts: { tables: Counts; columns: Counts };
+  /** Superposed: tables and columns drawn faded, gone by the cursor or not there yet. */
+  away: { gone: number; later: number };
 }
+
+/**
+ * Where an object stands at the cursor: there, gone by then, or not there
+ * yet (later in the range). Only superposed frames draw the last two.
+ */
+type Presence = "here" | "gone" | "later";
 
 /** A part of a table as a frame draws it. */
 interface PartPick<V> {
@@ -95,7 +106,7 @@ interface PartPick<V> {
   /** Index of the state drawn in its track. */
   index: number;
   state: State<V>;
-  ghost: boolean;
+  presence: Presence;
   mark: TimeMark;
 }
 
@@ -104,7 +115,7 @@ interface Picture {
   track: TableTrack;
   head: State<TableHead>;
   headIndex: number;
-  ghost: boolean;
+  presence: Presence;
   mark: TimeMark;
   columns: PartPick<Column>[];
   constraints: PartPick<Constraint>[];
@@ -123,23 +134,31 @@ interface Built {
 const NO_FILTERS: Filters = {};
 const EMPTY: Counts = { added: 0, removed: 0, changed: 0 };
 
-/** Which state a frame draws: the one at the cursor, or (superposed) the last one in the range. */
+/**
+ * Which state a frame draws: the one at the cursor; superposed, otherwise
+ * the last one before it in the range (gone by then), else the first one
+ * after it (not there yet).
+ */
 function pick<V>(
   states: readonly State<V>[],
   request: FrameRequest,
-): { state: State<V>; index: number; ghost: boolean } | undefined {
+): { state: State<V>; index: number; presence: Presence } | undefined {
+  const chosen = (state: State<V> | undefined, presence: Presence) =>
+    state ? { state, index: states.indexOf(state), presence } : undefined;
   const now = stateAt(states, request.at);
-  if (now) return { state: now, index: states.indexOf(now), ghost: false };
+  if (now) return chosen(now, "here");
   if (request.mode === "cursor") return undefined;
-  const last = lastWithin(states, request.range.from, request.at);
-  return last ? { state: last, index: states.indexOf(last), ghost: true } : undefined;
+  return (
+    chosen(lastWithin(states, request.range.from, request.at), "gone") ??
+    chosen(firstWithin(states, request.at + 1, request.range.to), "later")
+  );
 }
 
 /** The part of a mark that the graph draws, as a string: what a picture's signature holds. */
 function markSig(m: TimeMark): string {
-  return `${m.era ?? ""}${m.ghost ? "g" : ""}${m.changed ? "c" : ""}${m.muted ? "m" : ""}${
-    m.motion ?? ""
-  }${m.label ?? ""}${m.note ?? ""}`;
+  return `${m.era ?? ""}${m.ghost ? "g" : ""}${m.later ? "l" : ""}${m.changed ? "c" : ""}${
+    m.muted ? "m" : ""
+  }${m.motion ?? ""}:${m.label ?? ""}:${m.added ?? ""}:${m.removed ?? ""}`;
 }
 
 const lower = (s: string) => s.toLocaleLowerCase();
@@ -187,38 +206,62 @@ export class Frames {
 
   private make(request: FrameRequest, animate: boolean): Frame {
     const { history } = this;
-    const { from } = request.range;
+    const { from, to } = request.range;
     const at = request.at;
+    // Superposed, the marks speak of the whole range; at the cursor, of the
+    // range up to it (the version drawn has nothing of later).
+    const superposed = request.mode === "superposed";
+    const end = superposed ? to : at;
     const filters = request.filters ?? NO_FILTERS;
     const query = filters.query?.trim() ? lower(filters.query.trim()) : null;
     const scale = scaleOf(request.range);
     const versions = history.versions;
     const animating = animate && this.last !== null;
+    const number = (i: number | null | undefined) =>
+      i === null || i === undefined ? undefined : versions[i]?.number;
 
-    const markOf = (states: readonly State<unknown>[], ghost: boolean, key: string): TimeMark => {
-      const born = bornWithin(states, from, at);
+    // When it appeared and when it goes, as the run of states drawn says:
+    // `+v4` the run's start within the range (or, gone by the cursor, its
+    // return after it: `−v5 +v8`), `−v7` its end (superposed only: at the
+    // cursor, nothing of later is drawn).
+    const markOf = (
+      states: readonly State<unknown>[],
+      chosen: { index: number; presence: Presence },
+      key: string,
+    ): TimeMark => {
+      const { presence } = chosen;
+      const run = runOf(states, chosen.index);
+      let appeared = run.first.from > from ? run.first.from : undefined;
+      const went =
+        superposed && run.last.to !== null && run.last.to <= to ? run.last.to : undefined;
+      if (presence === "gone") {
+        const back = states.find((s) => s.from > at && s.from <= to);
+        if (back) appeared = back.from;
+      }
       const mark: TimeMark = { history: this.historyOf(key, states) };
-      if (born !== undefined) mark.era = stepOf(scale, born);
-      if (ghost) mark.ghost = true;
-      if (changesWithin(states, from, at).length > 0) mark.changed = true;
-      // Tables show it on their header; rows and edges say it to screen readers.
-      const gone = ghost ? goneWithin(states, from, at) : undefined;
-      if (gone !== undefined) mark.note = `−v${versions[gone]?.number ?? "?"}`;
-      else if (born !== undefined) mark.note = `+v${versions[born]?.number ?? "?"}`;
+      const era = eraOf(scale, appeared);
+      if (era !== undefined) mark.era = era;
+      if (appeared !== undefined) mark.added = number(appeared);
+      if (went !== undefined) mark.removed = number(went);
+      if (presence === "gone") mark.ghost = true;
+      if (presence === "later") mark.later = true;
+      if (changesWithin(states, from, end).length > 0) mark.changed = true;
       return mark;
     };
     const eventful = (states: readonly State<unknown>[]) =>
-      bornWithin(states, from, at) !== undefined ||
-      goneWithin(states, from, at) !== undefined ||
-      changesWithin(states, from, at).length > 0;
+      bornWithin(states, from, end) !== undefined ||
+      goneWithin(states, from, end) !== undefined ||
+      changesWithin(states, from, end).length > 0;
 
+    // What the range changed, from its first version to its last.
     const counts = { tables: { ...EMPTY }, columns: { ...EMPTY } };
     const tally = (into: Counts, states: readonly State<unknown>[]) => {
-      if (bornWithin(states, from, at) !== undefined && stateAt(states, at)) into.added++;
-      else if (goneWithin(states, from, at) !== undefined && !stateAt(states, from)) {
-        // Came and went within the range: neither here at the start nor now.
-      } else if (goneWithin(states, from, at) !== undefined) into.removed++;
-      else if (changesWithin(states, from, at).length > 0) into.changed++;
+      const first = stateAt(states, from) !== undefined;
+      const last = stateAt(states, to) !== undefined;
+      if (!first && last) into.added++;
+      else if (first && !last) into.removed++;
+      else if (first && last && changesWithin(states, from, to).length > 0) into.changed++;
+      // Neither at the start nor at the end: came and went within the range.
     };
 
     // ---- Pictures: what each table draws -----------------------------------
@@ -236,8 +279,8 @@ export class Frames {
             track: i,
             index: chosen.index,
             state: chosen.state,
-            ghost: chosen.ghost,
-            mark: markOf(p.states, chosen.ghost, `${track.id}\u0000${kind}\u0000${p.id}`),
+            presence: chosen.presence,
+            mark: markOf(p.states, chosen, `${track.id}\u0000${kind}\u0000${p.id}`),
           });
         });
         return out;
@@ -247,8 +290,8 @@ export class Frames {
         track,
         head: head.state,
         headIndex: head.index,
-        ghost: head.ghost,
-        mark: markOf(track.states, head.ghost, track.id),
+        presence: head.presence,
+        mark: markOf(track.states, head, track.id),
         columns,
         constraints: parts(track.constraints, "k"),
         indexes: parts(track.indexes, "i"),
@@ -273,16 +316,22 @@ export class Frames {
           !lower(frameName).includes(query) &&
           !columns.some((c) => lower(c.state.value.name).includes(query)));
       if (muted) picture.mark.muted = true;
-      if (filters.changedOnly && !muted && picture.mark.era === undefined && !picture.ghost) {
+      if (
+        filters.changedOnly &&
+        !muted &&
+        picture.mark.era === undefined &&
+        head.presence !== "gone"
+      ) {
         for (const c of columns) {
           const states = track.columns[c.track]!.states;
           if (!eventful(states)) c.mark.muted = true;
         }
       }
       pictures.set(track.id, picture);
-
+    }
+    for (const track of history.tables) {
       tally(counts.tables, track.states);
-      if (stateAt(track.states, from) && stateAt(track.states, at))
+      if (stateAt(track.states, from) && stateAt(track.states, to))
         for (const c of track.columns) tally(counts.columns, c.states);
     }
 
@@ -428,9 +477,19 @@ export class Frames {
         const target = byKey.get(e.target);
         const own = e.kind === "fk" ? p.constraints.find((c) => c.id === e.name)?.mark : undefined;
         const time: TimeMark = {
-          ...(own ?? { era: p.mark.era, ghost: p.mark.ghost, note: p.mark.note }),
+          ...(own ?? {
+            era: p.mark.era,
+            ghost: p.mark.ghost,
+            later: p.mark.later,
+            added: p.mark.added,
+            removed: p.mark.removed,
+          }),
         };
-        if (p.ghost || target?.time?.ghost) time.ghost = true;
+        // An edge is there at the cursor only when both its ends are.
+        if (p.mark.ghost || target?.time?.ghost) {
+          time.ghost = true;
+          delete time.later;
+        } else if (p.mark.later || target?.time?.later) time.later = true;
         if (p.mark.muted || target?.time?.muted) time.muted = true;
         if (p.mark.motion === "leave" || target?.time?.motion === "leave") time.motion = "leave";
         else if (p.mark.motion === "enter" || target?.time?.motion === "enter")
@@ -447,7 +506,7 @@ export class Frames {
       const drawn = fresh.types.get(`${t.schema}.${t.name}`);
       const chosen = drawn?.kind === t.kind ? pick(t.states, request) : undefined;
       if (drawn && chosen)
-        drawn.time = markOf(t.states, chosen.ghost, `type\u0000${t.kind}:${t.schema}.${t.name}`);
+        drawn.time = markOf(t.states, chosen, `type\u0000${t.kind}:${t.schema}.${t.name}`);
     }
 
     const graph: GraphModel = {
@@ -461,6 +520,14 @@ export class Frames {
     // What leaves is not there any more for the next frame; what comes in is.
     for (const p of this.previous.values())
       p.columns = p.columns.filter((c) => c.mark.motion !== "leave");
+    const away = { gone: 0, later: 0 };
+    for (const p of pictures.values()) {
+      for (const x of [p, ...p.columns]) {
+        if (x.mark.motion === "leave") continue;
+        if (x.presence === "gone") away.gone++;
+        else if (x.presence === "later") away.later++;
+      }
+    }
     const frame: Frame = {
       request,
       scale,
@@ -469,6 +536,7 @@ export class Frames {
       leaving,
       entering,
       counts,
+      away,
     };
     this.last = frame;
     return frame;
@@ -500,10 +568,10 @@ function trackIdOf(t: TableModel): string {
 /** What a picture draws, as a string: equal strings draw alike. */
 function signature(p: Picture): string {
   const parts = (list: PartPick<unknown>[]) =>
-    list.map((x) => `${x.track}.${x.index}${x.ghost ? "g" : ""}${markSig(x.mark)}`).join(",");
+    list.map((x) => `${x.track}.${x.index}${x.presence[0]}${markSig(x.mark)}`).join(",");
   return [
     p.headIndex,
-    p.ghost ? "g" : "",
+    p.presence,
     markSig(p.mark),
     parts(p.columns),
     parts(p.constraints),
@@ -513,8 +581,10 @@ function signature(p: Picture): string {
 }
 
 /**
- * The columns a table draws, in table order: those of the head drawn as it
- * orders them, then each ghost column after the column it last followed.
+ * The columns a table draws, in table order: those there at the cursor as
+ * the head drawn orders them, then each of the others after the column it
+ * followed when it was there (its last version for one gone by then, its
+ * first for one not there yet).
  */
 function orderColumns(
   track: TableTrack,
@@ -522,7 +592,9 @@ function orderColumns(
   picks: PartPick<Column>[],
 ): PartPick<Column>[] {
   const order = head.value.column_order ?? [];
-  const byName = new Map(picks.filter((p) => !p.ghost).map((p) => [p.state.value.name, p]));
+  const byName = new Map(
+    picks.filter((p) => p.presence === "here").map((p) => [p.state.value.name, p]),
+  );
   const out: PartPick<Column>[] = [];
   const placed = new Set<string>();
   for (const name of order) {
@@ -532,17 +604,17 @@ function orderColumns(
       placed.add(p.id);
     }
   }
-  // Alive columns the head does not order (a head older than them): last.
+  // Columns there that the head does not order (a head older than them): last.
   for (const p of picks) {
-    if (p.ghost || placed.has(p.id)) continue;
+    if (p.presence !== "here" || placed.has(p.id)) continue;
     out.push(p);
     placed.add(p.id);
   }
   for (const p of picks) {
     if (placed.has(p.id)) continue;
-    // The head of when it was last there says what it followed.
-    const last = p.state.to === null ? p.state.from : p.state.to - 1;
-    const then = stateAt(track.states, last)?.value.column_order ?? [];
+    // The head of when it was there says what it followed.
+    const when = p.presence === "later" || p.state.to === null ? p.state.from : p.state.to - 1;
+    const then = stateAt(track.states, when)?.value.column_order ?? [];
     const i = then.indexOf(p.state.value.name);
     let at = i < 0 ? out.length : 0;
     for (let j = i - 1; j >= 0; j--) {

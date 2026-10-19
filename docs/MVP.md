@@ -756,14 +756,31 @@ Several versions of a database superposed on one graph, with a timeline of its v
 it: `/app/<org>/<db>/time-machine`, from the history page and from every version's strip (T).
 
 - **Overlay and timeline.** A range of versions (two handles on the timeline) and a cursor in
-  it (a playhead: dragged, `[`/`]`, played with K). *Superposed* draws everything the range
-  had up to the cursor: what is gone by then as a ghost (struck through, dashed), what came
-  later not yet. *At cursor* draws exactly the version at the cursor (M switches). Each
-  table, column and foreign key is tinted by when it appeared in the range, on a one-hue age
-  scale of at most six steps (`--era-1`…`--era-6`, an ordinal ramp validated for contrast in
-  both themes; the dark theme flips its anchor), what was there at the range's start
-  untinted; changed things carry `~`. The timeline is the legend: a bar per version, as high
-  as what it changed, tinted by its step.
+  it (a playhead: dragged, `[`/`]`, played with K). *Superposed* draws the union of the whole
+  range, whatever the cursor: what the cursor's version has in full, the rest faded back (its
+  frame and fill fade, its words stay readable in muted ink, ≥ 4.5:1; gone by then: struck
+  through, dashed; not there yet: plain; one gone that comes back later says `−v5 +v8`), so
+  moving the cursor moves a
+  highlight and playing walks it through the versions. *At cursor* draws exactly the version
+  at the cursor, nothing else, and playing makes the schema evolve (M switches; the chosen
+  mode is inverted and a line under it says what is shown: "All 8 versions superposed, v4
+  highlighted", "The schema at v4"). The two differ whenever the range has more than the
+  cursor's version. Each table, column and foreign key is colored by when it appeared in the
+  range: six distinct hues at most (`--era-1`…`--era-6`), a run of versions each when the
+  range has more, the legend saying which versions each color covers; what was there at the
+  range's start uncolored; changed things carry `~`; tables say `+v4` / `−v7`. Headers carry a
+  solid band, rows a bar, and zoomed out a table is filled with its color, so the map reads at
+  overview zoom. The timeline is the legend: a bar per version, as high as what it changed,
+  colored by its run. The header speaks of the range (what it changed, start to end), the
+  timeline's bar of the cursor (its version, the mode).
+- **Why categorical colors** (changed 2026-10-19, task TM2, from the one-hue ordinal ramp of
+  TM): six steps of one violet could not be told apart on a column row or at overview zoom,
+  and the age is read off the `+vN` labels and the legend anyway. The palette is two
+  lightness tiers over six hue families (violet, green, indigo, magenta, teal, lime), clear of
+  the accent, the warning and the destructive colors, validated for every pair (any two
+  tables can sit side by side): color-blind ΔE ≥ 9.2 light / 10.3 dark, ≥ 3:1 on the card and
+  the canvas in both themes. Ordered so that short ranges, which use the first colors, get
+  the most distinct ones.
 - **History of an element.** Hovering a column (or a table header, or an enum through a
   column) shows its history in the hover card; selecting a table lists its history and its
   parts' (columns, keys, checks, indexes, policies), each version linking to its diff with

@@ -65,16 +65,40 @@ const ROW_STATUS: Record<ChangeStatus, string> = {
   changed: "bg-warning/8 before:bg-warning",
 };
 
-/** The age scale (`TimeMark.era`, 0 to 5): a row's bar and wash, a dot. */
+/**
+ * The age scale (`TimeMark.era`, 0 to 5, one hue each): a row's bar and
+ * wash, a chip's swatch. A header's band and tint, and zoomed out the
+ * node's fill, come from schema-graph.css (by `data-era`), layered over the
+ * header's own background (a view keeps its muted one).
+ */
 const ERA_ROW = [
-  "bg-era-1/10 before:bg-era-1",
-  "bg-era-2/10 before:bg-era-2",
-  "bg-era-3/10 before:bg-era-3",
-  "bg-era-4/10 before:bg-era-4",
-  "bg-era-5/10 before:bg-era-5",
-  "bg-era-6/10 before:bg-era-6",
+  "bg-era-1/12 before:bg-era-1",
+  "bg-era-2/12 before:bg-era-2",
+  "bg-era-3/12 before:bg-era-3",
+  "bg-era-4/12 before:bg-era-4",
+  "bg-era-5/12 before:bg-era-5",
+  "bg-era-6/12 before:bg-era-6",
+];
+/** Faded (not at the cursor), a row keeps its bar only, softened by AWAY_ROW. */
+const ERA_BAR = [
+  "before:bg-era-1",
+  "before:bg-era-2",
+  "before:bg-era-3",
+  "before:bg-era-4",
+  "before:bg-era-5",
+  "before:bg-era-6",
 ];
 const ERA_DOT = ["bg-era-1", "bg-era-2", "bg-era-3", "bg-era-4", "bg-era-5", "bg-era-6"];
+
+/**
+ * Superposed, what is not at the cursor (gone by then, or not there yet)
+ * steps back: its frame and fill fade (a translucent card, a lighter
+ * border, no shadow; the era band softer, see schema-graph.css), never its
+ * words, drawn in muted ink: ≥ 5.8:1 on the faded node in both themes,
+ * where an opacity of 0.6 over the whole node left them at 3.8:1.
+ */
+const AWAY = "border-border bg-card/60 shadow-none";
+const AWAY_ROW = "before:opacity-60 [&_svg]:opacity-60";
 
 /** How an element comes and goes between two of the time machine's frames. */
 const MOTION = {
@@ -133,6 +157,7 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
   const kindLabel = KIND_LABEL[table.kind];
   const isView = table.kind === "view" || table.kind === "materialized";
   const quiet = diffMode && !table.status && emphasis !== "selected";
+  const away = time?.ghost === true || time?.later === true;
 
   return (
     <div
@@ -140,11 +165,13 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
       data-picked={picked ? "" : undefined}
       data-era={time?.era !== undefined && !time.ghost ? time.era + 1 : undefined}
       data-ghost={time?.ghost ? "" : undefined}
+      data-later={time?.later ? "" : undefined}
       className={cn(
         "sg-node relative flex flex-col overflow-hidden rounded-lg border bg-card text-card-foreground shadow-raised",
         "transition-[opacity,box-shadow,border-color] duration-(--duration-fast)",
         table.status ? BORDER_STATUS[table.status] : "border-border-strong",
-        time?.ghost && "border-dashed opacity-60 shadow-none",
+        away && AWAY,
+        time?.ghost && "border-dashed",
         emphasis === "selected" && "border-primary shadow-popover ring-3 ring-primary/20",
         picked && "border-primary ring-2 ring-primary/45",
         emphasis === "dimmed" && "opacity-35",
@@ -168,7 +195,8 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
         data-table-header=""
         className={cn(
           "sg-header relative flex shrink-0 items-center gap-2 border-b border-border px-3",
-          isView ? "bg-muted" : "bg-card",
+          // Faded, the node's translucent card shows through.
+          isView ? (away ? "bg-muted/60" : "bg-muted") : away ? "bg-transparent" : "bg-card",
           mark?.status === "pending" && "bg-primary/6",
           mark?.status === "failed" && "bg-destructive/8",
           "data-[link-target=bad]:bg-destructive/10 data-[link-target=ok]:bg-success/15",
@@ -199,7 +227,8 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
             className={cn(
               "sg-name min-w-0 flex-1 truncate font-mono text-sm font-semibold text-foreground",
               table.status === "removed" && "line-through decoration-destructive/60",
-              time?.ghost && "text-muted-foreground line-through decoration-faint-foreground",
+              away && "text-muted-foreground",
+              time?.ghost && "line-through decoration-faint-foreground",
             )}
             onDoubleClick={
               canEdit
@@ -246,7 +275,22 @@ function TableNodeView({ id, data, width, height }: NodeProps<TableFlowNode>) {
 
 /** The time machine's word on a table: when it came or went, whether it changed. */
 function TimeChip({ time }: { time: TimeMark }) {
-  if (!time.changed && !time.note) return null;
+  if (!time.changed && time.added === undefined && time.removed === undefined) return null;
+  const added = time.added !== undefined && (
+    <span key="added" className="flex items-center gap-1">
+      {time.era !== undefined && (
+        <span aria-hidden className={cn("size-2 rounded-xs", ERA_DOT[time.era])} />
+      )}
+      +v{time.added}
+    </span>
+  );
+  const removed = time.removed !== undefined && (
+    <span key="removed" className="text-muted-foreground">
+      −v{time.removed}
+    </span>
+  );
+  // In the order they happen: `+v3 −v5`, or for one coming back `−v5 +v8`.
+  const back = time.added !== undefined && time.removed !== undefined && time.removed < time.added;
   return (
     <span className="sg-kind flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
       {time.changed && (
@@ -254,12 +298,9 @@ function TimeChip({ time }: { time: TimeMark }) {
           ~<span className="sr-only">changed</span>
         </span>
       )}
-      {time.note && (
-        <span className="flex items-center gap-1 rounded-sm px-1 tabular ring-1 ring-border-strong ring-inset">
-          {time.era !== undefined && !time.ghost && (
-            <span aria-hidden className={cn("size-1.5 rounded-full", ERA_DOT[time.era])} />
-          )}
-          {time.note}
+      {(added || removed) && (
+        <span className="flex items-center gap-1.5 rounded-sm bg-card px-1 text-foreground tabular ring-1 ring-border-strong ring-inset">
+          {back ? [removed, added] : [added, removed]}
         </span>
       )}
     </span>
@@ -395,12 +436,16 @@ function OverviewBody({ table, width }: { table: TableModel; width: number }) {
   // As large as legible at this zoom, never wider than the node (a monospace
   // character is 0.6em wide). Long snake_case names break at an underscore.
   const lines = overviewLines(table.time?.label ?? table.name);
+  const away = table.time?.ghost === true || table.time?.later === true;
   const longest = Math.max(...lines.map((l) => l.length));
   const fits = Math.floor((width - 32) / (longest * 0.62));
   return (
     <div className="sg-overview flex min-h-0 flex-1 flex-col items-center justify-center gap-[0.25em] overflow-hidden px-3 text-center">
       <span
-        className="max-w-full font-mono leading-tight font-semibold text-foreground"
+        className={cn(
+          "max-w-full font-mono leading-tight font-semibold",
+          away ? "text-muted-foreground" : "text-foreground",
+        )}
         style={{ fontSize: `min(${Math.min(fits, 64)}px, calc(0.875rem / var(--graph-zoom, 1)))` }}
       >
         {lines.map((line, i) => (
@@ -458,6 +503,11 @@ const ColumnRow = memo(function ColumnRow({
 }) {
   const edit = useEdit();
   const mark = editing?.mark;
+  // The time machine: washed by when it appeared, faded when not at the
+  // cursor (its bar only, softened).
+  const era = c.time?.ghost ? undefined : c.time?.era;
+  const away = c.time?.ghost === true || c.time?.later === true;
+  const washed = era !== undefined && !away;
   const start = (kind: "renameColumn" | "type") => (event: React.MouseEvent) => {
     if (!editing || !edit) return;
     event.stopPropagation();
@@ -469,13 +519,16 @@ const ColumnRow = memo(function ColumnRow({
       data-pending={mark?.status === "pending" ? "" : undefined}
       data-era={c.time?.era !== undefined && !c.time.ghost ? c.time.era + 1 : undefined}
       data-ghost={c.time?.ghost ? "" : undefined}
+      data-later={c.time?.later ? "" : undefined}
       className={cn(
         "group/row relative flex items-center gap-1.5 pr-3 font-mono text-xs",
         diffMode ? "pl-4" : "pl-3",
-        "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
+        "before:absolute before:inset-y-0 before:left-0",
+        c.time ? "before:w-1" : "before:w-0.5",
         c.status && ROW_STATUS[c.status],
-        c.time?.era !== undefined && !c.time.ghost && ERA_ROW[c.time.era],
+        era !== undefined && (away ? ERA_BAR : ERA_ROW)[era],
         c.time?.ghost && "before:bg-faint-foreground/60",
+        away && AWAY_ROW,
         c.time?.muted && "opacity-40",
         c.time?.motion && ROW_MOTION[c.time.motion],
         joined && !c.status && "bg-primary/8",
@@ -529,14 +582,13 @@ const ColumnRow = memo(function ColumnRow({
             joined ? "font-semibold text-foreground" : "text-foreground",
             c.status === "removed" &&
               "text-muted-foreground line-through decoration-destructive/60",
-            c.time?.ghost && "text-muted-foreground line-through decoration-faint-foreground",
+            away && "text-muted-foreground",
+            c.time?.ghost && "line-through decoration-faint-foreground",
           )}
           onDoubleClick={editing ? start("renameColumn") : undefined}
         >
           {c.time?.label ?? c.name}
-          {(c.time?.note || c.time?.changed) && (
-            <span className="sr-only">, {timeWords(c.time)}</span>
-          )}
+          {timeWords(c.time) && <span className="sr-only">, {timeWords(c.time)}</span>}
         </span>
       )}
       {(c.unique || c.identity || c.generated) && (
@@ -554,7 +606,10 @@ const ColumnRow = memo(function ColumnRow({
           "ml-auto min-w-0 shrink truncate pl-3 text-right",
           c.userType
             ? "text-syntax-type underline decoration-dotted underline-offset-2"
-            : "text-faint-foreground",
+            : // On an era wash, faint ink would fall under 4.5:1 (3.9:1 at 12 %).
+              washed
+              ? "text-muted-foreground"
+              : "text-faint-foreground",
         )}
         onDoubleClick={editing && !editing.renaming ? start("type") : undefined}
       >

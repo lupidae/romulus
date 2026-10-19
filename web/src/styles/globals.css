@@ -99,15 +99,28 @@
   --syntax-punctuation: #57534e;
 
   /* The time machine's age scale: when an element appeared within the range
-     drawn, oldest (lightest) to newest. One hue (away from the status colors
-     and the accent), lightness steps of 0.065+ in OKLCH, the light end at 2:1
-     on the card and the canvas (dataviz ordinal ramp, validated). */
-  --era-1: #afa7f5;
-  --era-2: #9b91e7;
-  --era-3: #887bda;
-  --era-4: #7463ca;
-  --era-5: #614abb;
-  --era-6: #502fab;
+     drawn, one color per run of versions, oldest first (the legend says
+     which versions each covers). Categorical, not a one-hue ramp: six steps
+     of one hue could not be told apart on a row or zoomed out. Two
+     lightness tiers over six hue families (violet, green, indigo, magenta,
+     teal, lime), clear of the accent, the warning and the destructive
+     colors; ordered so that the first few, which short ranges use, are the
+     most distinct. Validated (dataviz validate_palette.js, all pairs: any
+     two can sit side by side on the graph): color-blind ΔE ≥ 9.2, normal
+     ΔE ≥ 19.6, each ≥ 3:1 on the card and the canvas (non-text contrast). */
+  --era-1: #a57bf0;
+  --era-2: #18671e;
+  --era-3: #3347b2;
+  --era-4: #9b2671;
+  --era-5: #0394b0;
+  --era-6: #839a0d;
+  /* How much of its color tints a header (faded: not at the cursor), and
+     zoomed out fills a node: names keep ≥ 7:1 on the fill, ≥ 5.3:1 (muted
+     ink) on the faded one. */
+  --era-tint: 14%;
+  --era-tint-away: 8%;
+  --era-fill: 50%;
+  --era-fill-away: 20%;
 
   /* Elevation: hairline + soft layered drops. Only floating surfaces lift. */
   --elevation-control: 0 0.0625rem 0.0625rem rgb(28 25 23 / 0.04);
@@ -197,13 +210,21 @@
   --syntax-comment: #8a837d;
   --syntax-punctuation: #a8a29e;
 
-  /* Dark: the anchor flips, newest lightest; the dark end 2.5:1 on the card. */
-  --era-1: #5c4ca7;
-  --era-2: #7163bc;
-  --era-3: #867bd2;
-  --era-4: #9c93e7;
-  --era-5: #b4abfd;
-  --era-6: #cbc4ff;
+  /* Dark: the same families stepped for the dark surfaces, inside the dark
+     band (OKLCH L 0.48–0.67). All pairs: color-blind ΔE ≥ 10.3, normal
+     ΔE ≥ 18.4, each ≥ 3:1 on the card and the canvas. */
+  --era-1: #b862f7;
+  --era-2: #28b01c;
+  --era-3: #4b5dc3;
+  --era-4: #b03180;
+  --era-5: #08a2af;
+  --era-6: #647119;
+  /* Names keep ≥ 5.9:1 on the fill (era-2's is the lowest, 5.98:1), ≥ 5.2:1
+     (muted ink) on the faded one. */
+  --era-tint: 14%;
+  --era-tint-away: 8%;
+  --era-fill: 50%;
+  --era-fill-away: 20%;
 
   /* On dark, a drop shadow barely reads: a light rim draws the edge. */
   --elevation-control: inset 0 0.0625rem 0 rgb(255 255 255 / 0.04);
