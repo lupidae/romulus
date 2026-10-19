@@ -3,6 +3,7 @@ import type * as React from "react";
 
 import { CheckIcon, NavArrowRightIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { usePortalContainer } from "./portal";
 
 /**
  * Menus: account, overflow (⋯) and switchers. Fully keyboard driven (arrows,
@@ -36,7 +37,7 @@ export function MenuContent({
   ...props
 }: React.ComponentProps<typeof MenuPrimitive.Content>) {
   return (
-    <MenuPrimitive.Portal>
+    <MenuPrimitive.Portal container={usePortalContainer()}>
       <MenuPrimitive.Content
         data-slot="menu-content"
         sideOffset={sideOffset}
@@ -167,7 +168,7 @@ export function MenuSubContent({
   ...props
 }: React.ComponentProps<typeof MenuPrimitive.SubContent>) {
   return (
-    <MenuPrimitive.Portal>
+    <MenuPrimitive.Portal container={usePortalContainer()}>
       <MenuPrimitive.SubContent sideOffset={6} className={cn(surface, className)} {...props} />
     </MenuPrimitive.Portal>
   );

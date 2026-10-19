@@ -36,6 +36,7 @@ import {
   type MigrationFile,
   type MigrationHazard,
   type MigrationQuery,
+  type MigrationTool,
   type MigrationWarning,
   NUMBERED,
   TOOLS,
@@ -54,6 +55,10 @@ export interface MigrationViewProps {
   blocked?: React.ReactNode;
   /** A newer migration is on its way (the text changed): the last one stays, marked as updating. */
   busy?: boolean;
+  /** Where the tool and the concurrently option are remembered, per browser. */
+  storageKey?: string;
+  /** The tool shown until one is picked. */
+  defaultFormat?: MigrationTool;
   className?: string;
 }
 
@@ -74,11 +79,13 @@ export function MigrationView({
   primary = true,
   blocked,
   busy = false,
+  storageKey = "romulus:migration",
+  defaultFormat = "plain",
   className,
 }: MigrationViewProps) {
-  const [format, setFormat] = usePreference("romulus:migration-tool", "plain", isTool);
+  const [format, setFormat] = usePreference(`${storageKey}-tool`, defaultFormat, isTool);
   const [concurrently, setConcurrently] = usePreference(
-    "romulus:migration-concurrently",
+    `${storageKey}-concurrently`,
     false,
     isBoolean,
   );

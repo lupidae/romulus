@@ -1,0 +1,40 @@
+[package]
+name = "romulus-wasm"
+description = "romulus in the browser, for the homepage's live hero: a remus model built from Postgres's parse tree (no Postgres), romulus-diff and romulus-migration, behind wasm-bindgen. No I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib: the .wasm the hero loads (site/tools/hero.mjs); rlib: the tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+remus-core.workspace = true
+remus-dbml.workspace = true
+remus-mermaid.workspace = true
+romulus-diff.workspace = true
+romulus-migration.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Pinned with the wasm-bindgen CLI that builds the hero (site/tools/hero.mjs).
+wasm-bindgen = "=0.2.129"
+
+[dev-dependencies]
+dotenvy.workspace = true
+# The parse trees the browser gets from libpg-query's wasm, made natively:
+# pg_query's protobuf, transcoded to libpg_query's JSON (tests/common).
+pg_query = "=6.2.1"
+prost = "0.13.5"
+prost-reflect = { version = "0.14.7", features = ["serde"] }
+protox = "0.7.2"
+# The oracle: the same SQL compiled in the sandbox Postgres.
+romulus-sandbox.workspace = true
+similar.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

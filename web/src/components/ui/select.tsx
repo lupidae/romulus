@@ -5,6 +5,7 @@ import { CheckIcon, NavArrowDownIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 import { controlClasses } from "./input";
+import { usePortalContainer } from "./portal";
 
 export const Select = SelectPrimitive.Root;
 export const SelectGroup = SelectPrimitive.Group;
@@ -41,7 +42,7 @@ export function SelectContent({
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal container={usePortalContainer()}>
       <SelectPrimitive.Content
         data-slot="select-content"
         position={position}

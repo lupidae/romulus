@@ -19,6 +19,7 @@
   },
   "include": [
     "vite.config.ts",
+    "vite.hero.config.ts",
     "playwright.config.ts",
     "playwright.dev.config.ts",
     "playwright.perf.config.ts",

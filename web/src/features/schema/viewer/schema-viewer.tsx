@@ -69,6 +69,14 @@ export interface SchemaViewerProps {
   graphFocus?: SchemaGraphProps["focus"];
   /** More buttons in the text pane's tab bar, before the layout menu. */
   textActions?: ReactNode;
+  /**
+   * Below `md`, the pane shown. Given, the viewer leaves out its own Graph
+   * and SQL tabs: the caller switches panes (the homepage's hero has one
+   * row of tabs for everything).
+   */
+  pane?: "graph" | "text";
+  /** New tables come into view: see `SchemaGraph`'s `followNewTables`. */
+  followNewTables?: boolean;
   className?: string;
 }
 
@@ -110,6 +118,8 @@ export function SchemaViewer({
   editor,
   graphFocus,
   textActions,
+  pane,
+  followNewTables,
   className,
 }: SchemaViewerProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
@@ -122,7 +132,9 @@ export function SchemaViewer({
 
   const [ratio, setRatio] = usePreference(`${storageKey}:split`, DEFAULT_RATIO, isRatio);
   const [hidden, setHidden] = usePreference<Hidden>(`${storageKey}:hidden`, "none", isHidden);
-  const [mobilePane, setMobilePane] = useState<"graph" | "text">("graph");
+  const [ownPane, setMobilePane] = useState<"graph" | "text">("graph");
+  const mobilePane = pane ?? ownPane;
+  const ownTabs = pane === undefined;
   const [fullScreen, setFullScreen] = useState(false);
   const wide = useMediaQuery("(min-width: 48rem)");
   const uid = useId();
@@ -195,6 +207,7 @@ export function SchemaViewer({
       onPickedChange={onPickedChange}
       editor={editor}
       focus={graphFocus}
+      followNewTables={followNewTables}
       empty={graphEmpty}
       controls={
         <>
@@ -240,7 +253,7 @@ export function SchemaViewer({
         className,
       )}
     >
-      {!wide && (
+      {!wide && ownTabs && (
         <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-2">
           <Tabs
             value={mobilePane}
@@ -270,12 +283,12 @@ export function SchemaViewer({
         start={graphPane}
         end={textPane}
         startProps={
-          wide
+          wide || !ownTabs
             ? undefined
             : { id: `${uid}-graph`, role: "tabpanel", "aria-labelledby": `${uid}-tab-graph` }
         }
         endProps={
-          wide
+          wide || !ownTabs
             ? undefined
             : { id: `${uid}-text`, role: "tabpanel", "aria-labelledby": `${uid}-tab-text` }
         }

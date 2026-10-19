@@ -5,6 +5,7 @@ import { XmarkIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 
 import { Button } from "./button";
+import { usePortalContainer } from "./portal";
 
 export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
@@ -44,7 +45,7 @@ export function DialogContent({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & { hideClose?: boolean }) {
   return (
-    <DialogPrimitive.Portal>
+    <DialogPrimitive.Portal container={usePortalContainer()}>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"

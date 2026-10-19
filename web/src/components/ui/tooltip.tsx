@@ -4,6 +4,7 @@ import type * as React from "react";
 import { cn } from "@/lib/utils";
 
 import { KbdGroup } from "./kbd";
+import { usePortalContainer } from "./portal";
 
 /** Mounted once in the root route; tooltips share one delay so moving between them is instant. */
 export function TooltipProvider(props: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
@@ -24,7 +25,7 @@ export function Tooltip({ content, shortcut, side = "bottom", children }: Toolti
   return (
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
+      <TooltipPrimitive.Portal container={usePortalContainer()}>
         <TooltipPrimitive.Content
           side={side}
           sideOffset={6}

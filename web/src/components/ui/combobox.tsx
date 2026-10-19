@@ -4,6 +4,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 import { Input } from "./input";
+import { usePortalContainer } from "./portal";
 
 export interface ComboboxOption {
   value: string;
@@ -140,7 +141,7 @@ export function Combobox({
           {...props}
         />
       </PopoverPrimitive.Anchor>
-      <PopoverPrimitive.Portal>
+      <PopoverPrimitive.Portal container={usePortalContainer()}>
         <PopoverPrimitive.Content
           align="start"
           sideOffset={4}

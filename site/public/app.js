@@ -1,6 +1,6 @@
 // The homepage's only script: the header border on scroll, the hero scene
-// starting when it is seen, the copy button and the theme switch. Everything
-// works without it; it only adds behaviour.
+// starting when it is seen, the live hero, the copy button and the theme
+// switch. Everything works without it; it only adds behaviour.
 
 // Header: a hairline once the page scrolls under it.
 const header = document.querySelector("[data-header]");
@@ -40,6 +40,101 @@ if (product) {
       { threshold: 0.35 },
     );
     seen.observe(product);
+  }
+}
+
+// The live hero: romulus itself, running in the browser (/hero/, built from
+// web/src/hero). On a desktop it loads once the page is idle; on a phone, or
+// with data saving on, it waits for a tap (a megabyte nobody asked for). It
+// takes the picture's place only once it is drawn, in the same box. If it
+// fails to load, or stops later (it then forgets what it kept), the picture
+// comes back with a word about it and a way to try again.
+const stage = document.querySelector("[data-hero] .hero-stage");
+if (stage) {
+  const live = stage.querySelector("[data-hero-live]");
+  const start = stage.querySelector("[data-hero-start]");
+  const label = start?.querySelector("[data-hero-start-label]");
+  const status = document.querySelector("[data-hero-status]");
+  const picture = stage.querySelector(".product");
+  let loading = null;
+  let layers = null;
+
+  const stylesheet = () =>
+    new Promise((resolve, reject) => {
+      if (document.querySelector('link[href="/hero/hero.css"]')) return resolve();
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "/hero/hero.css";
+      link.onload = resolve;
+      link.onerror = () => {
+        link.remove();
+        reject(new Error("hero.css did not load"));
+      };
+      document.head.append(link);
+    });
+
+  const say = (text) => {
+    if (status) status.textContent = text;
+  };
+
+  /** The picture again, and the button to try once more. */
+  const fallBack = (message) => {
+    stage.classList.remove("is-live");
+    picture.removeAttribute("aria-hidden");
+    live.hidden = true;
+    layers?.remove();
+    layers = null;
+    loading = null;
+    say(message);
+    if (start) {
+      start.hidden = false;
+      start.removeAttribute("aria-busy");
+      start.disabled = false;
+      if (label) label.textContent = "Try again";
+    }
+  };
+
+  const load = () => {
+    if (loading) return loading;
+    say("");
+    // Menus, popovers and dialogs render here, outside the window that clips.
+    layers = document.createElement("div");
+    layers.className = "romulus-hero hero-layers";
+    document.body.append(layers);
+    live.hidden = false;
+    const onCrash = () =>
+      fallBack("The live editor ran into a problem and stopped. It starts over if you try again.");
+    loading = Promise.all([import("/hero/hero.js"), stylesheet()])
+      .then(([hero]) => hero.mount(live, layers, { onCrash }))
+      .then(() => {
+        stage.classList.add("is-live");
+        picture.setAttribute("aria-hidden", "true");
+        if (start) start.hidden = true;
+      })
+      .catch((error) => {
+        console.warn("romulus: the live editor did not load, the picture stays", error);
+        fallBack("The live editor did not load.");
+      });
+    return loading;
+  };
+
+  if (start && live) {
+    start.addEventListener("click", () => {
+      start.disabled = true;
+      start.setAttribute("aria-busy", "true");
+      if (label) label.textContent = "Loading the editor…";
+      load();
+    });
+  }
+  const saveData = navigator.connection?.saveData === true;
+  const auto = !saveData && matchMedia("(min-width: 64rem) and (pointer: fine)").matches;
+  if (auto) {
+    const idle = () =>
+      "requestIdleCallback" in window ? requestIdleCallback(load, { timeout: 3000 }) : setTimeout(load, 1500);
+    if (document.readyState === "complete") idle();
+    else addEventListener("load", idle, { once: true });
+  } else if (start) {
+    start.hidden = false;
   }
 }
 

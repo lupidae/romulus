@@ -29,8 +29,10 @@ const types = {
   ".woff2": "font/woff2",
   ".txt": "text/plain; charset=utf-8",
   ".xml": "application/xml",
+  // The live hero's parser and engine (Pages serves .wasm so, and compresses it).
+  ".wasm": "application/wasm",
 };
-const compressible = new Set([".html", ".css", ".js", ".json", ".webmanifest", ".svg", ".txt", ".xml"]);
+const compressible = new Set([".html", ".css", ".js", ".json", ".webmanifest", ".svg", ".txt", ".xml", ".wasm"]);
 
 // _headers: a URL pattern line (`*` matches anything), then indented
 // `Name: value` lines. Every matching block applies, in order.

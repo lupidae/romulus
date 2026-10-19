@@ -58,7 +58,12 @@ function declarations(body, pattern) {
   return out;
 }
 
-const globals = await readFile(join(web, "src/styles/globals.css"), "utf8");
+// The raw values live in globals.css, the Tailwind theme in theme.css (which
+// globals.css imports): read as one, in that order.
+const globals = [
+  await readFile(join(web, "src/styles/globals.css"), "utf8"),
+  await readFile(join(web, "src/styles/theme.css"), "utf8"),
+].join("\n");
 const light = block(globals, ":root");
 const dark = block(globals, ".dark");
 const theme = block(globals, "@theme inline");

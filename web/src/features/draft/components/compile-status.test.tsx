@@ -60,6 +60,26 @@ describe("CompileStatus", () => {
     expect(screen.getByTestId("compile-status")).toHaveTextContent("Not checked");
   });
 
+  it("says, checked by the parser, what the preview leaves out", async () => {
+    const note: Diagnostic = {
+      ...error,
+      code: "not_run",
+      severity: "info",
+      message: "CREATE STATISTICS is not supported in the browser preview.",
+    };
+    const { rerender } = render(
+      <CompileStatus compile={view({})} checker="parser" onJump={() => {}} />,
+    );
+    expect(screen.getByTestId("compile-status")).toHaveTextContent("Checked");
+    rerender(
+      <CompileStatus compile={view({ diagnostics: [note] })} checker="parser" onJump={() => {}} />,
+    );
+    expect(screen.getByTestId("compile-status")).toHaveTextContent("Checked, 1 note");
+    await userEvent.click(screen.getByTestId("compile-status"));
+    expect(screen.getByText(/except what is below/)).toBeInTheDocument();
+    expect(screen.getByText(note.message)).toBeInTheDocument();
+  });
+
   it("goes to an error from its list", async () => {
     const onJump = vi.fn();
     render(

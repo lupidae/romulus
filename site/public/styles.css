@@ -2,6 +2,11 @@
  * The romulus homepage. Colors, shadows, radii, fonts and easing come from
  * tokens.css, which is generated from the app's own globals.css: this file
  * holds layout and the marketing type scale only, never a raw color.
+ *
+ * Everything below the fonts is in the `site` cascade layer, declared first:
+ * the live hero's stylesheet (/hero/hero.css, the app's Tailwind, scoped to
+ * its island) comes in layers after it, so inside the island the app's own
+ * styles win, and outside it they match nothing.
  */
 
 /* ---- Fonts: the app's two variable fonts, latin subset ----------------- */
@@ -19,6 +24,8 @@
   font-weight: 100 800;
   src: url("/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
 }
+
+@layer site {
 
 /* ---- Marketing scale: app tokens are sized for dense UI ---------------- */
 :root {
@@ -387,6 +394,66 @@ p a:hover,
   inset: -10% 10% 20%;
   z-index: -1;
   background: radial-gradient(closest-side, color-mix(in oklab, var(--primary) 12%, transparent), transparent);
+}
+
+/* ---- The live hero ------------------------------------------------------- */
+/* The static window and the live island (app.js loads it) share one grid
+   cell: the island takes the picture's height, and the picture is made
+   invisible rather than removed, so nothing below moves when they swap.
+   Without JavaScript, or if the island fails to load, the picture stays. */
+.hero-stage {
+  position: relative;
+  display: grid;
+}
+.hero-stage > * {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+/* Out of the grid's flow: the cell is the picture's size, whatever the
+   island holds. */
+.hero-live {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--duration-slow) var(--ease-out);
+}
+.hero-stage.is-live .hero-live {
+  opacity: 1;
+}
+.hero-stage.is-live .product {
+  visibility: hidden;
+  --play: paused;
+}
+.hero-start {
+  z-index: 1;
+  align-self: center;
+  justify-self: center;
+  box-shadow: var(--elevation-3);
+}
+.hero-start[hidden] {
+  display: none;
+}
+.hero-start[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.85;
+}
+.hero-status {
+  margin-top: 1rem;
+  color: var(--foreground);
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+/* Always there, so a screen reader hears what is written in it. */
+.hero-status:empty {
+  margin-top: 0;
+}
+.hero-note {
+  max-width: 46rem;
+  margin-top: 1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  line-height: 1.5;
+  text-wrap: pretty;
 }
 
 /* ---- The product window ------------------------------------------------- */
@@ -862,10 +929,27 @@ p a:hover,
   transform: none;
 }
 
+/* A phone's window is as tall as the live editor needs, no taller: the
+   graph takes what the SQL leaves. */
+@container window (max-width: 49.99rem) {
+  .window {
+    display: flex;
+    flex-direction: column;
+    height: 40rem;
+  }
+  .panes {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .pane-graph {
+    min-height: 0;
+  }
+}
 @container window (min-width: 50rem) {
   .panes {
     grid-template-columns: minmax(0, 44fr) minmax(0, 56fr);
-    height: 30rem;
+    height: 34rem;
   }
   .pane-sql {
     border-bottom: 0;
@@ -1090,7 +1174,8 @@ code {
   font-size: 0.875em;
 }
 .points code,
-.copy p code {
+.copy p code,
+.faq p code {
   padding: 0.0625rem 0.3125rem;
   border-radius: var(--radius-sm);
   background: var(--muted);
@@ -1219,8 +1304,30 @@ code {
 }
 .diff-counts {
   display: flex;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding-bottom: 0.75rem;
+  font-size: 0.75rem;
   font-weight: 500;
+}
+/* The diff page's views, as a segmented control. */
+.seg {
+  display: inline-flex;
+  gap: 0.125rem;
+  padding: 0.125rem;
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  font-weight: 500;
+}
+.seg span {
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+}
+.seg .on {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--elevation-1);
 }
 .count {
   display: inline-flex;
@@ -1296,11 +1403,15 @@ code {
 }
 
 /* Update draft: an inline conflict, as the editor shows it. */
-.merge {
+.merge,
+.review,
+.migration,
+.run {
   overflow: hidden;
   font-size: var(--text-code);
 }
-.merge-head {
+.merge-head,
+.card-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1309,14 +1420,17 @@ code {
   padding: 0.75rem 1rem;
   border-bottom: 0.0625rem solid var(--border);
 }
-.merge-title {
+.merge-title,
+.card-title {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
   color: var(--foreground);
   font-weight: 600;
 }
-.merge-title .icon {
+.merge-title .icon,
+.card-title .icon {
   width: 1rem;
   height: 1rem;
   color: var(--primary);
@@ -1422,7 +1536,8 @@ code {
   font-weight: 600;
   line-height: 1.6;
 }
-.merge-foot {
+.merge-foot,
+.card-foot {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1436,6 +1551,298 @@ code {
   height: 0.4375rem;
   border-radius: 50%;
   background: var(--warning);
+}
+.card-foot .icon {
+  width: 1rem;
+  height: 1rem;
+  color: var(--faint-foreground);
+}
+.card-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  margin-left: 0.25rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.card-title .card-range .icon {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  color: var(--faint-foreground);
+}
+.badge .icon {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+.card-head > .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* Review: a thread as the SQL pane draws it, one being typed, and the thread. */
+.approvals {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.approvals .icon {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+.approvals .avatar {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 0.125rem;
+  font-size: 0.625rem;
+}
+/* A thread above its statement: not a line of the text, so no number. */
+.thread-line {
+  --who: var(--presence-4);
+  overflow: hidden;
+  padding: 0 0.75rem 0 4.5ch;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-line .dashes,
+.thread-line .more {
+  color: var(--faint-foreground);
+}
+.thread-line .who,
+.mention {
+  color: color-mix(in oklab, var(--who) 70%, var(--foreground));
+  font-weight: 600;
+}
+.l.typing {
+  --who: var(--presence-1);
+  background: var(--highlight);
+}
+.text-caret {
+  display: inline-block;
+  width: 0.125rem;
+  height: 1.15em;
+  margin-left: 0.0625rem;
+  vertical-align: text-bottom;
+  background: var(--who);
+}
+.enter-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0.375rem 0.75rem 0 4.5ch;
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+}
+.enter-hint kbd {
+  padding: 0 0.3125rem;
+  border-radius: var(--radius-xs);
+  background: var(--muted);
+  box-shadow: inset 0 0 0 0.0625rem var(--border);
+  color: var(--foreground);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+.thread {
+  display: grid;
+  gap: 0.875rem;
+  padding: 0.875rem 1rem 1rem;
+  border-top: 0.0625rem solid var(--border);
+  background: var(--background);
+}
+.comment {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.625rem;
+  align-items: start;
+}
+.comment-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.comment-meta b {
+  color: var(--foreground);
+  font-size: var(--text-code);
+  font-weight: 600;
+}
+.comment-body p {
+  margin-top: 0.125rem;
+  color: var(--foreground);
+  font-size: var(--text-code);
+  line-height: 1.5;
+}
+.comment .mention {
+  --who: var(--presence-4);
+}
+.thread-actions {
+  display: flex;
+  gap: 0.375rem;
+  padding-left: 2.125rem;
+}
+
+/* A migration file, with its flagged statements tinted as the app tints them. */
+.fake-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.75rem;
+  padding: 0 0.375rem 0 0.625rem;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow:
+    0 0 0 0.0625rem var(--border),
+    var(--elevation-control);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.fake-select .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--muted-foreground);
+}
+.file-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.file-tab {
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+.hazards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+/* Long statements wrap, hanging under their first line. */
+.code-block.wrap .lc {
+  padding-left: 2ch;
+  text-indent: -2ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.l.caution {
+  background: color-mix(in oklab, var(--warning) 9%, transparent);
+}
+.l.danger {
+  background: color-mix(in oklab, var(--destructive) 8%, transparent);
+}
+/* On a tint, the faint and comment tones fall under AA: one step up. */
+.l.caution .ln,
+.l.danger .ln,
+.l.caution .tc,
+.l.danger .tc,
+.l.typing .ln,
+.l.typing .tc {
+  color: var(--muted-foreground);
+}
+
+/* A migration run in a playground, statement by statement. */
+.run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-list li {
+  display: grid;
+  grid-template-columns: 1rem 1.25rem minmax(0, 1fr) auto;
+  gap: 0.625rem;
+  align-items: start;
+  padding: 0.75rem 1rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.run-list li:last-child {
+  border-bottom: 0;
+}
+.run-list li.failed {
+  background: color-mix(in oklab, var(--destructive) 5%, transparent);
+}
+.run-icon {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.0625rem;
+}
+.passed .run-icon {
+  color: var(--success);
+}
+.failed .run-icon {
+  color: var(--destructive);
+}
+.run-num {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.run-main {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.run-sql {
+  color: var(--foreground);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.run-facts {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.run-facts b {
+  color: var(--foreground);
+  font-weight: 550;
+}
+.run-facts .rewrote {
+  color: color-mix(in oklab, var(--warning) 68%, var(--foreground));
+}
+.run-error {
+  color: color-mix(in oklab, var(--destructive) 75%, var(--foreground));
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.run-rows {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+  margin-top: 0.25rem;
+  color: var(--foreground);
+  font-size: 0.75rem;
+}
+.run-ms {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.run .card-foot {
+  flex-wrap: wrap;
+  row-gap: 0.625rem;
+}
+.run .card-foot > span:not(.fake-button) {
+  flex: 1 1 14rem;
+}
+.run .card-foot .fake-button {
+  margin-left: auto;
 }
 
 /* The push snippet: a terminal, dark in both themes (the app's dark tokens). */
@@ -1627,6 +2034,42 @@ code {
 .note .icon {
   margin-top: 0.1875rem;
   color: var(--success);
+}
+.note + .note {
+  margin-top: 0.75rem;
+}
+/* The Postgres versions a database can target. */
+.majors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 2rem;
+  padding: 0;
+  list-style: none;
+}
+.majors li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 0.875rem;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: 0 0 0 0.0625rem var(--border);
+  color: var(--foreground);
+  font-size: var(--text-small);
+  font-weight: 550;
+}
+.major-default {
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  color: color-mix(in oklab, var(--primary) 68%, var(--foreground));
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.majors + .features {
+  margin-top: 1.25rem;
 }
 
 /* Roles. */
@@ -1889,3 +2332,5 @@ code {
   color: var(--muted-foreground);
   font-size: var(--text-body);
 }
+
+} /* @layer site */

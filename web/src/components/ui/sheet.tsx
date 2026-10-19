@@ -3,6 +3,8 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
+import { usePortalContainer } from "./portal";
+
 export const Sheet = SheetPrimitive.Root;
 export const SheetTrigger = SheetPrimitive.Trigger;
 export const SheetClose = SheetPrimitive.Close;
@@ -19,7 +21,7 @@ export function SheetContent({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & { side?: "left" | "right" }) {
   return (
-    <SheetPrimitive.Portal>
+    <SheetPrimitive.Portal container={usePortalContainer()}>
       <SheetPrimitive.Overlay
         className={cn(
           "fixed inset-0 z-(--z-overlay) bg-overlay",

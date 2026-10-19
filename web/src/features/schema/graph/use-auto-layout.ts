@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+// Only a URL (a string): the worker itself loads on first use.
+import workerUrl from "elkjs/lib/elk-worker.min.js?url";
 
 import type { Groups, Layout } from "../layout";
 import { type ElkLike, type LayoutRequest, placeMissing } from "./auto-layout";
@@ -12,12 +14,8 @@ let elk: Promise<ElkLike> | undefined;
  * that only a graph with unplaced tables ever needs).
  */
 function loadElk(): Promise<ElkLike> {
-  elk ??= Promise.all([
-    import("elkjs/lib/elk-api"),
-    import("elkjs/lib/elk-worker.min.js?url"),
-  ]).then(
-    ([{ default: ELK }, { default: workerUrl }]) =>
-      new ELK({ workerFactory: () => new Worker(workerUrl) }),
+  elk ??= import("elkjs/lib/elk-api").then(
+    ({ default: ELK }) => new ELK({ workerFactory: () => new Worker(workerUrl) }),
   );
   return elk;
 }

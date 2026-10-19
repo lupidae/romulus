@@ -106,3 +106,12 @@ opt-level = 3
 # The API tests' fake IdP generates an RSA key: seconds unoptimised, instant here.
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
+
+# The homepage's wasm (crates/romulus-wasm, site/tools/hero.mjs): small over
+# fast, and nothing else is built with it.
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -131,6 +131,8 @@ check:
     npm --prefix web run zitadel:assets -- --check
     npm --prefix web run test
     npm --prefix web run build
+    # The homepage's committed hero: built from what it says (see site/tools/hero.mjs).
+    node site/tools/hero.mjs --check
 
 # rustfmt needs nightly for imports_granularity / group_imports (rustfmt.toml)
 fmt:
@@ -157,16 +159,22 @@ site: env
     port=$(sed -n 's/^ROMULUS_SITE_PORT=//p' .env)
     node site/serve.mjs "$port"
 
-# the homepage's checks: tokens and fonts in sync with web/, the edge proxy's tests, then Playwright and axe
+# the homepage's checks: tokens and fonts in sync with web/, the live hero built from its sources, the edge proxy's tests, then Playwright and axe
 site-check: env
     node site/tools/sync.mjs --check
+    node site/tools/hero.mjs --check
     npm --prefix site run test:edge
     npm --prefix site run e2e
 
-# re-copy tokens and fonts from web/, re-render the social image and the icons
+# re-copy tokens and fonts from web/, rebuild the live hero, re-render the social image and the icons
 site-gen:
     node site/tools/sync.mjs
+    node site/tools/hero.mjs
     node site/tools/assets.mjs
+
+# rebuild the homepage's live hero only (crates/romulus-wasm + web/src/hero → site/public/hero)
+site-hero:
+    node site/tools/hero.mjs
 
 # Lighthouse, mobile and desktop, against the homepage; reports in site/lighthouse/
 site-lighthouse: env

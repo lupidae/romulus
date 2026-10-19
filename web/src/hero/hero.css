@@ -1,0 +1,50 @@
+/*
+ * The live hero's stylesheet: Tailwind's preflight and the app's theme and
+ * utilities, every rule scoped to `.romulus-hero` by vite.hero.config.ts so
+ * nothing reaches the homepage around it. The tokens and fonts are the
+ * homepage's own (site/public/tokens.css, styles.css); the homepage's rules
+ * sit in a lower cascade layer (`site`), so these win inside the island.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities) source("../");
+@import "tw-animate-css";
+@import "../styles/theme.css";
+
+/* The homepage's element rules (its `site` layer) reach the island wherever
+   the app's own styles say nothing: undone here. A graph's edges are an SVG
+   the homepage's `max-width: 100%` would shrink to nothing. */
+@layer base {
+  svg {
+    max-width: revert;
+  }
+  :focus-visible {
+    border-radius: revert;
+  }
+  code,
+  pre,
+  kbd {
+    font-variant-ligatures: revert;
+  }
+}
+
+/* The Save button, once there is something to save in the first visit. */
+@keyframes hero-pulse {
+  0%,
+  100% {
+    box-shadow:
+      var(--elevation-control),
+      0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+  50% {
+    box-shadow:
+      var(--elevation-control),
+      0 0 0 0.3rem color-mix(in oklab, var(--primary) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hero-pulse {
+    animation: hero-pulse 1.6s var(--ease-out) 3;
+  }
+}

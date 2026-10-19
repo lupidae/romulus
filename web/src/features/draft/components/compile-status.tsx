@@ -13,6 +13,11 @@ interface CompileStatusProps {
   major?: number;
   /** Puts the caret on a diagnostic in the SQL. */
   onJump: (diagnostic: Diagnostic) => void;
+  /**
+   * What checks the SQL: the app's Postgres sandbox, or Postgres's parser
+   * alone (the homepage's hero, in the browser), which is said so.
+   */
+  checker?: "sandbox" | "parser";
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -22,7 +27,8 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * "2 errors", "Not checked". The details (each error, where it is) open
  * below; a click on one goes to it in the text.
  */
-export function CompileStatus({ compile, major, onJump }: CompileStatusProps) {
+export function CompileStatus({ compile, major, onJump, checker = "sandbox" }: CompileStatusProps) {
+  const parser = checker === "parser";
   const errors = compile.diagnostics.filter((d) => d.severity === "error");
   const problems = errorCount(errors);
   const notes = compile.diagnostics.filter((d) => d.severity === "info");
@@ -30,24 +36,30 @@ export function CompileStatus({ compile, major, onJump }: CompileStatusProps) {
 
   let icon: React.ReactNode;
   let label: string;
+  // The parser's notes (what the browser preview leaves out) are worth a word.
+  let suffix: string | null = null;
   let tone = "text-muted-foreground";
   if (busy && compile.state !== "failed") {
-    icon = <Spinner label="Compiling" className="size-3.5" />;
-    label = "Compiling…";
+    icon = <Spinner label={parser ? "Checking" : "Compiling"} className="size-3.5" />;
+    label = parser ? "Checking…" : "Compiling…";
   } else if (compile.state === "failed") {
     icon = busy ? (
-      <Spinner label="Compiling" className="size-3.5" />
+      <Spinner label={parser ? "Checking" : "Compiling"} className="size-3.5" />
     ) : (
       <WarningTriangleIcon className="text-destructive" />
     );
-    label = busy ? "Compiling…" : problems;
+    label = busy ? (parser ? "Checking…" : "Compiling…") : problems;
     tone = busy ? tone : "text-destructive";
   } else if (compile.state === "unavailable") {
     icon = <WarningTriangleIcon className="text-warning" />;
     label = "Not checked";
+  } else if (parser && notes.length > 0) {
+    icon = <InfoCircleIcon className="text-info" />;
+    label = "Checked";
+    suffix = `, ${notes.length} ${notes.length === 1 ? "note" : "notes"}`;
   } else {
     icon = <CheckCircleIcon className="text-success" />;
-    label = "Compiled";
+    label = parser ? "Checked" : "Compiled";
   }
 
   return (
@@ -61,7 +73,10 @@ export function CompileStatus({ compile, major, onJump }: CompileStatusProps) {
           className={cn("min-w-0 gap-1.5 font-medium", tone)}
         >
           {icon}
-          <span className="truncate">{label}</span>
+          <span className="truncate">
+            {label}
+            {suffix && <span className="max-sm:sr-only">{suffix}</span>}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="grid w-96 max-w-[calc(100vw-2rem)] gap-3">
@@ -71,6 +86,7 @@ export function CompileStatus({ compile, major, onJump }: CompileStatusProps) {
           notes={notes}
           busy={busy}
           postgres={major ? `Postgres ${major}` : "Postgres"}
+          parser={parser}
           onJump={onJump}
         />
       </PopoverContent>
@@ -84,6 +100,7 @@ function Details({
   notes,
   busy,
   postgres,
+  parser,
   onJump,
 }: {
   compile: CompileView;
@@ -92,6 +109,8 @@ function Details({
   busy: boolean;
   /** "Postgres 15": what it compiles on. */
   postgres: string;
+  /** Checked by the parser in the browser, not compiled in Postgres. */
+  parser: boolean;
   onJump: (diagnostic: Diagnostic) => void;
 }) {
   if (compile.state === "unavailable") {
@@ -99,6 +118,20 @@ function Details({
       <Explain title="The SQL could not be checked">
         The compiler is unreachable. Your edits are saved and checked once it is back.
       </Explain>
+    );
+  }
+  if (parser && compile.state !== "failed") {
+    return (
+      <>
+        <Explain title={busy ? "Checking your latest edits" : "The SQL checks out"}>
+          {busy
+            ? `${postgres}'s parser reads the text in your browser a moment after typing stops; the graph follows.`
+            : notes.length > 0
+              ? `${postgres}'s parser reads every statement; this preview builds the schema from them, except what is below. Signed in, romulus compiles everything in a real ${postgres}.`
+              : `${postgres}'s parser reads every statement, and this preview builds the schema from them: the graph shows it. Signed in, romulus compiles it in a real ${postgres}, which checks what a parser cannot.`}
+        </Explain>
+        {notes.length > 0 && <List items={notes} onJump={onJump} />}
+      </>
     );
   }
   if (compile.state !== "failed") {
@@ -115,8 +148,16 @@ function Details({
   }
   return (
     <>
-      <Explain title={busy ? "Compiling your latest edits" : `${errorCount(errors)} in the SQL`}>
-        Until it compiles, the graph shows the last version that did.
+      <Explain
+        title={
+          busy
+            ? `${parser ? "Checking" : "Compiling"} your latest edits`
+            : `${errorCount(errors)} in the SQL`
+        }
+      >
+        {parser
+          ? "Until it is fixed, the graph shows the last version that worked."
+          : "Until it compiles, the graph shows the last version that did."}
       </Explain>
       <List items={errors} onJump={onJump} />
     </>

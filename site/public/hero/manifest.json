@@ -1,0 +1,75 @@
+{
+  "note": "Built by site/tools/hero.mjs: do not edit. `--check` compares the files with `files` and the inputs with `inputs`.",
+  "inputs": {
+    "own": "8013cb6ed784842a",
+    "engine": "fb4c3b2a46107d67",
+    "app": "b1eed4822ae6ecc3"
+  },
+  "total": {
+    "raw": 5443397,
+    "gzip": 1591579,
+    "brotli": 1241296
+  },
+  "files": {
+    "assets/codemirror-ondR3cUP.js": {
+      "sha256": "a5e80a6f611b0585057354f728f2b2baff659e03ef0d7cfd4fb20974ca1b57a7",
+      "raw": 152479,
+      "gzip": 51122,
+      "brotli": 45271
+    },
+    "assets/dist-9e2eyDnr.js": {
+      "sha256": "db50d6cb60585e2c7da44bb99981cdf41b67c8fe055959c1e7bd1e3ebb2ffd7a",
+      "raw": 239967,
+      "gzip": 76108,
+      "brotli": 66193
+    },
+    "assets/elk-api-B-ZopJe3.js": {
+      "sha256": "31737dae9690f3e50d2c5f46a3d15fd21d087f4da485ce86bc21d02b8e97b9ad",
+      "raw": 4448,
+      "gzip": 1764,
+      "brotli": 1574
+    },
+    "assets/elk-worker.min-r_yRvuMO.js": {
+      "sha256": "e4f5c51c6f2fd564bb64e52e81c4a85a316ef2f24f8b90e1db5eb886c765b030",
+      "raw": 1595334,
+      "gzip": 464820,
+      "brotli": 345317
+    },
+    "assets/libpg-query-B8yNqVQ9.wasm": {
+      "sha256": "06fbfc24bcc98298770019a0bc4b715726a6b8fdbf1fcc1a4476a77512b000ac",
+      "raw": 1150984,
+      "gzip": 234516,
+      "brotli": 168575
+    },
+    "assets/merge-DEyhlAxr.js": {
+      "sha256": "4eba179247f9bfc84951fee0c5bdedecc11a44ae7a2758634968f894b70fb1b3",
+      "raw": 33502,
+      "gzip": 11335,
+      "brotli": 10301
+    },
+    "assets/rolldown-runtime-COiEfhsA.js": {
+      "sha256": "174e7e98105b02138bee9b4c62dfc8a01980db395f9e6c916db999c091115562",
+      "raw": 1116,
+      "gzip": 627,
+      "brotli": 541
+    },
+    "assets/romulus_wasm_bg-CYd61VhO.wasm": {
+      "sha256": "822c6acad0a8cb10381064e6e8dca1b2ab90351e173ad3c850d7cdbda6fc2afb",
+      "raw": 1019512,
+      "gzip": 392818,
+      "brotli": 304630
+    },
+    "hero.css": {
+      "sha256": "ff6e4789e5524fd93cb0ce9ef656909007e75223ace768a7be88d2f2a30e2269",
+      "raw": 149542,
+      "gzip": 19717,
+      "brotli": 15993
+    },
+    "hero.js": {
+      "sha256": "5e39299d358a6cf99d4e2f334d52d6ffaa47f5dc9c7644c80cb6273df8d2075c",
+      "raw": 1096513,
+      "gzip": 338752,
+      "brotli": 282901
+    }
+  }
+}

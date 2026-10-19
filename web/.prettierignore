@@ -6,3 +6,4 @@ playwright-report
 src/routeTree.gen.ts
 src/api/openapi.json
 src/components/icons
+.hero

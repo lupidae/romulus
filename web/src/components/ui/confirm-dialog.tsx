@@ -4,6 +4,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 import { Button } from "./button";
+import { usePortalContainer } from "./portal";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -54,7 +55,7 @@ export function ConfirmDialog({
 
   return (
     <AlertDialogPrimitive.Root open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <AlertDialogPrimitive.Portal>
+      <AlertDialogPrimitive.Portal container={usePortalContainer()}>
         <AlertDialogPrimitive.Overlay
           className={cn(
             "fixed inset-0 z-(--z-overlay) bg-overlay",

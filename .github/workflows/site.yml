@@ -1,13 +1,18 @@
 name: Homepage
 
 # Only when something the homepage is built from changes: site/ itself, the
-# app's tokens and font packages it copies, its port, recipes or this file.
+# app's tokens and font packages it copies, the live hero's sources (its
+# build is committed; the check says when it lags), its port, recipes or
+# this file.
 on:
   push:
     branches: [main]
     paths:
       - site/**
       - web/src/styles/**
+      - web/src/hero/**
+      - web/vite.hero.config.ts
+      - crates/romulus-wasm/**
       - web/package.json
       - web/package-lock.json
       - scripts/dev-env
@@ -17,6 +22,9 @@ on:
     paths:
       - site/**
       - web/src/styles/**
+      - web/src/hero/**
+      - web/vite.hero.config.ts
+      - crates/romulus-wasm/**
       - web/package.json
       - web/package-lock.json
       - scripts/dev-env

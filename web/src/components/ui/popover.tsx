@@ -3,6 +3,8 @@ import type * as React from "react";
 
 import { cn } from "@/lib/utils";
 
+import { usePortalContainer } from "./portal";
+
 /**
  * Non-modal floating content opened by a button: a legend, a small form, a
  * detail. Esc and an outside click close it; focus moves in and returns to the
@@ -20,7 +22,7 @@ export function PopoverContent({
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={usePortalContainer()}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}

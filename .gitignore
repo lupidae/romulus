@@ -13,6 +13,8 @@ node_modules/
 /web/playwright-report/
 /web/blob-report/
 /web/playwright/.cache/
+# The live hero's wasm-bindgen output (site/tools/hero.mjs), an input of its build.
+/web/.hero/
 *.tsbuildinfo
 
 # Homepage

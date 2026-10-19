@@ -61,6 +61,7 @@ import {
   NODE,
   type NodeState,
   nextLod,
+  OVERVIEW_ZOOM,
   tableSize,
 } from "./geometry";
 import {
@@ -128,6 +129,13 @@ export interface SchemaGraphProps {
    * double-click, keys, drawing foreign keys), handed out as edits.
    */
   editor?: GraphEditor;
+  /**
+   * Tables placed after the first layout (typed in the SQL) come into view:
+   * the view fits again while the reader has not moved it, else it pans to
+   * them. Off by default: in a shared draft, a peer's new table would move
+   * everyone's view.
+   */
+  followNewTables?: boolean;
   className?: string;
 }
 
@@ -200,6 +208,7 @@ function GraphCanvas({
   controls,
   children,
   editor,
+  followNewTables = false,
   className,
 }: SchemaGraphProps) {
   const graph = useMemo(() => graphOf(schema, diff), [schema, diff]);
@@ -317,22 +326,92 @@ function GraphCanvas({
   // The view keeps fitting the pane (a pane shown after mounting hidden, a
   // resized split, a rotated phone) until the reader moves it themselves.
   const autoFit = useRef(true);
+  // Whether the pane has a size. A hidden one (a phone's other tab) has
+  // none, while React Flow reports 500×500 for it: an animated move there
+  // divides by zero (d3's zoom interpolation) and draws NaN. Kept by the
+  // observer below, so no move has to read the element's size.
+  const roomy = useRef(true);
+
+  // New tables, once they have a place, where the reader can see them
+  // (`followNewTables`). Their keys wait here until the pane has a size (a
+  // phone's hidden pane has none) and the new nodes are drawn.
+  const toReveal = useRef(new Set<string>());
+  const revealNew = useRef(() => {});
+  useEffect(() => {
+    revealNew.current = showNewTables;
+  });
+  const showNewTables = () => {
+    const el = wrapper.current;
+    const keys = [...toReveal.current];
+    if (!el || !keys.length || !roomy.current) return;
+    toReveal.current.clear();
+    const width = el.clientWidth;
+    const height = el.clientHeight;
+    const all = flow.getNodesBounds(flow.getNodes());
+    const { x, y, zoom } = flow.getViewport();
+    // All in view already (the navigator map is hidden then): nothing covers them.
+    if (
+      all.x * zoom + x >= 0 &&
+      all.y * zoom + y >= 0 &&
+      (all.x + all.width) * zoom + x <= width &&
+      (all.y + all.height) * zoom + y <= height
+    )
+      return;
+    // Fit everything while tables stay readable; else center the new ones
+    // (away from the controls and the map in the corners).
+    const fit = Math.min((width - 48) / all.width, (height - 120) / all.height);
+    if (autoFit.current || fit >= OVERVIEW_ZOOM.leave) {
+      void flow.fitView({ ...FIT, duration: 300 });
+      return;
+    }
+    const nodes = keys.flatMap((key) => flow.getNode(key) ?? []);
+    if (!nodes.length) return;
+    const box = flow.getNodesBounds(nodes);
+    void flow.setCenter(box.x + box.width / 2, box.y + Math.min(box.height, 320) / 2, {
+      zoom,
+      duration: 300,
+    });
+  };
+
   useEffect(() => {
     const el = wrapper.current;
     if (!el || !ready) return;
     let size = `${el.clientWidth}x${el.clientHeight}`;
+    roomy.current = el.clientWidth > 0 && el.clientHeight > 0;
     const observer = new ResizeObserver(() => {
+      roomy.current = el.clientWidth > 0 && el.clientHeight > 0;
       const next = `${el.clientWidth}x${el.clientHeight}`;
       if (next === size) return;
       size = next;
       // Next frame: fitting inside the observer's callback would resize
       // observed content again ("ResizeObserver loop" warnings).
-      if (autoFit.current && el.clientWidth > 0 && el.clientHeight > 0)
-        requestAnimationFrame(() => void flow.fitView({ ...FIT }));
+      if (el.clientWidth > 0 && el.clientHeight > 0)
+        requestAnimationFrame(() => {
+          if (autoFit.current) void flow.fitView({ ...FIT });
+          revealNew.current();
+        });
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, [ready, flow]);
+
+  const drawnKeys = useMemo(
+    () => graph.tables.filter((t) => positions[t.key]).map((t) => t.key),
+    [graph, positions],
+  );
+  const seenKeys = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!ready) return;
+    const seen = seenKeys.current;
+    seenKeys.current = new Set(drawnKeys);
+    if (!followNewTables || !seen) return;
+    const added = drawnKeys.filter((key) => !seen.has(key));
+    if (!added.length) return;
+    added.forEach((key) => toReveal.current.add(key));
+    // Not cancelled by the next run: positions arrive in steps (placed,
+    // then written back), and the keys wait in the ref meanwhile.
+    requestAnimationFrame(() => revealNew.current());
+  }, [ready, drawnKeys, followNewTables]);
 
   /**
    * How long a move to (cx, cy) at `zoom` animates: a short glide to what is
@@ -359,7 +438,7 @@ function GraphCanvas({
       // would force a layout of the whole page on every pick. A hidden graph
       // has none to center in (React Flow would go NaN).
       const { width, height } = flowStore.getState();
-      if (!box || !width || !height) return;
+      if (!box || !width || !height || !roomy.current) return;
       autoFit.current = false;
       const { x, y, zoom } = flow.getViewport();
       const left = box.x * zoom + x;
@@ -384,7 +463,7 @@ function GraphCanvas({
     (key: string) => {
       const box = boxOf(key);
       const { width, height } = flowStore.getState();
-      if (!box || !width || !height) return;
+      if (!box || !width || !height || !roomy.current) return;
       autoFit.current = false;
       const fit = Math.min(width / (box.width + 320), height / (box.height + 200));
       const zoom = Math.max(0.45, Math.min(1, fit));
@@ -404,7 +483,7 @@ function GraphCanvas({
   // The table a zoom is on its way to: no pan to it first.
   const zooming = useRef<string | null>(null);
   useEffect(() => {
-    if (!focus || !initialized) return;
+    if (!focus || !initialized || !roomy.current) return;
     if ("point" in focus) {
       autoFit.current = false;
       const { x, y } = focus.point;
@@ -953,7 +1032,8 @@ function GraphCanvas({
       if ("table" in editing) {
         if (store.get().selected !== editing.table) select(editing.table);
         // Rows are drawn from a readable zoom only: get there first.
-        const box = boxOf(editing.table);
+        // Hidden, there is nothing to move.
+        const box = roomy.current ? boxOf(editing.table) : undefined;
         const { zoom } = flow.getViewport();
         if (box && store.get().lod === "overview") {
           autoFit.current = false;
@@ -1014,7 +1094,7 @@ function GraphCanvas({
       // The label is the frame's top left: bring it into view if it is not.
       const frame = frameOf(tables.map(boxOf).filter((b) => b !== undefined));
       const { width, height } = flowStore.getState();
-      if (!frame || !width || !height) return;
+      if (!frame || !width || !height || !roomy.current) return;
       const { x, y, zoom } = flow.getViewport();
       const left = frame.x * zoom + x;
       const top = frame.y * zoom + y;

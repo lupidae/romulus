@@ -8,18 +8,25 @@ import { expect, test, type Page } from "@playwright/test";
 const publicFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../public/${name}`, import.meta.url)), "utf8");
 
+/** The static picture only: the live hero (e2e/hero.spec.ts) is not loaded. */
+async function withoutLiveHero(page: Page) {
+  await page.route("**/hero/**", (route) => route.abort());
+}
+
 /** Fails the test on any console error or uncaught exception (CSP violations included). */
-function watchErrors(page: Page) {
+function watchErrors(page: Page, allow?: RegExp) {
   const errors: string[] = [];
   page.on("console", (m) => {
-    if (m.type() === "error") errors.push(m.text());
+    if (m.type() === "error" && !allow?.test(m.text())) errors.push(m.text());
   });
   page.on("pageerror", (e) => errors.push(String(e)));
   return errors;
 }
 
 test("the hero says what romulus is and offers both ways in", async ({ page }) => {
-  const errors = watchErrors(page);
+  // The live hero's requests are refused on purpose.
+  const errors = watchErrors(page, /Failed to load resource/);
+  await withoutLiveHero(page);
   await page.goto("/");
 
   await expect(page).toHaveTitle(/design, version and review your Postgres schema together/i);
@@ -48,9 +55,38 @@ test("every section link lands on a section", async ({ page }) => {
   expect(hrefs.length).toBeGreaterThan(5);
   for (const href of hrefs) await expect(page.locator(href)).toHaveCount(1);
 
-  await page.getByRole("navigation", { name: "Sections" }).getByRole("link", { name: "CI" }).click();
-  await expect(page).toHaveURL(/#ci$/);
-  await expect(page.getByRole("heading", { name: "Push the real schema from CI." })).toBeInViewport();
+  await page
+    .getByRole("navigation", { name: "Sections" })
+    .getByRole("link", { name: "Migrations" })
+    .click();
+  await expect(page).toHaveURL(/#migrations$/);
+  await expect(
+    page.getByRole("heading", { name: "Bring your migrations. Get the next one written." }),
+  ).toBeInViewport();
+});
+
+test("the page covers what ships, section by section", async ({ page }) => {
+  await page.goto("/");
+  for (const name of [
+    "Every version kept. Any two compared.",
+    "Design the next version together.",
+    "Review the change where it's made.",
+    "Bring your migrations. Get the next one written.",
+    "Try the migration on rows first.",
+    "Push the real schema from CI.",
+    "Postgres, down to the last policy.",
+    "Roles that match how teams review.",
+  ])
+    await expect(page.getByRole("heading", { level: 2, name })).toHaveCount(1);
+  // Each database targets one of these majors (docs/MVP.md, "Several Postgres majors").
+  await expect(
+    page.getByRole("list", { name: "Postgres versions a database can target" }).getByRole("listitem"),
+  ).toHaveText(["PostgreSQL 18", "PostgreSQL 17default", "PostgreSQL 16", "PostgreSQL 15"]);
+  // The roles table matches docs/MVP.md "Roles" and CLAUDE.md's matrix.
+  const row = (name: string) => page.getByRole("row", { name: new RegExp(`^${name}`) });
+  await expect(row("Approve drafts others edited").getByRole("img", { name: "Yes" })).toHaveCount(3);
+  await expect(row("Remove and restore versions").getByRole("img", { name: "Yes" })).toHaveCount(1);
+  await expect(row("Create playgrounds").getByRole("img", { name: "No" })).toHaveCount(1);
 });
 
 test("the push command copies to the clipboard", async ({ page, context }) => {
@@ -132,6 +168,7 @@ for (const width of [360, 390, 1024, 1440]) {
 }
 
 test("the hero scene waits to be seen, then plays to the finished graph", async ({ page }) => {
+  await withoutLiveHero(page);
   await page.setViewportSize({ width: 390, height: 700 });
   await page.goto("/");
   const product = page.locator(".product");
@@ -143,6 +180,7 @@ test("the hero scene waits to be seen, then plays to the finished graph", async 
 });
 
 test("with reduced motion, the scene is already finished", async ({ page }) => {
+  await withoutLiveHero(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/");
   await expect(page.locator(".row-new")).toHaveCSS("opacity", "1");
@@ -209,6 +247,9 @@ for (const colorScheme of ["light", "dark"] as const) {
   test(`axe finds no accessibility violations (${colorScheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
     await page.goto("/");
+    // The live hero too: it loads once the page is idle on a desktop.
+    test.setTimeout(90_000);
+    await expect(page.locator(".hero-stage.is-live")).toBeAttached({ timeout: 60_000 });
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
     expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target).join(", ")}`)).toEqual([]);
   });

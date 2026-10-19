@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 
 import { Avatar } from "./avatar";
 import { Textarea } from "./input";
+import { usePortalContainer } from "./portal";
 
 /** Someone who can be @mentioned. */
 export interface MentionPerson {
@@ -171,7 +172,7 @@ export function MentionTextarea({
           {...props}
         />
       </PopoverPrimitive.Anchor>
-      <PopoverPrimitive.Portal>
+      <PopoverPrimitive.Portal container={usePortalContainer()}>
         <PopoverPrimitive.Content
           align="start"
           side="bottom"

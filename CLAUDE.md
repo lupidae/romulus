@@ -10,6 +10,8 @@ remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
+crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
+                      (a catalog in miniature, ruleutils' printing), diff, migration; oracle in tests/
 crates/romulus-migration/ model → model migration (ALTER … in dependency order), tool files; no I/O; oracle in tests/
 crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, allowlist, stubs, compile pool
 crates/romulus-playground/ the playground service (lib + bin): builds playgrounds, console sessions, migration
@@ -20,7 +22,8 @@ deploy/playground/    a playground's Postgres image (17): the sandbox's, nothing
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
 site/                 the static homepage (tokens copied from web/; see site/README.md); its Pages
-                      Function (functions/, edge/proxy.js) proxies /app and /api to the API
+                      Function (functions/, edge/proxy.js) proxies /app and /api to the API; its
+                      live hero (public/hero/, committed) is built from web/src/hero by `just site-hero`
 deploy/zitadel/       the provisioner that sets Zitadel up on `just up` (and on deploys), and the login's brand assets
 deploy/preview/       the preview at romulus.lupidae.com: compose, deploy.sh, cloudflare.sh; README = runbook
 Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
@@ -46,6 +49,7 @@ just e2e-dev     # Playwright on dev-only screens (/app/dev/*, e.g. the schema v
 just perf        # schema viewer frame times at 300 tables: headed, production build with dev routes
 just gen         # after any API change: OpenAPI → web/src/api/{openapi.json,schema.gen.ts}
 just site        # the homepage on $ROMULUS_SITE_PORT; `just site-check` = its CI gate
+just site-hero   # rebuild the homepage's live hero (needs the wasm32 target, wasm-bindgen-cli, wasm-opt)
 just sandbox 15   # another Postgres major's sandbox (15, 16, 18, or all); `just up` runs 17 only
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
 just play        # only the playground runner and service (the API and web elsewhere)
@@ -907,6 +911,33 @@ docs/playground.md (its decisions block first) has the design; deploy/preview/RE
   containers (the runner in process; skipped without Docker or the image, fails in CI),
   `crates/romulus-api/tests/api/playgrounds.rs` (the fake host),
   `web/e2e/playground.spec.ts`.
+
+## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
+
+site/README.md "The live hero" has the design. The hero reuses the app's own
+components (SchemaViewer, SchemaDiffView, MigrationView, the comments, the
+draft session in `local` mode) in a browser-only island: no API calls.
+
+- **It is a committed build** (`site/public/hero`): after changing what it is
+  made of, run `just site-hero` and commit the output. `just check` and
+  `just site-check` run `site/tools/hero.mjs --check`: it fails when a built
+  file differs from the manifest or `web/src/hero`/`crates/romulus-wasm`
+  changed since, and notes it when what it shares with the app did
+  (components, lockfiles, romulus-diff/migration, remus: it keeps working on
+  the old ones).
+- **Shared code it relies on**: the kit's floating layers render through
+  `usePortalContainer()` (`components/ui/portal.ts`: keep it on any new Radix
+  `Portal`); the Tailwind theme lives in `styles/theme.css` (globals.css
+  imports it; the hero imports it without the app's tokens); opt-in props:
+  SchemaViewer's `pane` and `followNewTables`, CompileStatus's `checker`,
+  MigrationView's `storageKey`/`defaultFormat`.
+- **The engine is not Postgres**: romulus-wasm prints what Postgres would
+  (`tests/oracle` and `tests/errors.rs` compare it with the sandbox: add a
+  case there when you change it); the app never uses it. It never panics
+  (errors instead, `tests/robustness.rs`) and never skips a statement
+  silently: what it does not model is a `not_run` note. In the browser, a
+  trap restarts it, and anything worse gives the page its picture back
+  (site/README.md, "When something breaks").
 
 ## Testing
 
