@@ -7,6 +7,7 @@
 //! With `ROMULUS_WEB_DIR` set, [`app`] also serves the web app at `/app`
 //! ([`web`]).
 
+pub mod admin;
 pub mod audit;
 pub mod auth;
 pub mod collab;
@@ -21,9 +22,12 @@ pub mod edge;
 pub mod email;
 pub mod error;
 pub mod extract;
+pub mod forwarded;
 pub mod health;
 pub mod imports;
+pub mod instance;
 mod layers;
+pub mod mail;
 pub mod orgs;
 pub mod playgrounds;
 pub mod rate;
@@ -65,6 +69,7 @@ struct ApiDoc;
 fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(health::router())
+        .merge(instance::router())
         .merge(auth::router())
         .merge(audit::router())
         .merge(orgs::router())
@@ -100,6 +105,12 @@ pub fn app(state: AppState) -> Router {
     let router = router
         .fallback(error::not_found)
         .layer(middleware::from_fn_with_state(state.clone(), csrf::guard))
+        // The client behind a trusted reverse proxy (after the edge, which
+        // names it itself).
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            forwarded::client,
+        ))
         // Outside the CSRF guard: a request that did not come through the
         // edge is refused before anything else looks at it.
         .layer(middleware::from_fn_with_state(state.clone(), edge::guard))

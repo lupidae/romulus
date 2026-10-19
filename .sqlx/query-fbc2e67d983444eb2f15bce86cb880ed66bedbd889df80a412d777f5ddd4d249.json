@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sign_in_devices SET failures = 0, locked_until = NULL, last_used_at = now()\n         WHERE token_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fbc2e67d983444eb2f15bce86cb880ed66bedbd889df80a412d777f5ddd4d249"
+}

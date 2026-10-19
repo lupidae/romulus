@@ -1,0 +1,109 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT created_at, kind AS \"kind: AuthEventKind\", email, user_id, ip, details\n           FROM auth_events\n           WHERE $1::text IS NULL\n              OR lower(email COLLATE pg_unicode_fast) = lower($1 COLLATE pg_unicode_fast)\n           ORDER BY created_at DESC, id DESC\n           LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kind: AuthEventKind",
+        "type_info": {
+          "Custom": {
+            "name": "auth_event_kind",
+            "kind": {
+              "Enum": [
+                "signed_in",
+                "sign_in_failed",
+                "sign_in_locked",
+                "sign_up_requested",
+                "account_created",
+                "password_reset_requested",
+                "password_reset",
+                "password_changed",
+                "password_link_created",
+                "unlocked",
+                "email_verified",
+                "admin_created"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "ip",
+        "type_info": "Inet",
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "ip"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "details",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "details"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e75bdc7d36ab99d5bf0520d4e64cabf1dab542789ce827fc58b91c173aae47bf"
+}

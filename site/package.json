@@ -2,6 +2,7 @@
   "name": "romulus-site",
   "private": true,
   "version": "0.0.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "The romulus homepage: static files in public/, no build step.",
   "engines": {

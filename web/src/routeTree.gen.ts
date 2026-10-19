@@ -22,6 +22,10 @@ import { Route as DevShellRouteImport } from './routes/dev/shell'
 import { Route as DevTimeMachineRouteImport } from './routes/dev/time-machine'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
+import { Route as SigninForgotRouteImport } from './routes/signin_.forgot'
+import { Route as SigninNewRouteImport } from './routes/signin_.new'
+import { Route as SigninResetRouteImport } from './routes/signin_.reset'
+import { Route as SigninWelcomeRouteImport } from './routes/signin_.welcome'
 import { Route as OrgDbIndexRouteImport } from './routes/$org/$db/index'
 import { Route as OrgDbHistoryRouteImport } from './routes/$org/$db/history'
 import { Route as OrgDbImportRouteImport } from './routes/$org/$db/import'
@@ -102,6 +106,26 @@ const DevViewerRoute = DevViewerRouteImport.update({
 const InviteTokenRoute = InviteTokenRouteImport.update({
   id: '/invite/$token',
   path: '/invite/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SigninForgotRoute = SigninForgotRouteImport.update({
+  id: '/signin_/forgot',
+  path: '/signin/forgot',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SigninNewRoute = SigninNewRouteImport.update({
+  id: '/signin_/new',
+  path: '/signin/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SigninResetRoute = SigninResetRouteImport.update({
+  id: '/signin_/reset',
+  path: '/signin/reset',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SigninWelcomeRoute = SigninWelcomeRouteImport.update({
+  id: '/signin_/welcome',
+  path: '/signin/welcome',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OrgDbIndexRoute = OrgDbIndexRouteImport.update({
@@ -199,6 +223,10 @@ export interface FileRoutesByFullPath {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/signin/forgot': typeof SigninForgotRoute
+  '/signin/new': typeof SigninNewRoute
+  '/signin/reset': typeof SigninResetRoute
+  '/signin/welcome': typeof SigninWelcomeRoute
   '/$org/': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
@@ -227,6 +255,10 @@ export interface FileRoutesByTo {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/signin/forgot': typeof SigninForgotRoute
+  '/signin/new': typeof SigninNewRoute
+  '/signin/reset': typeof SigninResetRoute
+  '/signin/welcome': typeof SigninWelcomeRoute
   '/$org': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
@@ -259,6 +291,10 @@ export interface FileRoutesById {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/signin_/forgot': typeof SigninForgotRoute
+  '/signin_/new': typeof SigninNewRoute
+  '/signin_/reset': typeof SigninResetRoute
+  '/signin_/welcome': typeof SigninWelcomeRoute
   '/$org/': typeof OrgIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
@@ -292,6 +328,10 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/signin/forgot'
+    | '/signin/new'
+    | '/signin/reset'
+    | '/signin/welcome'
     | '/$org/'
     | '/$org/$db/history'
     | '/$org/$db/import'
@@ -320,6 +360,10 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/signin/forgot'
+    | '/signin/new'
+    | '/signin/reset'
+    | '/signin/welcome'
     | '/$org'
     | '/$org/$db/history'
     | '/$org/$db/import'
@@ -351,6 +395,10 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/signin_/forgot'
+    | '/signin_/new'
+    | '/signin_/reset'
+    | '/signin_/welcome'
     | '/$org/'
     | '/$org/$db/history'
     | '/$org/$db/import'
@@ -382,6 +430,10 @@ export interface RootRouteChildren {
   DevTimeMachineRoute: typeof DevTimeMachineRoute
   DevViewerRoute: typeof DevViewerRoute
   InviteTokenRoute: typeof InviteTokenRoute
+  SigninForgotRoute: typeof SigninForgotRoute
+  SigninNewRoute: typeof SigninNewRoute
+  SigninResetRoute: typeof SigninResetRoute
+  SigninWelcomeRoute: typeof SigninWelcomeRoute
   OrgDbDraftsDraftRoute: typeof OrgDbDraftsDraftRoute
   OrgDbPlaygroundsPlaygroundRoute: typeof OrgDbPlaygroundsPlaygroundRoute
 }
@@ -477,6 +529,34 @@ declare module '@tanstack/react-router' {
       path: '/invite/$token'
       fullPath: '/invite/$token'
       preLoaderRoute: typeof InviteTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signin_/forgot': {
+      id: '/signin_/forgot'
+      path: '/signin/forgot'
+      fullPath: '/signin/forgot'
+      preLoaderRoute: typeof SigninForgotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signin_/new': {
+      id: '/signin_/new'
+      path: '/signin/new'
+      fullPath: '/signin/new'
+      preLoaderRoute: typeof SigninNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signin_/reset': {
+      id: '/signin_/reset'
+      path: '/signin/reset'
+      fullPath: '/signin/reset'
+      preLoaderRoute: typeof SigninResetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signin_/welcome': {
+      id: '/signin_/welcome'
+      path: '/signin/welcome'
+      fullPath: '/signin/welcome'
+      preLoaderRoute: typeof SigninWelcomeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$org/$db/': {
@@ -664,6 +744,10 @@ const rootRouteChildren: RootRouteChildren = {
   DevTimeMachineRoute: DevTimeMachineRoute,
   DevViewerRoute: DevViewerRoute,
   InviteTokenRoute: InviteTokenRoute,
+  SigninForgotRoute: SigninForgotRoute,
+  SigninNewRoute: SigninNewRoute,
+  SigninResetRoute: SigninResetRoute,
+  SigninWelcomeRoute: SigninWelcomeRoute,
   OrgDbDraftsDraftRoute: OrgDbDraftsDraftRoute,
   OrgDbPlaygroundsPlaygroundRoute: OrgDbPlaygroundsPlaygroundRoute,
 }

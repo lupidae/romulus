@@ -82,6 +82,157 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/auth/password/change": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Changes the signed-in person's password. Their other sessions end; this
+     *     one goes on under a new cookie.
+     */
+    post: operations["change_password"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/forgot": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Emails a reset link to the account with this address, if there is one.
+     *     Answers the same either way.
+     */
+    post: operations["forgot_password"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/reset": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Sets the password a reset link is for: ends every session of the
+     *     account, clears its address's lock, signs this browser in.
+     */
+    post: operations["reset_password"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/reset/check": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** What a reset link is for, without using it. */
+    post: operations["check_reset_link"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/sign-in": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Signs in with an email address and a password: sets the session cookie. */
+    post: operations["password_sign_in"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/sign-up": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Creates a password account: with mail, emails a link that finishes it;
+     *     without, creates it from an invitation at once and signs in.
+     */
+    post: operations["password_sign_up"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/sign-up/check": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** What a sign-up link creates, without using it. */
+    post: operations["check_sign_up_link"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/auth/password/sign-up/finish": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Finishes a sign-up from its link: creates the account (and joins the
+     *     invitation's organization), signs in.
+     */
+    post: operations["finish_sign_up"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/databases/{database_id}/imports": {
     parameters: {
       query?: never;
@@ -148,6 +299,23 @@ export interface paths {
     };
     /** Liveness and database reachability, for compose healthchecks and CI. */
     get: operations["health"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/instance": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** How this server is set up. */
+    get: operations["instance"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1406,8 +1574,18 @@ export interface components {
     AuthMethods: {
       /** @description The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`). */
       dev_signin: boolean;
-      /** @description Single sign-on is configured (Zitadel is provisioned). */
+      /** @description Email + password sign-in is on (`ROMULUS_AUTH=password`). */
+      password: boolean;
+      /** @description "Forgot password?" sends a link (password sign-in and mail are on). */
+      password_reset: boolean;
+      sign_up?: components["schemas"]["SignUpPolicy"] | null;
+      /** @description Single sign-on is on and configured (the OIDC client exists). */
       sso: boolean;
+      /**
+       * @description Single sign-on is one of this server's methods (`ROMULUS_AUTH`),
+       *     configured or not yet.
+       */
+      sso_enabled: boolean;
     };
     /** @description Who made a version: a person (uploads, drafts) or an API token (pushes). */
     Author:
@@ -1450,6 +1628,10 @@ export interface components {
       | "extension";
     ChangeMajor: {
       pg_major: components["schemas"]["PgMajor"];
+    };
+    ChangePassword: {
+      current_password: string;
+      new_password: string;
     };
     ChangeRole: {
       role: components["schemas"]["Role"];
@@ -1900,6 +2082,8 @@ export interface components {
       scope: components["schemas"]["TokenScope"];
     };
     CreatedInvitation: {
+      /** @description romulus emailed the link to the invitee too (the server sends mail). */
+      emailed: boolean;
       invitation: components["schemas"]["Invitation"];
       /** @description The one-time link to send to the invitee. Shown only now. */
       url: string;
@@ -1926,6 +2110,8 @@ export interface components {
       /** Format: uuid */
       id: string;
       name: string;
+      /** @description Signs in with a password (and may change it), not single sign-on. */
+      password_account: boolean;
     };
     /** @description A schema kept in romulus, as its organization's members see it. */
     Database: {
@@ -2313,6 +2499,14 @@ export interface components {
       sql: components["schemas"]["Sides"];
       status: components["schemas"]["Status"];
     };
+    FinishSignUp: {
+      name: string;
+      password: string;
+      token: string;
+    };
+    ForgotPassword: {
+      email: string;
+    };
     /**
      * @description `pg_attribute.attgenerated`, as a word.
      * @enum {string}
@@ -2517,6 +2711,17 @@ export interface components {
       name: string;
       status: components["schemas"]["Status"];
     };
+    Instance: {
+      /** @description romulus sends email (invitations, sign-up and reset links). */
+      mail: boolean;
+      /** @description Playgrounds are set up on this server (`ROMULUS_PLAY_URL`). */
+      playgrounds: boolean;
+      /**
+       * @description One organization per install (`ROMULUS_SINGLE_ORG`): no way to create
+       *     another.
+       */
+      single_org: boolean;
+    };
     /** @description A pending invitation (its link is never shown again). */
     Invitation: {
       /** Format: date-time */
@@ -2567,6 +2772,10 @@ export interface components {
       label: string;
       position: components["schemas"]["Positions"];
       status: components["schemas"]["Status"];
+    };
+    LinkToken: {
+      /** @description From the link's fragment (`#token=…`). */
+      token: string;
     };
     /**
      * @description Where a draft is in its life, as the people in it see it.
@@ -3001,6 +3210,26 @@ export interface components {
       schema: string;
       status: components["schemas"]["Status"];
     };
+    PasswordSignIn: {
+      email: string;
+      password: string;
+    };
+    PasswordSignUp: {
+      email: string;
+      /**
+       * @description The token of the invitation link this sign-up comes from. Required
+       *     unless sign-up is open; its address must be `email`.
+       */
+      invitation?: string | null;
+      /** @description How the team will see them: 1 to 100 characters. */
+      name: string;
+      /**
+       * @description Only when the server sends no email (`mail` false in
+       *     `GET /api/instance`): the password, set now. Otherwise ignored: it is
+       *     chosen on the page the emailed link opens.
+       */
+      password?: string | null;
+    };
     Person: {
       /** Format: uuid */
       id: string;
@@ -3411,6 +3640,20 @@ export interface components {
       /** @description 1 to 200 characters. */
       name: string;
     };
+    ResetLink: {
+      email: string;
+      /** Format: date-time */
+      expires_at: string;
+      /**
+       * @description The account has no password yet (the first admin's link): "set", not
+       *     "reset".
+       */
+      first_password: boolean;
+    };
+    ResetPassword: {
+      password: string;
+      token: string;
+    };
     /** @description One member's approval, as the people in the draft see it. */
     ReviewApproval: {
       /** Format: date-time */
@@ -3671,12 +3914,29 @@ export interface components {
       after: string | null;
       before: string | null;
     };
+    SignUpLink: {
+      email: string;
+      name: string;
+      /** @description The organization the account joins once created. */
+      org?: string | null;
+    };
+    /** @enum {string} */
+    SignUpOutcome: "email_sent" | "signed_in";
+    /**
+     * @description Who may create a password account (`ROMULUS_SIGNUP`).
+     * @enum {string}
+     */
+    SignUpPolicy: "invite" | "open";
     SignedOut: {
       /**
        * @description Where the browser goes next: the IdP's logout (which comes back to
        *     the sign-in page), or the sign-in page itself.
        */
       redirect_url: string;
+    };
+    SignedUp: {
+      org?: components["schemas"]["Org"] | null;
+      outcome: components["schemas"]["SignUpOutcome"];
     };
     /**
      * @description Why a statement is not replayed.
@@ -4282,6 +4542,423 @@ export interface operations {
       };
     };
   };
+  change_password: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ChangePassword"];
+      };
+    };
+    responses: {
+      /** @description Changed */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `not_a_password_account`: this account signs in with single sign-on */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (`current_password`, `new_password`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` (also when the address is locked) */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  forgot_password: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ForgotPassword"];
+      };
+    };
+    responses: {
+      /** @description If an account has this address, a link is on its way */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Password sign-in is off */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `mail_unavailable`: this server sends no email; an admin prints a link (`romulus-api password-link`) */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  reset_password: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ResetPassword"];
+      };
+    };
+    responses: {
+      /** @description Set, and signed in */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Unknown, used or expired link */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (`password`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  check_reset_link: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["LinkToken"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ResetLink"];
+        };
+      };
+      /** @description Unknown, used or expired link (or password sign-in is off) */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  password_sign_in: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PasswordSignIn"];
+      };
+    };
+    responses: {
+      /** @description Signed in: the session cookie is set */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description `invalid_credentials`: the same for an unknown address and a wrong password */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Password sign-in is off */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited`: too many attempts from this client, or the address is locked (`details.retry_after`, seconds) */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  password_sign_up: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PasswordSignUp"];
+      };
+    };
+    responses: {
+      /** @description Created and signed in (no mail: from an invitation) */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SignedUp"];
+        };
+      };
+      /** @description A link was sent; the same answer whether the address has an account or not */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SignedUp"];
+        };
+      };
+      /** @description Password sign-in is off; or the invitation link does not work */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `account_exists` (no mail, from an invitation) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (`email`, `name`, `password`, `invitation`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  check_sign_up_link: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["LinkToken"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SignUpLink"];
+        };
+      };
+      /** @description Unknown, used or expired link (or password sign-in is off) */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  finish_sign_up: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FinishSignUp"];
+      };
+    };
+    responses: {
+      /** @description Created and signed in */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SignedUp"];
+        };
+      };
+      /** @description Unknown, used or expired link */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `account_exists`: the address got an account meanwhile */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (`name`, `password`) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   push_migrations: {
     parameters: {
       query?: {
@@ -4590,6 +5267,25 @@ export interface operations {
       };
     };
   };
+  instance: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Instance"];
+        };
+      };
+    };
+  };
   preview_invitation: {
     parameters: {
       query?: never;
@@ -4751,6 +5447,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Org"];
+        };
+      };
+      /** @description `single_org`: this install keeps one organization */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
       /** @description `slug_taken` */

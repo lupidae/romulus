@@ -1,0 +1,18 @@
+# romulus behind a Caddy you run on the host (not the bundled `caddy`
+# profile): TLS for one domain, everything proxied to the API published on
+# 127.0.0.1:8080 (ROMULUS_BIND, ROMULUS_PORT), websockets included.
+# ROMULUS_PUBLIC_URL must be https://romulus.example.com.
+#
+# The API sees this proxy through the compose network's gateway, which
+# ROMULUS_TRUSTED_PROXIES trusts by default (docs/self-host/hardening.md).
+
+romulus.example.com {
+	# The app lives at /app; the API answers nothing at /.
+	redir / /app/ 302
+
+	header Strict-Transport-Security "max-age=31536000"
+
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}

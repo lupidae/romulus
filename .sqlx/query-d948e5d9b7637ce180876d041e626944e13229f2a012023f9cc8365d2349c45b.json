@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM users\n           WHERE oidc_subject NOT LIKE 'password|%'\n             AND lower(email COLLATE pg_unicode_fast) = lower($1 COLLATE pg_unicode_fast)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d948e5d9b7637ce180876d041e626944e13229f2a012023f9cc8365d2349c45b"
+}

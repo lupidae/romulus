@@ -43,6 +43,8 @@ pub struct CurrentUser {
     /// Accepting an invitation requires it.
     pub email_verified: bool,
     pub name: String,
+    /// Signs in with a password (and may change it), not single sign-on.
+    pub password_account: bool,
 }
 
 /// Cached in the request's extensions: [`super::Member`] and a handler may
@@ -99,7 +101,8 @@ async fn lookup(db: &PgPool, token: &str) -> Result<Option<CurrentUser>, ApiErro
     }
     let id_hash = token::hash(token);
     let Some(row) = sqlx::query!(
-        r#"SELECT s.last_seen_at, u.id, u.email, u.email_verified, u.name
+        r#"SELECT s.last_seen_at, u.id, u.email, u.email_verified, u.name,
+                  u.oidc_subject LIKE 'password|%' AS "password_account!"
            FROM sessions s JOIN users u ON u.id = s.user_id
            WHERE s.id_hash = $1 AND s.expires_at > now()"#,
         id_hash,
@@ -127,6 +130,7 @@ async fn lookup(db: &PgPool, token: &str) -> Result<Option<CurrentUser>, ApiErro
         email: row.email,
         email_verified: row.email_verified,
         name: row.name,
+        password_account: row.password_account,
     }))
 }
 

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (oidc_subject, email, email_verified, name)\n         VALUES ('sub-alice', 'alice@acme.io', false, 'Alice') RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "52f33280ad457d6e15218a779cf3fdb9daa92959feba0e37647c77eb37ffb9fb"
+}

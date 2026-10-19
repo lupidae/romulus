@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM sign_in_devices WHERE user_id = $1 AND token_hash IS DISTINCT FROM $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3715794ecc968c3a15c0a63c63d734a8d28c7ff04798fba8d97287a64015352e"
+}

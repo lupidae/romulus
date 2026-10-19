@@ -1,0 +1,366 @@
+//! Email: what romulus sends (sign-up links, password resets, invitations,
+//! security notices) and how (`ROMULUS_SMTP_*`, `Config::mail`).
+//!
+//! Sending never holds up or fails the request that asked for it: a message
+//! goes out from its own task, and a failure is logged (never the address).
+//! That also keeps answers the same whether a message went out or not, which
+//! the sign-up and reset endpoints rely on to say nothing about who has an
+//! account. Without `ROMULUS_SMTP_HOST` the mailer is off and nothing is
+//! sent; tests use [`Mailer::memory`] and read what would have been.
+
+use std::{
+    fmt::Write as _,
+    sync::{Arc, Mutex, PoisonError},
+};
+
+use lettre::{
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::{Mailbox, MultiPart, SinglePart, header::ContentType},
+    transport::smtp::{
+        authentication::Credentials,
+        client::{Tls, TlsParameters},
+    },
+};
+
+use crate::{
+    Config,
+    config::{MailConfig, SmtpTls},
+    error::Chain,
+};
+
+/// What one message says. Built by [`Letter`]; `to` is the address as
+/// stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Email {
+    pub to: String,
+    /// What kind of message this is, for logs (never the address).
+    pub kind: &'static str,
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+}
+
+/// Sends email, or does not. Cheap to clone.
+#[derive(Clone)]
+pub struct Mailer(Inner);
+
+#[derive(Clone)]
+enum Inner {
+    Off,
+    Smtp(Arc<Smtp>),
+    Memory(Arc<Mutex<Vec<Email>>>),
+}
+
+struct Smtp {
+    transport: AsyncSmtpTransport<Tokio1Executor>,
+    from: Mailbox,
+}
+
+/// What a [`Mailer::memory`] was asked to send.
+#[derive(Clone, Default)]
+pub struct Outbox(Arc<Mutex<Vec<Email>>>);
+
+impl Outbox {
+    /// Every message so far, oldest first.
+    pub fn all(&self) -> Vec<Email> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The messages sent to `to` (compared as addresses are: `email::key`).
+    pub fn to(&self, to: &str) -> Vec<Email> {
+        let key = crate::email::key(to);
+        self.all()
+            .into_iter()
+            .filter(|email| crate::email::key(&email.to) == key)
+            .collect()
+    }
+}
+
+impl Mailer {
+    /// From `Config::mail`: SMTP, or off.
+    pub fn from_config(config: &Config) -> Self {
+        match &config.mail {
+            None => Self(Inner::Off),
+            Some(mail) => Self(Inner::Smtp(Arc::new(Smtp {
+                transport: transport(mail),
+                from: mail.from.clone(),
+            }))),
+        }
+    }
+
+    /// Sends nothing.
+    pub fn off() -> Self {
+        Self(Inner::Off)
+    }
+
+    /// Keeps every message in memory instead of sending it (tests).
+    pub fn memory() -> (Self, Outbox) {
+        let outbox = Outbox::default();
+        (Self(Inner::Memory(outbox.0.clone())), outbox)
+    }
+
+    /// Whether messages go anywhere: the app offers what needs them (a
+    /// reset by email) only then.
+    pub fn is_on(&self) -> bool {
+        !matches!(self.0, Inner::Off)
+    }
+
+    /// Sends `email` in the background. Returns at once, whatever happens.
+    pub fn send(&self, email: Email) {
+        match &self.0 {
+            Inner::Off => tracing::debug!(kind = email.kind, "mail: off, not sent"),
+            Inner::Memory(outbox) => outbox
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(email),
+            Inner::Smtp(smtp) => {
+                let message = match message(&smtp.from, &email) {
+                    Ok(message) => message,
+                    Err(err) => {
+                        tracing::warn!(kind = email.kind, error = %Chain(&err), "mail: cannot build the message");
+                        return;
+                    }
+                };
+                let smtp = smtp.clone();
+                let kind = email.kind;
+                tokio::spawn(async move {
+                    match smtp.transport.send(message).await {
+                        Ok(_) => tracing::info!(kind, "mail: sent"),
+                        Err(err) => {
+                            tracing::warn!(kind, error = %Chain(&err), "mail: not sent");
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    /// Connects and says hello, for `romulus-api mail-check`: whether the
+    /// settings work, before anyone needs a message.
+    pub async fn check(&self) -> Result<bool, lettre::transport::smtp::Error> {
+        match &self.0 {
+            Inner::Smtp(smtp) => smtp.transport.test_connection().await,
+            Inner::Off | Inner::Memory(_) => Ok(false),
+        }
+    }
+
+    /// Sends one message and waits for the server's answer (the CLI's test
+    /// message).
+    pub async fn send_now(&self, email: &Email) -> Result<(), MailError> {
+        match &self.0 {
+            Inner::Off => Err(MailError::Off),
+            Inner::Memory(outbox) => {
+                outbox
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(email.clone());
+                Ok(())
+            }
+            Inner::Smtp(smtp) => {
+                smtp.transport.send(message(&smtp.from, email)?).await?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MailError {
+    #[error("mail is off: set ROMULUS_SMTP_HOST and ROMULUS_MAIL_FROM")]
+    Off,
+    #[error("the message")]
+    Message(#[from] lettre::error::Error),
+    #[error("the recipient's address")]
+    Address(#[from] lettre::address::AddressError),
+    #[error("the SMTP server")]
+    Smtp(#[from] lettre::transport::smtp::Error),
+}
+
+fn transport(mail: &MailConfig) -> AsyncSmtpTransport<Tokio1Executor> {
+    let tls = || {
+        TlsParameters::new(mail.host.clone())
+            .expect("TLS parameters for a host name always build with webpki roots")
+    };
+    let mut builder =
+        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&mail.host).port(mail.port);
+    builder = match mail.tls {
+        SmtpTls::StartTls => builder.tls(Tls::Required(tls())),
+        SmtpTls::Implicit => builder.tls(Tls::Wrapper(tls())),
+        SmtpTls::None => builder.tls(Tls::None),
+    };
+    if let Some((user, password)) = &mail.credentials {
+        builder = builder.credentials(Credentials::new(user.clone(), password.expose().to_owned()));
+    }
+    builder
+        .timeout(Some(std::time::Duration::from_secs(20)))
+        .build()
+}
+
+fn message(from: &Mailbox, email: &Email) -> Result<Message, MailError> {
+    Ok(Message::builder()
+        .from(from.clone())
+        .to(Mailbox::new(None, email.to.parse()?))
+        .subject(&email.subject)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(
+                    SinglePart::builder()
+                        .header(ContentType::TEXT_PLAIN)
+                        .body(email.text.clone()),
+                )
+                .singlepart(
+                    SinglePart::builder()
+                        .header(ContentType::TEXT_HTML)
+                        .body(email.html.clone()),
+                ),
+        )?)
+}
+
+/// A message in romulus's one layout: a few paragraphs, at most one button
+/// (whose link is also spelled out, for clients that drop it), and why it
+/// was sent. Text and HTML say the same thing.
+pub struct Letter<'a> {
+    pub kind: &'static str,
+    pub to: &'a str,
+    pub subject: String,
+    pub paragraphs: Vec<String>,
+    pub action: Option<(&'a str, &'a str)>,
+    /// Below a rule: why this arrived, what to do if it was not expected.
+    pub footer: String,
+}
+
+impl Letter<'_> {
+    pub fn email(self) -> Email {
+        let mut text = String::new();
+        let mut html = String::from(
+            "<!doctype html><html><body style=\"margin:0;padding:24px;background:#f6f5f3;\">\
+             <div style=\"max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e7e5e2;\
+             border-radius:8px;padding:32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',\
+             Inter,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1c1917;\">\
+             <p style=\"margin:0 0 24px;font-weight:600;font-size:16px;\">romulus</p>",
+        );
+        for paragraph in &self.paragraphs {
+            text.push_str(paragraph);
+            text.push_str("\n\n");
+            html.push_str("<p style=\"margin:0 0 16px;\">");
+            html.push_str(&escape(paragraph));
+            html.push_str("</p>");
+        }
+        if let Some((label, url)) = self.action {
+            text.push_str(url);
+            text.push_str("\n\n");
+            let _ = write!(
+                html,
+                "<p style=\"margin:24px 0;\"><a href=\"{url}\" style=\"display:inline-block;\
+                 background:#b4532a;color:#ffffff;text-decoration:none;font-weight:600;\
+                 padding:10px 18px;border-radius:6px;\">{label}</a></p>\
+                 <p style=\"margin:0 0 16px;font-size:13px;color:#57534e;word-break:break-all;\">\
+                 Or open this link: {url}</p>",
+                url = escape(url),
+                label = escape(label),
+            );
+        }
+        text.push_str("--\n");
+        text.push_str(&self.footer);
+        text.push('\n');
+        let _ = write!(
+            html,
+            "<hr style=\"border:0;border-top:1px solid #e7e5e2;margin:24px 0 16px;\">\
+             <p style=\"margin:0;font-size:13px;color:#57534e;\">{}</p></div></body></html>",
+            escape(&self.footer)
+        );
+        Email {
+            to: self.to.to_owned(),
+            kind: self.kind,
+            subject: self.subject,
+            text,
+            html,
+        }
+    }
+}
+
+/// Text into HTML: the five characters that could start markup.
+fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn letters_say_the_same_in_text_and_html_and_escape_names() {
+        let email = Letter {
+            kind: "test",
+            to: "bob@x.io",
+            subject: "Hello".to_owned(),
+            paragraphs: vec!["<script>alert(1)</script> invited you.".to_owned()],
+            action: Some(("Join", "https://r.example/app/invite/abc?x=1&y=2")),
+            footer: "You got this because…".to_owned(),
+        }
+        .email();
+        assert!(
+            email
+                .text
+                .contains("<script>alert(1)</script> invited you.")
+        );
+        assert!(
+            email
+                .text
+                .contains("https://r.example/app/invite/abc?x=1&y=2")
+        );
+        assert!(!email.html.contains("<script>"));
+        assert!(email.html.contains("&lt;script&gt;"));
+        assert!(
+            email
+                .html
+                .contains("href=\"https://r.example/app/invite/abc?x=1&amp;y=2\"")
+        );
+    }
+
+    #[test]
+    fn a_memory_mailer_keeps_what_it_is_given() {
+        let (mailer, outbox) = Mailer::memory();
+        assert!(mailer.is_on());
+        mailer.send(Email {
+            to: "Bob@X.io".to_owned(),
+            kind: "test",
+            subject: "s".to_owned(),
+            text: "t".to_owned(),
+            html: "h".to_owned(),
+        });
+        assert_eq!(outbox.to("bob@x.io").len(), 1);
+        assert!(!Mailer::off().is_on());
+    }
+
+    #[tokio::test]
+    async fn messages_build_with_a_display_name_sender() {
+        let from: Mailbox = "romulus <romulus@example.com>".parse().unwrap();
+        let email = Letter {
+            kind: "test",
+            to: "élodie@x.io",
+            subject: "Réinitialiser".to_owned(),
+            paragraphs: vec!["Bonjour".to_owned()],
+            action: None,
+            footer: "f".to_owned(),
+        }
+        .email();
+        let formatted = String::from_utf8(message(&from, &email).unwrap().formatted()).unwrap();
+        assert!(formatted.contains("From: romulus <romulus@example.com>"));
+        assert!(formatted.contains("multipart/alternative"));
+    }
+}

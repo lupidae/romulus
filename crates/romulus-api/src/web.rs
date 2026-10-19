@@ -10,7 +10,8 @@
 //!   router's routes, `/app/acme/db/history`), answer the page with
 //!   `no-cache`, so the next navigation after a deploy picks up the new build.
 //! - Other files of the build (`favicon.svg`) are cached for an hour.
-//! - `/app` redirects to `/app/`.
+//! - `/app` redirects to `/app/`, and so does `/`: a self-hosted install has
+//!   no homepage (the hosted one's edge serves `/` itself).
 
 use std::path::Path;
 
@@ -46,6 +47,7 @@ where
         async move { serve(files, page, request).await }
     };
     Router::new()
+        .route("/", get(|| async { Redirect::to("/app/") }))
         .route("/app", get(|| async { Redirect::permanent("/app/") }))
         .route("/app/", get(serve.clone()))
         .route("/app/{*path}", get(serve))

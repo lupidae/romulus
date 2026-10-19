@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sign_in_failures AS f (email_key, failures, locks, last_failure_at, locked_until)\n           VALUES (lower($1 COLLATE pg_unicode_fast), 1, CASE WHEN 1 >= $3 THEN 1 ELSE 0 END, now(),\n                   CASE WHEN 1 >= $3 THEN now() + make_interval(secs => $4) END)\n           ON CONFLICT (email_key) DO UPDATE SET\n               -- The series: a new one after a day of quiet or a lock that ran out.\n               failures = CASE\n                   WHEN f.last_failure_at < now() - make_interval(secs => $2)\n                        OR f.locked_until IS NOT NULL THEN 1\n                   ELSE f.failures + 1 END,\n               -- Today's locks: forgotten after a day of quiet.\n               locks = CASE WHEN f.last_failure_at < now() - make_interval(secs => $2)\n                            THEN 0 ELSE f.locks END\n                     + CASE WHEN (CASE\n                           WHEN f.last_failure_at < now() - make_interval(secs => $2)\n                                OR f.locked_until IS NOT NULL THEN 1\n                           ELSE f.failures + 1 END) >= $3 THEN 1 ELSE 0 END,\n               last_failure_at = now(),\n               -- 15 minutes, 30, then an hour ($5) for every lock after.\n               locked_until = CASE\n                   WHEN (CASE\n                           WHEN f.last_failure_at < now() - make_interval(secs => $2)\n                                OR f.locked_until IS NOT NULL THEN 1\n                           ELSE f.failures + 1 END) >= $3\n                   THEN now() + make_interval(secs => least(\n                       $4 * power(2, CASE WHEN f.last_failure_at < now() - make_interval(secs => $2)\n                                          THEN 0 ELSE f.locks END),\n                       $5)) END\n           -- Not while locked: those are refused unchecked, uncounted.\n           WHERE f.locked_until IS NULL OR f.locked_until <= now()\n           RETURNING failures, locks, locked_until",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sign_in_failures",
+            "name": "failures"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "locks",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sign_in_failures",
+            "name": "locks"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "locked_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sign_in_failures",
+            "name": "locked_until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Int4",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "e2a62161323f603652501af69e150abe081e0edbb6e9fa782eaf12625701535f"
+}

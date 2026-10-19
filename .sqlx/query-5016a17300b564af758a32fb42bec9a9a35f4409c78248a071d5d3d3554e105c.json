@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM sign_in_devices WHERE user_id = $1 AND token_hash NOT IN (\n             SELECT token_hash FROM sign_in_devices WHERE user_id = $1\n             ORDER BY last_used_at DESC LIMIT $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5016a17300b564af758a32fb42bec9a9a35f4409c78248a071d5d3d3554e105c"
+}

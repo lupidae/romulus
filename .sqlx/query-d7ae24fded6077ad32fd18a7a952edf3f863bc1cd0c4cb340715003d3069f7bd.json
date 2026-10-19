@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT extract(epoch FROM locked_until - now())::float8 AS \"left!\" FROM sign_in_failures",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "left!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d7ae24fded6077ad32fd18a7a952edf3f863bc1cd0c4cb340715003d3069f7bd"
+}

@@ -1,0 +1,18 @@
+# The `caddy` profile's configuration (compose.yaml): TLS for ROMULUS_DOMAIN
+# (from .env) with a certificate from Let's Encrypt, everything proxied to
+# the API, websockets included (drafts' live editing, the playground
+# console). DNS must point at this host and ports 80 and 443 reach it.
+# Caddyfile.example is the same for a Caddy you run yourself.
+
+{$ROMULUS_DOMAIN} {
+	# The app lives at /app; the API answers nothing at /.
+	redir / /app/ 302
+
+	header Strict-Transport-Security "max-age=31536000"
+
+	reverse_proxy api:8080 {
+		# The client's address, not one a client sent: the API trusts this
+		# header from this network only (ROMULUS_TRUSTED_PROXIES).
+		header_up X-Forwarded-For {remote_host}
+	}
+}

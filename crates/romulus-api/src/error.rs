@@ -51,6 +51,10 @@ pub enum ApiError {
     /// is unknown or revoked. The message says how to get a working one.
     #[error("{0}")]
     InvalidToken(String),
+    /// 401 from a password sign-in: the address has no account or the
+    /// password is wrong (never which).
+    #[error("Email or password is incorrect.")]
+    InvalidCredentials,
     /// 401: the request carried a session cookie, but that session expired
     /// (or was signed out elsewhere). The web app says so on the sign-in page.
     #[error("Your session expired. Sign in again to continue.")]
@@ -114,9 +118,10 @@ impl ApiError {
             Self::Validation { .. } | Self::Unprocessable { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            Self::Unauthorized | Self::SessionExpired | Self::InvalidToken(_) => {
-                StatusCode::UNAUTHORIZED
-            }
+            Self::Unauthorized
+            | Self::SessionExpired
+            | Self::InvalidToken(_)
+            | Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
             Self::Forbidden(_) | Self::Denied { .. } | Self::Csrf => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
@@ -137,6 +142,7 @@ impl ApiError {
             Self::Validation { .. } => "validation",
             Self::Unauthorized => "unauthorized",
             Self::SessionExpired => "session_expired",
+            Self::InvalidCredentials => "invalid_credentials",
             Self::InvalidToken(_) => "invalid_token",
             Self::Forbidden(_) => "forbidden",
             Self::Csrf => "csrf",
@@ -216,6 +222,10 @@ impl ApiError {
         let details = match self {
             Self::Validation { details, .. } | Self::Unprocessable { details, .. } => {
                 details.clone()
+            }
+            // Also in `Retry-After`, which a page's fetch wrapper may not read.
+            Self::RateLimited { retry_after } => {
+                Some(serde_json::json!({ "retry_after": whole_seconds(*retry_after) }))
             }
             _ => None,
         };

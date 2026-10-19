@@ -1,0 +1,30 @@
+#!/bin/sh
+# The stub API (Dockerfile): /api/health on 8080, and the CLI commands
+# install.sh runs, answering as the real ones do (one link on stdout,
+# messages on stderr, exit 3 for mail-test without mail).
+set -eu
+
+link() { echo "${ROMULUS_PUBLIC_URL:?}/app/signin/reset#token=stub-$(date +%s)-$$"; }
+
+case "${1:-serve}" in
+serve)
+    mkdir -p /tmp/www/api
+    printf '{"status":"ok","database":"ok","sandbox":"ok","sandboxes":{"17":"ok"},"playgrounds":"off","version":"stub"}' \
+        >/tmp/www/api/health
+    exec httpd -f -p 8080 -h /tmp/www
+    ;;
+setup)
+    link
+    echo "stub: the admin and the organization are ready" >&2
+    ;;
+password-link) link ;;
+mail-test)
+    echo "stub: mail is off" >&2
+    exit 3
+    ;;
+migrate | unlock | verify-email) ;;
+*)
+    echo "stub romulus-api: unknown command $1" >&2
+    exit 64
+    ;;
+esac

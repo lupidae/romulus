@@ -4,8 +4,8 @@
     "title": "romulus",
     "description": "DBA as a service: versioned Postgres schemas, diffs and collaborative drafts.",
     "license": {
-      "name": "UNLICENSED",
-      "identifier": "UNLICENSED"
+      "name": "AGPL-3.0-only",
+      "identifier": "AGPL-3.0-only"
     },
     "version": "0.1.0"
   },
@@ -137,6 +137,486 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AuthMethods"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/change": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Changes the signed-in person's password. Their other sessions end; this\none goes on under a new cookie.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`not_a_password_account`: this account signs in with single sign-on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`current_password`, `new_password`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited` (also when the address is locked)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/forgot": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Emails a reset link to the account with this address, if there is one.\nAnswers the same either way.",
+        "operationId": "forgot_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "If an account has this address, a link is on its way"
+          },
+          "404": {
+            "description": "Password sign-in is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`mail_unavailable`: this server sends no email; an admin prints a link (`romulus-api password-link`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sets the password a reset link is for: ends every session of the\naccount, clears its address's lock, signs this browser in.",
+        "operationId": "reset_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPassword"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set, and signed in"
+          },
+          "404": {
+            "description": "Unknown, used or expired link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`password`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/reset/check": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "What a reset link is for, without using it.",
+        "operationId": "check_reset_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetLink"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, used or expired link (or password sign-in is off)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/sign-in": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Signs in with an email address and a password: sets the session cookie.",
+        "operationId": "password_sign_in",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Signed in: the session cookie is set"
+          },
+          "401": {
+            "description": "`invalid_credentials`: the same for an unknown address and a wrong password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Password sign-in is off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many attempts from this client, or the address is locked (`details.retry_after`, seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/sign-up": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Creates a password account: with mail, emails a link that finishes it;\nwithout, creates it from an invitation at once and signs in.",
+        "operationId": "password_sign_up",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignUp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created and signed in (no mail: from an invitation)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUp"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "A link was sent; the same answer whether the address has an account or not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUp"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Password sign-in is off; or the invitation link does not work",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`account_exists` (no mail, from an invitation)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`email`, `name`, `password`, `invitation`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/sign-up/check": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "What a sign-up link creates, without using it.",
+        "operationId": "check_sign_up_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignUpLink"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, used or expired link (or password sign-in is off)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/password/sign-up/finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Finishes a sign-up from its link: creates the account (and joins the\ninvitation's organization), signs in.",
+        "operationId": "finish_sign_up",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishSignUp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created and signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUp"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, used or expired link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`account_exists`: the address got an account meanwhile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`name`, `password`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -573,6 +1053,26 @@
         }
       }
     },
+    "/api/instance": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "How this server is set up.",
+        "operationId": "instance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instance"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/invitations/{token}": {
       "get": {
         "tags": [
@@ -766,6 +1266,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Org"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`single_org`: this install keeps one organization",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -6763,6 +7273,9 @@
         "type": "object",
         "required": [
           "sso",
+          "sso_enabled",
+          "password",
+          "password_reset",
           "dev_signin"
         ],
         "properties": {
@@ -6770,9 +7283,32 @@
             "type": "boolean",
             "description": "The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`)."
           },
+          "password": {
+            "type": "boolean",
+            "description": "Email + password sign-in is on (`ROMULUS_AUTH=password`)."
+          },
+          "password_reset": {
+            "type": "boolean",
+            "description": "\"Forgot password?\" sends a link (password sign-in and mail are on)."
+          },
+          "sign_up": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignUpPolicy",
+                "description": "Who may create a password account; `None` while password sign-in\nis off."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sso": {
             "type": "boolean",
-            "description": "Single sign-on is configured (Zitadel is provisioned)."
+            "description": "Single sign-on is on and configured (the OIDC client exists)."
+          },
+          "sso_enabled": {
+            "type": "boolean",
+            "description": "Single sign-on is one of this server's methods (`ROMULUS_AUTH`),\nconfigured or not yet."
           }
         }
       },
@@ -6879,6 +7415,21 @@
         "properties": {
           "pg_major": {
             "$ref": "#/components/schemas/PgMajor"
+          }
+        }
+      },
+      "ChangePassword": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string"
           }
         }
       },
@@ -8302,9 +8853,14 @@
         "type": "object",
         "required": [
           "invitation",
-          "url"
+          "url",
+          "emailed"
         ],
         "properties": {
+          "emailed": {
+            "type": "boolean",
+            "description": "romulus emailed the link to the invitee too (the server sends mail)."
+          },
           "invitation": {
             "$ref": "#/components/schemas/Invitation"
           },
@@ -8338,7 +8894,8 @@
           "id",
           "email",
           "email_verified",
-          "name"
+          "name",
+          "password_account"
         ],
         "properties": {
           "email": {
@@ -8354,6 +8911,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "password_account": {
+            "type": "boolean",
+            "description": "Signs in with a password (and may change it), not single sign-on."
           }
         }
       },
@@ -9433,6 +9994,36 @@
           }
         }
       },
+      "FinishSignUp": {
+        "type": "object",
+        "required": [
+          "token",
+          "name",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgotPassword": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        }
+      },
       "Generated": {
         "type": "string",
         "description": "`pg_attribute.attgenerated`, as a word.",
@@ -10000,6 +10591,28 @@
           }
         }
       },
+      "Instance": {
+        "type": "object",
+        "required": [
+          "single_org",
+          "mail",
+          "playgrounds"
+        ],
+        "properties": {
+          "mail": {
+            "type": "boolean",
+            "description": "romulus sends email (invitations, sign-up and reset links)."
+          },
+          "playgrounds": {
+            "type": "boolean",
+            "description": "Playgrounds are set up on this server (`ROMULUS_PLAY_URL`)."
+          },
+          "single_org": {
+            "type": "boolean",
+            "description": "One organization per install (`ROMULUS_SINGLE_ORG`): no way to create\nanother."
+          }
+        }
+      },
       "Invitation": {
         "type": "object",
         "description": "A pending invitation (its link is never shown again).",
@@ -10126,6 +10739,18 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "LinkToken": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "From the link's fragment (`#token=…`)."
           }
         }
       },
@@ -11121,6 +11746,51 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "PasswordSignIn": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "PasswordSignUp": {
+        "type": "object",
+        "required": [
+          "email",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "invitation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The token of the invitation link this sign-up comes from. Required\nunless sign-up is open; its address must be `email`."
+          },
+          "name": {
+            "type": "string",
+            "description": "How the team will see them: 1 to 100 characters."
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only when the server sends no email (`mail` false in\n`GET /api/instance`): the password, set now. Otherwise ignored: it is\nchosen on the page the emailed link opens."
           }
         }
       },
@@ -12270,6 +12940,42 @@
           }
         }
       },
+      "ResetLink": {
+        "type": "object",
+        "required": [
+          "email",
+          "first_password",
+          "expires_at"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "first_password": {
+            "type": "boolean",
+            "description": "The account has no password yet (the first admin's link): \"set\", not\n\"reset\"."
+          }
+        }
+      },
+      "ResetPassword": {
+        "type": "object",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
       "ReviewApproval": {
         "type": "object",
         "description": "One member's approval, as the people in the draft see it.",
@@ -12943,6 +13649,43 @@
           }
         }
       },
+      "SignUpLink": {
+        "type": "object",
+        "required": [
+          "email",
+          "name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "org": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The organization the account joins once created."
+          }
+        }
+      },
+      "SignUpOutcome": {
+        "type": "string",
+        "enum": [
+          "email_sent",
+          "signed_in"
+        ]
+      },
+      "SignUpPolicy": {
+        "type": "string",
+        "description": "Who may create a password account (`ROMULUS_SIGNUP`).",
+        "enum": [
+          "invite",
+          "open"
+        ]
+      },
       "SignedOut": {
         "type": "object",
         "required": [
@@ -12952,6 +13695,28 @@
           "redirect_url": {
             "type": "string",
             "description": "Where the browser goes next: the IdP's logout (which comes back to\nthe sign-in page), or the sign-in page itself."
+          }
+        }
+      },
+      "SignedUp": {
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "org": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Org",
+                "description": "The organization joined, when the sign-up came with an invitation\nand finished."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SignUpOutcome"
           }
         }
       },

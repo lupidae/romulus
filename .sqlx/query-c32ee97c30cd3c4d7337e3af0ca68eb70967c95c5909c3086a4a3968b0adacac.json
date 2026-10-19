@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (details->>'locks')::int AS \"locks!\" FROM auth_events\n           WHERE kind = 'sign_in_locked' ORDER BY created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locks!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c32ee97c30cd3c4d7337e3af0ca68eb70967c95c5909c3086a4a3968b0adacac"
+}

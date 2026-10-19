@@ -37,3 +37,8 @@ node_modules/
 # Python bytecode (the exporter scripts are run in place)
 __pycache__/
 *.pyc
+
+# A self-hosted install's state (deploy/self-host/install.sh writes it there)
+/deploy/self-host/.env
+/deploy/self-host/.env.*
+/deploy/self-host/backups/

@@ -18,15 +18,19 @@ romulus-migration = { workspace = true, features = ["utoipa"] }
 romulus-playground = { workspace = true, features = ["utoipa"] }
 romulus-sandbox = { workspace = true, features = ["utoipa"] }
 
+argon2.workspace = true
 axum = { workspace = true, features = ["ws"] }
 axum-extra.workspace = true
 base64.workspace = true
 chrono.workspace = true
 cookie.workspace = true
 dotenvy.workspace = true
+flate2.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
 http-body-util.workspace = true
+ipnet.workspace = true
+lettre.workspace = true
 multer.workspace = true
 openidconnect.workspace = true
 reqwest.workspace = true

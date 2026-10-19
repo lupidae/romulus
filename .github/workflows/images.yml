@@ -1,7 +1,10 @@
 name: Images
 
-# The deployable images, pushed to ghcr.io/lupidae (private, like the repo):
-#   romulus-api         Dockerfile: the API, serving the web app at /app
+# The official romulus images, published to ghcr.io/lupidae by the
+# maintainers (run on a fork, this pushes to ghcr.io/<the fork's owner>; a
+# fork's pull request pushes nothing). Each package's visibility is set on
+# GitHub, apart from the repository's. The images:
+#   romulus-api        Dockerfile: the API, serving the web app at /app
 #   romulus-sandbox     deploy/sandbox: the Postgres SQL compiles run in, once
 #                       per Postgres major a database can target (PG_MAJOR):
 #                       17, the default, under the bare tags; 15, 16 and 18

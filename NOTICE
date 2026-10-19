@@ -1,0 +1,28 @@
+romulus
+Copyright (C) 2026 Lucas Lefort and Pierre-Louis Dubois
+
+romulus is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License, version 3 only
+(SPDX: AGPL-3.0-only), as published by the Free Software Foundation. It is
+distributed WITHOUT ANY WARRANTY. The full license text is in LICENSE.
+
+Exception: the ee/ directory is not licensed under the AGPL. Its contents are
+covered by ee/LICENSE.
+
+Third-party software:
+
+- remus (the crates remus-core, remus-sql, remus-dbml and remus-mermaid on
+  crates.io) is used as a dependency and is licensed under the Apache
+  License, Version 2.0. It is a separate project and keeps its own license
+  and notices.
+- Every other dependency keeps its own license (see Cargo.lock,
+  web/package-lock.json and site/package-lock.json). Built files committed
+  under site/public/hero bundle some of them.
+- Fonts in site/public/fonts and deploy/zitadel/assets are licensed under
+  the SIL Open Font License 1.1; their license files sit next to them.
+- Icons in web/src/components/icons come from Iconoir (MIT License).
+- crates/romulus-api/src/auth/password/common-passwords.txt.gz is derived
+  from SecLists (https://github.com/danielmiessler/SecLists, MIT License,
+  Copyright (c) 2018 Daniel Miessler): its common-password lists, filtered.
+- Files copied from other projects keep their original license notice
+  (CONTRIBUTING.md, "File headers").

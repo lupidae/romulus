@@ -18,3 +18,12 @@ export const authMethodsQuery = queryOptions({
   queryFn: () => unwrap(api.GET("/api/auth/methods")),
   staleTime: Infinity,
 });
+
+export type Instance = components["schemas"]["Instance"];
+
+/** How this server is set up (one organization only, mail, playgrounds). */
+export const instanceQuery = queryOptions({
+  queryKey: ["instance"],
+  queryFn: () => unwrap(api.GET("/api/instance")),
+  staleTime: Infinity,
+});

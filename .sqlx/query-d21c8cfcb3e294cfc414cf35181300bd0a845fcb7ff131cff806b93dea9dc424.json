@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sign_in_failures SET last_failure_at = now() - interval '25 hours'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d21c8cfcb3e294cfc414cf35181300bd0a845fcb7ff131cff806b93dea9dc424"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET email_verified = true\n         WHERE oidc_subject LIKE 'password|%'\n           AND lower(email COLLATE pg_unicode_fast) = lower($1 COLLATE pg_unicode_fast)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "61915ede604da4c5ce5a44dd653fce3a7c3b2b272d3ecd7db7b1417bbeea9c6d"
+}

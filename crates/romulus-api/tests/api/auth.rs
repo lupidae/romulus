@@ -191,7 +191,14 @@ async fn methods_say_what_the_sign_in_page_offers(db: PgPool) {
     let response = TestApp::new(db.clone()).get("/api/auth/methods").await;
     assert_eq!(
         response.json(),
-        json!({ "sso": false, "dev_signin": false })
+        json!({
+            "sso": false,
+            "sso_enabled": true,
+            "password": false,
+            "sign_up": null,
+            "password_reset": false,
+            "dev_signin": false
+        })
     );
 
     let response = TestApp::with_config(db, dev_config())

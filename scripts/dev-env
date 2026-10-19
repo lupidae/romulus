@@ -11,7 +11,8 @@
 #
 #   slot N  →  ports 41000 + 10·N … +9   (see the table in CLAUDE.md)
 #              and 40000 + 10·N + (M − 10) for the sandbox of Postgres major M
-#              other than the default (15, 16, 18: +5, +6, +8)
+#              other than the default (15, 16, 18: +5, +6, +8), 40000 + 10·N + 1
+#              for the mail catcher's SMTP
 #
 #   scripts/dev-env                 write .env (idempotent)
 #   scripts/dev-env --release       give this worktree's slot back (teardown)
@@ -71,6 +72,8 @@ mkdir -p "$(dirname "$registry")"
 
 port_base() { echo $((41000 + 10 * $1)); }
 major_port() { echo $((40000 + 10 * $1 + $2 - 10)); }
+# The mail catcher's SMTP, in the same block (a digit no major uses).
+smtp_port() { echo $((40000 + 10 * $1 + 1)); }
 
 # Every port of the slot, so a stack this registry does not know (another
 # user's, a stale one) is never reused.
@@ -87,6 +90,9 @@ slot_ports_free() {
             return 1
         fi
     done
+    if nc -z 127.0.0.1 "$(smtp_port "$1")" 2>/dev/null; then
+        return 1
+    fi
 }
 
 acquire_lock() {
@@ -156,6 +162,7 @@ preview=$((base + $(offset preview)))
 e2e_api=$((base + $(offset e2e_api)))
 site=$((base + $(offset site)))
 mail=$((base + $(offset mail)))
+smtp=$(smtp_port "$slot")
 pg15=$(major_port "$slot" 15)
 pg16=$(major_port "$slot" 16)
 pg18=$(major_port "$slot" 18)
@@ -181,8 +188,10 @@ ROMULUS_PREVIEW_PORT=$preview
 ROMULUS_E2E_API_PORT=$e2e_api
 # The static homepage (site/), served by \`just site\`.
 ROMULUS_SITE_PORT=$site
-# The mail catcher: emails Zitadel sends (sign-up codes), web UI and API.
+# The mail catcher: emails Zitadel and romulus send (sign-up codes, password
+# links), web UI and API; its SMTP, which the API sends through.
 ROMULUS_MAIL_PORT=$mail
+ROMULUS_MAIL_SMTP_PORT=$smtp
 # The sandboxes of the other Postgres majors (17's is ROMULUS_SANDBOX_PORT),
 # started on demand: \`just sandbox 15\`, \`just sandbox all\`.
 ROMULUS_SANDBOX_PG15_PORT=$pg15
@@ -206,6 +215,13 @@ ROMULUS_SESSION_COOKIE=romulus_session_$slot
 # Dev-only sign-in without Zitadel's UI (QA, Playwright). The API refuses to
 # start with it unless ROMULUS_PUBLIC_URL is a loopback address.
 ROMULUS_DEV_SIGNIN=true
+# Both sign-in methods: single sign-on (Zitadel, as hosted) and romulus's
+# own email + password (as self-hosted). Its links go to the mail catcher.
+ROMULUS_AUTH=oidc,password
+ROMULUS_SMTP_HOST=127.0.0.1
+ROMULUS_SMTP_PORT=$smtp
+ROMULUS_SMTP_TLS=none
+ROMULUS_MAIL_FROM=romulus@romulus.localhost
 
 # Playgrounds (docs/playground.md): the service on the slot's last port, its
 # runner on a short socket path (Unix sockets have a ~100-byte limit), the
@@ -229,4 +245,4 @@ ROMULUS_UID=$(id -u)
 ROMULUS_GID=$(id -g)
 EOF
 
-echo "dev-env: slot $slot, project $project, web http://localhost:$web, api :$api, postgres :$postgres, sandbox :$sandbox (pg15 :$pg15, pg16 :$pg16, pg18 :$pg18), zitadel :$zitadel, playgrounds :$play"
+echo "dev-env: slot $slot, project $project, web http://localhost:$web, api :$api, postgres :$postgres, sandbox :$sandbox (pg15 :$pg15, pg16 :$pg16, pg18 :$pg18), zitadel :$zitadel, playgrounds :$play, mail :$mail (smtp :$smtp)"

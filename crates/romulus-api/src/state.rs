@@ -5,10 +5,11 @@ use sqlx::PgPool;
 
 use crate::{
     Config,
-    auth::{events::SessionEvents, oidc::Oidc},
+    auth::{events::SessionEvents, oidc::Oidc, password},
     collab::Hub,
     compile::SqlCompiler,
     imports::Turns,
+    mail::Mailer,
     orgs::events::MembershipEvents,
     playgrounds::{
         Playgrounds,
@@ -47,12 +48,17 @@ pub struct AppState {
     pub imports: Turns,
     /// The playground host, builds in progress, who has which console open.
     pub playgrounds: Playgrounds,
+    /// Email (`ROMULUS_SMTP_*`), or off.
+    pub mailer: Mailer,
+    /// Password sign-in's limits per client, address and person.
+    pub passwords: Arc<password::throttle::Limits>,
 }
 
 impl AppState {
     /// Without a SQL compiler (see [`AppState::with_compiler`]).
     pub fn new(db: PgPool, config: Config) -> Self {
         let config_playground = config.playground.clone();
+        let mailer = Mailer::from_config(&config);
         Self {
             collab: Hub::new(db.clone(), SqlCompiler::unavailable()),
             db,
@@ -69,7 +75,16 @@ impl AppState {
                 Some(play) => Host::new(Remote::new(play.url.clone(), play.key.clone())),
                 None => Host::off(),
             }),
+            mailer,
+            passwords: Arc::new(password::throttle::Limits::default()),
         }
+    }
+
+    /// A mailer of one's own (tests: `Mailer::memory`).
+    #[must_use]
+    pub fn with_mailer(mut self, mailer: Mailer) -> Self {
+        self.mailer = mailer;
+        self
     }
 
     /// A playground host of one's own (tests: a fake).

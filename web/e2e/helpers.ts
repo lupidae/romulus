@@ -52,19 +52,43 @@ export async function emailedCode(email: string): Promise<string> {
   const port = process.env.ROMULUS_MAIL_PORT;
   if (!port) throw new Error("ROMULUS_MAIL_PORT is not set: run scripts/dev-env");
   const api = `http://localhost:${port}/api/v1`;
-  for (let attempt = 0; attempt < 40; attempt++) {
+  // Every message to the address, newest first: romulus emails the
+  // invitation there too.
+  for (let attempt = 0; attempt < 120; attempt++) {
     const search = (await (
       await fetch(`${api}/search?query=${encodeURIComponent(`to:"${email}"`)}`)
     ).json()) as { messages?: { ID: string }[] };
-    const id = search.messages?.[0]?.ID;
-    if (id) {
-      const message = (await (await fetch(`${api}/message/${id}`)).json()) as { Text: string };
+    for (const { ID } of search.messages ?? []) {
+      const message = (await (await fetch(`${api}/message/${ID}`)).json()) as { Text: string };
       const code = /Your code is (\w+)/.exec(message.Text)?.[1];
       if (code) return code;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`no code emailed to ${email}`);
+}
+
+/**
+ * The one-time link romulus emailed to `email` for `page` (`welcome`: a
+ * sign-up, `reset`: a password), the newest, from the stack's mail catcher.
+ */
+export async function emailedLink(email: string, page: "welcome" | "reset"): Promise<string> {
+  const port = process.env.ROMULUS_MAIL_PORT;
+  if (!port) throw new Error("ROMULUS_MAIL_PORT is not set: run scripts/dev-env");
+  const api = `http://localhost:${port}/api/v1`;
+  const pattern = new RegExp(`https?://\\S+/app/signin/${page}#token=[\\w-]{43}`);
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const search = (await (
+      await fetch(`${api}/search?query=${encodeURIComponent(`to:"${email}"`)}`)
+    ).json()) as { messages?: { ID: string }[] };
+    for (const { ID } of search.messages ?? []) {
+      const message = (await (await fetch(`${api}/message/${ID}`)).json()) as { Text: string };
+      const link = pattern.exec(message.Text)?.[0];
+      if (link) return link;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`no ${page} link emailed to ${email}`);
 }
 
 /**

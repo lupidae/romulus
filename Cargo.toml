@@ -5,8 +5,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Private repository, no license granted (see the owner before changing).
-license = "UNLICENSED"
+license = "AGPL-3.0-only"
 repository = "https://github.com/lupidae/romulus"
 rust-version = "1.99"
 publish = false
@@ -23,6 +22,8 @@ romulus-play-runner = { path = "crates/romulus-play-runner", default-features = 
 romulus-playground = { path = "crates/romulus-playground", default-features = false }
 romulus-sandbox = { path = "crates/romulus-sandbox" }
 
+# Password accounts (ROMULUS_AUTH=password): Argon2id PHC strings.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "password-hash"] }
 axum = { version = "0.8.9", features = ["macros"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
 base64 = "0.22.1"
@@ -38,6 +39,22 @@ http-body-util = "0.1.5"
 # HTTP over Unix sockets: the runner (Docker's API) and the service (the runner's).
 hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
+# The common-password list (auth::password::policy), gzipped: already built
+# for zip's deflate.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+# ROMULUS_TRUSTED_PROXIES: CIDR ranges.
+ipnet = "2.12.2"
+# Email over SMTP (sign-up links, password resets, invitations): rustls with
+# webpki roots and ring, like every other TLS client here.
+lettre = { version = "0.11.23", default-features = false, features = [
+    "builder",
+    "hostname",
+    "smtp-transport",
+    "tokio1",
+    "tokio1-rustls",
+    "ring",
+    "webpki-roots",
+] }
 # multipart/form-data bodies: migration folders uploaded from the browser.
 multer = "3.1.0"
 openidconnect = "4.0.1"
@@ -56,6 +73,7 @@ sha2 = "0.10.9"
 similar = "2.7.0"
 sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
+    "ipnet",
     "json",
     "macros",
     "migrate",
@@ -101,6 +119,13 @@ print_stderr = "warn"
 
 [profile.dev.package.sqlx-macros]
 # The query macros run on every build; an optimised build of them pays off fast.
+opt-level = 3
+
+# Password hashing (Argon2id, 19 MiB): seconds per hash unoptimised, which
+# every password test would pay.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
 opt-level = 3
 
 # The API tests' fake IdP generates an RSA key: seconds unoptimised, instant here.

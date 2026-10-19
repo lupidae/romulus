@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.oidc_subject LIKE 'password|%' AS \"password!\"\n               FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "password!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "e0bd20d0c3cd85106b56628af135410293c66b5b1a913aeb5189dac02321c382"
+}

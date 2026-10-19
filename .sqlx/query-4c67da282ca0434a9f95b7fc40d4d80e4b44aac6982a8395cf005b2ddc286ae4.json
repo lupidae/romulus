@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM sessions WHERE user_id = $1 AND id_hash IS DISTINCT FROM $2 RETURNING id_hash",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "id_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4c67da282ca0434a9f95b7fc40d4d80e4b44aac6982a8395cf005b2ddc286ae4"
+}

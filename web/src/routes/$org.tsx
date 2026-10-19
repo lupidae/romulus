@@ -15,7 +15,8 @@ import { DatabaseIcon, GroupIcon, MailOutIcon, SettingsIcon } from "@/components
 import { AppShell, PageBody } from "@/components/shell/app-shell";
 import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toaster";
-import { meQuery } from "@/features/auth/queries";
+import { ChangePasswordDialog } from "@/features/auth/components/change-password-dialog";
+import { instanceQuery, meQuery } from "@/features/auth/queries";
 import { requireUser, signOut } from "@/features/auth/session";
 import { databaseQuery } from "@/features/databases/queries";
 import { rememberLastOrg } from "@/features/orgs/last-org";
@@ -47,7 +48,9 @@ function OrgLayout() {
   const { data: me } = useSuspenseQuery(meQuery);
   const { data: org } = useSuspenseQuery(orgQuery(slug));
   const { data: orgs } = useSuspenseQuery(orgsQuery);
+  const instance = useQuery(instanceQuery);
   const navigate = useNavigate();
+  const [changingPassword, setChangingPassword] = React.useState(false);
   const params = { org: slug };
   // Database pages lay themselves out edge to edge (the schema viewer).
   const { db } = useParams({ strict: false });
@@ -95,10 +98,14 @@ function OrgLayout() {
       nav={nav}
       breadcrumb={db ? <DatabaseCrumb org={slug} db={db} /> : undefined}
       onSwitchOrg={(next) => void navigate({ to: "/$org", params: { org: next.slug } })}
-      onCreateOrg={() => void navigate({ to: "/new" })}
+      // Hidden until the server says organizations can be created.
+      onCreateOrg={
+        instance.data && !instance.data.single_org ? () => void navigate({ to: "/new" }) : undefined
+      }
       onSignOut={() =>
         void signOut().catch(() => toast.error("Could not sign out. Check your connection."))
       }
+      onChangePassword={me.password_account ? () => setChangingPassword(true) : undefined}
     >
       {fullBleed ? (
         <Outlet />
@@ -106,6 +113,13 @@ function OrgLayout() {
         <PageBody>
           <Outlet />
         </PageBody>
+      )}
+      {me.password_account && (
+        <ChangePasswordDialog
+          email={me.email}
+          open={changingPassword}
+          onOpenChange={setChangingPassword}
+        />
       )}
     </AppShell>
   );

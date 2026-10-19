@@ -1,4 +1,4 @@
-import { ComputerIcon, HalfMoonIcon, LogOutIcon, SunLightIcon } from "@/components/icons";
+import { ComputerIcon, HalfMoonIcon, KeyIcon, LogOutIcon, SunLightIcon } from "@/components/icons";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,16 @@ import { type ThemePreference, useTheme } from "@/lib/theme";
 
 import type { ShellUser } from "./types";
 
-export function UserMenu({ user, onSignOut }: { user: ShellUser; onSignOut: () => void }) {
+export function UserMenu({
+  user,
+  onSignOut,
+  onChangePassword,
+}: {
+  user: ShellUser;
+  onSignOut: () => void;
+  /** Password accounts only: opens "Change password". */
+  onChangePassword?: () => void;
+}) {
   const { preference, setPreference } = useTheme();
   return (
     <Menu>
@@ -54,6 +63,12 @@ export function UserMenu({ user, onSignOut }: { user: ShellUser; onSignOut: () =
           </MenuRadioItem>
         </MenuRadioGroup>
         <MenuSeparator />
+        {onChangePassword && (
+          <MenuItem onSelect={onChangePassword}>
+            <KeyIcon />
+            Change password…
+          </MenuItem>
+        )}
         <MenuItem onSelect={onSignOut}>
           <LogOutIcon />
           Sign out

@@ -287,6 +287,47 @@ pub enum AuditAction {
     PlaygroundRestarted,
 }
 
+/// What a password sign-in event records (`auth_event_kind`): the security
+/// log of `ROMULUS_AUTH=password` (`auth::password::events`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "auth_event_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum AuthEventKind {
+    SignedIn,
+    /// A wrong password, an unknown address, or one without a password yet.
+    SignInFailed,
+    /// The address locked after too many failures (or refused while locked).
+    SignInLocked,
+    /// A sign-up link was sent (or would have been: the address has an account).
+    SignUpRequested,
+    AccountCreated,
+    /// Someone asked for a reset link (sent only to an existing account).
+    PasswordResetRequested,
+    /// A password set or reset with a one-time link.
+    PasswordReset,
+    /// A signed-in person changed their password.
+    PasswordChanged,
+    /// An admin printed a one-time link (`romulus-api password-link`, `setup`).
+    PasswordLinkCreated,
+    /// An admin cleared a lock (`romulus-api unlock`).
+    Unlocked,
+    /// An admin marked an address verified (`romulus-api verify-email`).
+    EmailVerified,
+    /// `romulus-api setup` created the first admin.
+    AdminCreated,
+}
+
+/// What a one-time link is for (`auth_link_purpose`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "auth_link_purpose", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum LinkPurpose {
+    /// Finishing a sign-up: receiving the link proved the address.
+    SignUp,
+    /// Setting a password (the first admin's) or resetting one.
+    ResetPassword,
+}
+
 /// Where a playground is (`playground_status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "playground_status", rename_all = "snake_case")]

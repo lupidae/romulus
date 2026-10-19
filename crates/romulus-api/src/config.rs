@@ -52,6 +52,145 @@ pub struct Config {
     /// 32 characters, the service holds the same). Both or neither; neither:
     /// playgrounds are off.
     pub playground: Option<PlaygroundConfig>,
+    /// `ROMULUS_AUTH`: how people sign in, a comma-separated list of `oidc`
+    /// (an identity provider, the `ROMULUS_OIDC_*` client) and `password`
+    /// (romulus's own accounts, `auth::password`). Default `oidc`.
+    pub auth: AuthConfig,
+    /// `ROMULUS_SIGNUP`: who may create a password account. `invite` (the
+    /// default): only from an invitation link, with the invited address.
+    /// `open`: anyone, the address proved by email (needs mail).
+    pub signup: SignUpPolicy,
+    /// `ROMULUS_SINGLE_ORG=true`: one organization per install (the free
+    /// self-hosted tier). `romulus-api setup` creates it; the API refuses to
+    /// create another and the app hides the way to.
+    pub single_org: bool,
+    /// `ROMULUS_SMTP_*` and `ROMULUS_MAIL_FROM`: how romulus sends email
+    /// (sign-up links, password resets, invitations). `None`: it sends none,
+    /// and admins hand links over themselves (`romulus-api password-link`).
+    pub mail: Option<MailConfig>,
+    /// `ROMULUS_TRUSTED_PROXIES`: comma-separated addresses or CIDR ranges
+    /// of reverse proxies whose `X-Forwarded-For` names the client (rate
+    /// limits and the sign-in log key by it). Empty: the TCP peer is the
+    /// client, whatever a header says.
+    pub trusted_proxies: Vec<ipnet::IpNet>,
+}
+
+/// The sign-in methods `ROMULUS_AUTH` enables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub oidc: bool,
+    pub password: bool,
+}
+
+/// Who may create a password account (`ROMULUS_SIGNUP`).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SignUpPolicy {
+    /// From an invitation link only, with the invited address.
+    Invite,
+    /// Anyone; the address is proved by a link sent to it.
+    Open,
+}
+
+/// The SMTP server romulus sends through, and as whom.
+#[derive(Debug, Clone)]
+pub struct MailConfig {
+    /// `ROMULUS_SMTP_HOST`.
+    pub host: String,
+    /// `ROMULUS_SMTP_PORT`: by default 587 (STARTTLS), 465 (implicit TLS)
+    /// or 25 (no TLS).
+    pub port: u16,
+    /// `ROMULUS_SMTP_TLS`: `starttls` (the default), `implicit` or `none`.
+    pub tls: SmtpTls,
+    /// `ROMULUS_SMTP_USERNAME` and `ROMULUS_SMTP_PASSWORD`: both or neither.
+    pub credentials: Option<(String, Secret)>,
+    /// `ROMULUS_MAIL_FROM`: `romulus <romulus@example.com>`.
+    pub from: lettre::message::Mailbox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpTls {
+    /// Plain connection upgraded with STARTTLS, which must succeed (port 587).
+    StartTls,
+    /// TLS from the first byte (SMTPS, port 465).
+    Implicit,
+    /// No TLS: only for a relay on this host (a loopback address).
+    None,
+}
+
+impl MailConfig {
+    fn from_lookup(
+        get: &impl Fn(&'static str) -> Option<String>,
+    ) -> Result<Option<Self>, ConfigError> {
+        let Some(host) = get("ROMULUS_SMTP_HOST") else {
+            for var in [
+                "ROMULUS_SMTP_PORT",
+                "ROMULUS_SMTP_TLS",
+                "ROMULUS_SMTP_USERNAME",
+                "ROMULUS_SMTP_PASSWORD",
+            ] {
+                if get(var).is_some() {
+                    return Err(ConfigError::Invalid {
+                        var,
+                        reason: "set ROMULUS_SMTP_HOST too, or remove it".to_owned(),
+                    });
+                }
+            }
+            return Ok(None);
+        };
+        let tls = match get("ROMULUS_SMTP_TLS").as_deref() {
+            None | Some("starttls") => SmtpTls::StartTls,
+            Some("implicit") => SmtpTls::Implicit,
+            Some("none") => SmtpTls::None,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_SMTP_TLS",
+                    reason: format!("expected starttls, implicit or none, got {other:?}"),
+                });
+            }
+        };
+        let port = match get("ROMULUS_SMTP_PORT") {
+            Some(port) => port.parse().map_err(|_| ConfigError::Invalid {
+                var: "ROMULUS_SMTP_PORT",
+                reason: format!("{port:?} is not a port number"),
+            })?,
+            None => match tls {
+                SmtpTls::StartTls => 587,
+                SmtpTls::Implicit => 465,
+                SmtpTls::None => 25,
+            },
+        };
+        let credentials = match (get("ROMULUS_SMTP_USERNAME"), get("ROMULUS_SMTP_PASSWORD")) {
+            (None, None) => None,
+            (Some(user), Some(password)) => Some((user, Secret(password))),
+            (Some(_), None) => return Err(ConfigError::Missing("ROMULUS_SMTP_PASSWORD")),
+            (None, Some(_)) => return Err(ConfigError::Missing("ROMULUS_SMTP_USERNAME")),
+        };
+        // Links that sign people in, in clear over a network: never. A relay
+        // on this host (loopback) is the one place TLS may be skipped.
+        if tls == SmtpTls::None && !is_loopback_host(&host) {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_SMTP_TLS",
+                reason: format!(
+                    "none sends sign-in links (and any SMTP password) in clear to {host}: use starttls or implicit, or a relay on 127.0.0.1"
+                ),
+            });
+        }
+        let from = get("ROMULUS_MAIL_FROM").ok_or(ConfigError::Missing("ROMULUS_MAIL_FROM"))?;
+        let from = from.parse().map_err(|err| ConfigError::Invalid {
+            var: "ROMULUS_MAIL_FROM",
+            reason: format!("{err} (expected `romulus <romulus@example.com>`)"),
+        })?;
+        Ok(Some(Self {
+            host,
+            port,
+            tls,
+            credentials,
+            from,
+        }))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +291,14 @@ impl Config {
             web_dir: None,
             edge_key: None,
             playground: None,
+            auth: AuthConfig {
+                oidc: true,
+                password: false,
+            },
+            signup: SignUpPolicy::Invite,
+            single_org: false,
+            mail: None,
+            trusted_proxies: Vec::new(),
         }
     }
 
@@ -161,6 +308,7 @@ impl Config {
         self.public_url.origin().ascii_serialization()
     }
 
+    #[allow(clippy::too_many_lines, reason = "every variable, one after the other")]
     fn from_lookup(get: impl Fn(&'static str) -> Option<String>) -> Result<Self, ConfigError> {
         let required = |name| get(name).ok_or(ConfigError::Missing(name));
         let url = |name: &'static str, value: &str| {
@@ -202,16 +350,7 @@ impl Config {
 
         let public_url = url("ROMULUS_PUBLIC_URL", &required("ROMULUS_PUBLIC_URL")?)?;
 
-        let dev_signin = match get("ROMULUS_DEV_SIGNIN").as_deref() {
-            None | Some("false" | "0") => false,
-            Some("true" | "1") => true,
-            Some(other) => {
-                return Err(ConfigError::Invalid {
-                    var: "ROMULUS_DEV_SIGNIN",
-                    reason: format!("expected true or false, got {other:?}"),
-                });
-            }
-        };
+        let dev_signin = flag(&get, "ROMULUS_DEV_SIGNIN")?;
         if dev_signin && !is_loopback(&public_url) {
             return Err(ConfigError::DevSigninNotLocal(public_url.to_string()));
         }
@@ -255,6 +394,55 @@ impl Config {
         }
 
         let playground = PlaygroundConfig::from_lookup(&get)?;
+        let auth = auth_methods(get("ROMULUS_AUTH").as_deref())?;
+        // A client configured for a method that is off is ignored.
+        let oidc = oidc.filter(|_| auth.oidc);
+        let mail = MailConfig::from_lookup(&get)?;
+        let signup = match get("ROMULUS_SIGNUP").as_deref() {
+            None | Some("invite") => SignUpPolicy::Invite,
+            Some("open") => SignUpPolicy::Open,
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_SIGNUP",
+                    reason: format!("expected invite or open, got {other:?}"),
+                });
+            }
+        };
+        // Without mail nothing proves an address: only an invitation, which
+        // an admin handed over, may.
+        if signup == SignUpPolicy::Open && mail.is_none() {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_SIGNUP",
+                reason: "open needs mail to prove addresses: set ROMULUS_SMTP_HOST, or use invite"
+                    .to_owned(),
+            });
+        }
+        let single_org = flag(&get, "ROMULUS_SINGLE_ORG")?;
+        let trusted_proxies = match get("ROMULUS_TRUSTED_PROXIES") {
+            None => Vec::new(),
+            Some(list) => list
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| {
+                    let net = item
+                        .parse::<ipnet::IpNet>()
+                        .or_else(|_| item.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
+                        .map_err(|_| ConfigError::Invalid {
+                            var: "ROMULUS_TRUSTED_PROXIES",
+                            reason: format!("{item:?} is not an IP address or a CIDR range"),
+                        })?;
+                    // Everyone would choose their own address.
+                    if net.prefix_len() == 0 {
+                        return Err(ConfigError::Invalid {
+                            var: "ROMULUS_TRUSTED_PROXIES",
+                            reason: format!("{item:?} trusts every client: name your proxies"),
+                        });
+                    }
+                    Ok(net)
+                })
+                .collect::<Result<_, _>>()?,
+        };
 
         Ok(Self {
             database_url: required("DATABASE_URL")?,
@@ -269,8 +457,71 @@ impl Config {
             web_dir,
             edge_key,
             playground,
+            auth,
+            signup,
+            single_org,
+            mail,
+            trusted_proxies,
         })
     }
+}
+
+/// `ROMULUS_AUTH`: `oidc` when unset.
+fn auth_methods(value: Option<&str>) -> Result<AuthConfig, ConfigError> {
+    let Some(value) = value else {
+        return Ok(AuthConfig {
+            oidc: true,
+            password: false,
+        });
+    };
+    let mut auth = AuthConfig {
+        oidc: false,
+        password: false,
+    };
+    for method in value.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+        match method {
+            "oidc" => auth.oidc = true,
+            "password" => auth.password = true,
+            other => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_AUTH",
+                    reason: format!("unknown sign-in method {other:?} (oidc, password)"),
+                });
+            }
+        }
+    }
+    if !(auth.oidc || auth.password) {
+        return Err(ConfigError::Invalid {
+            var: "ROMULUS_AUTH",
+            reason: "name at least one sign-in method: oidc, password".to_owned(),
+        });
+    }
+    Ok(auth)
+}
+
+/// A `true`/`false` (or `1`/`0`) variable, false when unset.
+fn flag(
+    get: &impl Fn(&'static str) -> Option<String>,
+    var: &'static str,
+) -> Result<bool, ConfigError> {
+    match get(var).as_deref() {
+        None | Some("false" | "0") => Ok(false),
+        Some("true" | "1") => Ok(true),
+        Some(other) => Err(ConfigError::Invalid {
+            var,
+            reason: format!("expected true or false, got {other:?}"),
+        }),
+    }
+}
+
+/// `localhost` or a loopback IP.
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Each major's sandbox URL, from `ROMULUS_SANDBOX_URL` (the default
@@ -533,6 +784,151 @@ mod tests {
         let config = config(&vars).unwrap();
         assert!(!format!("{config:?}").contains(&key));
         assert_eq!(config.edge_key.unwrap().expose(), key);
+    }
+
+    #[test]
+    fn sign_in_methods_default_to_sso_and_take_a_list() {
+        let auth = config(&BASE).unwrap().auth;
+        assert!(auth.oidc && !auth.password);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_AUTH", "password"));
+        let auth = config(&vars).unwrap().auth;
+        assert!(!auth.oidc && auth.password);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_AUTH", " oidc , password "));
+        let auth = config(&vars).unwrap().auth;
+        assert!(auth.oidc && auth.password);
+        for bad in ["ldap", ",", "password,saml"] {
+            let mut vars = BASE.to_vec();
+            vars.push(("ROMULUS_AUTH", bad));
+            assert!(
+                matches!(
+                    config(&vars),
+                    Err(ConfigError::Invalid {
+                        var: "ROMULUS_AUTH",
+                        ..
+                    })
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_oidc_client_is_ignored_when_sso_is_off() {
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_AUTH", "password"));
+        vars.push(("ROMULUS_OIDC_ISSUER", "http://localhost:41004"));
+        vars.push(("ROMULUS_OIDC_CLIENT_ID", "client"));
+        vars.push(("ROMULUS_OIDC_CLIENT_SECRET", "secret"));
+        assert!(config(&vars).unwrap().oidc.is_none());
+    }
+
+    #[test]
+    fn open_sign_up_needs_mail() {
+        assert_eq!(config(&BASE).unwrap().signup, SignUpPolicy::Invite);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SIGNUP", "open"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_SIGNUP",
+                ..
+            })
+        ));
+        vars.push(("ROMULUS_SMTP_HOST", "smtp.resend.com"));
+        vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
+        assert_eq!(config(&vars).unwrap().signup, SignUpPolicy::Open);
+    }
+
+    #[test]
+    fn smtp_settings_default_to_starttls_and_need_a_sender() {
+        assert!(config(&BASE).unwrap().mail.is_none());
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SMTP_HOST", "smtp.resend.com"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Missing("ROMULUS_MAIL_FROM"))
+        ));
+        vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
+        vars.push(("ROMULUS_SMTP_USERNAME", "resend"));
+        vars.push(("ROMULUS_SMTP_PASSWORD", "re_secret"));
+        let config_ = config(&vars).unwrap();
+        let mail = config_.mail.as_ref().unwrap();
+        assert_eq!((mail.tls, mail.port), (SmtpTls::StartTls, 587));
+        assert_eq!(mail.from.email.to_string(), "romulus@example.com");
+        assert!(!format!("{config_:?}").contains("re_secret"));
+
+        let mut implicit = vars.clone();
+        implicit.push(("ROMULUS_SMTP_TLS", "implicit"));
+        let mail = config(&implicit).unwrap().mail.unwrap();
+        assert_eq!((mail.tls, mail.port), (SmtpTls::Implicit, 465));
+    }
+
+    #[test]
+    fn smtp_without_tls_is_for_a_relay_on_this_host_only() {
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SMTP_HOST", "mail.internal"));
+        vars.push(("ROMULUS_MAIL_FROM", "romulus@example.com"));
+        vars.push(("ROMULUS_SMTP_TLS", "none"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_SMTP_TLS",
+                ..
+            })
+        ));
+        for local in ["127.0.0.1", "localhost", "::1"] {
+            let vars: Vec<_> = vars
+                .iter()
+                .map(|&(k, v)| (k, if k == "ROMULUS_SMTP_HOST" { local } else { v }))
+                .collect();
+            assert_eq!(config(&vars).unwrap().mail.unwrap().port, 25, "{local}");
+        }
+    }
+
+    #[test]
+    fn smtp_details_without_a_host_are_a_mistake() {
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SMTP_PASSWORD", "p"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_SMTP_PASSWORD",
+                ..
+            })
+        ));
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SMTP_HOST", "h"));
+        vars.push(("ROMULUS_MAIL_FROM", "not an address"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_MAIL_FROM",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn single_org_and_trusted_proxies_are_read() {
+        let plain = config(&BASE).unwrap();
+        assert!(!plain.single_org && plain.trusted_proxies.is_empty());
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SINGLE_ORG", "true"));
+        vars.push(("ROMULUS_TRUSTED_PROXIES", "172.16.0.0/12, 127.0.0.1 ,::1"));
+        let set = config(&vars).unwrap();
+        assert!(set.single_org);
+        assert_eq!(set.trusted_proxies.len(), 3);
+        assert!(set.trusted_proxies[1].contains(&"127.0.0.1".parse::<std::net::IpAddr>().unwrap()));
+        for bad in ["everyone", "0.0.0.0/0", "::/0"] {
+            let mut vars = BASE.to_vec();
+            vars.push(("ROMULUS_TRUSTED_PROXIES", bad));
+            assert!(config(&vars).is_err(), "{bad}");
+        }
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_SINGLE_ORG", "yes"));
+        assert!(config(&vars).is_err());
     }
 
     #[test]

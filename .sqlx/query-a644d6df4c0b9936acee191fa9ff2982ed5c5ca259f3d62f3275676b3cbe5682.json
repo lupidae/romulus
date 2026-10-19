@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sign_in_failures SET locked_until = now() - interval '1 second'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "a644d6df4c0b9936acee191fa9ff2982ed5c5ca259f3d62f3275676b3cbe5682"
+}

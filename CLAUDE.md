@@ -4,6 +4,9 @@ DBA as a service: an organization keeps its Postgres schemas here, versions
 them, reviews diffs and designs the next version together (SQL and table graph,
 live cursors). The spec is [docs/MVP.md](docs/MVP.md); read it before a feature.
 remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
+Open source (AGPL-3.0-only, `LICENSE`, `NOTICE`; contributions under `CLA.md`);
+hosted by lupidae and self-hostable for one organization
+([docs/business-model.md](docs/business-model.md), `deploy/self-host`).
 
 ## Repo map
 
@@ -25,7 +28,12 @@ site/                 the static homepage (tokens copied from web/; see site/REA
                       Function (functions/, edge/proxy.js) proxies /app and /api to the API; its
                       live hero (public/hero/, committed) is built from web/src/hero by `just site-hero`
 deploy/zitadel/       the provisioner that sets Zitadel up on `just up` (and on deploys), and the login's brand assets
-deploy/preview/       the preview at romulus.lupidae.com: compose, deploy.sh, cloudflare.sh; README = runbook
+deploy/preview/       lupidae's hosted preview (romulus.lupidae.com): compose, deploy.sh, cloudflare.sh; README = runbook
+deploy/self-host/     the self-host bundle: compose.yaml (published images), install.sh (install, upgrade,
+                      backup, restore, admin-link), Caddyfile, test/install-test.sh (CI: self-host.yml);
+                      docs in docs/self-host/
+ee/                   the future separately licensed (commercial) features: empty, ee/LICENSE a placeholder
+docs/oss/             going open source: the history's secret scan, what is lupidae's own
 Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
 scripts/export-migrations/  alembic.sh, django.sh, rails.sh: run in a user's project, print the SQL to import
@@ -81,9 +89,10 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +5 | `ROMULUS_PREVIEW_PORT` | `vite preview`: the origin Playwright drives |
 | +6 | `ROMULUS_E2E_API_PORT` | the API Playwright starts, with `ROMULUS_PUBLIC_URL` = the preview origin |
 | +7 | `ROMULUS_SITE_PORT` | the static homepage (`just site`, site/'s Playwright) |
-| +8 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel sends (sign-up codes) |
+| +8 | `ROMULUS_MAIL_PORT` | Mailpit: web UI and API of every email Zitadel and the API send (sign-up codes, password links, invitations) |
 | +9 | `ROMULUS_PLAY_PORT` | the playground service (`ROMULUS_PLAY_URL`; `just dev` or `just play` runs it) |
 | 40000 + 10·N + M − 10 | `ROMULUS_SANDBOX_PG15_PORT`, `…PG16…`, `…PG18…` | the other Postgres majors' sandboxes (`ROMULUS_SANDBOX_URL_PG15`…), on demand |
+| 40000 + 10·N + 1 | `ROMULUS_MAIL_SMTP_PORT` | Mailpit's SMTP: the API's mail (`ROMULUS_SMTP_*` in `.env`) |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
 the worktree path>`, computed by `scripts/dev-env --project-name` and passed
@@ -145,6 +154,36 @@ Made in the skeleton (S0):
   in the OpenAPI document. Config refuses it unless `ROMULUS_PUBLIC_URL` is
   loopback and `ROMULUS_API_ADDR` a loopback IP (never `0.0.0.0`). It reuses an existing user by email; a later real SSO login of
   that address is another user (different `sub`).
+- **Two sign-in methods behind one session layer** (docs/MVP.md "Self-host
+  and open source"): `ROMULUS_AUTH` lists `oidc` (Zitadel, the hosted
+  service) and/or `password` (`auth::password`, the self-host bundle's
+  default); dev and e2e stacks run both, their mail going to Mailpit.
+  Password accounts are `users` rows with `oidc_subject` `password|<uuid>`
+  (one per address); their address is always verified (an emailed link
+  creates the account, or, without mail, an invitation vouches). Argon2id,
+  12 to 128 characters and not in the embedded breach list (`policy.rs`,
+  `common-passwords.txt.gz`), each attempt counted before its check (the
+  10th in a series locks the address, account or not: 15 min, 30, then 1 h
+  for every lock of the day after; a new series once it runs out), a device
+  cookie per browser that signed in (`sign_in_devices`: its attempts count
+  apart, never locked out by others), per-client limits by IPv4 address or
+  IPv6 /48, no global cap (the hashing pool, `hash::Slots`, is a bounded
+  queue answering 503 `busy` only when full),
+  answers that never tell which addresses have accounts, one-time links
+  (`#token=` in the fragment, sha256 stored), every event in `auth_events`
+  (append only, 90 days). An operator's commands: `romulus-api setup |
+  password-link | unlock | verify-email | auth-events | mail-test`
+  (`admin.rs`).
+- **Single-organization mode** (`ROMULUS_SINGLE_ORG=true`, self-host):
+  `romulus-api setup` creates the one organization and its admin; `POST
+  /orgs` answers 403 `single_org`; `GET /api/instance` tells the app
+  (no "Create organization"; `/new` explains how to get an invitation).
+- **Mail** (`mail.rs`, `ROMULUS_SMTP_*`): optional; sends from its own
+  task, never fails the request; tests use `Mailer::memory()` and read the
+  `Outbox`. With mail, invitations are emailed too (`CreatedInvitation.emailed`).
+- **Behind a reverse proxy**: `ROMULUS_TRUSTED_PROXIES` (CIDRs) makes the
+  client of `X-Forwarded-For` the request's `ConnectInfo` (`forwarded.rs`);
+  per-client limits key by it. Unset, no header is believed.
 - **Sessions**: a random token in an httpOnly `SameSite=Lax` cookie
   (`Path=/api`, `Secure` on https), only its sha256 stored; expiry slides a
   week from each use, never past 30 days after sign-in. No IdP token is kept
@@ -347,7 +386,7 @@ Made in the skeleton (S0):
 
 ```
 src/routes/              TanStack file routes (only route + page code); -prefixed files are ignored
-src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Field, Select
+src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), PasswordInput (show/hide), Field, Select
                          (SelectItem `description`), Dialog, ConfirmDialog, Popover, Sheet, Menu
                          (MenuItem `description`),
                          Toaster/toast, Avatar/AvatarStack, Badge, Tabs, Table, CopyField,
@@ -398,7 +437,11 @@ src/styles/globals.css   every token; the only file with raw colors
   and gate actions on `canWrite(org.role)` / `canManageMembers(org.role)`
   (`features/orgs/roles.ts`); the API enforces it anyway. Slugs must not
   collide with top-level routes: `signin`, `new`, `invite`, `dev`,
-  `settings`, `api`, `app` are reserved (API and database refuse them). A
+  `settings`, `api`, `app` are reserved (API and database refuse them). The
+  sign-in pages live under `/signin/…` (`signin_.forgot`, `signin_.reset`,
+  `signin_.new`, `signin_.welcome`: not nested in `signin.tsx`), on
+  `features/auth/components/auth-page.tsx`; one-time links carry their token
+  in the fragment (`readLinkToken`, then `forgetLinkToken` in an effect). A
   signed-in route outside `$org` calls `requireUser(queryClient,
   location.href)` (`features/auth/session.ts`) in `beforeLoad`. A 401 from
   any query or mutation sends the user to sign-in and back; a 403 refetches
@@ -996,7 +1039,9 @@ draft session in `local` mode) in a browser-only island: no API calls.
   `app.push(database, token, content_type, body)`, and
   `TestApp::compiling(db)` with a fake compiler (`CREATE TABLE x` makes a
   table, `oops` is a located syntax error). `idp::FakeIdp`
-  plays the OIDC provider (`TestApp::with_config(db, idp.config())`). Unit
+  plays the OIDC provider (`TestApp::with_config(db, idp.config())`).
+  Password sign-in: `tests/api/passwords.rs` (`app_with(db, mail, signup)`
+  gives an app and its `Outbox`; `token_in(&email.text)` reads a link). Unit
   tests inline in `#[cfg(test)] mod tests`, named as assertions.
 - Web: Vitest + Testing Library next to the code (`*.test.tsx`) for behaviour;
   Playwright in `web/e2e/` for flows, against the production build on the
@@ -1006,6 +1051,7 @@ draft session in `local` mode) in a browser-only island: no API calls.
   `ssoSignIn(page, user)` (from our sign-in page) or `zitadelSignIn(page,
   user)` (already on Zitadel's) with `zitadelUsers()` for the real login,
   `emailedCode(email)` for a code Zitadel emailed (sign-up),
+  `emailedLink(email, "welcome" | "reset")` for a link the API emailed,
   `createOrg`, `inviteLink`, `unique(…)` (the stack's database is shared
   between runs: name things uniquely).
 - Every feature PR: its endpoints tested (happy path, permission denied per

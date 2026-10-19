@@ -2,7 +2,9 @@
 //!
 //! Endpoints (who may call them in brackets; see `auth::member`):
 //! - `GET /orgs` [signed in]: mine, with my role. `POST /orgs` [signed in]:
-//!   create one; its creator is its admin.
+//!   create one; its creator is its admin. Refused (403 `single_org`) on a
+//!   single-organization install (`ROMULUS_SINGLE_ORG`), whose one
+//!   organization `romulus-api setup` creates.
 //! - `GET /orgs/{org}` [member], `PATCH /orgs/{org}` [admin]: name, slug,
 //!   and how many approvals publishing a draft needs (`drafts::approvals`).
 //! - `GET /orgs/{org}/members` [member]; `PATCH /orgs/{org}/members/{user}`
@@ -23,7 +25,7 @@
 //! websockets (`collab`).
 
 pub mod events;
-mod invitations;
+pub(crate) mod invitations;
 mod members;
 pub mod slug;
 
@@ -158,6 +160,7 @@ async fn list(user: CurrentUser, State(db): State<PgPool>) -> ApiResult<Json<Vec
     request_body = CreateOrg,
     responses(
         (status = 201, body = Org),
+        (status = 403, description = "`single_org`: this install keeps one organization", body = ErrorBody),
         (status = 409, description = "`slug_taken`", body = ErrorBody),
         (status = 422, description = "`validation`, `details` names the field", body = ErrorBody),
     )
@@ -165,8 +168,15 @@ async fn list(user: CurrentUser, State(db): State<PgPool>) -> ApiResult<Json<Vec
 async fn create(
     user: CurrentUser,
     State(db): State<PgPool>,
+    State(config): State<std::sync::Arc<crate::Config>>,
     Json(body): Json<CreateOrg>,
 ) -> ApiResult<(StatusCode, Json<Org>)> {
+    if config.single_org {
+        return Err(ApiError::Denied {
+            code: "single_org",
+            message: "This server keeps one organization. Ask its admin to invite you.".to_owned(),
+        });
+    }
     let name = checked_name(&body.name)?;
     let slug = checked_slug(&body.slug)?;
     let mut tx = db::begin_read_committed(&db).await?;

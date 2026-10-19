@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM sign_in_failures\n         WHERE last_failure_at < now() - make_interval(secs => $1)\n           AND (locked_until IS NULL OR locked_until < now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c3a72dc9398aac92f961c2c39f64f200214ca80a516cfd84ba4f112c3ff7cda"
+}

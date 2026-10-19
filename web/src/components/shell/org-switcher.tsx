@@ -18,7 +18,8 @@ interface OrgSwitcherProps {
   current: ShellOrg;
   orgs: ShellOrg[];
   onSelect: (org: ShellOrg) => void;
-  onCreate: () => void;
+  /** Absent where organizations cannot be created (a single-organization install). */
+  onCreate?: () => void;
 }
 
 export function OrgTile({ name, className }: { name: string; className?: string }) {
@@ -67,11 +68,15 @@ export function OrgSwitcher({ current, orgs, onSelect, onCreate }: OrgSwitcherPr
             </MenuItem>
           ))}
         </MenuGroup>
-        <MenuSeparator />
-        <MenuItem onSelect={onCreate}>
-          <PlusIcon />
-          Create organization
-        </MenuItem>
+        {onCreate && (
+          <>
+            <MenuSeparator />
+            <MenuItem onSelect={onCreate}>
+              <PlusIcon />
+              Create organization
+            </MenuItem>
+          </>
+        )}
       </MenuContent>
     </Menu>
   );

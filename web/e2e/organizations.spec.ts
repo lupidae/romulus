@@ -34,8 +34,9 @@ test("an admin invites a developer, who joins, and is then made a reviewer", asy
   await invitee.goto(link);
   await expect(invitee.getByRole("heading", { name: `Join ${orgName} on romulus` })).toBeVisible();
   await expect(invitee.getByText(`invited ${bob.email} to join as a developer`)).toBeVisible();
-  // One click, straight into Zitadel, with Bob's address already given.
-  await invitee.getByRole("link", { name: "Sign in to accept" }).click();
+  // One click, straight into Zitadel, with Bob's address already given (the
+  // e2e stack also offers password accounts: e2e/passwords.spec.ts).
+  await invitee.getByRole("link", { name: "Continue with SSO" }).click();
   await expect(invitee.getByRole("heading", { name: "Enter your password" })).toBeVisible();
   await zitadelSignIn(invitee, bob);
   await expect(invitee).toHaveURL(/\/app\/invite\//);
@@ -141,6 +142,8 @@ test("a session ended elsewhere lands on sign-in, and stays there", async ({ pag
 test("someone without an account creates one from the invitation and joins", async ({
   browser,
 }) => {
+  // Zitadel's sign-up and its emailed code take their time under load.
+  test.setTimeout(60_000);
   const admin = await (await browser.newContext()).newPage();
   await devSignIn(admin, `host-${Date.now()}@romulus.test`, "/app/new");
   const orgName = unique("Newcomers");
@@ -150,7 +153,7 @@ test("someone without an account creates one from the invitation and joins", asy
 
   const nora = await (await browser.newContext()).newPage();
   await nora.goto(link);
-  await nora.getByRole("link", { name: "Sign in to accept" }).click();
+  await nora.getByRole("link", { name: "Continue with SSO" }).click();
   // No account for that address: Zitadel's (branded) login offers one.
   await expect(nora.getByRole("heading", { name: "Sign in to romulus" })).toBeVisible();
   await nora.getByRole("button", { name: "Create account" }).click();

@@ -197,7 +197,8 @@ site-lighthouse: env
             "$PWD/site/lighthouse/$preset.report.json" "$preset"
     done
 
-# publish the homepage and its Function (/app, /api → the preview's API) to Cloudflare Pages
+# publish the homepage and its Function (/app, /api → the preview's API) to Cloudflare Pages:
+# lupidae's hosted homepage, maintainers only (site/README.md)
 # (site/wrangler.toml; `npx wrangler login` once, or CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID)
 site-deploy:
     cd site && npx --yes wrangler@4.151.0 pages deploy --branch main

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE auth_events SET created_at = now() - interval '91 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d7057f6d12408c93c76167682600730c9bfc7e8d798fffbb63407f02d27de130"
+}

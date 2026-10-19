@@ -42,8 +42,9 @@ interface PlaygroundButtonProps {
 
 /**
  * "Playground": opens the draft's (or the version's) playground, or, for a
- * developer, creates one. Nothing for a reviewer when there is none yet, and
- * nothing at all on a server without a playground host.
+ * developer, creates one. Nothing for a reviewer when there is none yet; on
+ * a server without a playground host, a disabled button saying so (to whoever
+ * could create one).
  */
 export function PlaygroundButton({
   org,
@@ -71,7 +72,19 @@ export function PlaygroundButton({
       <span className={cn(compact && "max-md:sr-only")}>Playground</span>
     </>
   );
-  if (health.data?.playgrounds === "off") return null;
+  if (health.data?.playgrounds === "off") {
+    // A self-hosted server without them: say they exist and who turns them on.
+    if (!canCreate) return null;
+    return (
+      <Tooltip content="Playgrounds are not set up on this server. Whoever runs it can turn them on (self-host docs, Playgrounds).">
+        <span>
+          <Button variant={variant} disabled>
+            {label}
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  }
   if (existing) {
     return (
       <Tooltip

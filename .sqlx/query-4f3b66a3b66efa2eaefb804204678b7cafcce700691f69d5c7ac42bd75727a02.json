@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE auth_links SET used_at = now()\n         WHERE user_id = $1 AND purpose = 'reset_password' AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4f3b66a3b66efa2eaefb804204678b7cafcce700691f69d5c7ac42bd75727a02"
+}

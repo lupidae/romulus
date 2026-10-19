@@ -54,13 +54,24 @@ export async function signOut(): Promise<void> {
 }
 
 /**
- * Ends the session and signs in again through the IdP, choosing the account:
- * for "this invitation is for another address". Always the real sign-in,
- * dev stacks included: the dev shortcut is only ever an explicit choice on
- * the sign-in page.
+ * Ends the session and signs in again, choosing the account: for "this
+ * invitation is for another address". Through the IdP (`sso`, the default),
+ * dev stacks included (the dev shortcut is only ever an explicit choice on
+ * the sign-in page); with `sso: false`, on romulus's own sign-in page.
  */
-export async function switchAccount(next: string, loginHint?: string): Promise<void> {
+export async function switchAccount(
+  next: string,
+  loginHint?: string,
+  options: { sso?: boolean } = {},
+): Promise<void> {
   await unwrap(api.POST("/api/auth/logout"));
+  if (options.sso === false) {
+    // Password accounts: our own sign-in page, the address pre-filled.
+    const params = new URLSearchParams({ next });
+    if (loginHint) params.set("email", loginHint);
+    window.location.assign(`${APP_BASE}/signin?${params.toString()}`);
+    return;
+  }
   window.location.assign(loginUrl(next, { switchAccount: true, loginHint }));
 }
 

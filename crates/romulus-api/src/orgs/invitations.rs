@@ -64,6 +64,8 @@ pub struct CreatedInvitation {
     pub invitation: Invitation,
     /// The one-time link to send to the invitee. Shown only now.
     pub url: String,
+    /// romulus emailed the link to the invitee too (the server sends mail).
+    pub emailed: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -205,6 +207,25 @@ async fn create(
         .public_url
         .join(&format!("/app/invite/{link}"))
         .expect("a path joins any base URL");
+    // A few per address: inviting again and again never floods an inbox.
+    let emailed = state.mailer.is_on()
+        && state
+            .passwords
+            .mails
+            .check(crate::email::key(&email))
+            .is_ok();
+    if emailed {
+        state
+            .mailer
+            .send(crate::auth::password::letters::invitation(
+                &email,
+                &admin.user.name,
+                &admin.org.name,
+                with_article(body.role),
+                url.as_str(),
+                TTL,
+            ));
+    }
     Ok((
         StatusCode::CREATED,
         Json(CreatedInvitation {
@@ -221,6 +242,7 @@ async fn create(
                 }),
             },
             url: url.into(),
+            emailed,
         }),
     ))
 }
@@ -554,6 +576,105 @@ pub(super) async fn revoke_sent_by(
     .execute(tx)
     .await
     .map(|done| done.rows_affected())
+}
+
+/// An invitation a link names that can still be accepted (unused,
+/// unexpired, its author still an admin): what a sign-up from it needs.
+pub(crate) struct LiveInvitation {
+    pub id: Uuid,
+    pub email: String,
+    pub org_name: String,
+}
+
+pub(crate) async fn live(db: &PgPool, link: &str) -> Result<Option<LiveInvitation>, sqlx::Error> {
+    if !token::is_well_formed(link) {
+        return Ok(None);
+    }
+    sqlx::query_as!(
+        LiveInvitation,
+        r#"SELECT i.id, i.email, o.name AS org_name
+           FROM invitations i JOIN organizations o ON o.id = i.org_id
+           WHERE i.token_hash = $1 AND i.accepted_at IS NULL AND i.expires_at > now()
+             AND EXISTS (SELECT 1 FROM memberships author
+                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by
+                           AND author.role = 'admin')"#,
+        token::hash(link),
+    )
+    .fetch_optional(db)
+    .await
+}
+
+/// The organization an invitation is to, by name (a sign-up link's page).
+pub(crate) async fn org_name(db: &PgPool, id: Uuid) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "SELECT o.name FROM invitations i JOIN organizations o ON o.id = i.org_id
+         WHERE i.id = $1 AND i.accepted_at IS NULL AND i.expires_at > now()",
+        id,
+    )
+    .fetch_optional(db)
+    .await
+}
+
+/// Accepts invitation `id` for a password account just created with
+/// `email`: claims it (still live, still from an admin, for that address;
+/// by its link's token too when `link` is given) and adds the membership.
+/// `None` when it can no longer be accepted.
+pub(crate) async fn claim_for(
+    tx: &mut sqlx::PgConnection,
+    id: Uuid,
+    link: Option<&str>,
+    user_id: Uuid,
+    email: &str,
+) -> Result<Option<Org>, sqlx::Error> {
+    let Some(claimed) = sqlx::query!(
+        r#"UPDATE invitations i SET accepted_at = now()
+           WHERE i.id = $1 AND ($2::bytea IS NULL OR i.token_hash = $2)
+             AND i.accepted_at IS NULL AND i.expires_at > now()
+             AND lower(i.email COLLATE pg_unicode_fast) = lower($3 COLLATE pg_unicode_fast)
+             AND EXISTS (SELECT 1 FROM memberships author
+                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by
+                           AND author.role = 'admin')
+           RETURNING i.org_id, i.role AS "role: Role""#,
+        id,
+        link.map(token::hash),
+        email,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    else {
+        return Ok(None);
+    };
+    sqlx::query!(
+        "INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)
+         ON CONFLICT (org_id, user_id) DO NOTHING",
+        claimed.org_id,
+        user_id,
+        claimed.role as Role,
+    )
+    .execute(&mut *tx)
+    .await?;
+    let org = sqlx::query!(
+        r#"SELECT slug, name, approvals_required::int AS "approvals_required!" FROM organizations WHERE id = $1"#,
+        claimed.org_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    Ok(Some(Org {
+        id: claimed.org_id,
+        slug: org.slug,
+        name: org.name,
+        role: claimed.role,
+        approvals_required: org.approvals_required,
+    }))
+}
+
+/// "an admin", "a developer", "a reviewer": the role in a sentence.
+fn with_article(role: Role) -> &'static str {
+    match role {
+        Role::Admin => "an admin",
+        Role::Developer => "a developer",
+        Role::Reviewer => "a reviewer",
+    }
 }
 
 fn used() -> ApiError {

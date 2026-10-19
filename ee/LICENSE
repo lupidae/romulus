@@ -1,0 +1,36 @@
+PLACEHOLDER — to be reviewed by counsel before any use.
+This text states the intent of the license. It is not final and grants
+nothing beyond what its final version will.
+
+romulus Enterprise License
+
+Copyright: the holders named in the NOTICE file at the root of this
+repository (the "Licensor").
+
+1. Scope. This license covers every file in the ee/ directory of the romulus
+   repository and its subdirectories (the "Enterprise Software"). The rest of
+   the repository is licensed under the GNU Affero General Public License,
+   version 3 only (LICENSE). The Enterprise Software is NOT licensed under the
+   AGPL, and nothing in the AGPL-licensed part grants rights to it.
+
+2. Source available. You may read, copy and modify the Enterprise Software,
+   and run it for development and testing.
+
+3. Production use. Any other use, including production use and offering the
+   Enterprise Software, or a modified version of it, as a service, requires a
+   separate commercial agreement with the Licensor (and, where the software
+   asks for one, a valid license key).
+
+4. Restrictions. You may not distribute, sublicense or sell the Enterprise
+   Software or modified versions of it, except by contributing to this
+   repository, and you may not remove, disable or work around its license
+   key checks.
+
+5. Contributions to the Enterprise Software are made under CLA.md.
+
+6. No warranty. The Enterprise Software is provided "as is", without warranty
+   of any kind. The Licensor is not liable for any damages arising from its
+   use.
+
+7. Termination. Your rights under this license end automatically if you break
+   any of its terms.

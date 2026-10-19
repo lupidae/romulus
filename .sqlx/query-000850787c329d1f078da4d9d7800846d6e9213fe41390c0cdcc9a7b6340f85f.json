@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sign_in_devices d SET\n               failures = CASE WHEN d.last_used_at < now() - make_interval(secs => $3)\n                                    OR d.locked_until IS NOT NULL\n                               THEN 1 ELSE d.failures + 1 END,\n               last_used_at = now(),\n               locked_until = CASE\n                   WHEN (CASE WHEN d.last_used_at < now() - make_interval(secs => $3)\n                                   OR d.locked_until IS NOT NULL\n                              THEN 1 ELSE d.failures + 1 END) >= $4\n                   THEN now() + make_interval(secs => $5) END\n           FROM users u\n           WHERE d.token_hash = $1 AND u.id = d.user_id AND u.oidc_subject LIKE 'password|%'\n             AND lower(u.email COLLATE pg_unicode_fast) = lower($2 COLLATE pg_unicode_fast)\n             AND (d.locked_until IS NULL OR d.locked_until <= now())\n           RETURNING d.failures, d.locked_until",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "sign_in_devices",
+            "name": "failures"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "locked_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "sign_in_devices",
+            "name": "locked_until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Text",
+        "Float8",
+        "Int4",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "000850787c329d1f078da4d9d7800846d6e9213fe41390c0cdcc9a7b6340f85f"
+}

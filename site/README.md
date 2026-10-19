@@ -1,5 +1,9 @@
 # site/: the romulus homepage
 
+> This directory is the marketing homepage of lupidae's hosted service
+> (romulus.lupidae.com), deployed to lupidae's Cloudflare account. Running
+> or self-hosting romulus does not need it.
+
 A static page, no framework: `public/` is exactly what gets served, and Pages
 has no build step. It is the app's brand, not a lookalike: `public/tokens.css`
 and the two fonts are copied from `web/` by a script, and a check fails when

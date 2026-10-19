@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
-import { meQuery } from "@/features/auth/queries";
+import { authMethodsQuery, meQuery } from "@/features/auth/queries";
 import { appPath, loginUrl, switchAccount } from "@/features/auth/session";
 import { useAcceptInvitation } from "@/features/orgs/mutations";
 import { type InvitationPreview, invitationPreviewQuery } from "@/features/orgs/queries";
@@ -158,7 +158,7 @@ function Invitation({ token, invitation }: { token: string; invitation: Invitati
         )}
       </div>
       {status === "sign_in_required" && (
-        <SignInToAccept here={here} email={email} expiresAt={invitation.expires_at} />
+        <SignInToAccept token={token} here={here} email={email} expiresAt={invitation.expires_at} />
       )}
       {status === "ready" && <Accept token={token} invitation={invitation} />}
       {status === "wrong_account" && <WrongAccount here={here} email={email} />}
@@ -212,14 +212,48 @@ function Outcome({
 }
 
 function SignInToAccept({
+  token,
   here,
   email,
   expiresAt,
 }: {
+  token: string;
   here: string;
   email: string;
   expiresAt: string;
 }) {
+  const methods = useQuery(authMethodsQuery);
+  if (methods.isPending) return <Skeleton className="h-10 w-full" />;
+  if (methods.data?.password) {
+    // Email + password: create the account with the invited address, or
+    // sign in with it; single sign-on too when this server has both.
+    return (
+      <div className="grid gap-3">
+        <Button variant="primary" size="lg" className="w-full" asChild>
+          <Link to="/signin/new" search={{ invitation: token }}>
+            Create your account
+          </Link>
+        </Button>
+        <Button size="lg" className="w-full" asChild>
+          <Link to="/signin" search={{ next: here, email }}>
+            I already have an account
+          </Link>
+        </Button>
+        {methods.data.sso && (
+          <Button variant="ghost" className="w-full" asChild>
+            <a href={loginUrl(here, { loginHint: email })}>
+              <LockIcon />
+              Continue with SSO
+            </a>
+          </Button>
+        )}
+        <p className="text-sm text-muted-foreground">
+          Use {email}; you come straight back here. The invitation expires on{" "}
+          {formatDate(expiresAt)}.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="grid gap-3">
       {/* Straight into single sign-on (in dev too): one click, and the
@@ -280,7 +314,10 @@ function Accept({ token, invitation }: { token: string; invitation: InvitationPr
 
 function WrongAccount({ here, email }: { here: string; email: string }) {
   const me = useQuery(meQuery);
+  const methods = useQuery(authMethodsQuery);
   const [switching, setSwitching] = React.useState(false);
+  // A password account, or a server without single sign-on: our own page.
+  const sso = methods.data?.sso === true && me.data?.password_account !== true;
 
   return (
     <div className="grid gap-3">
@@ -296,7 +333,7 @@ function WrongAccount({ here, email }: { here: string; email: string }) {
         loading={switching}
         onClick={() => {
           setSwitching(true);
-          switchAccount(here, email).catch(() => {
+          switchAccount(here, email, { sso }).catch(() => {
             setSwitching(false);
             toast.error("Could not sign out. Try again.");
           });

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE auth_events SET email = 'x'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "1706d2f2b8fc025dec27b964b88750fb4fdbb4de0f81cee464eb3bc10837a310"
+}

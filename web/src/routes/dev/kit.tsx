@@ -49,6 +49,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import { FileButton } from "@/components/ui/file-button";
 import { Input, Textarea } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
 import {
@@ -96,7 +97,7 @@ const sections = [
   ["type", "Type"],
   ["shape", "Radius and depth"],
   ["buttons", "Button"],
-  ["forms", "Input, Select, Combobox, MentionTextarea, Field"],
+  ["forms", "Input, PasswordInput, Select, Combobox, MentionTextarea, Field"],
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
@@ -404,7 +405,7 @@ function Buttons() {
 
 function Forms() {
   return (
-    <Section id="forms" title="Input, Select, Combobox, MentionTextarea, Field">
+    <Section id="forms" title="Input, PasswordInput, Select, Combobox, MentionTextarea, Field">
       <Card className="grid gap-5 p-4 sm:grid-cols-2">
         <Field label="Database name" description="Lowercase, used in links.">
           <Input placeholder="billing" />
@@ -435,6 +436,12 @@ function Forms() {
         </Field>
         <Field label="Disabled">
           <Input disabled defaultValue="read-only value" />
+        </Field>
+        <Field label="Password" description="PasswordInput: the eye shows what was typed.">
+          <PasswordInput autoComplete="new-password" defaultValue="violet tractor mango" />
+        </Field>
+        <Field label="Current password" error="That is not your current password.">
+          <PasswordInput autoComplete="off" />
         </Field>
         <Field
           label="Message"

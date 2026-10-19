@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.name FROM invitations i JOIN organizations o ON o.id = i.org_id\n         WHERE i.id = $1 AND i.accepted_at IS NULL AND i.expires_at > now()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "df715a25073d739015e0324823b6069dd0b4cfd9325e8bb0ea2c12d70a0b205b"
+}

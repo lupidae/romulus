@@ -1,20 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import * as React from "react";
 
 import { healthQuery } from "@/api/health";
-import { LogoMark } from "@/components/brand/logo";
 import { LockIcon } from "@/components/icons";
-import { SchemaPreview } from "@/components/shell/schema-preview";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AuthPage, authLinkClass } from "@/features/auth/components/auth-page";
+import { PasswordSignInForm } from "@/features/auth/components/password-forms";
 import { authMethodsQuery, meQuery } from "@/features/auth/queries";
 import { afterSignIn, devSigninUrl, loginUrl } from "@/features/auth/session";
 import { safePath } from "@/lib/safe-path";
 
 interface SigninSearch {
+  /** The address to sign in with, pre-filled (an invitation's). */
+  email?: string;
   /**
    * Where to land after signing in: a same-origin path including the /app
    * prefix (the API redirects there after the callback). Anything else is
@@ -49,6 +52,7 @@ const errors: Record<string, SigninMessage> = {
     title: "Verify your email first",
     body: "romulus needs a verified email address. Verify it with your identity provider, then sign in again.",
   },
+
   sign_in_expired: {
     title: "That sign-in took too long",
     body: "Sign-ins are valid for 10 minutes and work once. Start again.",
@@ -74,6 +78,7 @@ export const Route = createFileRoute("/signin")({
   validateSearch: (search: Record<string, unknown>): SigninSearch => ({
     next: safePath(search.next),
     error: typeof search.error === "string" ? search.error : undefined,
+    email: typeof search.email === "string" ? search.email.slice(0, 254) : undefined,
   }),
   // Already signed in: straight on to where the link was going.
   beforeLoad: async ({ context, search }) => {
@@ -89,83 +94,115 @@ export const Route = createFileRoute("/signin")({
 });
 
 function SignIn() {
-  const { next, error } = Route.useSearch();
+  const { next, error, email } = Route.useSearch();
   const health = useQuery(healthQuery);
   const methods = useQuery(authMethodsQuery);
   const failure = error ? (errors[error] ?? fallbackError) : undefined;
-  const ssoMissing = methods.data?.sso === false;
+  const password = methods.data?.password === true;
+  // Single sign-on is offered when it works, or when it is the only way in
+  // (then disabled, saying why).
+  const sso = methods.data !== undefined && (methods.data.sso || !password);
+  const ssoMissing = methods.data !== undefined && !methods.data.sso && !password;
   const ssoBlocked = health.isError || ssoMissing;
 
   return (
-    <div className="grid min-h-dvh bg-background lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-      <main className="flex flex-col px-6 py-6 sm:px-10">
-        <div className="flex flex-1 items-center justify-center pb-10">
-          <div className="w-full max-w-sm">
-            <LogoMark className="size-10" />
-            <h1 className="mt-8 text-2xl font-semibold text-foreground">Sign in to romulus</h1>
-            <p className="mt-2 text-base text-muted-foreground">
-              Version, review and design your Postgres schemas together.
-            </p>
-
-            <div className="mt-8 grid gap-3">
-              {failure && (
-                <Alert variant={failure.neutral ? "info" : "destructive"} title={failure.title}>
-                  {failure.body}
-                </Alert>
-              )}
-              {health.isError && (
-                <Alert
-                  variant="warning"
-                  title="romulus is not answering"
-                  action={
-                    <Button
-                      size="sm"
-                      loading={health.isFetching}
-                      onClick={() => void health.refetch()}
-                    >
-                      Retry
-                    </Button>
-                  }
-                >
-                  Sign-in is paused until the server is back.
-                </Alert>
-              )}
-              {ssoMissing && !health.isError && (
-                <Alert variant="warning" title="Single sign-on is not set up">
-                  This server has no identity provider configured yet.
-                </Alert>
-              )}
-              {ssoBlocked ? (
-                <Button variant="primary" size="lg" className="w-full" disabled>
-                  <LockIcon />
-                  Continue with SSO
-                </Button>
-              ) : (
-                <Button variant="primary" size="lg" className="w-full" asChild>
-                  <a href={loginUrl(next)}>
-                    <LockIcon />
-                    Continue with SSO
-                  </a>
-                </Button>
-              )}
-            </div>
-
-            <p className="mt-4 text-sm text-muted-foreground">
-              You sign in with your company account, then come straight back here.
-            </p>
-
-            {methods.data?.dev_signin && <DevSignin next={next} />}
+    <AuthPage
+      title="Sign in to romulus"
+      description="Version, review and design your Postgres schemas together."
+      footer={
+        password &&
+        (methods.data?.sign_up === "open" ? (
+          <>
+            New to romulus?{" "}
+            <Link to="/signin/new" search={{ next }} className={authLinkClass}>
+              Create an account
+            </Link>
+          </>
+        ) : (
+          "No account yet? Ask an admin of your organization to invite you."
+        ))
+      }
+    >
+      <div className="grid gap-3">
+        {failure && (
+          <Alert variant={failure.neutral ? "info" : "destructive"} title={failure.title}>
+            {failure.body}
+          </Alert>
+        )}
+        {health.isError && (
+          <Alert
+            variant="warning"
+            title="romulus is not answering"
+            action={
+              <Button size="sm" loading={health.isFetching} onClick={() => void health.refetch()}>
+                Retry
+              </Button>
+            }
+          >
+            Sign-in is paused until the server is back.
+          </Alert>
+        )}
+        {ssoMissing && !health.isError && (
+          <Alert variant="warning" title="Single sign-on is not set up">
+            This server has no identity provider configured yet.
+          </Alert>
+        )}
+        {methods.isPending ? (
+          <div className="grid gap-4" aria-busy>
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="mt-2 h-10 w-full" />
           </div>
-        </div>
-      </main>
+        ) : (
+          password && (
+            <PasswordSignInForm
+              next={next}
+              canReset={methods.data?.password_reset === true}
+              defaultEmail={email}
+            />
+          )
+        )}
+        {password && sso && (
+          <div className="my-1 flex items-center gap-3">
+            <Separator className="flex-1" />
+            <span className="text-sm text-faint-foreground">or</span>
+            <Separator className="flex-1" />
+          </div>
+        )}
+        {sso &&
+          (ssoBlocked ? (
+            <Button
+              variant={password ? "secondary" : "primary"}
+              size="lg"
+              className="w-full"
+              disabled
+            >
+              <LockIcon />
+              Continue with SSO
+            </Button>
+          ) : (
+            <Button
+              variant={password ? "secondary" : "primary"}
+              size="lg"
+              className="w-full"
+              asChild
+            >
+              <a href={loginUrl(next)}>
+                <LockIcon />
+                Continue with SSO
+              </a>
+            </Button>
+          ))}
+      </div>
 
-      <aside
-        aria-hidden
-        className="relative hidden overflow-hidden border-l border-border bg-muted lg:block"
-      >
-        <SchemaPreview />
-      </aside>
-    </div>
+      {sso && !password && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          You sign in with your company account, then come straight back here.
+        </p>
+      )}
+
+      {methods.data?.dev_signin && <DevSignin next={next} />}
+    </AuthPage>
   );
 }
 

@@ -1,0 +1,303 @@
+# romulus on one Linux host (docs/self-host/install.md). install.sh writes
+# .env beside this file (every secret and setting, mode 600) and runs
+# `docker compose` with it; `docker compose …` in this directory works the
+# same afterwards. Nothing here is published but the API's port, on
+# ${ROMULUS_BIND:-127.0.0.1}:${ROMULUS_PORT:-8080} for a reverse proxy, and
+# Caddy's 80 and 443 when the `caddy` profile runs.
+#
+# Profiles (COMPOSE_PROFILES in .env, set by install.sh):
+#   caddy        TLS for ROMULUS_DOMAIN with automatic certificates (Caddyfile)
+#   pg15 pg16 pg18  the other Postgres majors' sandboxes (17, the default, always runs)
+#   playgrounds  the playground runner and service (Linux, gVisor, an XFS volume:
+#                docs/self-host/playgrounds.md)
+#
+# Memory limits, sized for a 4 GB host by default (docs/self-host/install.md,
+# "Sizing"): api 1 GB (drafts' live documents live in it), postgres 768 MB,
+# the sandbox 768 MB ((pool of 4 + 2) × 128 MB per backend,
+# deploy/sandbox/README.md), backup 256 MB, caddy 128 MB: about 2.9 GB at
+# most, the rest for the system. Each other major adds 768 MB; playgrounds
+# add the runner 128 MB, the service 512 MB and 512 MB per running
+# playground (ROMULUS_PLAY_MAX_RUNNING, 2 by default): about 1.7 GB.
+# Limits are caps, not reservations: an idle install uses far less.
+
+name: romulus
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  # The API, serving the web app at /app and itself at /api (one origin). It
+  # applies pending migrations when it starts.
+  api:
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-api:${ROMULUS_VERSION:?run ./install.sh (it writes .env)}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://romulus:${POSTGRES_PASSWORD:?}@postgres:5432/romulus
+      ROMULUS_PUBLIC_URL: ${ROMULUS_PUBLIC_URL:?}
+      # Built-in email and password sign-in, one organization (created by
+      # `romulus-api setup`), accounts from invitations unless ROMULUS_SIGNUP=open.
+      ROMULUS_AUTH: ${ROMULUS_AUTH:-password}
+      ROMULUS_SIGNUP: ${ROMULUS_SIGNUP:-invite}
+      ROMULUS_SINGLE_ORG: "true"
+      # Who may say who the client is (X-Forwarded-For): Caddy's fixed
+      # address, or the gateway a proxy on this host comes through, or nobody
+      # when the port is published beyond loopback (install.sh decides:
+      # ROMULUS_PROXIES; ROMULUS_TRUSTED_PROXIES set by hand wins).
+      ROMULUS_TRUSTED_PROXIES: ${ROMULUS_TRUSTED_PROXIES:-${ROMULUS_PROXIES:-}}
+      # Mail is off without a host: admins hand out links (`install.sh admin-link`).
+      ROMULUS_SMTP_HOST: ${ROMULUS_SMTP_HOST:-}
+      ROMULUS_SMTP_PORT: ${ROMULUS_SMTP_PORT:-}
+      ROMULUS_SMTP_TLS: ${ROMULUS_SMTP_TLS:-}
+      ROMULUS_SMTP_USERNAME: ${ROMULUS_SMTP_USERNAME:-}
+      ROMULUS_SMTP_PASSWORD: ${ROMULUS_SMTP_PASSWORD:-}
+      ROMULUS_MAIL_FROM: ${ROMULUS_MAIL_FROM:-}
+      # Single sign-on with your own OpenID Connect provider (optional; add
+      # `oidc` to ROMULUS_AUTH).
+      ROMULUS_OIDC_ISSUER: ${ROMULUS_OIDC_ISSUER:-}
+      ROMULUS_OIDC_CLIENT_ID: ${ROMULUS_OIDC_CLIENT_ID:-}
+      ROMULUS_OIDC_CLIENT_SECRET: ${ROMULUS_OIDC_CLIENT_SECRET:-}
+      # A database compiles on its Postgres major's sandbox: 17 always, the
+      # others only when their profile runs (ROMULUS_SANDBOX_PG15… = on).
+      ROMULUS_SANDBOX_URL: postgres://sandbox_admin:${SANDBOX_PASSWORD:?}@sandbox:5432/postgres
+      ROMULUS_SANDBOX_URL_PG15: ${ROMULUS_SANDBOX_PG15:+postgres://sandbox_admin:${SANDBOX_PASSWORD}@sandbox-15:5432/postgres}
+      ROMULUS_SANDBOX_URL_PG16: ${ROMULUS_SANDBOX_PG16:+postgres://sandbox_admin:${SANDBOX_PASSWORD}@sandbox-16:5432/postgres}
+      ROMULUS_SANDBOX_URL_PG18: ${ROMULUS_SANDBOX_PG18:+postgres://sandbox_admin:${SANDBOX_PASSWORD}@sandbox-18:5432/postgres}
+      # The playground service on the internal `play` network; both empty
+      # (playgrounds off) unless install.sh turned them on.
+      ROMULUS_PLAY_URL: ${ROMULUS_PLAY_URL:-}
+      ROMULUS_PLAY_KEY: ${ROMULUS_PLAY_URL:+${ROMULUS_PLAY_KEY}}
+      ROMULUS_DEV_SIGNIN: "false"
+      RUST_LOG: ${RUST_LOG:-romulus_api=info,tower_http=info,sqlx=warn}
+    ports:
+      - ${ROMULUS_BIND:-127.0.0.1}:${ROMULUS_PORT:-8080}:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sandbox:
+        condition: service_started
+    # The image's check, with time for a long migration at start.
+    healthcheck:
+      test: [CMD, curl, -fsS, -o, /dev/null, http://127.0.0.1:8080/api/health]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+    # Graceful shutdown closes the draft sockets and writes every open draft.
+    stop_grace_period: 30s
+    networks: [default, play]
+    mem_limit: ${ROMULUS_API_MEMORY:-1g}
+    logging: *logging
+
+  # The application database: the only state worth keeping (with .env).
+  # Never published; `install.sh backup` and the `backup` service dump it.
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: romulus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: romulus
+    command: [postgres, -c, shared_buffers=192MB, -c, effective_cache_size=512MB, -c, max_connections=100]
+    shm_size: 256m
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U romulus -d romulus]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    mem_limit: ${ROMULUS_POSTGRES_MEMORY:-768m}
+    logging: *logging
+
+  # Where SQL compiles (crates/romulus-sandbox, deploy/sandbox/README.md):
+  # every compile is rolled back, so it holds nothing worth keeping. A
+  # backend that runs out of memory dies (OOM score 1000), never the
+  # postmaster (-1000). This is the default major's (17); the others follow.
+  sandbox: &sandbox
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-sandbox:${ROMULUS_VERSION:?}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sandbox_admin
+      POSTGRES_PASSWORD: ${SANDBOX_PASSWORD:?}
+      POSTGRES_DB: postgres
+      PG_OOM_ADJUST_FILE: /proc/self/oom_score_adj
+      PG_OOM_ADJUST_VALUE: "1000"
+    command: [postgres, -c, synchronous_commit=off,
+              -c, wal_level=minimal, -c, max_wal_senders=0, -c, max_wal_size=128MB,
+              -c, min_wal_size=32MB, -c, checkpoint_timeout=60s,
+              -c, shared_buffers=32MB, -c, work_mem=4MB, -c, maintenance_work_mem=32MB,
+              -c, max_connections=60, -c, max_locks_per_transaction=2048]
+    mem_limit: ${ROMULUS_SANDBOX_MEMORY:-768m}
+    oom_score_adj: -1000
+    # Under contention the API and its database go first.
+    cpu_shares: 512
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U sandbox_admin -d postgres]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  sandbox-15:
+    <<: *sandbox
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-sandbox:${ROMULUS_VERSION:?}-pg15
+    profiles: [pg15]
+    volumes:
+      - sandbox-15-data:/var/lib/postgresql/data
+
+  sandbox-16:
+    <<: *sandbox
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-sandbox:${ROMULUS_VERSION:?}-pg16
+    profiles: [pg16]
+    volumes:
+      - sandbox-16-data:/var/lib/postgresql/data
+
+  sandbox-18:
+    <<: *sandbox
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-sandbox:${ROMULUS_VERSION:?}-pg18
+    profiles: [pg18]
+    # 18's image keeps its data in a directory per major under this one.
+    volumes:
+      - sandbox-18-data:/var/lib/postgresql
+
+  # Playgrounds (docs/self-host/playgrounds.md, docs/playground.md). The
+  # runner is the only container with the Docker socket, which is root on
+  # this host: fixed operations, nothing from a request becomes a Docker
+  # argument. No network at all: Docker over its socket, the service over
+  # the runner's socket (the play-runner volume, mounted by the two of them
+  # only). It starts each playground with gVisor (runsc-uds), --network
+  # none, a read-only root, no capabilities, 512 MB, and an XFS project
+  # quota on its directory of ROMULUS_PLAY_DIR.
+  play-runner:
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-play:${ROMULUS_VERSION:?}
+    command: [romulus-play-runner]
+    profiles: [playgrounds]
+    user: "0"
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      ROMULUS_PLAY_RUNNER_SOCKET: /run/romulus-runner/runner.sock
+      ROMULUS_PLAY_IMAGE: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-playground:${ROMULUS_VERSION:?}
+      ROMULUS_PLAY_QUOTA_IMAGE: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-play:${ROMULUS_VERSION:?}
+      ROMULUS_PLAY_ROOT: ${ROMULUS_PLAY_DIR:-/var/lib/romulus-play}
+      ROMULUS_PLAY_RUNTIME: runsc-uds
+      ROMULUS_PLAY_SCOPE: ${ROMULUS_PLAY_SCOPE:-self-host}
+      ROMULUS_PLAY_SECRET: ${ROMULUS_PLAY_SECRET:?}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - play-runner:/run/romulus-runner
+    read_only: true
+    mem_limit: 128m
+    logging: *logging
+
+  # The playground service (crates/romulus-playground): unprivileged, on the
+  # internal `play` network (no egress, only the API reaches it), trusting
+  # only calls the API signed (ROMULUS_PLAY_KEY). It reaches each
+  # playground's Postgres over its socket, mounted read-only.
+  playground:
+    image: ${ROMULUS_REGISTRY:-ghcr.io/lupidae}/romulus-play:${ROMULUS_VERSION:?}
+    command: [romulus-playground]
+    profiles: [playgrounds]
+    restart: unless-stopped
+    environment:
+      ROMULUS_PLAY_ADDR: 0.0.0.0:8080
+      ROMULUS_PLAY_KEY: ${ROMULUS_PLAY_KEY:?}
+      ROMULUS_PLAY_SECRET: ${ROMULUS_PLAY_SECRET:?}
+      ROMULUS_PLAY_RUNNER_SOCKET: /run/romulus-runner/runner.sock
+      ROMULUS_PLAY_SOCKETS: /run/play
+      ROMULUS_PLAY_MAX_RUNNING: ${ROMULUS_PLAY_MAX_RUNNING:-2}
+      # One organization per install: its cap is the host's.
+      ROMULUS_PLAY_MAX_RUNNING_PER_ORG: ${ROMULUS_PLAY_MAX_RUNNING:-2}
+      ROMULUS_PLAY_STATEMENTS: "4"
+    volumes:
+      - play-runner:/run/romulus-runner
+      - ${ROMULUS_PLAY_DIR:-/var/lib/romulus-play}/run:/run/play:ro
+    networks: [play]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      play-runner:
+        condition: service_started
+    # Closes console sessions and lets running statements end.
+    stop_grace_period: 15s
+    mem_limit: 512m
+    cpu_shares: 512
+    logging: *logging
+
+  # TLS for ROMULUS_DOMAIN, certificates from Let's Encrypt (Caddyfile).
+  # DNS must point at this host and ports 80 and 443 reach it.
+  caddy:
+    image: caddy:2
+    profiles: [caddy]
+    restart: unless-stopped
+    environment:
+      ROMULUS_DOMAIN: ${ROMULUS_DOMAIN:-}
+    ports:
+      - 80:80
+      - 443:443
+      - 443:443/udp
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    # A fixed address: the only one the API believes X-Forwarded-For from.
+    networks:
+      default:
+        ipv4_address: ${ROMULUS_CADDY_IP:-172.30.80.10}
+    depends_on:
+      api:
+        condition: service_started
+    mem_limit: 128m
+    logging: *logging
+
+  # A dump of the app database every day at $BACKUP_AT (UTC) into
+  # ROMULUS_BACKUP_DIR (./backups), kept $BACKUP_KEEP_DAYS days
+  # (backup.sh). Copy them off this host, with .env (docs/self-host/backup.md).
+  backup:
+    image: postgres:18.6
+    restart: unless-stopped
+    # The files belong to whoever ran install.sh, not to root.
+    user: ${ROMULUS_UID:-0}:${ROMULUS_GID:-0}
+    entrypoint: [bash, /backup.sh]
+    command: [daily]
+    environment:
+      ROMULUS_DB: postgres://romulus:${POSTGRES_PASSWORD:?}@postgres:5432/romulus
+      BACKUP_AT: ${BACKUP_AT:-03:00}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      HOME: /tmp
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - ${ROMULUS_BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 256m
+    logging: *logging
+
+networks:
+  # Pinned, so Caddy's address and the gateway are known (the proxies the
+  # API trusts). Change ROMULUS_SUBNET in .env if it overlaps a network of
+  # this host; install.sh derives the rest.
+  default:
+    ipam:
+      config:
+        - subnet: ${ROMULUS_SUBNET:-172.30.80.0/24}
+  # The API and the playground service only; no route out.
+  play:
+    internal: true
+
+volumes:
+  postgres-data:
+  sandbox-data:
+  sandbox-15-data:
+  sandbox-16-data:
+  sandbox-18-data:
+  play-runner:
+  caddy-data:
+  caddy-config:

@@ -1,8 +1,10 @@
 //! Sign-in through Zitadel (OIDC code flow + PKCE, done by the API as a
-//! backend-for-frontend), server-side sessions, and the extractors every
-//! other module authenticates with.
+//! backend-for-frontend) or with an email and a password ([`password`],
+//! `ROMULUS_AUTH`), server-side sessions, and the extractors every other
+//! module authenticates with. Both methods end in the same session.
 //!
 //! Endpoints: `GET /auth/methods` (what the sign-in page offers),
+//! `/auth/password/…` (email + password sign-in: [`password`]),
 //! `GET /auth/login?next=` (redirect to the IdP), `GET /auth/callback` (the
 //! redirect URI the Zitadel provisioner registers), `POST /auth/logout`,
 //! `GET /me`. Tables: `users`, `sessions`, `oidc_flows`. The session cookie is
@@ -30,6 +32,7 @@ pub mod limit;
 pub mod member;
 pub mod next;
 pub mod oidc;
+pub mod password;
 pub mod session;
 
 use axum::{
@@ -65,6 +68,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(callback))
         .routes(routes!(logout))
         .routes(routes!(me))
+        .merge(password::router())
         // Undocumented: it only exists in development (see the module docs).
         .route("/auth/dev-signin", any(dev_signin))
 }
@@ -120,9 +124,23 @@ fn to_signin(error: &str, next: &str) -> Redirect {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the sign-in page's switches, as JSON"
+)]
 pub struct AuthMethods {
-    /// Single sign-on is configured (Zitadel is provisioned).
+    /// Single sign-on is on and configured (the OIDC client exists).
     pub sso: bool,
+    /// Single sign-on is one of this server's methods (`ROMULUS_AUTH`),
+    /// configured or not yet.
+    pub sso_enabled: bool,
+    /// Email + password sign-in is on (`ROMULUS_AUTH=password`).
+    pub password: bool,
+    /// Who may create a password account; `None` while password sign-in
+    /// is off.
+    pub sign_up: Option<crate::config::SignUpPolicy>,
+    /// "Forgot password?" sends a link (password sign-in and mail are on).
+    pub password_reset: bool,
     /// The dev-only sign-in exists (`GET /api/auth/dev-signin?email=…`).
     pub dev_signin: bool,
 }
@@ -136,8 +154,13 @@ pub struct AuthMethods {
     responses((status = 200, body = AuthMethods))
 )]
 async fn methods(State(state): State<AppState>) -> Json<AuthMethods> {
+    let password = state.config.auth.password;
     Json(AuthMethods {
-        sso: state.oidc.is_configured(),
+        sso: state.config.auth.oidc && state.oidc.is_configured(),
+        sso_enabled: state.config.auth.oidc,
+        password,
+        sign_up: password.then_some(state.config.signup),
+        password_reset: password && state.mailer.is_on(),
         dev_signin: state.config.dev_signin,
     })
 }
@@ -412,15 +435,30 @@ async fn logout(
 ) -> ApiResult<(CookieJar, Json<SignedOut>)> {
     // A bearer request is exempt from the CSRF check, so it must not touch
     // the cookie's session either (see `crate::csrf`).
+    let mut password_account = false;
     if let Some(cookie) = jar
         .get(&state.config.session_cookie)
         .filter(|_| !crate::csrf::has_bearer(&headers))
     {
+        password_account = sqlx::query_scalar!(
+            r#"SELECT u.oidc_subject LIKE 'password|%' AS "password!"
+               FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1"#,
+            token::hash(cookie.value()),
+        )
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or(false);
         session::delete(&state.db, cookie.value()).await?;
         // Its open sockets (drafts) close too.
         state.sessions.ended(token::hash(cookie.value()));
     }
-    let redirect_url = match state.oidc.logout_url().await {
+    // A password account has no session at the IdP to end.
+    let idp_logout = if password_account {
+        None
+    } else {
+        state.oidc.logout_url().await
+    };
+    let redirect_url = match idp_logout {
         Some(url) => url.into(),
         None => state
             .config

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "ALTER TABLE auth_events DISABLE TRIGGER auth_events_are_append_only",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "e55dac63f9b2696a7468cd20312750fb91e7ba006a0168d039806643b6360e77"
+}

@@ -817,11 +817,79 @@ it: `/app/<org>/<db>/time-machine`, from the history page and from every version
 - At most the newest 1000 versions (`earlier` counts the rest). One version: the page
   explains what the time machine needs.
 
+## Self-host and open source (decided 2026-10-19, built: task OSS)
+
+docs/business-model.md has the decisions (AGPL-3.0, a CLA, one organization per self-hosted
+install, `ee/` later, email + password sign-in for self-hosters); this is what the build
+decided on top.
+
+- **Two sign-in methods, one session layer.** `ROMULUS_AUTH` lists `oidc` (Zitadel: the hosted
+  service, unchanged) and `password` (romulus's own accounts: the self-host bundle). Both end in
+  the same session cookie, CSRF rules and `CurrentUser`. A password account is a `users` row
+  (`oidc_subject` `password|<uuid>`, one per address); an SSO account with the same address is
+  another person, as with the dev sign-in.
+- **Every password account's address is proved.** With mail (`ROMULUS_SMTP_*`), signing up sends
+  a link and the account is created from it, its password chosen there: nobody can create an
+  account for an address they do not read (no pre-hijacked accounts, no unverified state). Without
+  mail, only an invitation's holder creates an account, with the invited address, at once: the
+  invitation vouches (the admin chose whom to send it; it works once, 7 days). Open sign-up
+  (`ROMULUS_SIGNUP=open`) needs mail; the default is invitations only.
+- **Nothing tells who has an account.** Sign-in answers 401 `invalid_credentials` for an unknown
+  address and a wrong password alike, after the same Argon2id work (a decoy hash). Sign-up with
+  mail and "forgot password" answer 202 whatever the address (the owner of an existing account
+  is emailed "you already have one"; nobody else is). The lock is per address, account or not.
+- **Guessing is slow** (OWASP ASVS 2.2): per client a burst of 10 sign-ins then one per 3 s
+  (an IPv6 client counts as its /48). Per address, every attempt is counted before its password
+  is checked: the 10th in a series locks it, 15 minutes the first time in a day, 30 the second,
+  an hour from the third on (never longer); a new series starts when a lock runs out, and a
+  success or a reset starts the day over. A browser that signed in to the account before
+  carries a device cookie: its attempts count against it, never the address, so its owner signs
+  in through anyone else's lock; a reset link works through any lock too (mail is strongly
+  recommended for that). No global requests-per-second cap (a few clients could fill it for
+  everyone): the hashing pool is the guard on cost, a bounded queue (4 at once, 64 waiting, 2 s)
+  that answers 503 `busy` only when it is actually full. The owner is emailed at the first lock
+  of the day, and an address locked three times a day is logged. Wrong current passwords on
+  "change password" count too. Behind a reverse proxy, `ROMULUS_TRUSTED_PROXIES` names who may
+  say the client's address (the bundle: Caddy's fixed address, or the gateway for a proxy on
+  the host, or nobody when the port is published beyond loopback).
+- **Passwords**: 12 to 128 characters, any characters (NFC), no composition rules; refused when
+  in the breach lists (SecLists' top million and NCSC's 100k, the entries long enough to
+  matter, embedded gzipped), repetitive, sequential, or built on the account's name or address.
+  Argon2id at OWASP's parameters (19 MiB, 2 passes), rehashed at sign-in when they change.
+- **One-time links** (sign-up 24 h, emailed reset 30 min, an admin's 1 h, the first admin's 24 h):
+  the token in the URL's fragment (never in a log or a `Referer`), sha256 stored, single use, a
+  newer reset link retires the older. Setting a password ends every session of the account;
+  changing it ends the others (this browser gets a new session id); the owner is emailed.
+- **No email provider required.** Without mail, admins print links (`romulus-api password-link`),
+  invitation links are copied as before, and "Forgot password?" says whom to ask. With mail,
+  invitations are emailed too.
+- **First run**: `romulus-api setup --email --name --org` creates the admin (no password) and the
+  organization, and prints the link that sets the password; idempotent (a fresh link until the
+  password is set). Refused when another admin set the install up.
+- **Single-organization mode** (`ROMULUS_SINGLE_ORG`): creating an organization is refused
+  (403 `single_org`) and hidden; someone signed in without a membership is told to ask for an
+  invitation. Invitations, roles and everything else work as hosted.
+- **The security log** (`auth_events`): sign-ins, failures, locks, sign-ups, resets, changes and
+  every admin command, with the client address; append only, kept 90 days, read with
+  `romulus-api auth-events`.
+- **Data model additions**: `password_credentials`, `sign_in_failures` (by address),
+  `auth_links`, `auth_events`; `users_password_email_key` (one password account per address).
+- **The bundle** (`deploy/self-host`, docs/self-host): compose with the published images, an
+  install script that asks about playgrounds and checks gVisor and XFS, upgrades, backups and
+  restores; TLS at the user's reverse proxy (a Caddy profile included). The API redirects `/` to
+  `/app/` (no homepage on a self-hosted install).
+- **Mail without TLS** only to a relay on this host (loopback): sign-in links never travel in
+  clear. `romulus-api verify-email` vouches for password accounts only (an identity provider
+  verifies its own).
+- Follow-ups: MFA (TOTP, WebAuthn), an online breached-password check (k-anonymity, opt-in), an
+  admin page for accounts and the sign-in log, SSO configured from the app for self-hosters.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).
 - SQL text is the source of truth for the schema; layout and groups live in Yjs.
-- SSO: Zitadel. Router: TanStack Router.
+- SSO: Zitadel (hosted). Self-hosted installs sign in with email + password (above). Router:
+  TanStack Router.
 - Graph → text schema edits are in the MVP.
 - Branches are supported, as drafts, with one-click creation and publishing.
 - Homepage lives in `site/`.

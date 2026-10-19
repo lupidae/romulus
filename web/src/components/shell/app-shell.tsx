@@ -24,8 +24,11 @@ interface AppShellProps {
   /** Context after the org in the top bar, e.g. the current database. */
   breadcrumb?: React.ReactNode;
   onSwitchOrg: (org: ShellOrg) => void;
-  onCreateOrg: () => void;
+  /** Absent on a single-organization install: no "Create organization". */
+  onCreateOrg?: () => void;
   onSignOut: () => void;
+  /** Password accounts: "Change password" in the user menu. */
+  onChangePassword?: () => void;
   children: React.ReactNode;
 }
 
@@ -50,6 +53,7 @@ export function AppShell({
   onSwitchOrg,
   onCreateOrg,
   onSignOut,
+  onChangePassword,
   children,
 }: AppShellProps) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
@@ -132,7 +136,7 @@ export function AppShell({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <UserMenu user={user} onSignOut={onSignOut} />
+          <UserMenu user={user} onSignOut={onSignOut} onChangePassword={onChangePassword} />
         </div>
       </header>
 

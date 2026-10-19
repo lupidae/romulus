@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.id, i.email, o.name AS org_name\n           FROM invitations i JOIN organizations o ON o.id = i.org_id\n           WHERE i.token_hash = $1 AND i.accepted_at IS NULL AND i.expires_at > now()\n             AND EXISTS (SELECT 1 FROM memberships author\n                         WHERE author.org_id = i.org_id AND author.user_id = i.created_by\n                           AND author.role = 'admin')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "invitations",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invitations",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "org_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bb5d87daa5622d64d9116c5602939070a98e72eddd3f05cdcc09053b1ece07ae"
+}

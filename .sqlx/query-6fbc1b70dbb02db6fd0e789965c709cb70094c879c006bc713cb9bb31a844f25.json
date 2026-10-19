@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM sign_in_failures WHERE email_key = lower($1 COLLATE pg_unicode_fast)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6fbc1b70dbb02db6fd0e789965c709cb70094c879c006bc713cb9bb31a844f25"
+}
