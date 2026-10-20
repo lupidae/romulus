@@ -69,6 +69,32 @@ pub fn script(sql: &str, compilation: &Compilation, catalog: &Catalog) -> String
     out
 }
 
+/// A migration's statement as a playground runs it (Test migration, Run
+/// migration): its policy roles become `PUBLIC`, as [`script`] made them
+/// (none but the playground's three roles exist there). Everything else
+/// is left as written.
+pub fn migration(sql: &str) -> String {
+    let parsed = parse(sql);
+    let mut rewrites: Vec<std::ops::Range<usize>> = parsed
+        .statements
+        .iter()
+        .filter_map(|statement| policy_roles(statement, &parsed).and_then(|r| r.rewrite))
+        .collect();
+    if rewrites.is_empty() {
+        return sql.to_owned();
+    }
+    rewrites.sort_by_key(|r| r.start);
+    let mut out = String::with_capacity(sql.len());
+    let mut cursor = 0;
+    for range in rewrites {
+        out.push_str(&sql[cursor..range.start]);
+        out.push_str("PUBLIC");
+        cursor = range.end;
+    }
+    out.push_str(&sql[cursor..]);
+    out
+}
+
 /// Where `IF NOT EXISTS` goes in a `CREATE SCHEMA` without it (and without
 /// schema elements, which Postgres refuses with it): after `SCHEMA`.
 fn schema_keyword_end(statement: &Statement, parsed: &crate::parse::ParsedSql) -> Option<usize> {
@@ -118,6 +144,22 @@ mod tests {
             "CREATE TABLE docs (id int, owner text, embedding vector(3));\n\
              CREATE POLICY mine ON docs FOR SELECT TO PUBLIC USING (owner = current_user);\n"
         );
+    }
+
+    #[test]
+    fn a_migration_s_policies_name_public_and_the_rest_is_kept() {
+        assert_eq!(
+            migration(
+                "CREATE POLICY own ON docs FOR SELECT TO app_user, \"Admin\" USING (owner = current_user);"
+            ),
+            "CREATE POLICY own ON docs FOR SELECT TO PUBLIC USING (owner = current_user);"
+        );
+        assert_eq!(
+            migration("ALTER POLICY own ON docs TO auditor;"),
+            "ALTER POLICY own ON docs TO PUBLIC;"
+        );
+        let untouched = "ALTER TABLE docs ADD COLUMN body text; -- TO app_user";
+        assert_eq!(migration(untouched), untouched);
     }
 
     #[test]

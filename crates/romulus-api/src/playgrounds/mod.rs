@@ -387,6 +387,9 @@ pub struct Playground {
     /// The migration run whose rows it holds; `null` while it holds the
     /// generated rows.
     pub migrated_by: Option<PlaygroundRun>,
+    /// The last time a migration test copied its rows (it paused a moment
+    /// for the copy), and who ran that test.
+    pub copied: Option<PlaygroundCopied>,
     /// `null` once their account is gone.
     pub created_by: Option<Person>,
     pub created_at: DateTime<Utc>,
@@ -394,6 +397,14 @@ pub struct Playground {
     pub last_used_at: DateTime<Utc>,
     /// Deleted then unless used again.
     pub expires_at: DateTime<Utc>,
+}
+
+/// A migration test copying a playground's rows.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PlaygroundCopied {
+    pub at: DateTime<Utc>,
+    /// `null` once their account is gone.
+    pub by: Option<Person>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -500,6 +511,22 @@ impl Row {
         };
         let tables: Vec<TableRows> =
             serde_json::from_value(self.row_counts.clone()).unwrap_or_default();
+        let copied = sqlx::query!(
+            r#"SELECT t.started_at AS "at!", t.created_by, u.name AS "name?"
+               FROM migration_tests t LEFT JOIN users u ON u.id = t.created_by
+               WHERE t.data_playground_id = $1 AND t.started_at IS NOT NULL
+               ORDER BY t.started_at DESC LIMIT 1"#,
+            self.id,
+        )
+        .fetch_optional(&state.db)
+        .await?
+        .map(|c| PlaygroundCopied {
+            at: c.at,
+            by: c
+                .created_by
+                .zip(c.name)
+                .map(|(id, name)| Person { id, name }),
+        });
         Ok(Playground {
             id: self.id,
             status: self.status,
@@ -529,6 +556,7 @@ impl Row {
             live,
             present: state.playgrounds.present(self.id),
             migrated_by,
+            copied,
             created_by: self
                 .created_by
                 .zip(self.creator_name.clone())

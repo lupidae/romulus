@@ -25,6 +25,10 @@ remus-core = { workspace = true, features = ["fixtures"] }
 dotenvy.workspace = true
 insta = "1.49.0"
 romulus-sandbox.workspace = true
+# The tool runs' plain cases go through the engine a playground's Test
+# migration uses, on generated rows: the two cannot disagree.
+romulus-fakedata.workspace = true
+romulus-migration-check = { workspace = true, features = ["sqlx"] }
 serde_json.workspace = true
 # The tool-run oracle connects to the sandbox cluster directly.
 sqlx.workspace = true

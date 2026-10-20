@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT approvals_required, require_passing_test FROM organizations\n         WHERE id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "approvals_required",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "approvals_required"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "require_passing_test",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "require_passing_test"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0caa4d4e9e7054c09fb2472bba8ecf3585e5486523f1a4892060bd9e8b8fb980"
+}

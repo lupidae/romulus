@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id!\" FROM playgrounds WHERE status IN ('building', 'ready')\n               UNION ALL\n               SELECT playground_id FROM migration_tests\n               WHERE status IN ('queued', 'running') AND playground_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "cd966c873801d81290374ffe1f5381155b052f7a3fb7eacbcdcab19fea2840b5"
+}

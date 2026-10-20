@@ -10,6 +10,7 @@ use crate::{
     compile::SqlCompiler,
     imports::Turns,
     mail::Mailer,
+    migration_tests::MigrationTests,
     orgs::events::MembershipEvents,
     playgrounds::{
         Playgrounds,
@@ -48,6 +49,8 @@ pub struct AppState {
     pub imports: Turns,
     /// The playground host, builds in progress, who has which console open.
     pub playgrounds: Playgrounds,
+    /// Migration tests in flight: their queue, their progress.
+    pub migration_tests: MigrationTests,
     /// Email (`ROMULUS_SMTP_*`), or off.
     pub mailer: Mailer,
     /// Password sign-in's limits per client, address and person.
@@ -75,6 +78,7 @@ impl AppState {
                 Some(play) => Host::new(Remote::new(play.url.clone(), play.key.clone())),
                 None => Host::off(),
             }),
+            migration_tests: MigrationTests::default(),
             mailer,
             passwords: Arc::new(password::throttle::Limits::default()),
         }

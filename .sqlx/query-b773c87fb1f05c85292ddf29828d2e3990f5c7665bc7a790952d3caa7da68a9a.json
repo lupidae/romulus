@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) AS \"total!\",\n                  count(*) FILTER (WHERE org_id = $1) AS \"org!\",\n                  count(*) FILTER (WHERE database_id = $2) AS \"database!\",\n                  count(*) FILTER (WHERE created_by = $3) AS \"person!\",\n                  count(*) FILTER (WHERE (draft_id IS NOT NULL AND draft_id = $4)\n                                      OR (draft_id IS NULL AND $4::uuid IS NULL AND version_id = $5)) AS \"same!\",\n                  count(*) FILTER (WHERE size = 'small') AS \"small!\",\n                  count(*) FILTER (WHERE size = 'medium') AS \"medium!\"\n           FROM playgrounds WHERE status IN ('building', 'ready')",
+  "query": "WITH tests AS (\n               SELECT size FROM migration_tests WHERE status = 'running' AND playground_id IS NOT NULL\n           )\n           SELECT count(*) + (SELECT count(*) FROM tests) AS \"total!\",\n                  count(*) FILTER (WHERE org_id = $1) AS \"org!\",\n                  count(*) FILTER (WHERE database_id = $2) AS \"database!\",\n                  count(*) FILTER (WHERE created_by = $3) AS \"person!\",\n                  count(*) FILTER (WHERE (draft_id IS NOT NULL AND draft_id = $4)\n                                      OR (draft_id IS NULL AND $4::uuid IS NULL AND version_id = $5)) AS \"same!\",\n                  count(*) FILTER (WHERE size = 'small')\n                      + (SELECT count(*) FROM tests WHERE size = 'small') AS \"small!\",\n                  count(*) FILTER (WHERE size = 'medium')\n                      + (SELECT count(*) FROM tests WHERE size = 'medium') AS \"medium!\"\n           FROM playgrounds WHERE status IN ('building', 'ready')",
   "describe": {
     "columns": [
       {
@@ -65,5 +65,5 @@
       null
     ]
   },
-  "hash": "26d47cb39d12e26f068926e515d50dc74015fc563a26ac4ccd918348525cb052"
+  "hash": "b773c87fb1f05c85292ddf29828d2e3990f5c7665bc7a790952d3caa7da68a9a"
 }

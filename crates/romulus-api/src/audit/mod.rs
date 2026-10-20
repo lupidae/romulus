@@ -76,6 +76,9 @@ pub struct AuditDetails {
     /// The beginning of the first one (comments deleted).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
+    /// The migration test (its loss acknowledged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_id: Option<Uuid>,
     /// The playground (created, deleted, reset, migrated).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playground_id: Option<Uuid>,

@@ -29,6 +29,11 @@ pub const LIFETIME: i64 = 60;
 pub enum Op {
     Build,
     Migrate,
+    /// Test a migration on the playground's rows (and leave them so).
+    Test,
+    /// Create the playground as a copy of another's rows (signed for the
+    /// new one; the body names the source).
+    Fork,
     Reset,
     Stop,
     Destroy,

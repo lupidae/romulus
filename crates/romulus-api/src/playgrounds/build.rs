@@ -52,7 +52,7 @@ fn limit(message: String) -> ApiError {
 
 /// The seed from its hex form, or a random one (24 bits: six digits are
 /// easy to read out and type).
-fn seed(given: Option<&str>) -> ApiResult<i64> {
+pub(crate) fn seed(given: Option<&str>) -> ApiResult<i64> {
     match given.map(str::trim) {
         Some(hex) if !hex.is_empty() => {
             let valid = hex.len() <= 15 && hex.bytes().all(|b| b.is_ascii_hexdigit());
@@ -123,7 +123,7 @@ async fn source(
 
 /// The advisory lock creates take in their transaction (one at a time, so
 /// the counts they check hold until they commit). Global: creates are rare.
-const CREATE_LOCK: i64 = 0x726f_6d75_6c75_7301;
+pub(crate) const CREATE_LOCK: i64 = 0x726f_6d75_6c75_7301;
 
 fn host_full(message: String) -> ApiError {
     ApiError::Down {
@@ -133,9 +133,9 @@ fn host_full(message: String) -> ApiError {
 }
 
 /// The host's playground volume, as it said before the transaction.
-struct Room {
-    free: u64,
-    total: u64,
+pub(crate) struct Room {
+    pub(crate) free: u64,
+    pub(crate) total: u64,
 }
 
 /// What a new playground is checked against.
@@ -155,15 +155,22 @@ async fn check_caps(
     wanted: &Wanted<'_>,
     room: &Room,
 ) -> ApiResult<()> {
+    // Migration tests' playgrounds take room on the host too (not a
+    // place among the organization's playgrounds: they go within minutes).
     let counts = sqlx::query!(
-        r#"SELECT count(*) AS "total!",
+        r#"WITH tests AS (
+               SELECT size FROM migration_tests WHERE status = 'running' AND playground_id IS NOT NULL
+           )
+           SELECT count(*) + (SELECT count(*) FROM tests) AS "total!",
                   count(*) FILTER (WHERE org_id = $1) AS "org!",
                   count(*) FILTER (WHERE database_id = $2) AS "database!",
                   count(*) FILTER (WHERE created_by = $3) AS "person!",
                   count(*) FILTER (WHERE (draft_id IS NOT NULL AND draft_id = $4)
                                       OR (draft_id IS NULL AND $4::uuid IS NULL AND version_id = $5)) AS "same!",
-                  count(*) FILTER (WHERE size = 'small') AS "small!",
-                  count(*) FILTER (WHERE size = 'medium') AS "medium!"
+                  count(*) FILTER (WHERE size = 'small')
+                      + (SELECT count(*) FROM tests WHERE size = 'small') AS "small!",
+                  count(*) FILTER (WHERE size = 'medium')
+                      + (SELECT count(*) FROM tests WHERE size = 'medium') AS "medium!"
            FROM playgrounds WHERE status IN ('building', 'ready')"#,
         wanted.member.org.id,
         wanted.database_id,
@@ -213,7 +220,7 @@ async fn check_caps(
 
 /// The host's volume: free and total bytes. A host that cannot say gets no
 /// new playground (its disk is shared with the app).
-async fn room(state: &AppState) -> ApiResult<Room> {
+pub(crate) async fn room(state: &AppState) -> ApiResult<Room> {
     let backend = state.playgrounds.host.backend()?;
     let health = tokio::time::timeout(std::time::Duration::from_secs(5), backend.health()).await;
     match health {
@@ -234,7 +241,7 @@ async fn room(state: &AppState) -> ApiResult<Room> {
 
 /// Playgrounds run Postgres [`MAJOR`] (their image): another major's
 /// migration would show 17's locks and rewrites.
-fn check_major(database: &DatabaseRef) -> ApiResult<()> {
+pub(crate) fn check_major(database: &DatabaseRef) -> ApiResult<()> {
     if database.pg_major == MAJOR {
         return Ok(());
     }
@@ -360,7 +367,7 @@ pub(super) async fn create(
 }
 
 /// The extensions the model installs, as the host takes them.
-fn extensions(schema: &remus_core::Schema) -> Vec<Extension> {
+pub(crate) fn extensions(schema: &remus_core::Schema) -> Vec<Extension> {
     schema
         .extensions
         .iter()

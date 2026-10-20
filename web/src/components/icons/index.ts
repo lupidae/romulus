@@ -95,6 +95,7 @@ export { UserIcon } from "./user";
 export { UserPlusIcon } from "./user-plus";
 export { ViewColumns2Icon } from "./view-columns-2";
 export { ViewColumns3Icon } from "./view-columns-3";
+export { WarningCircleIcon } from "./warning-circle";
 export { WarningTriangleIcon } from "./warning-triangle";
 export { WifiOffIcon } from "./wifi-off";
 export { XmarkIcon } from "./xmark";

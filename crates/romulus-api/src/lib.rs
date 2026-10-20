@@ -28,6 +28,7 @@ pub mod imports;
 pub mod instance;
 mod layers;
 pub mod mail;
+pub mod migration_tests;
 pub mod orgs;
 pub mod playgrounds;
 pub mod rate;
@@ -80,6 +81,7 @@ fn routes() -> OpenApiRouter<AppState> {
         .merge(collab::router())
         .merge(compile::router())
         .merge(playgrounds::router())
+        .merge(migration_tests::router())
 }
 
 fn router_and_spec() -> (Router<AppState>, utoipa::openapi::OpenApi) {

@@ -8,7 +8,9 @@
 //!   build task died with the last one) or running for over 30 minutes:
 //!   `failed`, and whatever the host holds of them destroyed;
 //! - **orphans**: clusters the host holds that no live row names (a delete
-//!   whose host call failed);
+//!   whose host call failed), a migration test running included;
+//! - **migration tests left behind** by an earlier process (their task died
+//!   with it): `error`, and their playground destroyed;
 //! - **purged**: expired and failed rows 30 days old.
 //!
 //! The host stops idle playgrounds itself (15 minutes without anyone).
@@ -39,6 +41,8 @@ pub struct Swept {
     pub failed: usize,
     pub orphans: usize,
     pub purged: u64,
+    /// Migration tests an earlier process left running.
+    pub tests: usize,
 }
 
 /// Sweeps every [`SWEEP_EVERY`] until aborted; the first sweep now.
@@ -57,6 +61,36 @@ pub fn sweeper(state: AppState, every: Duration) -> tokio::task::JoinHandle<()> 
             }
         }
     })
+}
+
+/// Tests a restart left queued or running end as errors: the playground
+/// each held (read before the update clears it) and its organization.
+async fn end_left_tests(
+    state: &AppState,
+    started: DateTime<Utc>,
+) -> Result<Vec<LeftTest>, sqlx::Error> {
+    sqlx::query_as!(
+        LeftTest,
+        r#"WITH left_over AS (
+               SELECT id, playground_id FROM migration_tests
+               WHERE status IN ('queued', 'running') AND created_at < $1
+               FOR UPDATE
+           )
+           UPDATE migration_tests t
+           SET status = 'error', finished_at = now(), playground_id = NULL,
+               failure = 'The server restarted during the test. Run it again.'
+           FROM left_over l
+           WHERE t.id = l.id
+           RETURNING l.playground_id, t.org_id"#,
+        started,
+    )
+    .fetch_all(&state.db)
+    .await
+}
+
+struct LeftTest {
+    playground_id: Option<Uuid>,
+    org_id: Uuid,
 }
 
 /// One sweep. `started`: when this process started (builds older than it
@@ -117,13 +151,25 @@ pub async fn sweep(state: &AppState, started: DateTime<Utc>) -> Result<Swept, sq
         swept.failed += 1;
     }
 
+    let left = end_left_tests(state, started).await?;
+    for test in left {
+        if let Some(playground) = test.playground_id {
+            destroy(playground, test.org_id).await;
+        }
+        swept.tests += 1;
+    }
+
     if let Ok(listing) = backend.list().await {
-        let live: std::collections::HashSet<Uuid> =
-            sqlx::query_scalar!("SELECT id FROM playgrounds WHERE status IN ('building', 'ready')")
-                .fetch_all(&state.db)
-                .await?
-                .into_iter()
-                .collect();
+        let live: std::collections::HashSet<Uuid> = sqlx::query_scalar!(
+            r#"SELECT id AS "id!" FROM playgrounds WHERE status IN ('building', 'ready')
+               UNION ALL
+               SELECT playground_id FROM migration_tests
+               WHERE status IN ('queued', 'running') AND playground_id IS NOT NULL"#
+        )
+        .fetch_all(&state.db)
+        .await?
+        .into_iter()
+        .collect();
         for orphan in listing.playgrounds.iter().filter(|p| !live.contains(&p.id)) {
             if destroy(orphan.id, Uuid::nil()).await {
                 swept.orphans += 1;

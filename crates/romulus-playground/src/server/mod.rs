@@ -13,6 +13,8 @@ pub mod host;
 pub mod migrate;
 pub mod pg;
 pub mod seed;
+pub mod session;
+pub mod testing;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -31,7 +33,7 @@ use uuid::Uuid;
 
 pub use self::host::{Config, Host, HostError};
 use crate::{
-    protocol::{Access, Build, ErrorBody, Health, Listing, Migrate, Status, limits},
+    protocol::{Access, Build, ErrorBody, Fork, Health, Listing, Migrate, Status, Test, limits},
     signing::{Claims, Op},
 };
 
@@ -130,6 +132,8 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/playgrounds/{id}", get(status).delete(destroy))
         .route("/playgrounds/{id}/build", post(build))
         .route("/playgrounds/{id}/migration", post(migration))
+        .route("/playgrounds/{id}/test", post(test))
+        .route("/playgrounds/{id}/fork", post(fork))
         .route("/playgrounds/{id}/reset", post(reset))
         .route("/playgrounds/{id}/stop", post(stop))
         .route("/playgrounds/{id}/console", get(console))
@@ -248,6 +252,102 @@ async fn migration(
     ));
     entry.set_job(Some(job.abort_handle()));
     Ok(ndjson(rx))
+}
+
+async fn test(
+    State(host): State<Arc<Host>>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    let claims = verify(&host, &headers, Op::Test, Some(id), Some(&body))?;
+    if claims.access != Access::Develop {
+        return Err(Failure::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "migration tests are for developers",
+        ));
+    }
+    let request: Test = serde_json::from_slice(&body)
+        .map_err(|e| Failure::new(StatusCode::BAD_REQUEST, "bad_request", e.to_string()))?;
+    let longest = request
+        .up
+        .len()
+        .max(request.down.as_ref().map_or(0, Vec::len));
+    if longest > limits::MIGRATION_STATEMENTS {
+        return Err(Failure::new(
+            StatusCode::BAD_REQUEST,
+            "too_long",
+            format!(
+                "a migration test has at most {} statements each way",
+                limits::MIGRATION_STATEMENTS
+            ),
+        ));
+    }
+    let entry = host.entry(id, claims.org);
+    // Refused before the stream starts, like a migration run.
+    let op = Host::try_op(&entry)?;
+    let (tx, rx) = mpsc::channel(64);
+    let job = tokio::spawn(testing::run(
+        Arc::clone(&host),
+        Arc::clone(&entry),
+        request,
+        tx,
+        op,
+    ));
+    entry.set_job(Some(job.abort_handle()));
+    Ok(ndjson(rx))
+}
+
+async fn fork(
+    State(host): State<Arc<Host>>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, Failure> {
+    let claims = verify(&host, &headers, Op::Fork, Some(id), Some(&body))?;
+    if claims.access != Access::Develop {
+        return Err(Failure::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "copies of playgrounds are for developers' migration tests",
+        ));
+    }
+    let request: Fork = serde_json::from_slice(&body)
+        .map_err(|e| Failure::new(StatusCode::BAD_REQUEST, "bad_request", e.to_string()))?;
+    // The copy is a playground of the same organization as its source: a
+    // source this process knows to be another organization's is refused,
+    // never taken over.
+    let source = host.entry(request.source, None);
+    if !source.same_org(claims.org) {
+        return Err(Failure::new(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "that playground is another organization's",
+        ));
+    }
+    host.entry(id, claims.org);
+    let fork = romulus_play_runner::protocol::Fork {
+        source: request.source,
+        size: match request.size {
+            crate::protocol::Size::Small => romulus_play_runner::protocol::Size::Small,
+            crate::protocol::Size::Medium => romulus_play_runner::protocol::Size::Medium,
+        },
+        extensions: request
+            .extensions
+            .iter()
+            .map(|e| romulus_play_runner::protocol::Extension {
+                name: e.name.clone(),
+                schema: if romulus_play_runner::protocol::is_plain_identifier(&e.schema) {
+                    e.schema.clone()
+                } else {
+                    "public".to_owned()
+                },
+            })
+            .collect(),
+    };
+    host.fork(&source, id, &fork).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn reset(

@@ -15,6 +15,9 @@ export type MigrationEvent = components["schemas"]["PlaygroundMigrationEvent"];
 export type MigrationReport = components["schemas"]["MigrationRunReport"];
 export type MigrationStatementResult = components["schemas"]["MigrationRunStatement"];
 
+/** The Postgres major playgrounds run (playgrounds::MAJOR in the API). */
+export const PLAYGROUND_MAJOR = 17;
+
 export const playgroundKeys = {
   list: (org: string, db: string) => ["playgrounds", org, db] as const,
   one: (org: string, db: string, id: string) => ["playgrounds", org, db, id] as const,

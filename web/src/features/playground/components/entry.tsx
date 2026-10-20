@@ -22,12 +22,10 @@ import {
   playgroundFor,
   playgroundsQuery,
   rowsTotal,
+  PLAYGROUND_MAJOR,
   timeLeft,
 } from "../queries";
 import { CreatePlaygroundDialog, type PlaygroundSource } from "./create-playground-dialog";
-
-/** The Postgres major playgrounds run (playgrounds::MAJOR in the API). */
-const PLAYGROUND_MAJOR = 17;
 
 interface PlaygroundButtonProps {
   org: string;
@@ -241,6 +239,8 @@ function PlaygroundRow({
           {playground.status === "ready" && ` · ${formatCount(rowsTotal(playground))} rows`}
           {playground.created_by &&
             ` · ${playground.created_by.name}, ${timeAgo(playground.created_at)}`}
+          {playground.copied &&
+            ` · copied by ${playground.copied.by?.name ?? "someone"}'s test ${timeAgo(playground.copied.at)}`}
           {playground.status === "ready" &&
             ` · deleted in ${timeLeft(playground.expires_at)} unless used`}
         </p>

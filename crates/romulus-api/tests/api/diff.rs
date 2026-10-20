@@ -37,6 +37,7 @@ fn pushed(database_id: Uuid, tables: &[&str]) -> NewVersion {
         expected_base: None,
         publishes_draft: None,
         approvals: None,
+        test_override: None,
         migration_sql: None,
         compiled_on: None,
         discussion: Vec::new(),

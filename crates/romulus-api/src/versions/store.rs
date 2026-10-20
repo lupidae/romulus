@@ -45,6 +45,9 @@ pub struct NewVersion {
     /// The approvals of the draft it publishes: checked again and kept with
     /// it, in the same transaction (`drafts::approvals::freeze`).
     pub approvals: Option<crate::drafts::approvals::Freeze>,
+    /// Published without the passing test the organization requires: the
+    /// override, kept in the audit log in the version's transaction.
+    pub test_override: Option<crate::migration_tests::TestOverride>,
     /// The migration the version was written as (a draft in migration mode
     /// publishing it; `versions.migration_sql`).
     pub migration_sql: Option<String>,
@@ -268,6 +271,9 @@ pub async fn store(
     }
     if let Some(approvals) = &new.approvals {
         crate::drafts::approvals::freeze(&mut tx, approvals, database_id, id, number).await?;
+    }
+    if let Some(found) = &new.test_override {
+        crate::migration_tests::record_override(&mut tx, found, database_id, number).await?;
     }
     if let Some(draft) = new.publishes_draft {
         super::discussion::freeze(&mut tx, id, draft, &new.discussion).await?;

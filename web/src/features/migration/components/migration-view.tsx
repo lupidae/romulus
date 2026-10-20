@@ -60,6 +60,17 @@ export interface RenameControl {
   known?: string;
 }
 
+/** The migration on screen, for what acts on it (Test on data). */
+export interface ShownMigration {
+  concurrently: boolean;
+  /** The rename decisions on screen. */
+  renames: RenameDecisions;
+  /** Statements in it (0: nothing to run). */
+  statements: number;
+  /** Not yet of what is chosen: fetching after a switch, or the text changed. */
+  pending: boolean;
+}
+
 export interface MigrationViewProps {
   /** The query for a tool and options: between two versions, or for a draft. */
   query: (choice: MigrationChoice) => MigrationQuery;
@@ -91,6 +102,8 @@ export interface MigrationViewProps {
    * waits. Called with `false` when the view goes.
    */
   onPendingChange?: (pending: boolean) => void;
+  /** More actions on the migration on screen, before Copy (Test on data). */
+  actions?: (shown: ShownMigration) => React.ReactNode;
   className?: string;
 }
 
@@ -116,6 +129,7 @@ export function MigrationView({
   renames,
   knownRenames,
   onPendingChange,
+  actions,
   className,
 }: MigrationViewProps) {
   const [ownDecisions, setOwnDecisions] = React.useState<RenameDecisions>({});
@@ -360,6 +374,13 @@ export function MigrationView({
               </Button>
             </Tooltip>
           )}
+          {data &&
+            actions?.({
+              concurrently,
+              renames: decisions,
+              statements,
+              pending: pending || switching,
+            })}
           <Button
             size="sm"
             onClick={() => void copy()}

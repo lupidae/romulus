@@ -66,6 +66,9 @@ pub struct Org {
     /// Approvals publishing a draft needs, from members who did not edit
     /// it; 0: none (pushes and imports are never gated).
     pub approvals_required: i32,
+    /// Publishing a draft that changes the schema needs a passing
+    /// migration test of its text as it is (Test on data).
+    pub require_passing_test: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -84,6 +87,8 @@ pub struct UpdateOrg {
     pub slug: Option<String>,
     /// 0 (none) to 10.
     pub approvals_required: Option<i32>,
+    /// Whether publishing a draft needs a passing migration test.
+    pub require_passing_test: Option<bool>,
 }
 
 /// A 422 naming the field, in the shape the web app's forms read.
@@ -140,7 +145,8 @@ fn slug_taken(slug: &str) -> impl FnOnce(sqlx::Error) -> ApiError + '_ {
 async fn list(user: CurrentUser, State(db): State<PgPool>) -> ApiResult<Json<Vec<Org>>> {
     let orgs = sqlx::query_as!(
         Org,
-        r#"SELECT o.id, o.slug, o.name, m.role AS "role: Role", o.approvals_required::int AS "approvals_required!"
+        r#"SELECT o.id, o.slug, o.name, m.role AS "role: Role", o.approvals_required::int AS "approvals_required!",
+                  o.require_passing_test
            FROM memberships m JOIN organizations o ON o.id = m.org_id
            WHERE m.user_id = $1
            ORDER BY lower(o.name), o.slug"#,
@@ -205,6 +211,7 @@ async fn create(
             name,
             role: Role::Admin,
             approvals_required: 0,
+            require_passing_test: false,
         }),
     ))
 }
@@ -228,6 +235,7 @@ async fn get(member: Member) -> Json<Org> {
         name: member.org.name,
         role: member.role,
         approvals_required: member.org.approvals_required.into(),
+        require_passing_test: member.org.require_passing_test,
     })
 }
 
@@ -271,8 +279,9 @@ async fn update(
         .transpose()?;
     let shown = slug.clone().unwrap_or_default();
     let mut tx = db.begin().await?;
-    let before = sqlx::query_scalar!(
-        "SELECT approvals_required FROM organizations WHERE id = $1 FOR UPDATE",
+    let before = sqlx::query!(
+        "SELECT approvals_required, require_passing_test FROM organizations
+         WHERE id = $1 FOR UPDATE",
         member.org.id,
     )
     .fetch_one(&mut *tx)
@@ -280,16 +289,40 @@ async fn update(
     let org = sqlx::query!(
         "UPDATE organizations
          SET name = coalesce($2, name), slug = coalesce($3, slug),
-             approvals_required = coalesce($4, approvals_required)
-         WHERE id = $1 RETURNING slug, name, approvals_required",
+             approvals_required = coalesce($4, approvals_required),
+             require_passing_test = coalesce($5, require_passing_test)
+         WHERE id = $1 RETURNING slug, name, approvals_required, require_passing_test",
         member.org.id,
         name,
         slug,
         approvals,
+        body.require_passing_test,
     )
     .fetch_one(&mut *tx)
     .await
     .map_err(slug_taken(&shown))?;
+    if org.require_passing_test != before.require_passing_test {
+        // Who changed what publishing needs: in the audit log.
+        audit::record(
+            &mut *tx,
+            &audit::Entry {
+                org_id: member.org.id,
+                database_id: None,
+                action: AuditAction::PassingTestRequiredChanged,
+                actor_id: Some(member.user.id),
+                actor_name: Some(member.user.name.clone()),
+                version_number: None,
+                reason: None,
+                details: audit::AuditDetails {
+                    from: Some(before.require_passing_test.into()),
+                    to: Some(org.require_passing_test.into()),
+                    ..Default::default()
+                },
+            },
+        )
+        .await?;
+    }
+    let before = before.approvals_required;
     let changed = org.approvals_required != before;
     if changed {
         // Who changed what publishing needs, from what: in the audit log.
@@ -324,6 +357,7 @@ async fn update(
         name: org.name,
         role: member.role,
         approvals_required: org.approvals_required.into(),
+        require_passing_test: org.require_passing_test,
     }))
 }
 

@@ -457,8 +457,9 @@ async fn accept(
         .await?
         .ok_or_else(not_found)?;
     let preview = found.preview;
-    let approvals_required = sqlx::query_scalar!(
-        "SELECT approvals_required::int AS \"n!\" FROM organizations WHERE id = $1",
+    let settings = sqlx::query!(
+        r#"SELECT approvals_required::int AS "approvals_required!", require_passing_test
+           FROM organizations WHERE id = $1"#,
         found.org_id
     )
     .fetch_one(&state.db)
@@ -468,7 +469,8 @@ async fn accept(
         slug: preview.org.slug.clone(),
         name: preview.org.name.clone(),
         role,
-        approvals_required,
+        approvals_required: settings.approvals_required,
+        require_passing_test: settings.require_passing_test,
     };
     match preview.status {
         InvitationStatus::AlreadyMember => {
@@ -654,7 +656,8 @@ pub(crate) async fn claim_for(
     .execute(&mut *tx)
     .await?;
     let org = sqlx::query!(
-        r#"SELECT slug, name, approvals_required::int AS "approvals_required!" FROM organizations WHERE id = $1"#,
+        r#"SELECT slug, name, approvals_required::int AS "approvals_required!", require_passing_test
+           FROM organizations WHERE id = $1"#,
         claimed.org_id,
     )
     .fetch_one(&mut *tx)
@@ -665,6 +668,7 @@ pub(crate) async fn claim_for(
         name: org.name,
         role: claimed.role,
         approvals_required: org.approvals_required,
+        require_passing_test: org.require_passing_test,
     }))
 }
 

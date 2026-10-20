@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MigrationView, type RenameControl } from "@/features/migration/components/migration-view";
+import { MigrationTestButton } from "@/features/migration-test/components/test-sheet";
 import { type MigrationChoice, draftMigrationQuery } from "@/features/migration/queries";
 import { save } from "@/features/migration/zip";
 import { CodeView } from "@/features/schema/text/code-view";
@@ -189,6 +190,18 @@ export function GeneratedMigration({
           blocked={blocked}
           busy={compile.stale || compile.sha256 !== sha}
           renames={renames}
+          actions={(shown) =>
+            sha && (
+              <MigrationTestButton
+                org={org}
+                db={db}
+                source={{ kind: "draft", draft: draft.id, sha256: sha }}
+                canRun={canEdit}
+                shown={shown}
+                base={base}
+              />
+            )
+          }
           className="min-h-0 flex-1"
         />
       ) : (
@@ -210,6 +223,7 @@ export function WrittenMigration({
   canEdit,
   baseVersion,
   onEditor,
+  test,
 }: {
   /** The migration now (seeds the editor; the binding owns it after). */
   text: string;
@@ -219,10 +233,30 @@ export function WrittenMigration({
   canEdit: boolean;
   baseVersion: number | null | undefined;
   onEditor: (editor: Editor | null) => void;
+  /** Test on data: the draft as compiled (`sha256`), or why not now. */
+  test?: { org: string; db: string; draft: string; sha256: string | null; blocked?: string };
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <PaneNotice icon={<EditPencilIcon aria-hidden />}>
+      <PaneNotice
+        icon={<EditPencilIcon aria-hidden />}
+        action={
+          test && (
+            <MigrationTestButton
+              org={test.org}
+              db={test.db}
+              source={{ kind: "draft", draft: test.draft, sha256: test.sha256 ?? "" }}
+              canRun={canEdit}
+              blocked={
+                test.blocked ??
+                (test.sha256 ? undefined : "The migration is compiling: test it in a moment.")
+              }
+              base={baseVersion}
+              className="shrink-0"
+            />
+          )
+        }
+      >
         {baseVersion ? `Written by hand from v${baseVersion}` : "Written by hand"}: the schema SQL
         and the graph follow from it.
         {!canEdit && " Developers and admins edit it."}

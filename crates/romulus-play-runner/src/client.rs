@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use crate::{
-    protocol::{Create, ErrorBody, Health, Listing, Space, Started, State},
+    protocol::{Create, ErrorBody, Fork, Health, Listing, Space, Started, State},
     unix::{UnixHttpError, request},
 };
 
@@ -81,6 +81,14 @@ impl Runner {
 
     pub async fn restore(&self, id: Uuid) -> Result<(), RunnerError> {
         self.call::<serde_json::Value>(Method::POST, &path(id, "/restore"), None, SLOW)
+            .await
+            .map(drop)
+    }
+
+    /// Creates `id` as a copy of another playground's cluster (left stopped).
+    pub async fn fork(&self, id: Uuid, fork: &Fork) -> Result<(), RunnerError> {
+        let body = serde_json::to_vec(fork)?;
+        self.call::<serde_json::Value>(Method::POST, &path(id, "/fork"), Some(body), SLOW)
             .await
             .map(drop)
     }

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH live AS (\n                       SELECT size FROM playgrounds WHERE status IN ('building', 'ready')\n                       UNION ALL\n                       SELECT size FROM migration_tests\n                       WHERE status = 'running' AND playground_id IS NOT NULL\n                   )\n                   SELECT count(*) AS \"live!\",\n                          count(*) FILTER (WHERE size = 'small') AS \"small!\",\n                          count(*) FILTER (WHERE size = 'medium') AS \"medium!\"\n                   FROM live",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "live!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "small!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "medium!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8297149883e84255af9a40a82ff38443b07620de00bc8e4d98690bf2466b56d4"
+}

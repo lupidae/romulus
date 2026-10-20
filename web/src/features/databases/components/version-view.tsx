@@ -35,6 +35,7 @@ import { useComments } from "@/features/comments/use-comments";
 import { useCommentsUi } from "@/features/comments/use-comments-ui";
 import { CompareWith } from "@/features/diff/components/compare-with";
 import { MigrationButton } from "@/features/imports/components/migration-dialog";
+import { MigrationTestButton } from "@/features/migration-test/components/test-sheet";
 import { PlaygroundButton } from "@/features/playground/components/entry";
 import { names } from "@/features/draft/review";
 import { orgQuery } from "@/features/orgs/queries";
@@ -332,7 +333,22 @@ function VersionStrip({
             compact
           />
         )}
-        {version && <MigrationButton version={version} />}
+        {version && (
+          <MigrationButton
+            version={version}
+            test={
+              older && (
+                <MigrationTestButton
+                  org={org}
+                  db={db}
+                  source={{ kind: "version", version: version.number }}
+                  canRun={canWrite(orgData.role)}
+                  base={older}
+                />
+              )
+            }
+          />
+        )}
         {version && <WrittenMigrationButton org={org} database={database} version={version} />}
         {database.versions > 1 && (
           <Tooltip content={`See v${number} in the time machine`} shortcut={["T"]}>

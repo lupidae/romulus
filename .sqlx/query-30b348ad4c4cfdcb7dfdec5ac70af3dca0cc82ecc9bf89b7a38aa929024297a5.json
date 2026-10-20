@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE migration_tests SET status = $2, verdict = $3, rows_checked = $4, report = $5,\n                    failure = $6, finished_at = now()\n             WHERE id = $1 AND status IN ('queued', 'running')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "migration_test_status",
+            "kind": {
+              "Enum": [
+                "queued",
+                "running",
+                "passed",
+                "failed",
+                "needs_acknowledgement",
+                "error",
+                "cancelled"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "migration_test_verdict",
+            "kind": {
+              "Enum": [
+                "passed",
+                "passed_up_only",
+                "needs_acknowledgement",
+                "failed"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "30b348ad4c4cfdcb7dfdec5ac70af3dca0cc82ecc9bf89b7a38aa929024297a5"
+}

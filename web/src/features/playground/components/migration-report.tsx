@@ -59,23 +59,45 @@ export function MigrationReportView({ report, live, onQuery }: MigrationReportVi
           </p>
         )}
       </div>
-      <ol className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
-        {statements
-          .filter((s) => s.status !== "not_run")
-          .map((statement) => (
-            <StatementRow key={statement.index} statement={statement} onQuery={onQuery} />
-          ))}
-        {live?.running != null && (
-          <li className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-muted-foreground">
-            <Spinner className="size-4" label="Running" />
-            Statement {live.running + 1}
-          </li>
-        )}
-      </ol>
+      <StatementList statements={statements} running={live?.running} onQuery={onQuery} />
       {report && !report.passed && (
         <p className="text-sm text-muted-foreground">{afterFailure(report)}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * The statements of a run that ran (or failed), each with what it did; the
+ * one running now, if any. A migration test shows its up and down runs
+ * with it.
+ */
+export function StatementList({
+  statements,
+  report,
+  running,
+  onQuery,
+}: {
+  statements?: MigrationStatementResult[];
+  report?: MigrationReport;
+  running?: number | null;
+  onQuery?: (sql: string) => void;
+}) {
+  const list = statements ?? report?.statements ?? [];
+  return (
+    <ol className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
+      {list
+        .filter((s) => s.status !== "not_run")
+        .map((statement) => (
+          <StatementRow key={statement.index} statement={statement} onQuery={onQuery} />
+        ))}
+      {running != null && (
+        <li className="flex items-center gap-2.5 px-3 py-2.5 text-sm text-muted-foreground">
+          <Spinner className="size-4" label="Running" />
+          Statement {running + 1}
+        </li>
+      )}
+    </ol>
   );
 }
 

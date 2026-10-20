@@ -97,6 +97,20 @@ export function PlaygroundPage({ org, db, id }: { org: string; db: string; id: s
     if (message) toast.info(message, { description: description(notice.event) });
   }, [notice, queryClient, org, db, id, me.id]);
 
+  // A migration test copied its rows (it paused a moment for the copy):
+  // the owner hears of it while the page is open.
+  const copiedAt = playground.copied?.at;
+  const lastCopy = React.useRef(copiedAt);
+  React.useEffect(() => {
+    if (copiedAt === lastCopy.current) return;
+    lastCopy.current = copiedAt;
+    const by = playground.copied?.by;
+    if (!copiedAt || by?.id === me.id) return;
+    toast.info(`${by?.name ?? "Someone"}'s migration test copied these rows`, {
+      description: "The playground paused a moment for the copy; nothing in it changed.",
+    });
+  }, [copiedAt, playground.copied?.by, me.id]);
+
   const startMigration = async (sha256: string) => {
     // The host puts the generated rows back first.
     setMigration({

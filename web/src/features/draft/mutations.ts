@@ -94,6 +94,8 @@ export function usePublishDraft(org: string, db: string, id: string) {
       sha256: string;
       message?: string;
       override_reason?: string;
+      /** An admin publishing without the required test while tests cannot run, saying why. */
+      test_override_reason?: string;
       /** The renames as the person saw the migration: the version keeps them. */
       renames?: Record<string, boolean>;
     }) =>

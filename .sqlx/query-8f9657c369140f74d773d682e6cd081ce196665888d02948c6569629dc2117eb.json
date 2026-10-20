@@ -34,7 +34,10 @@
                 "playground_deleted",
                 "playground_reset",
                 "playground_migration_run",
-                "playground_restarted"
+                "playground_restarted",
+                "passing_test_required_changed",
+                "migration_test_acknowledged",
+                "passing_test_overridden"
               ]
             }
           }

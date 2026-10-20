@@ -311,6 +311,7 @@ async fn the_layout_places_every_table_the_history_had(db: PgPool) {
             expected_base: None,
             publishes_draft: None,
             approvals: None,
+            test_override: None,
             migration_sql: None,
             compiled_on: None,
             discussion: Vec::new(),

@@ -23,6 +23,7 @@ mod live;
 mod majors;
 mod members;
 mod migration;
+mod migration_tests;
 mod oidc;
 mod orgs;
 mod passwords;

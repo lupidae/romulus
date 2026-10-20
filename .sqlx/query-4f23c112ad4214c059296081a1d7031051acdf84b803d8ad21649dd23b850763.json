@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT details->>'test_id' AS \"test_id\" FROM audit_events WHERE action = 'migration_test_acknowledged'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "test_id",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4f23c112ad4214c059296081a1d7031051acdf84b803d8ad21649dd23b850763"
+}

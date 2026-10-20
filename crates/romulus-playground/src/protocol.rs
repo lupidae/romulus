@@ -5,6 +5,8 @@
 //! |---|---|
 //! | `POST /playgrounds/{id}/build` | [`Build`] → NDJSON [`BuildEvent`]s |
 //! | `POST /playgrounds/{id}/migration` | [`Migrate`] → NDJSON [`MigrationEvent`]s |
+//! | `POST /playgrounds/{id}/test` | [`Test`] → NDJSON [`TestEvent`]s |
+//! | `POST /playgrounds/{id}/fork` | [`Fork`] → 204 (a copy of another's rows) |
 //! | `POST /playgrounds/{id}/reset` | → [`Status`] |
 //! | `POST /playgrounds/{id}/stop` | → [`Status`] |
 //! | `DELETE /playgrounds/{id}` | → 204 |
@@ -155,6 +157,17 @@ pub struct MigrationStatement {
     pub outside_transaction: bool,
 }
 
+/// Create a playground as a copy of another's rows, for a migration test on
+/// them: the source pauses for the copy (its sessions are told and come
+/// back) and is never changed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fork {
+    pub source: Uuid,
+    pub size: Size,
+    #[serde(default)]
+    pub extensions: Vec<Extension>,
+}
+
 /// Run a migration on the generated rows: reset, then each statement in its
 /// own transaction, measured.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,125 +175,55 @@ pub struct Migrate {
     pub statements: Vec<MigrationStatement>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = MigrationRunStatus))]
-#[serde(rename_all = "snake_case")]
-pub enum StatementStatus {
-    Passed,
-    Failed,
-    /// Not run: an earlier statement failed.
-    NotRun,
-    /// Transaction control a playground run does not need (`BEGIN`…).
-    Skipped,
-}
+// The statements' results, one shape for Run migration and Test migration:
+// romulus-migration-check's runner makes them.
+pub use romulus_migration_check::report::{
+    Lock, MigrationReport, Offending, SqlError, StatementResult, StatementStatus, TextSpan,
+};
 
-/// A lock a statement held, from `pg_locks` before its `COMMIT`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = MigrationRunLock))]
-pub struct Lock {
-    /// `schema.name` of the relation.
-    pub relation: String,
-    /// `AccessExclusiveLock`…
-    pub mode: String,
-}
-
-/// A Postgres error, located.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = PlaygroundSqlError))]
-pub struct SqlError {
-    pub sqlstate: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-    /// Where in the text the request sent (this statement for a migration,
-    /// the whole console text for a run).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub span: Option<TextSpan>,
-}
-
-/// A range of a text: bytes, and UTF-16 code units (the browser's).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = PlaygroundTextSpan))]
-pub struct TextSpan {
-    pub start: usize,
-    pub end: usize,
-    pub utf16_start: usize,
-    pub utf16_end: usize,
-}
-
-impl TextSpan {
-    /// The span of `range` in `text`.
-    pub fn of(text: &str, range: std::ops::Range<usize>) -> Self {
-        let utf16 = |byte: usize| {
-            text.get(..byte)
-                .map_or(0, |prefix| prefix.encode_utf16().count())
-        };
-        Self {
-            start: range.start,
-            end: range.end,
-            utf16_start: utf16(range.start),
-            utf16_end: utf16(range.end),
-        }
-    }
-}
-
-/// What one statement of a migration run did.
+/// Test a migration on the playground's rows (romulus-migration-check):
+/// the database is checked to be at `base` and its rows counted and
+/// sampled, `up` runs (each statement in its own transaction, measured),
+/// the schema and the rows are checked against `target`, then `down` (if
+/// any) and the same checks against `base`. Develop access. The playground
+/// is left as the test leaves it: a test runs on a playground made for it
+/// (or a copy of someone's), which the API deletes after.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = MigrationRunStatement))]
-pub struct StatementResult {
-    pub index: usize,
-    pub sql: String,
-    pub status: StatementStatus,
+pub struct Test {
+    /// The remus models before and after.
+    pub base: serde_json::Value,
+    pub target: serde_json::Value,
+    pub up: Vec<romulus_migration_check::Statement>,
+    /// Tables whose columns `up` warned Postgres puts last.
     #[serde(default)]
-    pub hazard: Option<String>,
-    pub duration_ms: u64,
-    /// Exact, for statements in a transaction.
+    pub up_reordered: Vec<String>,
+    /// `None`: there is no down migration (one written without it).
     #[serde(default)]
-    pub locks: Vec<Lock>,
-    /// Outside a transaction (`CONCURRENTLY`): the documented lock, not a
-    /// measured one.
+    pub down: Option<Vec<romulus_migration_check::Statement>>,
     #[serde(default)]
-    pub locks_documented: bool,
-    /// Tables (and materialized views) rewritten: their files changed.
-    #[serde(default)]
-    pub rewrote: Vec<String>,
-    /// Rows inserted, updated or deleted, from `pg_stat_xact_user_tables`.
-    #[serde(default)]
-    pub rows_changed: Option<i64>,
-    /// Postgres's command tag (`ALTER TABLE`, `UPDATE 12`).
-    #[serde(default)]
-    pub tag: Option<String>,
-    #[serde(default)]
-    pub error: Option<SqlError>,
-    /// Rows of the table that broke it (a NOT NULL, a unique key…), when the
-    /// error says which, at most 5, as `column = value` text.
-    #[serde(default)]
-    pub offending: Option<Offending>,
+    pub down_reordered: Vec<String>,
+    /// Rows sampled per table.
+    pub sample: usize,
+    /// What the report calls the two schemas (`v7`, `the draft`).
+    pub base_label: String,
+    pub target_label: String,
+    /// What the report says the rows are.
+    pub data: romulus_migration_check::DataSource,
 }
 
-/// Rows that make a statement fail.
+/// What a test tells as it runs; ends with `done` or `failed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = MigrationRunOffending))]
-pub struct Offending {
-    /// How many rows break it.
-    pub count: i64,
-    /// A query that lists them (run it in the console).
-    pub query: String,
-    /// The first few, each as Postgres prints its key.
-    pub sample: Vec<String>,
-}
-
-/// A migration run, whole.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "utoipa", derive(ToSchema), schema(as = MigrationRunReport))]
-pub struct MigrationReport {
-    pub passed: bool,
-    pub statements: Vec<StatementResult>,
-    /// The index of the statement that failed.
-    pub failed_at: Option<usize>,
-    pub duration_ms: u64,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TestEvent {
+    /// A phase or a statement, as the engine tells it.
+    Progress {
+        event: romulus_migration_check::Event,
+    },
+    Done {
+        report: Box<romulus_migration_check::Report>,
+    },
+    /// The test could not run (the playground did not start).
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

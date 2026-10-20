@@ -28,6 +28,9 @@ import {
 } from "@/components/icons";
 import { toast } from "@/components/ui/toaster";
 import { MigrationView, type RenameControl } from "@/features/migration/components/migration-view";
+import { MigrationTestButton, TestedLine } from "@/features/migration-test/components/test-sheet";
+import { type TestSource, testsQuery } from "@/features/migration-test/queries";
+import { orgQuery } from "@/features/orgs/queries";
 import { RenamesNote } from "@/features/migration/components/renames-note";
 import { draftMigrationQuery } from "@/features/migration/queries";
 import { save } from "@/features/migration/zip";
@@ -140,6 +143,7 @@ function PublishBody({
   const errors = data?.diagnostics.filter((d) => d.severity === "error") ?? [];
   const changes = data ? changesOf(data) : [];
   const gate = useApprovalGate(data?.approvals);
+  const tested = useTestGate(org, db, draftId, data);
   const unpublishable = !data || data.stale || errors.length > 0 || !data.diff;
   // A rename switched reaches the server through the draft's socket: until
   // the preview has it (and the migration shown is of it), what would be
@@ -148,7 +152,7 @@ function PublishBody({
   const previewBehind = !!data && !!onScreen && !sameDecisions(data.renames, onScreen);
   const [migrationPending, setMigrationPending] = React.useState(false);
   const catchingUp = previewBehind || migrationPending;
-  const blocked = unpublishable || gate.blocked || catchingUp;
+  const blocked = unpublishable || gate.blocked || tested.blocked || catchingUp;
   React.useEffect(() => {
     if (!previewBehind) return;
     const timer = window.setTimeout(
@@ -166,6 +170,7 @@ function PublishBody({
         sha256: data.sha256,
         message: message.trim() || undefined,
         override_reason: gate.overrideReason,
+        test_override_reason: tested.overrideReason,
         renames: renames?.decisions,
       },
       {
@@ -179,6 +184,8 @@ function PublishBody({
               "validation",
               "stale_base",
               "approvals_required",
+              "passing_test_required",
+              "tests_unavailable",
             ].includes(error.code)
           ) {
             // Show what is true now.
@@ -260,6 +267,9 @@ function PublishBody({
         </Alert>
       ) : (
         <Changes
+          org={org}
+          db={db}
+          draftId={draftId}
           preview={data!}
           changes={changes}
           layout={layout}
@@ -284,6 +294,10 @@ function PublishBody({
         className="grid gap-4"
       >
         {data && !data.stale && errors.length === 0 && gate.element}
+        {data && !data.stale && errors.length === 0 && changes.length > 0 && data.base_version && (
+          <TestedLine org={org} db={db} draft={draftId} gate={data.test_gate} />
+        )}
+        {tested.element}
         {threads && threads.open + threads.resolved > 0 && (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <ChatLinesIcon aria-hidden className="size-4 shrink-0" />
@@ -315,12 +329,67 @@ function PublishBody({
             aria-keyshortcuts="Meta+Enter Control+Enter"
             title={`${modKey} Enter`}
           >
-            {gate.overrideReason ? `Publish v${number} without approvals` : `Publish v${number}`}
+            {gate.overrideReason && tested.overrideReason
+              ? `Publish v${number} without approvals or a test`
+              : gate.overrideReason
+                ? `Publish v${number} without approvals`
+                : tested.overrideReason
+                  ? `Publish v${number} without a test`
+                  : `Publish v${number}`}
           </Button>
         </DialogFooter>
       </form>
     </>
   );
+}
+
+/**
+ * An organization publishing only what passed a migration test: the
+ * preview's `test_gate` (the API's `migration_tests::gate`, of exactly the
+ * migration publishing would run). Held until such a test passed; where
+ * tests cannot run, an admin may publish without one, saying why (the
+ * audit log keeps it). The preview is read again whenever this draft's
+ * tests change (one finishing, an acknowledgement).
+ */
+function useTestGate(org: string, db: string, draft: string, preview: PublishPreview | undefined) {
+  const queryClient = useQueryClient();
+  const { data: orgData } = useQuery(orgQuery(org));
+  const [reason, setReason] = React.useState("");
+  const testGate = preview?.test_gate;
+  const held = !!testGate?.required && !testGate.nothing_to_test && !testGate.passing;
+  const tests = useQuery({
+    ...testsQuery(org, db, { kind: "draft", draft, sha256: "" }),
+    enabled: held,
+  });
+  const seen = tests.data?.map((t) => `${t.id}:${t.status}`).join(",");
+  const first = React.useRef(true);
+  React.useEffect(() => {
+    if (seen === undefined) return;
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draft) });
+  }, [seen, queryClient, org, db, draft]);
+  const canOverride = held && testGate?.available === false && orgData?.role === "admin";
+  const overrideReason = canOverride && reason.trim() ? reason.trim() : undefined;
+  return {
+    blocked: held && !overrideReason,
+    overrideReason,
+    element: canOverride ? (
+      <Field
+        label="Why publish without a test"
+        description="Tests cannot run on this server, and the organization requires one. The audit log keeps your reason with the version."
+      >
+        <Input
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Tested by hand on staging"
+          maxLength={1000}
+        />
+      </Field>
+    ) : null,
+  };
 }
 
 /** Whether two sets of rename decisions say the same. */
@@ -337,6 +406,9 @@ function reviewLine({ open, resolved }: { open: number; resolved: number }) {
 }
 
 function Changes({
+  org,
+  db,
+  draftId,
   preview,
   changes,
   layout,
@@ -346,6 +418,9 @@ function Changes({
   renames,
   onMigrationPending,
 }: {
+  org: string;
+  db: string;
+  draftId: string;
   preview: PublishPreview;
   changes: Change[];
   layout: Layout;
@@ -358,6 +433,7 @@ function Changes({
   migration: React.ComponentProps<typeof MigrationView>["query"];
 }) {
   const { model: rawModel, base_model: rawBase, diff } = preview;
+  const source: TestSource = { kind: "draft", draft: draftId, sha256: preview.sha256 };
   const [tab, setTab] = React.useState("list");
   const graph = React.useMemo(() => {
     try {
@@ -466,13 +542,35 @@ function Changes({
         className="mt-0 h-[50dvh] min-h-80 overflow-hidden rounded-lg border border-border"
       >
         {preview.mode === "migration" ? (
-          <WrittenMigrationPreview text={preview.migration ?? ""} fileName={fileName} />
+          <WrittenMigrationPreview
+            text={preview.migration ?? ""}
+            fileName={fileName}
+            test={
+              <MigrationTestButton
+                org={org}
+                db={db}
+                source={source}
+                canRun
+                base={preview.base_version}
+              />
+            }
+          />
         ) : (
           <MigrationView
             query={migration}
             primary={false}
             renames={renames}
             onPendingChange={onMigrationPending}
+            actions={(shown) => (
+              <MigrationTestButton
+                org={org}
+                db={db}
+                source={source}
+                canRun
+                shown={shown}
+                base={preview.base_version}
+              />
+            )}
           />
         )}
       </TabsContent>
@@ -481,7 +579,16 @@ function Changes({
 }
 
 /** The migration a migration-mode draft was written as: what the version keeps. */
-function WrittenMigrationPreview({ text, fileName }: { text: string; fileName: string }) {
+function WrittenMigrationPreview({
+  text,
+  fileName,
+  test,
+}: {
+  text: string;
+  fileName: string;
+  /** Test on data. */
+  test?: React.ReactNode;
+}) {
   const [copied, setCopied] = React.useState(false);
   React.useEffect(() => {
     if (!copied) return;
@@ -494,6 +601,7 @@ function WrittenMigrationPreview({ text, fileName }: { text: string; fileName: s
         <p className="min-w-0 flex-1 text-sm text-muted-foreground">
           Written by hand in this draft. The version keeps it: download it again from its page.
         </p>
+        {test}
         <Button
           size="sm"
           onClick={() => {

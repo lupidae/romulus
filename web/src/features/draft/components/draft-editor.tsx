@@ -586,6 +586,19 @@ export function Workspace({
               onEditor={(e) => {
                 migrationEditor.current = e;
               }}
+              test={{
+                org,
+                db,
+                draft: draft.id,
+                sha256: compile.stale ? null : compile.sha256,
+                blocked: draft.stale
+                  ? `v${draft.latest_version} is out: update the draft to test its migration.`
+                  : compile.state === "failed"
+                    ? "The migration has errors: fix them to test it."
+                    : compile.state === "unavailable"
+                      ? "The migration cannot be checked right now."
+                      : undefined,
+              }}
             />
           ),
           actions: (

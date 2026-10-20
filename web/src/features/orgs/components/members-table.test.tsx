@@ -25,6 +25,7 @@ const org = (role: Org["role"]): Org => ({
   name: "Acme",
   role,
   approvals_required: 0,
+  require_passing_test: false,
 });
 
 function renderTable(ui: React.ReactElement) {

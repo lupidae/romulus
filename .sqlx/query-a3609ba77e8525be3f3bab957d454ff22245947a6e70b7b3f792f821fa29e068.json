@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE migration_tests SET status = 'running', started_at = now(), playground_id = $2\n                 WHERE id = $1 AND status = 'queued'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3609ba77e8525be3f3bab957d454ff22245947a6e70b7b3f792f821fa29e068"
+}

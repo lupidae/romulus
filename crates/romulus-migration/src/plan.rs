@@ -775,6 +775,21 @@ impl<'a> Planner<'a> {
             || self.rebuild_reason(table, &b.definition).is_some()
     }
 
+    /// Whether what a foreign key references loses its values here: its
+    /// table created again, or a column it references added again.
+    fn fk_target_lost(&self, fk: &Constraint) -> bool {
+        let (Some(schema), Some(table)) = (fk.ref_schema.as_deref(), fk.ref_table.as_deref())
+        else {
+            return false;
+        };
+        let target = name_of(schema, table);
+        self.recreated.contains(&target)
+            || self
+                .readded
+                .get(&target)
+                .is_some_and(|columns| fk.ref_columns.iter().any(|c| columns.contains_key(c)))
+    }
+
     /// Why a foreign key that did not change must be dropped and added
     /// again, if it must.
     fn fk_rebuilt(&self, owner: &Name, fk: &Constraint) -> Option<String> {
@@ -1998,11 +2013,22 @@ impl<'a> Planner<'a> {
                         }
                     } else if let Some(reason) = rebuilt {
                         self.drop_constraint(&table, cb);
+                        // What it references is gone (its table created
+                        // again, its columns added again): a row pointing at
+                        // a value they held points nowhere now. Found by the
+                        // tests on generated rows (romulus-migration-check).
+                        let lost = self.fk_target_lost(cb);
                         self.add_constraint(
                             &table,
                             ca,
-                            Some(format!("Dropped above and added back: {reason}.")),
-                            None,
+                            Some(if lost {
+                                format!(
+                                    "Dropped above and added back: {reason}. Fails if an existing row points at a value it held."
+                                )
+                            } else {
+                                format!("Dropped above and added back: {reason}.")
+                            }),
+                            lost.then_some(Hazard::CanFail),
                         );
                         if let Some(comment) = &ca.comment {
                             self.constraint_comment(&table, ca, Some(comment));
@@ -2356,6 +2382,36 @@ impl<'a> Planner<'a> {
                 self.sequence_for(Phase::Columns, column);
                 let loses_labels = column.type_kind == TypeKind::Enum
                     && self.enum_loses_labels(&column.type_schema, &column.type_name);
+                // A recreated domain refuses what the old one took: a NULL
+                // (now NOT NULL), a value a new check or a narrower base
+                // type refuses, a label its base enum lost. Found by the
+                // tests on generated rows (romulus-migration-check).
+                let domain = |s: &'a Schema| {
+                    s.domains
+                        .iter()
+                        .find(|d| d.schema == column.type_schema && d.name == column.type_name)
+                };
+                let mut refuses: Vec<String> = Vec::new();
+                if recreated
+                    && column.type_kind == TypeKind::Domain
+                    && let (Some(o), Some(n)) = (domain(self.old), domain(self.new))
+                {
+                    if n.base_type
+                        .rsplit_once('.')
+                        .is_some_and(|(schema, name)| self.enum_loses_labels(schema, name))
+                    {
+                        refuses.push(format!("a label {} lost", n.base_type));
+                    }
+                    if n.not_null && !o.not_null {
+                        refuses.push("a NULL".to_owned());
+                    }
+                    if n.constraints.iter().any(|c| !o.constraints.contains(c)) {
+                        refuses.push("a value its new check refuses".to_owned());
+                    }
+                    if !conversion.lossless && n.base_type != o.base_type {
+                        refuses.push(format!("a value {} cannot hold", n.base_type));
+                    }
+                }
                 let statement = self.push(Phase::Columns, Kind::AlterColumn, sql);
                 if recreated {
                     let what = if column.type_kind == TypeKind::Domain {
@@ -2367,6 +2423,18 @@ impl<'a> Planner<'a> {
                         statement.can_fail(format!(
                             "Converts to the recreated {what} {}: fails on a row holding a label it lost.",
                             column.r#type.trim_end_matches("[]")
+                        ));
+                    } else if !refuses.is_empty() && conversion.rounds {
+                        statement.destroys(format!(
+                            "Converts to the recreated domain {}: values can come out rounded or cut, and it fails on {}.",
+                            column.r#type.trim_end_matches("[]"),
+                            refuses.join(", ")
+                        ));
+                    } else if !refuses.is_empty() {
+                        statement.can_fail(format!(
+                            "Converts to the recreated domain {}: fails on {}.",
+                            column.r#type.trim_end_matches("[]"),
+                            refuses.join(", ")
                         ));
                     } else {
                         statement.noted(format!(

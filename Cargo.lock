@@ -2808,6 +2808,7 @@ dependencies = [
  "reqwest",
  "romulus-diff",
  "romulus-migration",
+ "romulus-migration-check",
  "romulus-playground",
  "romulus-sandbox",
  "rsa",
@@ -2875,10 +2876,30 @@ dependencies = [
  "insta",
  "remus-core",
  "romulus-diff",
+ "romulus-fakedata",
+ "romulus-migration-check",
  "romulus-sandbox",
  "serde",
  "serde_json",
  "sqlx",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
+name = "romulus-migration-check"
+version = "0.1.0"
+dependencies = [
+ "dotenvy",
+ "remus-core",
+ "romulus-diff",
+ "romulus-fakedata",
+ "romulus-migration",
+ "romulus-sandbox",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
  "tokio",
  "utoipa",
 ]
@@ -2919,6 +2940,8 @@ dependencies = [
  "remus-core",
  "reqwest",
  "romulus-fakedata",
+ "romulus-migration",
+ "romulus-migration-check",
  "romulus-play-runner",
  "romulus-sandbox",
  "serde",

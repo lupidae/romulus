@@ -16,10 +16,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { save } from "@/features/migration/zip";
+import { MigrationTestButton } from "@/features/migration-test/components/test-sheet";
+import { orgQuery } from "@/features/orgs/queries";
+import { canWrite } from "@/features/orgs/roles";
 import { CodeView } from "@/features/schema/text/code-view";
 import { cn } from "@/lib/utils";
 
-import { type Database, type VersionDetail, writtenMigrationQuery } from "../queries";
+import { type Database, type VersionDetail, neighbours, writtenMigrationQuery } from "../queries";
 
 /**
  * A version published from a draft in migration mode: the migration it was
@@ -70,6 +73,8 @@ export function WrittenMigrationButton({
 
 function Body({ org, database, number }: { org: string; database: Database; number: number }) {
   const migration = useQuery(writtenMigrationQuery(org, database.slug, database.id, number));
+  const { data: orgData } = useQuery(orgQuery(org));
+  const base = neighbours(database, number).older;
   const [copied, setCopied] = React.useState(false);
   React.useEffect(() => {
     if (!copied) return;
@@ -103,6 +108,15 @@ function Body({ org, database, number }: { org: string; database: Database; numb
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
           {data?.file_name ?? <Skeleton className="h-3 w-40" />}
         </span>
+        {base && (
+          <MigrationTestButton
+            org={org}
+            db={database.slug}
+            source={{ kind: "version", version: number }}
+            canRun={!!orgData && canWrite(orgData.role)}
+            base={base}
+          />
+        )}
         <Button
           size="sm"
           disabled={!data}

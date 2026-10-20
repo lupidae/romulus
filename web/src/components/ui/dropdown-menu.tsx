@@ -102,15 +102,27 @@ export function MenuCheckboxItem({
   );
 }
 
+/** A choice among several; `description` as on `MenuItem`. */
 export function MenuRadioItem({
   className,
+  description,
   children,
   ...props
-}: React.ComponentProps<typeof MenuPrimitive.RadioItem>) {
+}: React.ComponentProps<typeof MenuPrimitive.RadioItem> & { description?: React.ReactNode }) {
   return (
-    <MenuPrimitive.RadioItem className={cn(item, "pr-8", className)} {...props}>
-      {children}
-      <MenuPrimitive.ItemIndicator className="absolute right-2 flex items-center">
+    <MenuPrimitive.RadioItem
+      className={cn(item, "pr-8", description && "h-auto items-start py-1.5", className)}
+      {...props}
+    >
+      {description ? (
+        <span className="grid min-w-0 gap-0.5">
+          <span className="flex items-center gap-2">{children}</span>
+          <span className="pl-6 text-xs text-muted-foreground">{description}</span>
+        </span>
+      ) : (
+        children
+      )}
+      <MenuPrimitive.ItemIndicator className="absolute top-2 right-2 flex items-center">
         <CheckIcon className="text-primary!" />
       </MenuPrimitive.ItemIndicator>
     </MenuPrimitive.RadioItem>

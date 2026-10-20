@@ -1,3 +1,5 @@
+import type * as React from "react";
+
 import { PageIcon } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +21,14 @@ import { formatLabel, skipReasonHint, skipReasonLabel } from "../labels";
  * An imported version's migration: the file it came from, its SQL as
  * replayed, and what of it was not replayed. Opened from the version strip.
  */
-export function MigrationButton({ version }: { version: VersionDetail }) {
+export function MigrationButton({
+  version,
+  test,
+}: {
+  version: VersionDetail;
+  /** Test on data, above the migration. */
+  test?: React.ReactNode;
+}) {
   const migration = version.migration;
   if (!migration) return null;
   const skipped = migration.skipped;
@@ -55,6 +64,7 @@ export function MigrationButton({ version }: { version: VersionDetail }) {
             )}
           </DialogDescription>
         </DialogHeader>
+        {test && <div className="flex shrink-0 justify-end px-5 pb-3">{test}</div>}
         <div className="h-80 min-h-0 flex-1 border-y border-border">
           <CodeView
             doc={version.source}

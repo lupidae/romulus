@@ -633,6 +633,7 @@ async fn upload(
         expected_base: None,
         publishes_draft: None,
         approvals: None,
+        test_override: None,
         migration_sql: None,
         compiled_on: Some(database.pg_major),
         discussion: Vec::new(),

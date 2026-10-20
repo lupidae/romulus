@@ -29,7 +29,7 @@ server = [
     "tokio/io-util",
 ]
 # `utoipa::ToSchema` on the protocol types the API puts in its OpenAPI document.
-utoipa = ["dep:utoipa"]
+utoipa = ["dep:utoipa", "romulus-migration-check/utoipa"]
 
 [[bin]]
 name = "romulus-playground"
@@ -39,6 +39,9 @@ required-features = ["server"]
 base64.workspace = true
 bytes.workspace = true
 hmac.workspace = true
+# The statements' runner and the test's checks and report (protocol
+# re-exports its report types: one shape for Run migration and Test).
+romulus-migration-check.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -66,6 +69,8 @@ dotenvy.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 romulus-play-runner = { workspace = true, features = ["server"] }
+# Test migration's tests plan their migrations.
+romulus-migration.workspace = true
 remus-core = { workspace = true, features = ["fixtures"] }
 tokio-tungstenite.workspace = true
 uuid = { workspace = true, features = ["v4", "v7"] }

@@ -31,7 +31,7 @@ const V1: &str = "CREATE TABLE users (id bigint PRIMARY KEY);\nCREATE TABLE orde
 /// exists`, at the second one), and a foreign table per `CREATE FOREIGN
 /// TABLE`: something canonical SQL does not write back (`render_sql` skips
 /// foreign tables), like the gaps Tidy refuses over.
-fn mode_compiler() -> SqlCompiler {
+pub(crate) fn mode_compiler() -> SqlCompiler {
     SqlCompiler::from_fn(mode_compiler_fn)
 }
 

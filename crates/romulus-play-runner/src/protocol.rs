@@ -7,6 +7,7 @@
 //! | `POST /v1/playgrounds/{id}/stop` | a clean stop (Postgres's fast shutdown) |
 //! | `POST /v1/playgrounds/{id}/snapshot` | stopped: copy its data as the generated copy |
 //! | `POST /v1/playgrounds/{id}/restore` | stop, then put the generated copy back |
+//! | `POST /v1/playgrounds/{id}/fork` [`Fork`] | create it as a copy of another's cluster (stopped for the copy, left stopped) |
 //! | `DELETE /v1/playgrounds/{id}` | the container, its directories, its quota |
 //! | `GET /v1/playgrounds/{id}` → [`State`] | exists, running, killed for memory |
 //! | `GET /v1/playgrounds` → [`Listing`] | every playground of this runner's scope |
@@ -112,6 +113,17 @@ pub fn is_plain_identifier(name: &str) -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Create {
+    pub size: Size,
+    #[serde(default)]
+    pub extensions: Vec<Extension>,
+}
+
+/// Create a playground as a copy of another's data: what a migration test
+/// on someone's rows runs on (the source is stopped for the copy and left
+/// stopped; the service starts it again).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fork {
+    pub source: Uuid,
     pub size: Size,
     #[serde(default)]
     pub extensions: Vec<Extension>,

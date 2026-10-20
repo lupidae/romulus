@@ -285,6 +285,15 @@ pub enum AuditAction {
     /// A playground restarted to undo a role changed from inside it (its
     /// password or settings), pausing everyone in it. By romulus itself.
     PlaygroundRestarted,
+    /// An admin turned on or off the passing migration test publishing a
+    /// draft needs (`from`, `to`: 0 or 1).
+    PassingTestRequiredChanged,
+    /// A developer acknowledged the data loss a migration test found that
+    /// the migration does not declare.
+    MigrationTestAcknowledged,
+    /// An admin published a draft the organization requires a passing test
+    /// of while tests could not run, saying why.
+    PassingTestOverridden,
 }
 
 /// What a password sign-in event records (`auth_event_kind`): the security
@@ -385,6 +394,89 @@ pub enum PlaygroundRunStatus {
     Ok,
     Error,
     Cancelled,
+}
+
+/// Where a migration test is (`migration_test_status`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "migration_test_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationTestStatus {
+    /// Waiting for room on the playground host (its place in line is live).
+    Queued,
+    /// Its playground is being built, or the migration runs on it.
+    Running,
+    /// It ran, and the report's verdict is passed (up and down, or up
+    /// only: `verdict` says), or a developer acknowledged the data loss it
+    /// found.
+    Passed,
+    /// It ran, and the report's verdict is failed (a statement, a check).
+    Failed,
+    /// It ran, and found data loss the migration does not declare: a
+    /// developer acknowledges it (then `passed`), or it does not pass.
+    NeedsAcknowledgement,
+    /// It could not run (the host refused, the build failed): `failure`.
+    Error,
+    /// Someone stopped it.
+    Cancelled,
+}
+
+impl MigrationTestStatus {
+    /// It will not change any more.
+    pub fn is_final(self) -> bool {
+        !matches!(self, Self::Queued | Self::Running)
+    }
+}
+
+/// A migration test's verdict, as its report gives it
+/// (`migration_test_verdict`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "migration_test_verdict", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationTestVerdict {
+    Passed,
+    PassedUpOnly,
+    NeedsAcknowledgement,
+    Failed,
+}
+
+impl From<romulus_migration_check::Verdict> for MigrationTestVerdict {
+    fn from(verdict: romulus_migration_check::Verdict) -> Self {
+        use romulus_migration_check::Verdict;
+        match verdict {
+            Verdict::Passed => Self::Passed,
+            Verdict::PassedUpOnly => Self::PassedUpOnly,
+            Verdict::NeedsAcknowledgement => Self::NeedsAcknowledgement,
+            Verdict::Failed => Self::Failed,
+        }
+    }
+}
+
+/// What a migration test tests (`migration_test_source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "migration_test_source", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationTestSource {
+    /// A draft's migration from its base, as reviewed.
+    Draft,
+    /// The migration planned from one version to another.
+    Versions,
+    /// The migration a version was written or imported as, from the one
+    /// before it.
+    Version,
+}
+
+/// Where a migration test's down migration comes from
+/// (`migration_test_down`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "migration_test_down", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationTestDown {
+    /// Planned by romulus-migration, mirroring the up migration.
+    Generated,
+    /// Written with the migration.
+    Written,
+    /// None: the up migration only.
+    None,
 }
 
 /// What a draft is edited as (`draft_mode`): one source of truth at a time

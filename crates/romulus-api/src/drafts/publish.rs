@@ -12,7 +12,10 @@
 //!    some (409 `approvals_required`; an admin may publish without them,
 //!    saying why: [`approvals::gate`]);
 //! 4. compiles exactly that text (422 when it does not compile);
-//! 5. stores it as the next version, under the lock on the database row,
+//! 5. when the organization requires it, checks that a migration test of
+//!    that text passed (409 `passing_test_required`:
+//!    [`crate::migration_tests::gate`]);
+//! 6. stores it as the next version, under the lock on the database row,
 //!    unless someone published since the draft started (409 `stale_base`:
 //!    "Update draft" comes first), and marks the draft published.
 //!
@@ -97,6 +100,9 @@ pub struct PublishPreview {
     pub model: Option<Value>,
     /// The approvals the organization requires, and who approved this SQL.
     pub approvals: PublishApprovals,
+    /// The passing migration test the organization may require: of
+    /// exactly the migration publishing would run.
+    pub test_gate: crate::migration_tests::TestGate,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -108,6 +114,11 @@ pub struct PublishDraft {
     /// Publish without the approvals the organization requires, saying why
     /// (admins; the audit log keeps it).
     pub override_reason: Option<String>,
+    /// Publish without the passing migration test the organization
+    /// requires while tests cannot run here, saying why (admins; the audit
+    /// log keeps it).
+    #[serde(default)]
+    pub test_override_reason: Option<String>,
     /// The renames turned on or off as the person saw the migration (rename
     /// key → on or off): the draft's, or 409 `renames_changed`. The version
     /// keeps what ran and what was left off.
@@ -171,6 +182,26 @@ pub(super) async fn preview(
         let empty = empty_like(model);
         romulus_diff::diff(base_schema.as_ref().unwrap_or(&empty), model)
     });
+    let test_gate = match &model {
+        Some(model) => {
+            crate::migration_tests::gate_state(
+                &state,
+                &database,
+                id,
+                &content,
+                model,
+                member.org.require_passing_test,
+            )
+            .await?
+        }
+        None => crate::migration_tests::TestGate {
+            required: member.org.require_passing_test,
+            available: false,
+            nothing_to_test: false,
+            passing: None,
+            reason: None,
+        },
+    };
 
     Ok(Json(PublishPreview {
         number,
@@ -188,6 +219,7 @@ pub(super) async fn preview(
             .map(|m| serde_json::to_value(m).map_err(ApiError::internal))
             .transpose()?,
         approvals,
+        test_gate,
     }))
 }
 
@@ -203,11 +235,15 @@ pub(super) async fn preview(
         (status = 201, body = Published),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)", body = ErrorBody),
+        (status = 409, description = "`draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it), `passing_test_required` (the organization requires a passing migration test of this text)", body = ErrorBody),
         (status = 422, description = "`compile_failed`: the SQL does not compile (`details.diagnostics`); `unrepresentable`: in migration mode, no SQL romulus can keep compiles back to the schema (`details.objects`)", body = ErrorBody),
         (status = 429, description = "`rate_limited`: the checks publishing compiles (migration mode) count against the compile limits", body = ErrorBody),
         (status = 503, description = "The compiler is unavailable", body = ErrorBody),
     )
+)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "publishing's steps, one after the other"
 )]
 pub(super) async fn publish(
     member: Member<min::Developer>,
@@ -228,7 +264,7 @@ pub(super) async fn publish(
     }
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let draft = sqlx::query!(
-        r#"SELECT status AS "status: DraftStatus", base_version_id
+        r#"SELECT status AS "status: DraftStatus", base_version_id, name
            FROM drafts WHERE id = $1 AND database_id = $2 AND status <> 'deleted'"#,
         id,
         database.id,
@@ -273,6 +309,16 @@ pub(super) async fn publish(
     }
     let approvals = approvals::gate(&state, &member, id, &content, &body).await?;
     let mut model = frozen_model(&state.collab, &content).await?;
+    let test_override = crate::migration_tests::gate(
+        &state,
+        &member,
+        &database,
+        (id, Some(draft.name.clone())),
+        &content,
+        &model,
+        body.test_override_reason.as_deref(),
+    )
+    .await?;
     let checks = source::Checks {
         hub: &state.collab,
         limits: &state.limits,
@@ -293,7 +339,7 @@ pub(super) async fn publish(
         (model, source),
         message,
         member.user.id,
-        approvals,
+        (approvals, test_override),
         renames,
     )
     .await
@@ -358,7 +404,10 @@ async fn store(
     (model, source): (Schema, String),
     message: Option<&str>,
     by: Uuid,
-    approvals: Option<approvals::Freeze>,
+    (approvals, test_override): (
+        Option<approvals::Freeze>,
+        Option<crate::migration_tests::TestOverride>,
+    ),
     renames: Option<RenameChoices>,
 ) -> ApiResult<versions::Created> {
     let migration_sql = (content.mode == DraftMode::Migration).then(|| content.migration.clone());
@@ -375,6 +424,7 @@ async fn store(
             message: message.map(str::to_owned),
             created_by: by,
             approvals,
+            test_override,
             compiled_on: content.major,
             discussion: content.discussion.clone(),
             renames,

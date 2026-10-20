@@ -17,8 +17,11 @@ import { Identical } from "@/features/diff/components/identical";
 import { SchemaDiffView } from "@/features/diff/components/schema-diff-view";
 import { diffQuery, parseRange, rangeParam } from "@/features/diff/queries";
 import { MigrationView } from "@/features/migration/components/migration-view";
+import { MigrationTestButton } from "@/features/migration-test/components/test-sheet";
 import { RenamesNote } from "@/features/migration/components/renames-note";
 import { versionMigrationQuery } from "@/features/migration/queries";
+import { orgQuery } from "@/features/orgs/queries";
+import { canWrite } from "@/features/orgs/roles";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { useDebounced } from "@/lib/use-debounced";
 
@@ -78,6 +81,7 @@ function Compare() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const { data: database } = useSuspenseQuery(databaseQuery(org, db));
+  const { data: orgData } = useSuspenseQuery(orgQuery(org));
   const latest = database.latest?.number ?? 0;
   const [pickerOpened, setPickerOpened] = React.useState(false);
   const versions = useInfiniteQuery({ ...versionsQuery(org, db), enabled: pickerOpened });
@@ -171,6 +175,16 @@ function Compare() {
             versionMigrationQuery(org, db, database.id, database.pg_major, from, to, choice)
           }
           knownRenames="Known renames: chosen when a version in this range was published."
+          actions={(shown) => (
+            <MigrationTestButton
+              org={org}
+              db={db}
+              source={{ kind: "versions", from, to }}
+              canRun={canWrite(orgData.role)}
+              shown={shown}
+              base={from}
+            />
+          )}
           className="min-h-0 flex-1"
         />
       </div>

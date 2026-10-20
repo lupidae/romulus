@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT slug, name, approvals_required::int AS \"approvals_required!\" FROM organizations WHERE id = $1",
+  "query": "SELECT slug, name, approvals_required::int AS \"approvals_required!\", require_passing_test\n           FROM organizations WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -30,6 +30,17 @@
         "name": "approvals_required!",
         "type_info": "Int4",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "require_passing_test",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "require_passing_test"
+          }
+        }
       }
     ],
     "parameters": {
@@ -40,8 +51,9 @@
     "nullable": [
       false,
       false,
-      null
+      null,
+      false
     ]
   },
-  "hash": "6e337b5742d2f92f00619b265e8a09213da9b1155c806a997659ad7f31e7bd09"
+  "hash": "3737cb9c76eb8a205ca3097a78890655bc3ad8063d136638ee92fda0a3b58fd5"
 }

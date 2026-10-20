@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT o.id, o.slug, o.name, m.role AS \"role: Role\", o.approvals_required::int AS \"approvals_required!\"\n           FROM memberships m JOIN organizations o ON o.id = m.org_id\n           WHERE m.user_id = $1\n           ORDER BY lower(o.name), o.slug",
+  "query": "SELECT o.id, o.slug, o.name, m.role AS \"role: Role\", o.approvals_required::int AS \"approvals_required!\",\n                  o.require_passing_test\n           FROM memberships m JOIN organizations o ON o.id = m.org_id\n           WHERE m.user_id = $1\n           ORDER BY lower(o.name), o.slug",
   "describe": {
     "columns": [
       {
@@ -63,6 +63,17 @@
         "name": "approvals_required!",
         "type_info": "Int4",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "require_passing_test",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "require_passing_test"
+          }
+        }
       }
     ],
     "parameters": {
@@ -75,8 +86,9 @@
       false,
       false,
       false,
-      null
+      null,
+      false
     ]
   },
-  "hash": "0bd98ea9ef0bfe5b85ec0f877a5a57a0e9370667b8028ebf1a0851aec06a9266"
+  "hash": "a5730be71802421bf7cb5acc6116d13ada6a9a854e7d20b2d9b99a8292ff4a3f"
 }

@@ -1,0 +1,449 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT t.id, t.status AS \"status: MigrationTestStatus\",\n                  t.source AS \"source: MigrationTestSource\", t.draft_id, d.name AS \"draft_name?\",\n                  f.number AS from_number, v.number AS \"to_number?\",\n                  t.down AS \"down: MigrationTestDown\",\n                  t.verdict AS \"verdict: MigrationTestVerdict\", t.rows_checked,\n                  t.acknowledged_by, a.name AS \"acknowledger_name?\", t.acknowledged_at,\n                  t.size AS \"size: PlaygroundSize\",\n                  t.profile AS \"profile: PlaygroundProfile\", t.seed, t.data_playground_id, t.data_label,\n                  t.input_sha256,\n                  t.report, t.failure, t.up_sql, t.down_sql, t.created_by, u.name AS \"creator_name?\",\n                  t.created_at, t.started_at, t.finished_at, t.org_id\n           FROM migration_tests t\n           JOIN versions f ON f.id = t.from_version_id\n           LEFT JOIN versions v ON v.id = t.to_version_id\n           LEFT JOIN drafts d ON d.id = t.draft_id\n           LEFT JOIN users u ON u.id = t.created_by\n           LEFT JOIN users a ON a.id = t.acknowledged_by\n           WHERE t.database_id = $1\n             AND ($2::migration_test_source IS NULL OR t.source = $2)\n             AND ($3::uuid IS NULL OR t.draft_id = $3)\n             AND ($4::int IS NULL OR f.number = $4)\n             AND ($5::int IS NULL OR v.number = $5)\n           ORDER BY t.created_at DESC\n           LIMIT $6",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status: MigrationTestStatus",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_status",
+            "kind": {
+              "Enum": [
+                "queued",
+                "running",
+                "passed",
+                "failed",
+                "needs_acknowledgement",
+                "error",
+                "cancelled"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "source: MigrationTestSource",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_source",
+            "kind": {
+              "Enum": [
+                "draft",
+                "versions",
+                "version"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "draft_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "draft_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "draft_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "drafts",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "from_number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "to_number?",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "down: MigrationTestDown",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_down",
+            "kind": {
+              "Enum": [
+                "generated",
+                "written",
+                "none"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "down"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "verdict: MigrationTestVerdict",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_verdict",
+            "kind": {
+              "Enum": [
+                "passed",
+                "passed_up_only",
+                "needs_acknowledgement",
+                "failed"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "rows_checked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "rows_checked"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "acknowledged_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "acknowledged_by"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "acknowledger_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "acknowledged_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "acknowledged_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "size: PlaygroundSize",
+        "type_info": {
+          "Custom": {
+            "name": "playground_size",
+            "kind": {
+              "Enum": [
+                "small",
+                "medium"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "profile: PlaygroundProfile",
+        "type_info": {
+          "Custom": {
+            "name": "playground_profile",
+            "kind": {
+              "Enum": [
+                "realistic",
+                "edge_cases"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "profile"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "seed",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "seed"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "data_playground_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "data_playground_id"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "data_label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "data_label"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "input_sha256",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "input_sha256"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "report",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "report"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "failure",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "failure"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "up_sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "up_sql"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "down_sql",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "down_sql"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "creator_name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "finished_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "migration_test_source",
+            "kind": {
+              "Enum": [
+                "draft",
+                "versions",
+                "version"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "b084c19c1dc96f76fc5b199a53538882b04927dec4ef098a36785f8256d29824"
+}

@@ -235,6 +235,20 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Entry {
+    /// Takes `org` as its organization unless it is known to be another's
+    /// (false then): a playground never changes hands.
+    pub fn same_org(&self, org: Option<Uuid>) -> bool {
+        let mut owner = lock(&self.org);
+        match (*owner, org) {
+            (Some(theirs), Some(ours)) if theirs != ours => false,
+            (None, Some(ours)) => {
+                *owner = Some(ours);
+                true
+            }
+            _ => true,
+        }
+    }
+
     fn new(id: Uuid) -> Self {
         Self {
             id,
@@ -662,6 +676,34 @@ impl Host {
         self.forget(entry).await;
         self.runner.restore(entry.id).await?;
         self.start_locked(entry).await
+    }
+
+    /// Creates `into` as a copy of `source`'s rows (a migration test on
+    /// someone's playground): `source` is stopped for the copy (its sessions
+    /// paused, a couple of seconds), started again if it ran, and never
+    /// changed. Refused at once while `source` is busy.
+    pub async fn fork(
+        &self,
+        source: &Arc<Entry>,
+        into: Uuid,
+        fork: &romulus_play_runner::protocol::Fork,
+    ) -> Result<(), HostError> {
+        let op = Self::try_op(source)?;
+        let busy = Self::busy(source, "copying");
+        let was_running = source.target().is_some();
+        let _ = source.notices.send(Notice::Pause(
+            "it is being copied for a migration test (a few seconds)".to_owned(),
+        ));
+        self.forget(source).await;
+        let forked = self.runner.fork(into, fork).await;
+        if was_running && let Err(err) = self.start_locked(source).await {
+            tracing::warn!(playground = %source.id, error = %err, "could not start a playground again after copying it");
+        }
+        // Not busy any more before its sessions hear it is back.
+        drop(busy);
+        drop(op);
+        let _ = source.notices.send(Notice::Resume);
+        forked.map_err(HostError::from)
     }
 
     /// The container and its files: gone. A build or a migration in

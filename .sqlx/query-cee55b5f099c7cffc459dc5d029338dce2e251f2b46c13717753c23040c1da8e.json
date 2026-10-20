@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE migration_tests SET status = 'cancelled', finished_at = now(),\n                failure = $2\n         WHERE id = $1 AND status IN ('queued', 'running')\n         RETURNING playground_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "playground_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "playground_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "cee55b5f099c7cffc459dc5d029338dce2e251f2b46c13717753c23040c1da8e"
+}

@@ -774,6 +774,25 @@ everything a change drops to be possible comes back after it.
   migration runs as renames, with the way to it); renaming a schema itself is not
   detected.
 
+## Test migration (decided 2026-10-19, built: task MTEST)
+
+One click (a draft's migration view and its publish dialog, the diff page's
+migration view, a version's written or imported migration) runs the
+migration up and down on a playground of its own, filled with generated rows
+(or a copy of someone's playground at the base version), and says whether
+everything is alright: each statement measured (duration, locks, rewrites,
+Postgres's error and the rows that break it), the schema exactly the target
+after up and exactly the base after down, row counts kept, sampled rows (by
+primary key) holding their values through renames and conversions, and the
+data that does not come back, matched against the migration's `deletes_data`
+flags (unflagged loss fails). Reports are kept and seen by the organization.
+One engine, `crates/romulus-migration-check`, behind the feature and the
+migration oracle. By default on a copy of the person's own playground at
+the base version, if any. An organization may publish only drafts whose text
+passed a test (a setting, off by default; deviation from the data model:
+`organizations.require_passing_test`). docs/playground.md "Test migration"
+has the decisions.
+
 ## Several Postgres majors (decided 2026-10-16, built: task PGV)
 
 Each database targets a Postgres major: 15, 16, 17 (the default, the one sandbox there was) or

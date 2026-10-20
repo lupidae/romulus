@@ -121,6 +121,9 @@ const icons = {
   playground_reset: RefreshDoubleIcon,
   playground_migration_run: DatabaseScriptIcon,
   playground_restarted: WarningTriangleIcon,
+  passing_test_required_changed: SettingsIcon,
+  migration_test_acknowledged: ShieldCheckIcon,
+  passing_test_overridden: ShieldCheckIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -145,6 +148,14 @@ function sentence(event: AuditEvent): string {
       return `${who} published ${v} without its approvals (${details.approvals ?? 0} of ${details.required ?? "?"})`;
     case "approvals_required_changed":
       return `${who} changed the approvals publishing needs: ${approvalsCount(details.from)} → ${approvalsCount(details.to)}`;
+    case "passing_test_required_changed":
+      return details.to === 1
+        ? `${who} made publishing wait for a passing migration test`
+        : `${who} let drafts publish without a passing migration test`;
+    case "migration_test_acknowledged":
+      return `${who} acknowledged the data loss a migration test found`;
+    case "passing_test_overridden":
+      return `${who} published ${v} without a passing migration test (tests could not run)`;
     case "major_changed":
       return event.version_number == null
         ? `${who} moved the database from Postgres ${details.from ?? "?"} to ${details.to ?? "?"}`
@@ -179,7 +190,7 @@ function Event({ event }: { event: AuditEvent }) {
         {(details.message || details.draft_name) && (
           <p className="truncate text-sm text-muted-foreground">
             {details.draft_name
-              ? `${event.action === "comment_deleted" ? "In" : event.action.startsWith("playground_") ? "For" : "From"} the draft “${details.draft_name}”`
+              ? `${event.action === "comment_deleted" ? "In" : event.action.startsWith("playground_") || event.action === "migration_test_acknowledged" ? "For" : "From"} the draft “${details.draft_name}”`
               : details.message}
           </p>
         )}

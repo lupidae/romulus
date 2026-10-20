@@ -1,0 +1,73 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO migration_tests (id, org_id, database_id, source, draft_id, from_version_id,\n                                      to_version_id, input_sha256, up_sql, down_sql, down, size,\n                                      profile, seed, created_by, data_playground_id, data_label,\n                                      gate_sha256)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "migration_test_source",
+            "kind": {
+              "Enum": [
+                "draft",
+                "versions",
+                "version"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Bytea",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "migration_test_down",
+            "kind": {
+              "Enum": [
+                "generated",
+                "written",
+                "none"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "playground_size",
+            "kind": {
+              "Enum": [
+                "small",
+                "medium"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "playground_profile",
+            "kind": {
+              "Enum": [
+                "realistic",
+                "edge_cases"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff93e684081eff325cf9436f0fa314cef67ccadbdbe78e6f3da400ad047f69b7"
+}

@@ -1,0 +1,40 @@
+[package]
+name = "romulus-migration-check"
+description = "Tests a migration on rows: seed, up, check the schema and the data, down, check again, report. One engine for the migration oracle and the playground's Test migration; any Postgres session behind a small trait."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# `Session` for `sqlx::PgConnection`: the oracle's scratch databases and
+# this crate's own tests.
+sqlx = ["dep:sqlx"]
+# `utoipa::ToSchema` on the report, for the API's OpenAPI document.
+utoipa = ["dep:utoipa"]
+
+[dependencies]
+remus-core.workspace = true
+romulus-diff.workspace = true
+# Rows to test on (`Seed::Generate`).
+romulus-fakedata.workspace = true
+# Hazards, extension objects.
+romulus-migration.workspace = true
+# The statements' parse trees (pg_query): what each does to the rows.
+romulus-sandbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+sqlx = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+
+[dev-dependencies]
+dotenvy.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

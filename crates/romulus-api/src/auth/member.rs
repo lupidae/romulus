@@ -74,6 +74,8 @@ pub struct OrgRef {
     pub name: String,
     /// Approvals publishing a draft needs (0: none).
     pub approvals_required: i16,
+    /// Publishing a draft needs a passing migration test of its text.
+    pub require_passing_test: bool,
 }
 
 /// The signed-in user, a member of the `{org}` in the path with at least
@@ -105,7 +107,8 @@ impl<R: MinRole> FromRequestParts<AppState> for Member<R> {
             })?;
 
         let membership = sqlx::query!(
-            r#"SELECT o.id, o.slug, o.name, o.approvals_required, m.role AS "role: Role"
+            r#"SELECT o.id, o.slug, o.name, o.approvals_required, o.require_passing_test,
+                      m.role AS "role: Role"
                FROM organizations o
                JOIN memberships m ON m.org_id = o.id AND m.user_id = $2
                WHERE o.slug = $1"#,
@@ -126,6 +129,7 @@ impl<R: MinRole> FromRequestParts<AppState> for Member<R> {
                 slug: membership.slug,
                 name: membership.name,
                 approvals_required: membership.approvals_required,
+                require_passing_test: membership.require_passing_test,
             },
             role: membership.role,
             min: PhantomData,

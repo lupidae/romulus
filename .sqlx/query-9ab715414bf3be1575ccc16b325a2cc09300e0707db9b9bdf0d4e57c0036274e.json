@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,\n                               migration_sql)\n         VALUES ($1, 3, $2, 'CREATE TABLE refunds ();', 'sql', 'draft', '{}', $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9ab715414bf3be1575ccc16b325a2cc09300e0707db9b9bdf0d4e57c0036274e"
+}

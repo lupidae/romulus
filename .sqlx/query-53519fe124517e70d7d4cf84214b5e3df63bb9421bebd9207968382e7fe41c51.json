@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO playgrounds (org_id, database_id, version_id, model_sha256, size, profile, seed,\n                                  status, ready_at, created_by)\n         SELECT d.org_id, d.id, v.id, sha256('model'), 'small', 'realistic', 1194641, 'ready', now(),\n                (SELECT user_id FROM memberships WHERE org_id = d.org_id AND role = 'developer' LIMIT 1)\n         FROM databases d JOIN versions v ON v.database_id = d.id\n         WHERE d.org_id = $1 AND d.slug = 'shop' AND v.number = $2\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "playgrounds",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "53519fe124517e70d7d4cf84214b5e3df63bb9421bebd9207968382e7fe41c51"
+}

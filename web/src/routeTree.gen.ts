@@ -39,6 +39,7 @@ import { Route as DevShellMembersRouteImport } from './routes/dev/shell/members'
 import { Route as DevShellSettingsRouteImport } from './routes/dev/shell/settings'
 import { Route as OrgDbDiffIndexRouteImport } from './routes/$org/$db/diff/index'
 import { Route as OrgDbDiffRangeRouteImport } from './routes/$org/$db/diff/$range'
+import { Route as OrgDbTestsIdRouteImport } from './routes/$org/$db/tests.$id'
 import { Route as OrgDbVNumberRouteImport } from './routes/$org/$db/v/$number'
 import { Route as OrgDbDraftsDraftRouteImport } from './routes/$org_.$db.drafts.$draft'
 import { Route as OrgDbPlaygroundsPlaygroundRouteImport } from './routes/$org_.$db.playgrounds.$playground'
@@ -193,6 +194,11 @@ const OrgDbDiffRangeRoute = OrgDbDiffRangeRouteImport.update({
   path: '/diff/$range',
   getParentRoute: () => OrgDbRoute,
 } as any)
+const OrgDbTestsIdRoute = OrgDbTestsIdRouteImport.update({
+  id: '/tests/$id',
+  path: '/tests/$id',
+  getParentRoute: () => OrgDbRoute,
+} as any)
 const OrgDbVNumberRoute = OrgDbVNumberRouteImport.update({
   id: '/v/$number',
   path: '/v/$number',
@@ -240,6 +246,7 @@ export interface FileRoutesByFullPath {
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
   '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
+  '/$org/$db/tests/$id': typeof OrgDbTestsIdRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
   '/$org/$db/playgrounds/$playground': typeof OrgDbPlaygroundsPlaygroundRoute
@@ -272,6 +279,7 @@ export interface FileRoutesByTo {
   '/$org/settings': typeof OrgSettingsIndexRoute
   '/dev/shell': typeof DevShellIndexRoute
   '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
+  '/$org/$db/tests/$id': typeof OrgDbTestsIdRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
   '/$org/$db/playgrounds/$playground': typeof OrgDbPlaygroundsPlaygroundRoute
@@ -308,6 +316,7 @@ export interface FileRoutesById {
   '/$org/settings/': typeof OrgSettingsIndexRoute
   '/dev/shell/': typeof DevShellIndexRoute
   '/$org/$db/diff/$range': typeof OrgDbDiffRangeRoute
+  '/$org/$db/tests/$id': typeof OrgDbTestsIdRoute
   '/$org/$db/v/$number': typeof OrgDbVNumberRoute
   '/$org_/$db/drafts/$draft': typeof OrgDbDraftsDraftRoute
   '/$org_/$db/playgrounds/$playground': typeof OrgDbPlaygroundsPlaygroundRoute
@@ -345,6 +354,7 @@ export interface FileRouteTypes {
     | '/$org/settings/'
     | '/dev/shell/'
     | '/$org/$db/diff/$range'
+    | '/$org/$db/tests/$id'
     | '/$org/$db/v/$number'
     | '/$org/$db/drafts/$draft'
     | '/$org/$db/playgrounds/$playground'
@@ -377,6 +387,7 @@ export interface FileRouteTypes {
     | '/$org/settings'
     | '/dev/shell'
     | '/$org/$db/diff/$range'
+    | '/$org/$db/tests/$id'
     | '/$org/$db/v/$number'
     | '/$org/$db/drafts/$draft'
     | '/$org/$db/playgrounds/$playground'
@@ -412,6 +423,7 @@ export interface FileRouteTypes {
     | '/$org/settings/'
     | '/dev/shell/'
     | '/$org/$db/diff/$range'
+    | '/$org/$db/tests/$id'
     | '/$org/$db/v/$number'
     | '/$org_/$db/drafts/$draft'
     | '/$org_/$db/playgrounds/$playground'
@@ -650,6 +662,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgDbDiffRangeRouteImport
       parentRoute: typeof OrgDbRoute
     }
+    '/$org/$db/tests/$id': {
+      id: '/$org/$db/tests/$id'
+      path: '/tests/$id'
+      fullPath: '/$org/$db/tests/$id'
+      preLoaderRoute: typeof OrgDbTestsIdRouteImport
+      parentRoute: typeof OrgDbRoute
+    }
     '/$org/$db/v/$number': {
       id: '/$org/$db/v/$number'
       path: '/v/$number'
@@ -681,6 +700,7 @@ interface OrgDbRouteChildren {
   OrgDbTimeMachineRoute: typeof OrgDbTimeMachineRoute
   OrgDbIndexRoute: typeof OrgDbIndexRoute
   OrgDbDiffRangeRoute: typeof OrgDbDiffRangeRoute
+  OrgDbTestsIdRoute: typeof OrgDbTestsIdRoute
   OrgDbVNumberRoute: typeof OrgDbVNumberRoute
   OrgDbDiffIndexRoute: typeof OrgDbDiffIndexRoute
 }
@@ -692,6 +712,7 @@ const OrgDbRouteChildren: OrgDbRouteChildren = {
   OrgDbTimeMachineRoute: OrgDbTimeMachineRoute,
   OrgDbIndexRoute: OrgDbIndexRoute,
   OrgDbDiffRangeRoute: OrgDbDiffRangeRoute,
+  OrgDbTestsIdRoute: OrgDbTestsIdRoute,
   OrgDbVNumberRoute: OrgDbVNumberRoute,
   OrgDbDiffIndexRoute: OrgDbDiffIndexRoute,
 }

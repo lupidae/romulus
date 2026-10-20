@@ -20,7 +20,7 @@ use romulus_play_runner::server::{
 use romulus_playground::{
     protocol::{
         Access, Build, BuildEvent, ConsoleEvent, ConsoleRequest, Migrate, MigrationEvent,
-        MigrationStatement, Profile, RunStatus, Size, StatementStatus,
+        MigrationStatement, Profile, RunStatus, Size, StatementStatus, Test, TestEvent,
     },
     server::{
         Config, Host,
@@ -320,13 +320,28 @@ impl Stack {
     }
 
     async fn post(&self, path: &str, op: Op, id: Uuid, body: Option<Vec<u8>>) -> reqwest::Response {
+        self.post_as(self.org, path, op, id, body).await
+    }
+
+    /// As [`Stack::post`], signed for organization `org`.
+    async fn post_as(
+        &self,
+        org: Uuid,
+        path: &str,
+        op: Op,
+        id: Uuid,
+        body: Option<Vec<u8>>,
+    ) -> reqwest::Response {
+        let mut claims = Claims::new(op, Some(id), Access::Develop, now())
+            .org(org)
+            .user(Uuid::from_u128(1));
+        if let Some(body) = body.as_deref() {
+            claims = claims.body(body);
+        }
         let mut request = self
             .http
             .post(format!("http://{}{path}", self.addr))
-            .header(
-                "authorization",
-                self.sign(op, Some(id), Access::Develop, body.as_deref()),
-            );
+            .header("authorization", claims.sign(KEY));
         if let Some(body) = body {
             request = request.body(body);
         }
@@ -1324,4 +1339,442 @@ async fn a_slow_seeding_step_fails_its_build_promptly() {
     );
     // A failed build leaves nothing.
     assert!(!docker(&["inspect", &format!("romulus-play-{id}")]));
+}
+
+/// The playground's schema as remus reads it (the console may run the
+/// introspection: it only reads catalogs).
+async fn introspected(stack: &Stack, id: Uuid) -> remus_core::Schema {
+    let mut console = stack.console(id, Access::Read).await;
+    let events = console.run(remus_core::INTROSPECT_SQL).await;
+    let json = column(&events)
+        .into_iter()
+        .next()
+        .expect("the schema's JSON");
+    remus_core::Schema::from_json(&json)
+        .map(remus_core::Schema::canonical)
+        .expect("a model")
+}
+
+/// A test of the migration from `base` to `target`, planned both ways.
+fn test_of(base: &remus_core::Schema, target: &remus_core::Schema) -> Test {
+    let options = romulus_migration::Options::default();
+    let up = romulus_migration::migration(base, target, &options);
+    let down = romulus_migration::migration(target, base, &options);
+    Test {
+        base: serde_json::to_value(base).unwrap(),
+        target: serde_json::to_value(target).unwrap(),
+        up: romulus_migration_check::Statement::all_planned(&up),
+        up_reordered: romulus_migration_check::compare::reordered(&up),
+        down: Some(romulus_migration_check::Statement::all_planned(&down)),
+        down_reordered: romulus_migration_check::compare::reordered(&down),
+        sample: 20,
+        base_label: "v1".to_owned(),
+        target_label: "the draft".to_owned(),
+        data: romulus_migration_check::DataSource::Generated {
+            size: "small".to_owned(),
+            profile: "realistic".to_owned(),
+            seed: "000007".to_owned(),
+            generator: "1".to_owned(),
+        },
+    }
+}
+
+fn report_of(events: &[TestEvent]) -> &romulus_migration_check::Report {
+    match events.last() {
+        Some(TestEvent::Done { report }) => report,
+        other => panic!("no report: {other:?} ({events:?})"),
+    }
+}
+
+fn customers_mut(model: &mut remus_core::Schema) -> &mut remus_core::model::Entity {
+    model
+        .entities
+        .iter_mut()
+        .find(|e| e.name == "customers")
+        .expect("customers")
+}
+
+#[tokio::test]
+async fn a_migration_test_runs_up_and_down_and_checks_the_rows() {
+    let Some(stack) = stack(|_| {}).await else {
+        return;
+    };
+    let id = stack.build().await;
+    let base = introspected(&stack, id).await;
+    let mut target = base.clone();
+    let mut status = customers_mut(&mut target).columns[1].clone();
+    status.name = "status".to_owned();
+    customers_mut(&mut target).columns.push(status);
+    let events: Vec<TestEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{id}/test"),
+            Op::Test,
+            id,
+            &test_of(&base, &target),
+        )
+        .await;
+    let report = report_of(&events);
+    assert_eq!(
+        report.verdict,
+        romulus_migration_check::Verdict::Passed,
+        "{}",
+        serde_json::to_string_pretty(report).unwrap()
+    );
+    assert_eq!(report.down_status, romulus_migration_check::DownStatus::Ran);
+    assert_eq!(report.rows, 300);
+    // The data as the API described it.
+    assert!(matches!(
+        &report.data,
+        romulus_migration_check::DataSource::Generated { seed, .. } if seed == "000007"
+    ));
+    let add = &report.up.statements[0];
+    assert!(
+        add.locks
+            .iter()
+            .any(|l| l.relation == "public.customers" && l.mode == "AccessExclusiveLock"),
+        "{:?}",
+        add.locks
+    );
+    // Progress came as it ran: phases and statements, both ways.
+    assert!(events.iter().any(|e| matches!(
+        e,
+        TestEvent::Progress {
+            event: romulus_migration_check::Event::Statement {
+                direction: romulus_migration_check::Direction::Down,
+                ..
+            }
+        }
+    )));
+    // A test on a busy playground is refused at once.
+    let held = Arc::clone(&stack.host).entry(id, None);
+    let _op = Host::try_op(&held).unwrap();
+    let busy = stack
+        .post(
+            &format!("/playgrounds/{id}/test"),
+            Op::Test,
+            id,
+            Some(serde_json::to_vec(&test_of(&base, &target)).unwrap()),
+        )
+        .await;
+    assert_eq!(busy.status(), 409);
+}
+
+#[tokio::test]
+async fn a_migration_test_names_the_statement_that_fails_and_the_rows_that_break_it() {
+    let Some(stack) = stack(|_| {}).await else {
+        return;
+    };
+    let id = stack.build().await;
+    let base = introspected(&stack, id).await;
+    let mut target = base.clone();
+    customers_mut(&mut target).columns[1].not_null = true;
+    let events: Vec<TestEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{id}/test"),
+            Op::Test,
+            id,
+            &test_of(&base, &target),
+        )
+        .await;
+    let report = report_of(&events);
+    assert_eq!(report.verdict, romulus_migration_check::Verdict::Failed);
+    let (direction, failed) = report.failed_statement().expect("a failed statement");
+    assert_eq!(direction, romulus_migration_check::Direction::Up);
+    assert!(failed.sql.contains("SET NOT NULL"), "{}", failed.sql);
+    assert_eq!(failed.error.as_ref().unwrap().sqlstate, "23502");
+    assert_eq!(failed.offending.as_ref().map(|o| o.count), Some(30));
+    assert_eq!(
+        report.down_status,
+        romulus_migration_check::DownStatus::NotRun
+    );
+}
+
+#[tokio::test]
+async fn a_migration_test_reports_what_the_down_migration_does_not_give_back() {
+    let Some(stack) = stack(|_| {}).await else {
+        return;
+    };
+    let id = stack.build().await;
+    let base = introspected(&stack, id).await;
+    let mut target = base.clone();
+    customers_mut(&mut target)
+        .columns
+        .retain(|c| c.name != "email");
+    let events: Vec<TestEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{id}/test"),
+            Op::Test,
+            id,
+            &test_of(&base, &target),
+        )
+        .await;
+    let report = report_of(&events);
+    // Flagged: the test passes, and says the emails do not come back.
+    assert_eq!(
+        report.verdict,
+        romulus_migration_check::Verdict::Passed,
+        "{}",
+        serde_json::to_string_pretty(report).unwrap()
+    );
+    let loss = report
+        .data_loss
+        .iter()
+        .find(|l| l.column.as_deref() == Some("email"))
+        .expect("the emails are lost");
+    assert_eq!(loss.kind, romulus_migration_check::LossKind::ColumnDropped);
+    assert!(loss.expected);
+    assert!(loss.rows > 0 && loss.rows <= 20, "{loss:?}");
+    assert!(loss.examples.iter().all(|e| e.after.is_none()), "{loss:?}");
+}
+
+#[tokio::test]
+async fn a_test_on_a_copy_of_a_playground_never_changes_it() {
+    let Some(stack) = stack(|_| {}).await else {
+        return;
+    };
+    let source = stack.build().await;
+    let base = introspected(&stack, source).await;
+    // Someone has its console open.
+    let mut console = stack.console(source, Access::Read).await;
+
+    let copy = Uuid::now_v7();
+    let forked = stack
+        .post(
+            &format!("/playgrounds/{copy}/fork"),
+            Op::Fork,
+            copy,
+            Some(
+                serde_json::to_vec(&romulus_playground::protocol::Fork {
+                    source,
+                    size: Size::Small,
+                    extensions: Vec::new(),
+                })
+                .unwrap(),
+            ),
+        )
+        .await;
+    assert_eq!(forked.status(), 204, "{}", forked.text().await.unwrap());
+    // The console heard the pause and came back.
+    console
+        .until(|e| matches!(e, ConsoleEvent::Ready { .. }))
+        .await;
+    // Another organization cannot copy it (nor take it over).
+    let stolen = Uuid::now_v7();
+    let refused = stack
+        .post_as(
+            Uuid::new_v4(),
+            &format!("/playgrounds/{stolen}/fork"),
+            Op::Fork,
+            stolen,
+            Some(
+                serde_json::to_vec(&romulus_playground::protocol::Fork {
+                    source,
+                    size: Size::Small,
+                    extensions: Vec::new(),
+                })
+                .unwrap(),
+            ),
+        )
+        .await;
+    assert_eq!(refused.status(), 403, "{}", refused.text().await.unwrap());
+
+    // A destructive migration, tested on the copy.
+    let mut target = base.clone();
+    customers_mut(&mut target)
+        .columns
+        .retain(|c| c.name != "email");
+    let mut test = test_of(&base, &target);
+    test.down = None;
+    test.data = romulus_migration_check::DataSource::Existing {
+        label: "Alice's playground".to_owned(),
+    };
+    let events: Vec<TestEvent> = stack
+        .ndjson(&format!("/playgrounds/{copy}/test"), Op::Test, copy, &test)
+        .await;
+    let report = report_of(&events);
+    // Up only (no down): passed, as such.
+    assert_eq!(
+        report.verdict,
+        romulus_migration_check::Verdict::PassedUpOnly
+    );
+    assert_eq!(report.rows, 300);
+    assert!(
+        report
+            .data_loss
+            .iter()
+            .any(|l| l.column.as_deref() == Some("email"))
+    );
+
+    // The source still has every email.
+    let events = console
+        .run("SELECT count(*), count(email) FROM customers")
+        .await;
+    assert_eq!(
+        rows(&events),
+        vec![vec![Some("300".to_owned()), Some("270".to_owned())]]
+    );
+}
+
+#[tokio::test]
+async fn a_copy_not_at_the_base_schema_is_refused_before_anything_runs() {
+    let Some(stack) = stack(|_| {}).await else {
+        return;
+    };
+    let source = stack.build().await;
+    let base = introspected(&stack, source).await;
+    // The source holds what a migration run left.
+    let events: Vec<MigrationEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{source}/migration"),
+            Op::Migrate,
+            source,
+            &Migrate {
+                statements: vec![MigrationStatement {
+                    sql: "ALTER TABLE customers ADD COLUMN status text;".to_owned(),
+                    hazard: None,
+                    outside_transaction: false,
+                }],
+            },
+        )
+        .await;
+    assert!(matches!(events.last(), Some(MigrationEvent::Done { report }) if report.passed));
+    let copy = Uuid::now_v7();
+    let forked = stack
+        .post(
+            &format!("/playgrounds/{copy}/fork"),
+            Op::Fork,
+            copy,
+            Some(
+                serde_json::to_vec(&romulus_playground::protocol::Fork {
+                    source,
+                    size: Size::Small,
+                    extensions: Vec::new(),
+                })
+                .unwrap(),
+            ),
+        )
+        .await;
+    assert_eq!(forked.status(), 204);
+    let mut target = base.clone();
+    customers_mut(&mut target).columns[1].not_null = true;
+    let events: Vec<TestEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{copy}/test"),
+            Op::Test,
+            copy,
+            &test_of(&base, &target),
+        )
+        .await;
+    let report = report_of(&events);
+    assert_eq!(report.verdict, romulus_migration_check::Verdict::Failed);
+    assert_eq!(
+        report
+            .phase(romulus_migration_check::Phase::Before)
+            .map(|p| p.status),
+        Some(romulus_migration_check::Status::Failed)
+    );
+    assert!(report.up.statements.is_empty(), "nothing ran");
+    assert!(report.headline.contains("not at v1"), "{}", report.headline);
+}
+
+/// The model the sandbox compiles `sql` to (Postgres 17, as a version's).
+async fn compiled_model(sql: &str) -> Option<remus_core::Schema> {
+    let _ = dotenvy::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.env"));
+    let url = std::env::var("ROMULUS_SANDBOX_URL").ok()?;
+    let compiler = romulus_sandbox::Compiler::start(romulus_sandbox::SandboxConfig {
+        major: Some(17),
+        pool_size: 1,
+        prefix: "romulus_playtest_model".to_owned(),
+        ..romulus_sandbox::SandboxConfig::new(url)
+    })
+    .await
+    .expect("the sandbox starts");
+    let compilation = compiler.compile(sql).await.expect("the sandbox compiles");
+    compilation.model
+}
+
+#[tokio::test]
+async fn a_migration_test_finds_a_rich_schema_at_its_version_s_model() {
+    // A version's model is the sandbox's compile of its SQL; its playground
+    // runs that SQL prepared (policies for PUBLIC, stubs, extensions at
+    // init). The test must find one exactly the other.
+    let showcase =
+        remus_core::Schema::from_json(remus_core::fixtures::SHOWCASE).expect("the showcase");
+    let sql = romulus_sandbox::render_sql(&showcase);
+    let Some(schema_sql) = playground_script(&sql).await else {
+        return;
+    };
+    let Some(base) = compiled_model(&sql).await else {
+        return;
+    };
+    let Some(stack) = stack_with(|_| {}, FakeData).await else {
+        return;
+    };
+    let id = Uuid::now_v7();
+    let events: Vec<BuildEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{id}/build"),
+            Op::Build,
+            id,
+            &Build {
+                size: Size::Small,
+                profile: Profile::Realistic,
+                seed: 0x7f_3a91,
+                schema_sql,
+                model: serde_json::to_value(&base).unwrap(),
+                extensions: base
+                    .extensions
+                    .iter()
+                    .map(|e| romulus_playground::protocol::Extension {
+                        name: e.name.clone(),
+                        schema: e.schema.clone(),
+                    })
+                    .collect(),
+            },
+        )
+        .await;
+    assert!(
+        matches!(events.last(), Some(BuildEvent::Ready { .. })),
+        "{events:?}"
+    );
+    // A column added to the first table with a key, and dropped back.
+    let mut target = base.clone();
+    let table = target
+        .entities
+        .iter_mut()
+        .find(|e| {
+            e.kind == remus_core::model::EntityKind::Table
+                && e.constraints
+                    .iter()
+                    .any(|c| c.kind == remus_core::model::ConstraintKind::PrimaryKey)
+        })
+        .expect("a table with a primary key");
+    let mut column = table.columns[0].clone();
+    column.name = "tested_at".to_owned();
+    column.r#type = "timestamp with time zone".to_owned();
+    column.type_name = "timestamptz".to_owned();
+    column.type_schema = "pg_catalog".to_owned();
+    column.type_kind = remus_core::model::TypeKind::Base;
+    column.not_null = false;
+    column.default = None;
+    column.identity = None;
+    column.generated = None;
+    column.comment = None;
+    table.columns.push(column);
+    let events: Vec<TestEvent> = stack
+        .ndjson(
+            &format!("/playgrounds/{id}/test"),
+            Op::Test,
+            id,
+            &test_of(&base, &target),
+        )
+        .await;
+    let report = report_of(&events);
+    assert_eq!(
+        report.verdict,
+        romulus_migration_check::Verdict::Passed,
+        "{}",
+        serde_json::to_string_pretty(report).unwrap()
+    );
+    assert!(report.rows > 0);
 }

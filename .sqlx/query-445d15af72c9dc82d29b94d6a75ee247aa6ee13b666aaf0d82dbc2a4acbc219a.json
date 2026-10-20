@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH left_over AS (\n               SELECT id, playground_id FROM migration_tests\n               WHERE status IN ('queued', 'running') AND created_at < $1\n               FOR UPDATE\n           )\n           UPDATE migration_tests t\n           SET status = 'error', finished_at = now(), playground_id = NULL,\n               failure = 'The server restarted during the test. Run it again.'\n           FROM left_over l\n           WHERE t.id = l.id\n           RETURNING l.playground_id, t.org_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "playground_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "playground_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "445d15af72c9dc82d29b94d6a75ee247aa6ee13b666aaf0d82dbc2a4acbc219a"
+}

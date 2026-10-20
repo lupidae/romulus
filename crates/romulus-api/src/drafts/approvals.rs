@@ -365,9 +365,16 @@ pub(super) async fn reviews(
 ) -> ApiResult<HashMap<Uuid, DraftReview>> {
     let required = required(db, org_id).await?;
     // Open drafts: what counts now. Published ones: what their version keeps.
+    // The review request (one per draft) in scalar subqueries, not outer
+    // joins: sqlx infers the same nullability whatever plan Postgres picks.
     let rows = sqlx::query!(
         r#"SELECT d.id AS "id!", d.status AS "status!: DraftStatus",
-                  r.requested_at AS "requested_at?", u.id AS "user_id?", u.name AS "name?",
+                  (SELECT r.requested_at FROM draft_review_requests r
+                   WHERE r.draft_id = d.id) AS "requested_at?",
+                  (SELECT u.id FROM draft_review_requests r JOIN users u ON u.id = r.requested_by
+                   WHERE r.draft_id = d.id) AS "user_id?",
+                  (SELECT u.name FROM draft_review_requests r JOIN users u ON u.id = r.requested_by
+                   WHERE r.draft_id = d.id) AS "name?",
                   (SELECT count(*) FROM draft_approvals a
                    JOIN draft_compiles c ON c.draft_id = a.draft_id AND c.source_hash = a.sql_sha256
                    JOIN memberships m ON m.user_id = a.user_id AND m.org_id = $2
@@ -378,8 +385,6 @@ pub(super) async fn reviews(
                   (SELECT count(*) FROM version_approvals va
                    WHERE va.version_id = d.published_version_id) AS "frozen!"
            FROM drafts d
-           LEFT JOIN draft_review_requests r ON r.draft_id = d.id
-           LEFT JOIN users u ON u.id = r.requested_by
            WHERE d.id = ANY($1)"#,
         drafts,
         org_id,

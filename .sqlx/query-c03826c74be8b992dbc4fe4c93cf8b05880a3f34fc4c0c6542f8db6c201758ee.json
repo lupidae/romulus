@@ -1,0 +1,115 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, status AS \"status: MigrationTestStatus\",\n                  verdict AS \"verdict: MigrationTestVerdict\", rows_checked,\n                  down AS \"down: MigrationTestDown\"\n           FROM migration_tests\n           WHERE draft_id = $1 AND gate_sha256 = ANY($2)\n           ORDER BY created_at DESC LIMIT 20",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status: MigrationTestStatus",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_status",
+            "kind": {
+              "Enum": [
+                "queued",
+                "running",
+                "passed",
+                "failed",
+                "needs_acknowledgement",
+                "error",
+                "cancelled"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "verdict: MigrationTestVerdict",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_verdict",
+            "kind": {
+              "Enum": [
+                "passed",
+                "passed_up_only",
+                "needs_acknowledgement",
+                "failed"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "verdict"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "rows_checked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "rows_checked"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "down: MigrationTestDown",
+        "type_info": {
+          "Custom": {
+            "name": "migration_test_down",
+            "kind": {
+              "Enum": [
+                "generated",
+                "written",
+                "none"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "migration_tests",
+            "name": "down"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "ByteaArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c03826c74be8b992dbc4fe4c93cf8b05880a3f34fc4c0c6542f8db6c201758ee"
+}

@@ -17,6 +17,8 @@ crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoi
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
                       (a catalog in miniature, ruleutils' printing), diff, migration; oracle in tests/
 crates/romulus-migration/ model → model migration (ALTER … in dependency order), tool files; no I/O; oracle in tests/
+crates/romulus-migration-check/ tests a migration on rows (seed, up, checks, down, checks, report): the oracle's
+                      plain runs and a playground's Test migration share it; any Postgres behind `Session`
 crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, allowlist, stubs, compile pool
 crates/romulus-playground/ the playground service (lib + bin): builds playgrounds, console sessions, migration
                       runs; its `protocol` and `signing` (no `server` feature) are what the API shares
@@ -991,6 +993,97 @@ docs/playground.md (its decisions block first) has the design; deploy/preview/RE
   containers (the runner in process; skipped without Docker or the image, fails in CI),
   `crates/romulus-api/tests/api/playgrounds.rs` (the fake host),
   `web/e2e/playground.spec.ts`.
+
+## Test migration (`migration_tests`, `romulus-migration-check`)
+
+docs/playground.md "Test migration" has the decisions.
+
+- **The engine** (`romulus_migration_check::run(session, &Check, on)`):
+  seed (`Seed::Generate` romulus-fakedata, `Sql`, `Existing`), the base
+  schema checked and the rows counted and sampled by key, up measured
+  (`statements::run`: the one runner, Run migration's too), schema/counts/
+  values checked, down, checked again, `Report` (serializable; utoipa names
+  `MigrationTest*`, the statement types keep `MigrationRun*`). What each
+  statement does to the rows comes from its parse tree (`effects::Walk`:
+  renames, drops, `USING`, `UPDATE`…, types followed through renames,
+  partitions as their parent's family); a loss is expected only when its
+  statement is flagged `deletes_data` (or, written by hand, says it does
+  it); hand-written without saying so (`Flag::WrittenUndeclared`) or
+  unreadable (`Opaque`: `DO`, `CALL`, `MERGE`) is `needs_acknowledgement`,
+  anything else fails. Never a clean pass unverified: keyless tables by
+  per-column aggregates (`snapshot::aggregates_of`: a converted column cast
+  back, renamed labels mapped back; else `not_verified`, to acknowledge
+  unless its statement says it changes data; too large to read within the
+  limit: `Snapshot::too_large`, to acknowledge when the migration changes
+  the table), a lost key column's fallback key, sequences never backwards,
+  extra rows after up fail; `Coverage` lists the touched tables that were
+  empty, `nothing_checked` when every table touched by something rows
+  matter to (`Effect::needs_rows`) was; `not_compared` what no check
+  compares. `verdict(phases, losses, down)` is the rule: `passed`,
+  `passed_up_only`, `needs_acknowledgement`, `failed`.
+  `Session` is the seam (`run(sql, limit, rows)`, `copy_in`): the `sqlx`
+  feature for scratch databases, `romulus_playground::server::session::
+  PlaySession` on a playground. Its own tests: `tests/engine.rs` (sandbox).
+- **The oracle uses it**: every plain tool run (scenarios, corpus, random
+  edits) is a test on generated rows (`tools.rs` `seeded`/`judge`: passed,
+  or stopped by a `can_fail` statement on rows that break it, which then
+  runs again without rows and must pass, schema up and down); the other
+  tool runs compare schemas with `romulus_migration_check::differences`
+  (as strict as main's: extension objects, versions).
+  Change the planner's hazards, run the oracle: rows now check them.
+- **The service**: `POST /playgrounds/{id}/test` (`Op::Test`, develop
+  access) runs the engine on the playground's rows (`server::testing`) and
+  leaves it as it ends; `POST /playgrounds/{id}/fork` (`Op::Fork`) copies
+  a playground into another (the runner's `fork`: the source stopped a
+  moment, its files reflinked, restarted; consoles pause and resume; only
+  within one organization, `Entry::same_org`).
+- **The API** (`migration_tests`): `POST …/migration-tests` [developer]
+  (a draft with `sha256`, `from`/`to`, or `version`; `down: generate|none`;
+  `renames` and `concurrently` as the migration view has them; `playground`
+  to test on a copy of one at the base version, as built), `GET` list
+  (`?draft=`, `?from=&to=`, `?version=`; a draft's say which are `current`,
+  of its text now) and one [member], `POST …/{id}/cancel` [developer],
+  `POST …/{id}/acknowledge` [developer] (a `needs_acknowledgement` test
+  then counts as passed, an up-only one as `passed_up_only`; audited
+  `migration_test_acknowledged` with `test_id`; 403 `own_draft` for the
+  draft's author or editors where tests are required, admins excepted). A
+  job per test (`job`): its turn (`queue`: 2 at a time, 1 per
+  organization, place in line live), room on the host (counted with live
+  playgrounds in `MAX_TOTAL` and disk, under `playgrounds::build::
+  CREATE_LOCK` like the caps), its own playground built (or forked from
+  someone's: the source checked again just before, one fork per source a
+  minute, `Playground.copied` tells its owner), the test, the report and
+  its `verdict`/`rows_checked`/`gate_sha256` stored, the playground destroyed.
+  The sweeper spares running tests' playgrounds and ends tests a restart
+  left. Planning is in `plan::generated`, as the migration view plans
+  (`stored_renames`, a draft's `rename_choices`, `romulus_migration::down`).
+  A draft's test keeps its input hash (`compile::input_hash`), whichever
+  hash it was started with (the preview's, the view's, a live compile's).
+- **Publishing after a passing test** (`organizations.require_passing_test`,
+  admins, audited): `migration_tests::gate` in publish, keyed by
+  `plan::gate_key` (sha256 of the base version, the effective renames and
+  the planned up + down SQL, `concurrently` as tested; the gate accepts
+  either form: renames switched or a new base need a new test), counting
+  only tests whose down ran (`down <> 'none'`), checked rows and passed
+  (or were acknowledged); 409 `passing_test_required`, or `tests_unavailable`
+  where tests cannot run (no playgrounds, another major), which an admin
+  overrides with `test_override_reason` (audited `passing_test_overridden`
+  in the version's transaction, `versions::store`'s `test_override`).
+  Nothing to migrate is never held (migration mode: decided from the
+  written statements). `gate_state` is the preview's `test_gate`.
+- **Web** (`features/migration-test`): `MigrationTestButton` ("Test on
+  data", its menu choosing the rows: `rows.ts`, the person's playground at
+  the base by default), `MigrationTestSheet`/`ShownTest`/`TestReport`, the
+  page `/$org/$db/tests/$id`, `TestedLine` (the publish dialog, from the
+  preview's `test_gate`; the admin's override field), Acknowledge in the
+  report (`useAcknowledgeTest`), `verdictWord`. It sits in
+  `MigrationView`'s `actions` (the draft's generated Migration tab, the
+  publish dialog, the diff page), in the written Migration tab's notice, and
+  in a version's written or imported migration dialog. `TestsCard` in the
+  org settings.
+- **Tests**: `tests/api/migration_tests.rs` (a fake host's `test`),
+  `crates/romulus-playground/tests/service.rs` (`a_migration_test_*`,
+  `a_test_on_a_copy_*`, real containers), `e2e/playground-test-migration.spec.ts`.
 
 ## The time machine (`versions::timeline`, `features/time-machine`)
 

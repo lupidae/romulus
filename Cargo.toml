@@ -18,6 +18,7 @@ remus-mermaid = "0.2.0"
 romulus-diff = { path = "crates/romulus-diff" }
 romulus-fakedata = { path = "crates/romulus-fakedata" }
 romulus-migration = { path = "crates/romulus-migration" }
+romulus-migration-check = { path = "crates/romulus-migration-check" }
 romulus-play-runner = { path = "crates/romulus-play-runner", default-features = false }
 romulus-playground = { path = "crates/romulus-playground", default-features = false }
 romulus-sandbox = { path = "crates/romulus-sandbox" }

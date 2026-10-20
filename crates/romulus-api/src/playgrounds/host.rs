@@ -12,7 +12,8 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use futures_util::{SinkExt, StreamExt};
 use romulus_playground::{
     protocol::{
-        Access, Build, BuildEvent, ErrorBody, Health, Listing, Migrate, MigrationEvent, Status,
+        Access, Build, BuildEvent, ErrorBody, Fork, Health, Listing, Migrate, MigrationEvent,
+        Status, Test, TestEvent,
     },
     signing::{Claims, Op},
 };
@@ -124,6 +125,23 @@ pub trait Backend: Send + Sync + 'static {
         caller: Caller,
         migrate: Migrate,
     ) -> BoxFuture<'_, Result<mpsc::Receiver<MigrationEvent>, HostError>>;
+    /// A migration test on the playground's rows (romulus-migration-check),
+    /// its progress then its report. A host without it is off.
+    fn test(
+        &self,
+        id: Uuid,
+        caller: Caller,
+        test: Test,
+    ) -> BoxFuture<'_, Result<mpsc::Receiver<TestEvent>, HostError>> {
+        let _ = (id, caller, test);
+        Box::pin(async { Err(HostError::Off) })
+    }
+    /// Creates playground `id` as a copy of `fork.source`'s rows (a test on
+    /// someone's playground); the source pauses a moment, unchanged.
+    fn fork(&self, id: Uuid, caller: Caller, fork: Fork) -> BoxFuture<'_, Result<(), HostError>> {
+        let _ = (id, caller, fork);
+        Box::pin(async { Err(HostError::Off) })
+    }
     fn reset(&self, id: Uuid, caller: Caller) -> BoxFuture<'_, Result<Status, HostError>>;
     fn destroy(&self, id: Uuid, caller: Caller) -> BoxFuture<'_, Result<(), HostError>>;
     fn status(&self, id: Uuid, caller: Caller) -> BoxFuture<'_, Result<Status, HostError>>;
@@ -333,6 +351,48 @@ impl Backend for Remote {
                 body,
             )
             .await
+        })
+    }
+
+    fn test(
+        &self,
+        id: Uuid,
+        caller: Caller,
+        test: Test,
+    ) -> BoxFuture<'_, Result<mpsc::Receiver<TestEvent>, HostError>> {
+        Box::pin(async move {
+            let body =
+                serde_json::to_vec(&test).map_err(|e| HostError::Unavailable(e.to_string()))?;
+            self.stream(
+                &format!("playgrounds/{id}/test"),
+                Op::Test,
+                id,
+                &caller,
+                body,
+            )
+            .await
+        })
+    }
+
+    fn fork(&self, id: Uuid, caller: Caller, fork: Fork) -> BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            let body =
+                serde_json::to_vec(&fork).map_err(|e| HostError::Unavailable(e.to_string()))?;
+            let response = self
+                .http
+                .post(self.url(&format!("playgrounds/{id}/fork")))
+                .header(
+                    "authorization",
+                    self.sign(Op::Fork, Some(id), &caller, Some(&body)),
+                )
+                .header("content-type", "application/json")
+                .body(body)
+                // A clean stop, a copy (reflinks), a start: seconds.
+                .timeout(Duration::from_secs(120))
+                .send()
+                .await
+                .map_err(|e| HostError::Unavailable(e.to_string()))?;
+            Self::answer::<serde_json::Value>(response).await.map(drop)
         })
     }
 

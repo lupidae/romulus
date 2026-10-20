@@ -2884,7 +2884,7 @@
             }
           },
           "409": {
-            "description": "`draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)",
+            "description": "`draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it), `passing_test_required` (the organization requires a passing migration test of this text)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4070,6 +4070,405 @@
           },
           "422": {
             "description": "`validation`: a number below 1",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/migration-tests": {
+      "get": {
+        "tags": [
+          "migration_tests"
+        ],
+        "summary": "The newest tests of a draft, of a pair of versions, of a version's own\nmigration, or of the database: without their reports (`summary` says\nhow each went).",
+        "operationId": "list_migration_tests",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "draft",
+            "in": "query",
+            "description": "A draft's tests.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The tests of the migration from `from` to `to`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "The tests of the migration version `version` was written or\nimported as.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MigrationTest"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "migration_tests"
+        ],
+        "summary": "Tests a migration on a playground of its own, filled with generated\nrows: up, checks, down, checks. Answers at once with the test, queued;\n`GET` it for its place in line, its progress, then its report.\nDevelopers and admins.",
+        "operationId": "create_migration_test",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMigrationTest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationTest"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_changed` (look at the migration again), `draft_not_open`, `test_queue_full`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`; `compile_failed`, `nothing_to_migrate`, `migration_too_long`, `migration_unreadable`, `no_written_migration`, `no_previous_version`, `no_version`, `major_unsupported`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/migration-tests/{id}": {
+      "get": {
+        "tags": [
+          "migration_tests"
+        ],
+        "summary": "One test: its place in line or progress while it runs, its report once\nit ran.",
+        "operationId": "get_migration_test",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationTest"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/migration-tests/{id}/acknowledge": {
+      "post": {
+        "tags": [
+          "migration_tests"
+        ],
+        "summary": "Acknowledges the data loss a test found that the migration does not\ndeclare (`needs_acknowledgement`): the test then counts as passed (an\nup-only one as passed up only: never enough for the publish gate), and\nthe audit log keeps who did, with the test. Developers and admins; where\nthe organization requires a passing test, not the draft's own author or\neditors (someone else looks at the loss), unless an admin.",
+        "operationId": "acknowledge_migration_test",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationTest"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`own_draft`: the draft's author or an editor, where the organization requires a passing test (someone else, or an admin)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`nothing_to_acknowledge`: it does not need it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/migration-tests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "migration_tests"
+        ],
+        "summary": "Stops a test that waits or runs, and deletes its playground. Developers\nand admins.",
+        "operationId": "cancel_migration_test",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MigrationTest"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`test_finished`: it ran already",
             "content": {
               "application/json": {
                 "schema": {
@@ -6784,6 +7183,30 @@
           }
         }
       },
+      "Acknowledged": {
+        "type": "object",
+        "description": "A developer's acknowledgement of a test's undeclared data loss.",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "`null` once their account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "ActivityPage": {
         "type": "object",
         "description": "A page of events, newest first.",
@@ -7083,7 +7506,10 @@
           "playground_deleted",
           "playground_reset",
           "playground_migration_run",
-          "playground_restarted"
+          "playground_restarted",
+          "passing_test_required_changed",
+          "migration_test_acknowledged",
+          "passing_test_overridden"
         ]
       },
       "AuditActor": {
@@ -7228,6 +7654,14 @@
               "null"
             ],
             "format": "int32"
+          },
+          "test_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The migration test (its loss acknowledged)."
           },
           "thread_id": {
             "type": [
@@ -8802,6 +9236,106 @@
           }
         }
       },
+      "CreateMigrationTest": {
+        "type": "object",
+        "description": "What to test.",
+        "properties": {
+          "concurrently": {
+            "type": "boolean",
+            "description": "Build indexes on existing tables `CONCURRENTLY`, as the migration\nview has it."
+          },
+          "down": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DownChoice",
+                "description": "`generate`: a down migration for a migration written without one\n(planned from its target back to its base). `none`: the up\nmigration only. By default: the generated one when the up migration\nis generated, none when it is written."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "draft_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A draft's migration from its base version, as reviewed: the draft,\nand the SHA-256 of what was reviewed (the migration tab's, or the\npublish preview's). Or:"
+          },
+          "from": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "the migration planned from version `from` to version `to`. Or:"
+          },
+          "playground": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Test on the rows of this playground (a copy of them: it is never\nchanged). It must hold the base version, as built (not migrated\nrows). Its size, profile and seed are the test's. Otherwise:"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/PlaygroundProfile"
+          },
+          "renames": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Renames turned on or off over what is stored, as the migration view\nhas them on screen (`SchemaMigration.renames[].key` → on or off).",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "seed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hex, at most 15 digits; random when absent."
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundSize",
+                "description": "`small` unless given (fresh generated rows)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "the migration version `version` was written or imported as, from\nthe live version before it."
+          }
+        }
+      },
       "CreateOrg": {
         "type": "object",
         "required": [
@@ -9290,6 +9824,13 @@
             "$ref": "#/components/schemas/Status"
           }
         }
+      },
+      "DownChoice": {
+        "type": "string",
+        "enum": [
+          "generate",
+          "none"
+        ]
       },
       "Draft": {
         "type": "object",
@@ -10019,6 +10560,35 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "FailedStatement": {
+        "type": "object",
+        "description": "The statement that failed, for lists.",
+        "required": [
+          "direction",
+          "index"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/MigrationDirection"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sqlstate": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -10853,6 +11423,24 @@
           }
         }
       },
+      "MigrationCheckStatus": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "warning",
+          "needs_acknowledgement",
+          "failed",
+          "skipped"
+        ]
+      },
+      "MigrationDirection": {
+        "type": "string",
+        "description": "Which way a migration runs.",
+        "enum": [
+          "up",
+          "down"
+        ]
+      },
       "MigrationFile": {
         "type": "object",
         "required": [
@@ -10986,7 +11574,7 @@
       },
       "MigrationRunReport": {
         "type": "object",
-        "description": "A migration run, whole.",
+        "description": "The statements of one run (a migration, up or down), whole.",
         "required": [
           "passed",
           "statements",
@@ -11019,7 +11607,7 @@
       },
       "MigrationRunStatement": {
         "type": "object",
-        "description": "What one statement of a migration run did.",
+        "description": "What one statement of a run did.",
         "required": [
           "index",
           "sql",
@@ -11046,7 +11634,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "`deletes_data`, `can_fail`, `widens_access` (romulus-migration's\nhazards), when the statement has one."
           },
           "index": {
             "type": "integer",
@@ -11106,6 +11695,7 @@
       },
       "MigrationRunStatus": {
         "type": "string",
+        "description": "How a statement of a run went.",
         "enum": [
           "passed",
           "failed",
@@ -11244,6 +11834,784 @@
           "changed",
           "out_of_order",
           "removed"
+        ]
+      },
+      "MigrationTest": {
+        "type": "object",
+        "description": "A migration test.",
+        "required": [
+          "id",
+          "status",
+          "source",
+          "from",
+          "down",
+          "rows_checked",
+          "data",
+          "created_at"
+        ],
+        "properties": {
+          "acknowledged": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Acknowledged",
+                "description": "Who acknowledged the data loss it found that the migration does not\ndeclare, and when (it then counts as passed)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "`null` once their account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "current": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For a draft's tests listed by `?draft=`: whether it is of the\ndraft's text as it is now (`null` elsewhere, or when the draft\ncannot be read)."
+          },
+          "data": {
+            "$ref": "#/components/schemas/TestData"
+          },
+          "down": {
+            "$ref": "#/components/schemas/MigrationTestDown"
+          },
+          "down_sql": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "draft": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestDraft",
+                "description": "The draft tested (`source` `draft`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it could not run (`error`)."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "from": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version its playground holds: the base."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Its place in line, from 1, while queued.",
+            "minimum": 0
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestProgress",
+                "description": "While it runs (in this API process)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationTestReport",
+                "description": "The whole report (one test's answer, not lists')."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rows_checked": {
+            "type": "boolean",
+            "description": "False when every table the migration changes (something rows matter\nto touches it) was empty: nothing was checked on rows (a publish gate\ndoes not count it). Renames, nullable columns and plain indexes need\nno rows."
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "For a draft: the SHA-256 of the text tested (`compile::input_hash`,\na live compile's)."
+          },
+          "source": {
+            "$ref": "#/components/schemas/MigrationTestSource"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationTestStatus"
+          },
+          "summary": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version migrated to (`versions`, `version`)."
+          },
+          "up_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The up migration as tested, and the down one (`null`: none)."
+          },
+          "verdict": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationTestVerdict",
+                "description": "The report's verdict, once it ran (`passed_up_only`: no down\nmigration ran; `needs_acknowledgement`: see `acknowledged`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "MigrationTestCheck": {
+        "type": "object",
+        "description": "One check of a phase.",
+        "required": [
+          "kind",
+          "status",
+          "summary",
+          "details",
+          "tables"
+        ],
+        "properties": {
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "More lines when there is more to say (the schema's differences)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MigrationTestCheckKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationCheckStatus"
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence: `Schema matches v8.`, `250 sampled rows kept their\nvalues.`"
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestTable"
+            },
+            "description": "The tables with something to say (all of them for row counts),\nat most [`crate::MAX_TABLES_LISTED`]."
+          }
+        }
+      },
+      "MigrationTestCheckKind": {
+        "type": "string",
+        "description": "What a check looks at.",
+        "enum": [
+          "rows",
+          "schema",
+          "row_counts",
+          "values",
+          "coverage",
+          "sequences"
+        ]
+      },
+      "MigrationTestData": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Generated by romulus-fakedata.",
+            "required": [
+              "size",
+              "profile",
+              "seed",
+              "generator",
+              "kind"
+            ],
+            "properties": {
+              "generator": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "generated"
+                ]
+              },
+              "profile": {
+                "type": "string"
+              },
+              "seed": {
+                "type": "string",
+                "description": "Hex: the same model, size, profile, seed and generator give the\nsame rows."
+              },
+              "size": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Rows already there (a playground's, copied).",
+            "required": [
+              "label",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "existing"
+                ]
+              },
+              "label": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Rows the caller inserted (a test's own).",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "provided"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The rows a test ran on."
+      },
+      "MigrationTestDataLoss": {
+        "type": "object",
+        "description": "Data a run did not give back: after the down migration (or after the\nup migration when there is none to run).",
+        "required": [
+          "table",
+          "kind",
+          "rows",
+          "sampled",
+          "examples",
+          "expected",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "cause": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationTestStatementRef",
+                "description": "The statement that explains it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "column": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "count_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rows counted before and after, for lost rows."
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestExample"
+            }
+          },
+          "expected": {
+            "type": "boolean",
+            "description": "Explained by a statement flagged `deletes_data` (or a hand-written\none that says it drops, deletes or changes it): what the migration\nsaid it would do. Unexpected loss fails the test."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MigrationTestLossKind"
+          },
+          "message": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "description": "Sampled rows it concerns, of `sampled`.",
+            "minimum": 0
+          },
+          "sampled": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationCheckStatus",
+            "description": "`warning` (expected), `needs_acknowledgement` (a hand-written\nstatement does it without saying so, or a `DO` block may have), or\n`failed`."
+          },
+          "table": {
+            "type": "string",
+            "description": "`schema.name` in the base schema."
+          }
+        }
+      },
+      "MigrationTestDown": {
+        "type": "string",
+        "description": "Where a migration test's down migration comes from\n(`migration_test_down`).",
+        "enum": [
+          "generated",
+          "written",
+          "none"
+        ]
+      },
+      "MigrationTestDownStatus": {
+        "type": "string",
+        "description": "The down migration's part.",
+        "enum": [
+          "ran",
+          "not_provided",
+          "not_run"
+        ]
+      },
+      "MigrationTestExample": {
+        "type": "object",
+        "description": "One row as an example: its key, a value before and after.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "description": "The row's primary key, as Postgres prints it (`(42)`, `(7,en)`)."
+          }
+        }
+      },
+      "MigrationTestFlag": {
+        "type": "string",
+        "description": "Where a statement's hazard comes from.",
+        "enum": [
+          "flagged",
+          "not_flagged",
+          "written",
+          "written_undeclared",
+          "opaque",
+          "moved"
+        ]
+      },
+      "MigrationTestLossKind": {
+        "type": "string",
+        "description": "How a run's data was lost.",
+        "enum": [
+          "column_dropped",
+          "values_changed",
+          "rows_deleted"
+        ]
+      },
+      "MigrationTestNote": {
+        "type": "object",
+        "required": [
+          "kind",
+          "rows",
+          "status",
+          "message",
+          "examples"
+        ],
+        "properties": {
+          "column": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The column (as the phase names it); `null` for the table's rows."
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestExample"
+            }
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name before (a rename)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MigrationTestNoteKind"
+          },
+          "message": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "description": "Sampled rows it concerns, of [`TableCheck::sampled`].",
+            "minimum": 0
+          },
+          "statement": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationTestStatementRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationCheckStatus"
+          }
+        }
+      },
+      "MigrationTestNoteKind": {
+        "type": "string",
+        "description": "What happened to one column (or one table's rows) of the sample.",
+        "enum": [
+          "renamed",
+          "converted",
+          "rounded",
+          "changed",
+          "unexplained",
+          "dropped",
+          "rows_missing",
+          "not_compared",
+          "not_verified",
+          "empty"
+        ]
+      },
+      "MigrationTestPhase": {
+        "type": "string",
+        "description": "The parts of a test, in order.",
+        "enum": [
+          "seed",
+          "before",
+          "up",
+          "after_up",
+          "down",
+          "after_down"
+        ]
+      },
+      "MigrationTestPhaseReport": {
+        "type": "object",
+        "required": [
+          "phase",
+          "status",
+          "duration_ms",
+          "summary",
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestCheck"
+            }
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "phase": {
+            "$ref": "#/components/schemas/MigrationTestPhase"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationCheckStatus"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "MigrationTestReport": {
+        "type": "object",
+        "description": "A test, whole.",
+        "required": [
+          "verdict",
+          "headline",
+          "data",
+          "sample",
+          "tables",
+          "rows",
+          "phases",
+          "up",
+          "down_status",
+          "data_loss",
+          "nothing_checked",
+          "empty_tables",
+          "not_compared",
+          "locks_from",
+          "duration_ms"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MigrationTestData"
+          },
+          "data_loss": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestDataLoss"
+            }
+          },
+          "down": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationRunReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "down_status": {
+            "$ref": "#/components/schemas/MigrationTestDownStatus"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "empty_tables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tables the migration touches that held no rows (`schema.name`)."
+          },
+          "headline": {
+            "type": "string",
+            "description": "One sentence for the top of the page."
+          },
+          "locks_from": {
+            "type": "string",
+            "description": "Where the lock list of each statement comes from: `pg_locks` before\nits `COMMIT` (exact), documented for those outside a transaction."
+          },
+          "not_compared": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the checks do not compare (grants, owners…), to say so."
+          },
+          "nothing_checked": {
+            "type": "boolean",
+            "description": "Every table the migration changes (something rows matter to touches\nit: data changed, a constraint validated…) was empty: nothing was\nchecked on rows (a publish gate does not count it)."
+          },
+          "phases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestPhaseReport"
+            }
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sample": {
+            "type": "integer",
+            "description": "Rows sampled per table, at most.",
+            "minimum": 0
+          },
+          "tables": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "up": {
+            "$ref": "#/components/schemas/MigrationRunReport"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/MigrationTestVerdict"
+          }
+        }
+      },
+      "MigrationTestSource": {
+        "type": "string",
+        "description": "What a migration test tests (`migration_test_source`).",
+        "enum": [
+          "draft",
+          "versions",
+          "version"
+        ]
+      },
+      "MigrationTestStatementRef": {
+        "type": "object",
+        "description": "A statement of the run, as a check names it.",
+        "required": [
+          "direction",
+          "index",
+          "flag"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/MigrationDirection"
+          },
+          "flag": {
+            "$ref": "#/components/schemas/MigrationTestFlag"
+          },
+          "hazard": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its hazard, as the migration flagged it (or as the check read it\nfrom a hand-written statement: [`StatementRef::flag`])."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "MigrationTestStatus": {
+        "type": "string",
+        "description": "Where a migration test is (`migration_test_status`).",
+        "enum": [
+          "queued",
+          "running",
+          "passed",
+          "failed",
+          "needs_acknowledgement",
+          "error",
+          "cancelled"
+        ]
+      },
+      "MigrationTestTable": {
+        "type": "object",
+        "description": "One table in a check of counts or values.",
+        "required": [
+          "table",
+          "sampled",
+          "status",
+          "notes"
+        ],
+        "properties": {
+          "after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Rows before (in the base schema) and now."
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name in the base schema, when that is another (renamed)."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MigrationTestNote"
+            }
+          },
+          "sampled": {
+            "type": "integer",
+            "description": "Rows sampled by primary key (0: none, see the notes).",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationCheckStatus"
+          },
+          "table": {
+            "type": "string",
+            "description": "`schema.name`, as the phase names it."
+          }
+        }
+      },
+      "MigrationTestVerdict": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "passed_up_only",
+          "needs_acknowledgement",
+          "failed"
         ]
       },
       "MigrationTool": {
@@ -11431,7 +12799,8 @@
           "slug",
           "name",
           "role",
-          "approvals_required"
+          "approvals_required",
+          "require_passing_test"
         ],
         "properties": {
           "approvals_required": {
@@ -11445,6 +12814,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "require_passing_test": {
+            "type": "boolean",
+            "description": "Publishing a draft that changes the schema needs a passing\nmigration test of its text as it is (Test on data)."
           },
           "role": {
             "$ref": "#/components/schemas/Role",
@@ -11851,6 +13224,22 @@
           18
         ]
       },
+      "PhaseDone": {
+        "type": "object",
+        "description": "A phase that ended, as the page lists them while the test runs.",
+        "required": [
+          "phase",
+          "status"
+        ],
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/MigrationTestPhase"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MigrationCheckStatus"
+          }
+        }
+      },
       "PlannedMigration": {
         "type": "object",
         "description": "One migration of the files, in order.",
@@ -11925,6 +13314,17 @@
           "expires_at"
         ],
         "properties": {
+          "copied": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundCopied",
+                "description": "The last time a migration test copied its rows (it paused a moment\nfor the copy), and who ran that test."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -12052,6 +13452,30 @@
             "type": "integer",
             "format": "int32",
             "description": "The version whose schema it holds."
+          }
+        }
+      },
+      "PlaygroundCopied": {
+        "type": "object",
+        "description": "A migration test copying a playground's rows.",
+        "required": [
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "by": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Person",
+                "description": "`null` once their account is gone."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -12756,6 +14180,13 @@
           "sha256": {
             "type": "string",
             "description": "The `sha256` of the preview the person confirmed."
+          },
+          "test_override_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Publish without the passing migration test the organization\nrequires while tests cannot run here, saying why (admins; the audit\nlog keeps it)."
           }
         }
       },
@@ -12769,7 +14200,8 @@
           "sha256",
           "renames",
           "diagnostics",
-          "approvals"
+          "approvals",
+          "test_gate"
         ],
         "properties": {
           "approvals": {
@@ -12855,6 +14287,10 @@
           "stale": {
             "type": "boolean",
             "description": "Someone published since the draft started: \"Update draft\" first."
+          },
+          "test_gate": {
+            "$ref": "#/components/schemas/TestGate",
+            "description": "The passing migration test the organization may require: of\nexactly the migration publishing would run."
           }
         }
       },
@@ -14251,6 +15687,258 @@
           }
         }
       },
+      "TestData": {
+        "type": "object",
+        "description": "The rows a test runs on.",
+        "required": [
+          "size",
+          "profile",
+          "seed"
+        ],
+        "properties": {
+          "playground": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestPlayground",
+                "description": "The playground whose rows were copied for the test; `null` for rows\ngenerated for it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile": {
+            "$ref": "#/components/schemas/PlaygroundProfile"
+          },
+          "seed": {
+            "type": "string",
+            "description": "Hex: the same model, size, profile, seed and generator give the same\nrows."
+          },
+          "size": {
+            "$ref": "#/components/schemas/PlaygroundSize"
+          }
+        }
+      },
+      "TestDraft": {
+        "type": "object",
+        "description": "The draft a test is of.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TestGate": {
+        "type": "object",
+        "description": "What the publish gate of an organization requiring a passing test\n(`organizations.require_passing_test`) says of a draft as it is: the\npublish dialog shows it, publishing enforces it ([`gate`]).",
+        "required": [
+          "required",
+          "available",
+          "nothing_to_test"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Tests can run here (playgrounds on this server, the database on\ntheir Postgres major)."
+          },
+          "nothing_to_test": {
+            "type": "boolean",
+            "description": "Nothing to test: no base version (no rows yet), or nothing to run."
+          },
+          "passing": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The newest test of exactly the migration publishing would run that\ncounts: passed up and down on rows (or its undeclared loss\nacknowledged)."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it holds publishing, when it does."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "The organization publishes only migrations that passed a test."
+          }
+        }
+      },
+      "TestPlayground": {
+        "type": "object",
+        "description": "A playground a test ran on a copy of.",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "`null` once that playground is deleted."
+          },
+          "label": {
+            "type": "string",
+            "description": "`Alice's playground (small, seed 7f3a91)`."
+          }
+        }
+      },
+      "TestProgress": {
+        "type": "object",
+        "description": "What a running test is doing.",
+        "required": [
+          "stage",
+          "done"
+        ],
+        "properties": {
+          "build": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BuildProgress",
+                "description": "Its playground's build, while building."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationDirection",
+                "description": "The statement running (from 0) of `statements`, and which way."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "done": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PhaseDone"
+            },
+            "description": "The phases done so far."
+          },
+          "phase": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationTestPhase",
+                "description": "The phase running, while testing."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "$ref": "#/components/schemas/TestStage"
+          },
+          "statement": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "statements": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "waiting": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it waits for room, when it does."
+          }
+        }
+      },
+      "TestStage": {
+        "type": "string",
+        "description": "Where a test is, while it is not over.",
+        "enum": [
+          "queued",
+          "building",
+          "testing"
+        ]
+      },
+      "TestSummary": {
+        "type": "object",
+        "description": "A test's report in a line, for lists.",
+        "required": [
+          "verdict",
+          "headline",
+          "up_statements",
+          "data_loss",
+          "unexpected_loss",
+          "rows",
+          "duration_ms"
+        ],
+        "properties": {
+          "data_loss": {
+            "type": "integer",
+            "description": "Findings of data that does not come back, and of those, the ones no\nflagged statement explains.",
+            "minimum": 0
+          },
+          "down_statements": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "`null` when no down migration ran.",
+            "minimum": 0
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FailedStatement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "headline": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unexpected_loss": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "up_statements": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/MigrationTestVerdict"
+          }
+        }
+      },
       "ThreadRead": {
         "type": "object",
         "description": "Up to when the caller read a thread.",
@@ -14463,6 +16151,13 @@
               "string",
               "null"
             ]
+          },
+          "require_passing_test": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether publishing a draft needs a passing migration test."
           },
           "slug": {
             "type": [

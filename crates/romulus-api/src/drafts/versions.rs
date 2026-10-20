@@ -92,6 +92,9 @@ pub struct DraftVersion {
     /// The approvals to check again and keep with the version (when the
     /// organization requires some).
     pub approvals: Option<super::approvals::Freeze>,
+    /// Published without the passing test the organization requires
+    /// (tests could not run), an admin saying why: kept in the audit log.
+    pub test_override: Option<crate::migration_tests::TestOverride>,
     /// The major `model` was compiled on (the room's): still the
     /// database's when it is stored, or 409 `major_changed`.
     pub compiled_on: PgMajor,
@@ -127,6 +130,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             expected_base: Some(new.expected_base),
             publishes_draft: Some(new.draft),
             approvals: new.approvals,
+            test_override: new.test_override,
             migration_sql: new.migration_sql,
             compiled_on: Some(new.compiled_on),
             discussion: new.discussion,

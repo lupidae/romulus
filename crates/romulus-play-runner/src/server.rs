@@ -34,8 +34,8 @@ use crate::{
     docker::{Docker, DockerError},
     password::{self, Role},
     protocol::{
-        Create, Endpoint, ErrorBody, Health, Listed, Listing, RUN_DIR_BYTES, Space, Started, State,
-        is_plain_identifier,
+        Create, Endpoint, ErrorBody, Fork, Health, Listed, Listing, RUN_DIR_BYTES, Space, Started,
+        State, is_plain_identifier,
     },
 };
 
@@ -381,8 +381,13 @@ impl Runner {
     /// `play-files <op> [id]`: root, no network, three capabilities, the
     /// volume at /play, nothing else.
     fn files_spec(&self, op: &'static str, id: Option<Uuid>) -> Value {
+        self.files_spec_with(op, id, None)
+    }
+
+    fn files_spec_with(&self, op: &'static str, id: Option<Uuid>, into: Option<Uuid>) -> Value {
         let mut cmd = vec![op.to_owned()];
         cmd.extend(id.map(|id| id.to_string()));
+        cmd.extend(into.map(|id| id.to_string()));
         json!({
             "Image": self.0.config.image,
             "User": "0:0",
@@ -409,6 +414,18 @@ impl Runner {
         self.0
             .docker
             .run_once(&name, &self.files_spec(op, Some(id)))
+            .await
+    }
+
+    /// `play-files fork <source> <into>`.
+    async fn fork_files(&self, source: Uuid, into: Uuid) -> Result<String, DockerError> {
+        let name = format!("romulus-play-files-fork-{into}");
+        self.0
+            .docker
+            .run_once(
+                &name,
+                &self.files_spec_with("fork", Some(source), Some(into)),
+            )
             .await
     }
 
@@ -629,6 +646,45 @@ impl Runner {
         Ok(())
     }
 
+    /// Creates `id` as a copy of `fork.source`'s cluster: its own container,
+    /// directories and quota, then the source stopped (cleanly) and its data
+    /// copied (reflinks on XFS), the source left stopped. A failed copy
+    /// leaves nothing of `id`.
+    pub async fn fork(&self, id: Uuid, fork: Fork) -> Result<(), Failure> {
+        if id == fork.source {
+            return Err(Failure::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "a playground cannot be copied into itself",
+            ));
+        }
+        if self.inspect(fork.source).await?.is_none() {
+            return Err(Failure::not_found());
+        }
+        self.create(
+            id,
+            Create {
+                size: fork.size,
+                extensions: fork.extensions,
+            },
+        )
+        .await?;
+        let copied = async {
+            let _source = self.lock(fork.source).await;
+            self.stop_locked(fork.source).await?;
+            let _into = self.lock(id).await;
+            self.fork_files(fork.source, id).await?;
+            Ok::<_, Failure>(())
+        }
+        .await;
+        if let Err(err) = copied {
+            let _ = self.destroy(id).await;
+            return Err(err);
+        }
+        tracing::info!(%id, source = %fork.source, "runner: forked");
+        Ok(())
+    }
+
     pub async fn destroy(&self, id: Uuid) -> Result<(), Failure> {
         let _guard = self.lock(id).await;
         if self.0.docker.inspect(&container(id)).await?.is_some()
@@ -719,6 +775,7 @@ pub fn router(runner: Runner) -> Router {
         .route("/v1/playgrounds/{id}/stop", post(stop))
         .route("/v1/playgrounds/{id}/snapshot", post(snapshot))
         .route("/v1/playgrounds/{id}/restore", post(restore))
+        .route("/v1/playgrounds/{id}/fork", post(fork))
         .with_state(runner)
 }
 
@@ -775,6 +832,17 @@ async fn restore(
 ) -> Result<StatusCode, Failure> {
     runner.restore(id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn fork(
+    AxumState(runner): AxumState<Runner>,
+    Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
+) -> Result<StatusCode, Failure> {
+    let fork: Fork = serde_json::from_slice(&body)
+        .map_err(|e| Failure::new(StatusCode::BAD_REQUEST, "bad_request", e.to_string()))?;
+    runner.fork(id, fork).await?;
+    Ok(StatusCode::CREATED)
 }
 
 async fn destroy(

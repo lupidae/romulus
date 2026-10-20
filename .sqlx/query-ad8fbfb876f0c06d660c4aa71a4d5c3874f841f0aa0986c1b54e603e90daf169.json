@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM drafts WHERE id = $1 AND created_by = $2\n                   UNION ALL\n                   SELECT 1 FROM draft_editors WHERE draft_id = $1 AND user_id = $2\n               ) AS \"own!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "own!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ad8fbfb876f0c06d660c4aa71a4d5c3874f841f0aa0986c1b54e603e90daf169"
+}

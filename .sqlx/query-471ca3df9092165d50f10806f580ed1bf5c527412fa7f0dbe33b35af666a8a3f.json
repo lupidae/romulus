@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE migration_tests SET status = 'passed', acknowledged_by = $2, acknowledged_at = now(),\n                verdict = CASE WHEN down = 'none' THEN 'passed_up_only'::migration_test_verdict ELSE verdict END\n         WHERE id = $1 AND database_id = $3 AND status = 'needs_acknowledgement'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "471ca3df9092165d50f10806f580ed1bf5c527412fa7f0dbe33b35af666a8a3f"
+}

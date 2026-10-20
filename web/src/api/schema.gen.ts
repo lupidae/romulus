@@ -819,6 +819,97 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/migration-tests": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The newest tests of a draft, of a pair of versions, of a version's own
+     *     migration, or of the database: without their reports (`summary` says
+     *     how each went).
+     */
+    get: operations["list_migration_tests"];
+    put?: never;
+    /**
+     * Tests a migration on a playground of its own, filled with generated
+     *     rows: up, checks, down, checks. Answers at once with the test, queued;
+     *     `GET` it for its place in line, its progress, then its report.
+     *     Developers and admins.
+     */
+    post: operations["create_migration_test"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/migration-tests/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * One test: its place in line or progress while it runs, its report once
+     *     it ran.
+     */
+    get: operations["get_migration_test"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/migration-tests/{id}/acknowledge": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Acknowledges the data loss a test found that the migration does not
+     *     declare (`needs_acknowledgement`): the test then counts as passed (an
+     *     up-only one as passed up only: never enough for the publish gate), and
+     *     the audit log keeps who did, with the test. Developers and admins; where
+     *     the organization requires a passing test, not the draft's own author or
+     *     editors (someone else looks at the loss), unless an admin.
+     */
+    post: operations["acknowledge_migration_test"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/migration-tests/{id}/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Stops a test that waits or runs, and deletes its playground. Developers
+     *     and admins.
+     */
+    post: operations["cancel_migration_test"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/playgrounds": {
     parameters: {
       query?: never;
@@ -1366,6 +1457,12 @@ export interface components {
       already_member: boolean;
       org: components["schemas"]["Org"];
     };
+    /** @description A developer's acknowledgement of a test's undeclared data loss. */
+    Acknowledged: {
+      /** Format: date-time */
+      at: string;
+      by?: components["schemas"]["Person"] | null;
+    };
     /** @description A page of events, newest first. */
     ActivityPage: {
       events: components["schemas"]["AuditEvent"][];
@@ -1487,7 +1584,10 @@ export interface components {
       | "playground_deleted"
       | "playground_reset"
       | "playground_migration_run"
-      | "playground_restarted";
+      | "playground_restarted"
+      | "passing_test_required_changed"
+      | "migration_test_acknowledged"
+      | "passing_test_overridden";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1558,6 +1658,11 @@ export interface components {
       playground_id?: string | null;
       /** Format: int32 */
       required?: number | null;
+      /**
+       * Format: uuid
+       * @description The migration test (its loss acknowledged).
+       */
+      test_id?: string | null;
       /**
        * Format: uuid
        * @description The thread a deletion was in (comments deleted).
@@ -2060,6 +2165,54 @@ export interface components {
       email: string;
       role: components["schemas"]["Role"];
     };
+    /** @description What to test. */
+    CreateMigrationTest: {
+      /**
+       * @description Build indexes on existing tables `CONCURRENTLY`, as the migration
+       *     view has it.
+       */
+      concurrently?: boolean;
+      down?: components["schemas"]["DownChoice"] | null;
+      /**
+       * Format: uuid
+       * @description A draft's migration from its base version, as reviewed: the draft,
+       *     and the SHA-256 of what was reviewed (the migration tab's, or the
+       *     publish preview's). Or:
+       */
+      draft_id?: string | null;
+      /**
+       * Format: int32
+       * @description the migration planned from version `from` to version `to`. Or:
+       */
+      from?: number | null;
+      /**
+       * Format: uuid
+       * @description Test on the rows of this playground (a copy of them: it is never
+       *     changed). It must hold the base version, as built (not migrated
+       *     rows). Its size, profile and seed are the test's. Otherwise:
+       */
+      playground?: string | null;
+      profile?: components["schemas"]["PlaygroundProfile"];
+      /**
+       * @description Renames turned on or off over what is stored, as the migration view
+       *     has them on screen (`SchemaMigration.renames[].key` → on or off).
+       */
+      renames?: {
+        [key: string]: boolean;
+      } | null;
+      /** @description Hex, at most 15 digits; random when absent. */
+      seed?: string | null;
+      sha256?: string | null;
+      size?: components["schemas"]["PlaygroundSize"] | null;
+      /** Format: int32 */
+      to?: number | null;
+      /**
+       * Format: int32
+       * @description the migration version `version` was written or imported as, from
+       *     the live version before it.
+       */
+      version?: number | null;
+    };
     CreateOrg: {
       /** @description 1 to 100 characters. */
       name: string;
@@ -2240,6 +2393,8 @@ export interface components {
       sql: components["schemas"]["Sides"];
       status: components["schemas"]["Status"];
     };
+    /** @enum {string} */
+    DownChoice: "generate" | "none";
     /** @description A draft, as the database page and the editor show it. */
     Draft: {
       /**
@@ -2507,6 +2662,13 @@ export interface components {
       name: string;
       sql: components["schemas"]["Sides"];
       status: components["schemas"]["Status"];
+    };
+    /** @description The statement that failed, for lists. */
+    FailedStatement: {
+      direction: components["schemas"]["MigrationDirection"];
+      index: number;
+      message?: string | null;
+      sqlstate?: string | null;
     };
     FinishSignUp: {
       name: string;
@@ -2821,6 +2983,13 @@ export interface components {
        */
       sql?: string | null;
     };
+    /** @enum {string} */
+    MigrationCheckStatus: "passed" | "warning" | "needs_acknowledgement" | "failed" | "skipped";
+    /**
+     * @description Which way a migration runs.
+     * @enum {string}
+     */
+    MigrationDirection: "up" | "down";
     MigrationFile: {
       content: string;
       /**
@@ -2890,7 +3059,7 @@ export interface components {
       /** @description The first few, each as Postgres prints its key. */
       sample: string[];
     };
-    /** @description A migration run, whole. */
+    /** @description The statements of one run (a migration, up or down), whole. */
     MigrationRunReport: {
       /** Format: int64 */
       duration_ms: number;
@@ -2899,11 +3068,15 @@ export interface components {
       passed: boolean;
       statements: components["schemas"]["MigrationRunStatement"][];
     };
-    /** @description What one statement of a migration run did. */
+    /** @description What one statement of a run did. */
     MigrationRunStatement: {
       /** Format: int64 */
       duration_ms: number;
       error?: components["schemas"]["PlaygroundSqlError"] | null;
+      /**
+       * @description `deletes_data`, `can_fail`, `widens_access` (romulus-migration's
+       *     hazards), when the statement has one.
+       */
       hazard?: string | null;
       index: number;
       /** @description Exact, for statements in a transaction. */
@@ -2926,7 +3099,10 @@ export interface components {
       /** @description Postgres's command tag (`ALTER TABLE`, `UPDATE 12`). */
       tag?: string | null;
     };
-    /** @enum {string} */
+    /**
+     * @description How a statement of a run went.
+     * @enum {string}
+     */
     MigrationRunStatus: "passed" | "failed" | "not_run" | "skipped";
     /**
      * @description The parts of a migration, in order.
@@ -3016,6 +3192,289 @@ export interface components {
      * @enum {string}
      */
     MigrationStatus: "new" | "imported" | "changed" | "out_of_order" | "removed";
+    /** @description A migration test. */
+    MigrationTest: {
+      acknowledged?: components["schemas"]["Acknowledged"] | null;
+      /** Format: date-time */
+      created_at: string;
+      created_by?: components["schemas"]["Person"] | null;
+      /**
+       * @description For a draft's tests listed by `?draft=`: whether it is of the
+       *     draft's text as it is now (`null` elsewhere, or when the draft
+       *     cannot be read).
+       */
+      current?: boolean | null;
+      data: components["schemas"]["TestData"];
+      down: components["schemas"]["MigrationTestDown"];
+      down_sql?: string | null;
+      draft?: components["schemas"]["TestDraft"] | null;
+      /** @description Why it could not run (`error`). */
+      failure?: string | null;
+      /** Format: date-time */
+      finished_at?: string | null;
+      /**
+       * Format: int32
+       * @description The version its playground holds: the base.
+       */
+      from: number;
+      /** Format: uuid */
+      id: string;
+      /** @description Its place in line, from 1, while queued. */
+      position?: number | null;
+      progress?: components["schemas"]["TestProgress"] | null;
+      report?: components["schemas"]["MigrationTestReport"] | null;
+      /**
+       * @description False when every table the migration changes (something rows matter
+       *     to touches it) was empty: nothing was checked on rows (a publish gate
+       *     does not count it). Renames, nullable columns and plain indexes need
+       *     no rows.
+       */
+      rows_checked: boolean;
+      /**
+       * @description For a draft: the SHA-256 of the text tested (`compile::input_hash`,
+       *     a live compile's).
+       */
+      sha256?: string | null;
+      source: components["schemas"]["MigrationTestSource"];
+      /** Format: date-time */
+      started_at?: string | null;
+      status: components["schemas"]["MigrationTestStatus"];
+      summary?: components["schemas"]["TestSummary"] | null;
+      /**
+       * Format: int32
+       * @description The version migrated to (`versions`, `version`).
+       */
+      to?: number | null;
+      /** @description The up migration as tested, and the down one (`null`: none). */
+      up_sql?: string | null;
+      verdict?: components["schemas"]["MigrationTestVerdict"] | null;
+    };
+    /** @description One check of a phase. */
+    MigrationTestCheck: {
+      /** @description More lines when there is more to say (the schema's differences). */
+      details: string[];
+      kind: components["schemas"]["MigrationTestCheckKind"];
+      status: components["schemas"]["MigrationCheckStatus"];
+      /**
+       * @description One sentence: `Schema matches v8.`, `250 sampled rows kept their
+       *     values.`
+       */
+      summary: string;
+      /**
+       * @description The tables with something to say (all of them for row counts),
+       *     at most [`crate::MAX_TABLES_LISTED`].
+       */
+      tables: components["schemas"]["MigrationTestTable"][];
+    };
+    /**
+     * @description What a check looks at.
+     * @enum {string}
+     */
+    MigrationTestCheckKind: "rows" | "schema" | "row_counts" | "values" | "coverage" | "sequences";
+    /** @description The rows a test ran on. */
+    MigrationTestData:
+      | {
+          generator: string;
+          /** @enum {string} */
+          kind: "generated";
+          profile: string;
+          /**
+           * @description Hex: the same model, size, profile, seed and generator give the
+           *     same rows.
+           */
+          seed: string;
+          size: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: "existing";
+          label: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: "provided";
+        };
+    /**
+     * @description Data a run did not give back: after the down migration (or after the
+     *     up migration when there is none to run).
+     */
+    MigrationTestDataLoss: {
+      cause?: components["schemas"]["MigrationTestStatementRef"] | null;
+      column?: string | null;
+      /** Format: int64 */
+      count_after?: number | null;
+      /**
+       * Format: int64
+       * @description Rows counted before and after, for lost rows.
+       */
+      count_before?: number | null;
+      examples: components["schemas"]["MigrationTestExample"][];
+      /**
+       * @description Explained by a statement flagged `deletes_data` (or a hand-written
+       *     one that says it drops, deletes or changes it): what the migration
+       *     said it would do. Unexpected loss fails the test.
+       */
+      expected: boolean;
+      kind: components["schemas"]["MigrationTestLossKind"];
+      message: string;
+      /** @description Sampled rows it concerns, of `sampled`. */
+      rows: number;
+      sampled: number;
+      /**
+       * @description `warning` (expected), `needs_acknowledgement` (a hand-written
+       *     statement does it without saying so, or a `DO` block may have), or
+       *     `failed`.
+       */
+      status: components["schemas"]["MigrationCheckStatus"];
+      /** @description `schema.name` in the base schema. */
+      table: string;
+    };
+    /**
+     * @description Where a migration test's down migration comes from
+     *     (`migration_test_down`).
+     * @enum {string}
+     */
+    MigrationTestDown: "generated" | "written" | "none";
+    /**
+     * @description The down migration's part.
+     * @enum {string}
+     */
+    MigrationTestDownStatus: "ran" | "not_provided" | "not_run";
+    /** @description One row as an example: its key, a value before and after. */
+    MigrationTestExample: {
+      after?: string | null;
+      before?: string | null;
+      /** @description The row's primary key, as Postgres prints it (`(42)`, `(7,en)`). */
+      key: string;
+    };
+    /**
+     * @description Where a statement's hazard comes from.
+     * @enum {string}
+     */
+    MigrationTestFlag:
+      "flagged" | "not_flagged" | "written" | "written_undeclared" | "opaque" | "moved";
+    /**
+     * @description How a run's data was lost.
+     * @enum {string}
+     */
+    MigrationTestLossKind: "column_dropped" | "values_changed" | "rows_deleted";
+    MigrationTestNote: {
+      /** @description The column (as the phase names it); `null` for the table's rows. */
+      column?: string | null;
+      examples: components["schemas"]["MigrationTestExample"][];
+      /** @description Its name before (a rename). */
+      from?: string | null;
+      kind: components["schemas"]["MigrationTestNoteKind"];
+      message: string;
+      /** @description Sampled rows it concerns, of [`TableCheck::sampled`]. */
+      rows: number;
+      statement?: components["schemas"]["MigrationTestStatementRef"] | null;
+      status: components["schemas"]["MigrationCheckStatus"];
+    };
+    /**
+     * @description What happened to one column (or one table's rows) of the sample.
+     * @enum {string}
+     */
+    MigrationTestNoteKind:
+      | "renamed"
+      | "converted"
+      | "rounded"
+      | "changed"
+      | "unexplained"
+      | "dropped"
+      | "rows_missing"
+      | "not_compared"
+      | "not_verified"
+      | "empty";
+    /**
+     * @description The parts of a test, in order.
+     * @enum {string}
+     */
+    MigrationTestPhase: "seed" | "before" | "up" | "after_up" | "down" | "after_down";
+    MigrationTestPhaseReport: {
+      checks: components["schemas"]["MigrationTestCheck"][];
+      /** Format: int64 */
+      duration_ms: number;
+      phase: components["schemas"]["MigrationTestPhase"];
+      status: components["schemas"]["MigrationCheckStatus"];
+      summary: string;
+    };
+    /** @description A test, whole. */
+    MigrationTestReport: {
+      data: components["schemas"]["MigrationTestData"];
+      data_loss: components["schemas"]["MigrationTestDataLoss"][];
+      down?: components["schemas"]["MigrationRunReport"] | null;
+      down_status: components["schemas"]["MigrationTestDownStatus"];
+      /** Format: int64 */
+      duration_ms: number;
+      /** @description Tables the migration touches that held no rows (`schema.name`). */
+      empty_tables: string[];
+      /** @description One sentence for the top of the page. */
+      headline: string;
+      /**
+       * @description Where the lock list of each statement comes from: `pg_locks` before
+       *     its `COMMIT` (exact), documented for those outside a transaction.
+       */
+      locks_from: string;
+      /** @description What the checks do not compare (grants, owners…), to say so. */
+      not_compared: string[];
+      /**
+       * @description Every table the migration changes (something rows matter to touches
+       *     it: data changed, a constraint validated…) was empty: nothing was
+       *     checked on rows (a publish gate does not count it).
+       */
+      nothing_checked: boolean;
+      phases: components["schemas"]["MigrationTestPhaseReport"][];
+      /** Format: int64 */
+      rows: number;
+      /** @description Rows sampled per table, at most. */
+      sample: number;
+      tables: number;
+      up: components["schemas"]["MigrationRunReport"];
+      verdict: components["schemas"]["MigrationTestVerdict"];
+    };
+    /**
+     * @description What a migration test tests (`migration_test_source`).
+     * @enum {string}
+     */
+    MigrationTestSource: "draft" | "versions" | "version";
+    /** @description A statement of the run, as a check names it. */
+    MigrationTestStatementRef: {
+      direction: components["schemas"]["MigrationDirection"];
+      flag: components["schemas"]["MigrationTestFlag"];
+      /**
+       * @description Its hazard, as the migration flagged it (or as the check read it
+       *     from a hand-written statement: [`StatementRef::flag`]).
+       */
+      hazard?: string | null;
+      index: number;
+    };
+    /**
+     * @description Where a migration test is (`migration_test_status`).
+     * @enum {string}
+     */
+    MigrationTestStatus:
+      "queued" | "running" | "passed" | "failed" | "needs_acknowledgement" | "error" | "cancelled";
+    /** @description One table in a check of counts or values. */
+    MigrationTestTable: {
+      /** Format: int64 */
+      after?: number | null;
+      /**
+       * Format: int64
+       * @description Rows before (in the base schema) and now.
+       */
+      before?: number | null;
+      /** @description Its name in the base schema, when that is another (renamed). */
+      from?: string | null;
+      notes: components["schemas"]["MigrationTestNote"][];
+      /** @description Rows sampled by primary key (0: none, see the notes). */
+      sampled: number;
+      status: components["schemas"]["MigrationCheckStatus"];
+      /** @description `schema.name`, as the phase names it. */
+      table: string;
+    };
+    /** @enum {string} */
+    MigrationTestVerdict: "passed" | "passed_up_only" | "needs_acknowledgement" | "failed";
     /** @enum {string} */
     MigrationTool: "plain" | "sqlx" | "flyway" | "prisma" | "dbmate" | "golang_migrate";
     /** @description Something about the migration as a whole that a reviewer must know. */
@@ -3113,6 +3572,11 @@ export interface components {
       /** Format: uuid */
       id: string;
       name: string;
+      /**
+       * @description Publishing a draft that changes the schema needs a passing
+       *     migration test of its text as it is (Test on data).
+       */
+      require_passing_test: boolean;
       /** @description The caller's role in it. */
       role: components["schemas"]["Role"];
       /** @description Its address: `/app/<slug>`. */
@@ -3252,6 +3716,11 @@ export interface components {
      * @enum {integer}
      */
     PgMajor: 15 | 16 | 17 | 18;
+    /** @description A phase that ended, as the page lists them while the test runs. */
+    PhaseDone: {
+      phase: components["schemas"]["MigrationTestPhase"];
+      status: components["schemas"]["MigrationCheckStatus"];
+    };
     /** @description One migration of the files, in order. */
     PlannedMigration: {
       /** @description Syntax errors (new migrations only): the import would stop here. */
@@ -3281,6 +3750,7 @@ export interface components {
     };
     /** @description A playground, as its page shows it. */
     Playground: {
+      copied?: components["schemas"]["PlaygroundCopied"] | null;
       /** Format: date-time */
       created_at: string;
       created_by?: components["schemas"]["Person"] | null;
@@ -3322,6 +3792,12 @@ export interface components {
        * @description The version whose schema it holds.
        */
       version: number;
+    };
+    /** @description A migration test copying a playground's rows. */
+    PlaygroundCopied: {
+      /** Format: date-time */
+      at: string;
+      by?: components["schemas"]["Person"] | null;
     };
     PlaygroundDraft: {
       /** Format: uuid */
@@ -3574,6 +4050,12 @@ export interface components {
       } | null;
       /** @description The `sha256` of the preview the person confirmed. */
       sha256: string;
+      /**
+       * @description Publish without the passing migration test the organization
+       *     requires while tests cannot run here, saying why (admins; the audit
+       *     log keeps it).
+       */
+      test_override_reason?: string | null;
     };
     /** @description What publishing the draft now would create. */
     PublishPreview: {
@@ -3615,6 +4097,11 @@ export interface components {
       sha256: string;
       /** @description Someone published since the draft started: "Update draft" first. */
       stale: boolean;
+      /**
+       * @description The passing migration test the organization may require: of
+       *     exactly the migration publishing would run.
+       */
+      test_gate: components["schemas"]["TestGate"];
     };
     /** @description The version a draft became. */
     Published: {
@@ -4189,6 +4676,95 @@ export interface components {
       /** Format: double */
       y: number;
     };
+    /** @description The rows a test runs on. */
+    TestData: {
+      playground?: components["schemas"]["TestPlayground"] | null;
+      profile: components["schemas"]["PlaygroundProfile"];
+      /**
+       * @description Hex: the same model, size, profile, seed and generator give the same
+       *     rows.
+       */
+      seed: string;
+      size: components["schemas"]["PlaygroundSize"];
+    };
+    /** @description The draft a test is of. */
+    TestDraft: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+    };
+    /**
+     * @description What the publish gate of an organization requiring a passing test
+     *     (`organizations.require_passing_test`) says of a draft as it is: the
+     *     publish dialog shows it, publishing enforces it ([`gate`]).
+     */
+    TestGate: {
+      /**
+       * @description Tests can run here (playgrounds on this server, the database on
+       *     their Postgres major).
+       */
+      available: boolean;
+      /** @description Nothing to test: no base version (no rows yet), or nothing to run. */
+      nothing_to_test: boolean;
+      /**
+       * Format: uuid
+       * @description The newest test of exactly the migration publishing would run that
+       *     counts: passed up and down on rows (or its undeclared loss
+       *     acknowledged).
+       */
+      passing?: string | null;
+      /** @description Why it holds publishing, when it does. */
+      reason?: string | null;
+      /** @description The organization publishes only migrations that passed a test. */
+      required: boolean;
+    };
+    /** @description A playground a test ran on a copy of. */
+    TestPlayground: {
+      /**
+       * Format: uuid
+       * @description `null` once that playground is deleted.
+       */
+      id?: string | null;
+      /** @description `Alice's playground (small, seed 7f3a91)`. */
+      label: string;
+    };
+    /** @description What a running test is doing. */
+    TestProgress: {
+      build?: components["schemas"]["BuildProgress"] | null;
+      direction?: components["schemas"]["MigrationDirection"] | null;
+      /** @description The phases done so far. */
+      done: components["schemas"]["PhaseDone"][];
+      phase?: components["schemas"]["MigrationTestPhase"] | null;
+      stage: components["schemas"]["TestStage"];
+      statement?: number | null;
+      statements?: number | null;
+      /** @description Why it waits for room, when it does. */
+      waiting?: string | null;
+    };
+    /**
+     * @description Where a test is, while it is not over.
+     * @enum {string}
+     */
+    TestStage: "queued" | "building" | "testing";
+    /** @description A test's report in a line, for lists. */
+    TestSummary: {
+      /**
+       * @description Findings of data that does not come back, and of those, the ones no
+       *     flagged statement explains.
+       */
+      data_loss: number;
+      /** @description `null` when no down migration ran. */
+      down_statements?: number | null;
+      /** Format: int64 */
+      duration_ms: number;
+      failed?: components["schemas"]["FailedStatement"] | null;
+      headline: string;
+      /** Format: int64 */
+      rows: number;
+      unexpected_loss: number;
+      up_statements: number;
+      verdict: components["schemas"]["MigrationTestVerdict"];
+    };
     /** @description Up to when the caller read a thread. */
     ThreadRead: {
       /** Format: date-time */
@@ -4274,6 +4850,8 @@ export interface components {
        */
       approvals_required?: number | null;
       name?: string | null;
+      /** @description Whether publishing a draft needs a passing migration test. */
+      require_passing_test?: boolean | null;
       /** @description Changing it changes every link to the organization. */
       slug?: string | null;
     };
@@ -6651,7 +7229,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it) */
+      /** @description `draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it), `passing_test_required` (the organization requires a passing migration test of this text) */
       409: {
         headers: {
           [name: string]: unknown;
@@ -7432,6 +8010,252 @@ export interface operations {
       };
       /** @description `validation`: a number below 1 */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_migration_tests: {
+    parameters: {
+      query?: {
+        /** @description A draft's tests. */
+        draft?: string;
+        /** @description The tests of the migration from `from` to `to`. */
+        from?: number;
+        to?: number;
+        /**
+         * @description The tests of the migration version `version` was written or
+         *     imported as.
+         */
+        version?: number;
+      };
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MigrationTest"][];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_migration_test: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateMigrationTest"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MigrationTest"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_changed` (look at the migration again), `draft_not_open`, `test_queue_full` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`; `compile_failed`, `nothing_to_migrate`, `migration_too_long`, `migration_unreadable`, `no_written_migration`, `no_previous_version`, `no_version`, `major_unsupported` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_migration_test: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MigrationTest"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  acknowledge_migration_test: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MigrationTest"];
+        };
+      };
+      /** @description `own_draft`: the draft's author or an editor, where the organization requires a passing test (someone else, or an admin) */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `nothing_to_acknowledge`: it does not need it */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  cancel_migration_test: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MigrationTest"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `test_finished`: it ran already */
+      409: {
         headers: {
           [name: string]: unknown;
         };

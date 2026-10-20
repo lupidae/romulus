@@ -14,6 +14,9 @@
 # plain copy. The id is a playground's UUID, checked here too.
 #
 #   play-files create|snapshot|restore|clean|destroy <id>
+#   play-files fork <id> <into>   copy a stopped playground's cluster into
+#                                 another's (created): a migration test on
+#                                 someone's rows, never touching theirs
 #   play-files fstype
 #   play-files space          "<available> <size>" of the volume, in bytes
 #   play-files usage <id>     bytes used by the playground's data and copy
@@ -37,6 +40,22 @@ esac
 
 pg=/play/pg/$id
 run=/play/run/$id
+
+if [ "$op" = fork ]; then
+    into=${3:-}
+    case "$into" in
+        *[!0-9a-f-]* | "") fail "not a playground id: '$into'" ;;
+    esac
+    [ "${#into}" -eq 36 ] || fail "not a playground id: '$into'"
+    [ "$into" != "$id" ] || fail "a playground cannot be copied into itself"
+    [ -s "$pg/data/PG_VERSION" ] || fail "no cluster to copy"
+    [ ! -e "$pg/data/postmaster.pid" ] || fail "the cluster is running"
+    [ -d "/play/pg/$into/data" ] || fail "no playground to copy into"
+    [ ! -s "/play/pg/$into/data/PG_VERSION" ] || fail "the playground to copy into has a cluster"
+    rm -rf "/play/pg/$into/data"
+    cp -a --reflink=auto "$pg/data" "/play/pg/$into/data"
+    exit 0
+fi
 
 case "$op" in
 create)

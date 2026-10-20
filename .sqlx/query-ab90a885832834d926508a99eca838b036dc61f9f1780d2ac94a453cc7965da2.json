@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE organizations\n         SET name = coalesce($2, name), slug = coalesce($3, slug),\n             approvals_required = coalesce($4, approvals_required)\n         WHERE id = $1 RETURNING slug, name, approvals_required",
+  "query": "UPDATE organizations\n         SET name = coalesce($2, name), slug = coalesce($3, slug),\n             approvals_required = coalesce($4, approvals_required),\n             require_passing_test = coalesce($5, require_passing_test)\n         WHERE id = $1 RETURNING slug, name, approvals_required, require_passing_test",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "approvals_required"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "require_passing_test",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "require_passing_test"
+          }
+        }
       }
     ],
     "parameters": {
@@ -42,14 +53,16 @@
         "Uuid",
         "Text",
         "Text",
-        "Int2"
+        "Int2",
+        "Bool"
       ]
     },
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "21d07f00e31ccd09447ee0ed3c748812e28116a65afeb09fc036ae5199d25064"
+  "hash": "ab90a885832834d926508a99eca838b036dc61f9f1780d2ac94a453cc7965da2"
 }

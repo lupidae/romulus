@@ -489,6 +489,7 @@ async fn a_version_is_stored_only_if_its_draft_is_still_open(db: PgPool) {
             expected_base: None,
             publishes_draft: Some(draft_id(&draft)),
             approvals: None,
+            test_override: None,
             migration_sql: None,
             compiled_on: None,
             discussion: Vec::new(),
