@@ -929,9 +929,8 @@ it: `/app/<org>/<db>/time-machine`, from the history page and from every version
 
 ## Self-host and open source (decided 2026-10-19, built: task OSS)
 
-docs/business-model.md has the decisions (AGPL-3.0, a CLA, one organization per self-hosted
-install, `ee/` later, email + password sign-in for self-hosters); this is what the build
-decided on top.
+The decisions: AGPL-3.0, a CLA, one organization per self-hosted install, `ee/` later,
+email + password sign-in for self-hosters. This is what the build decided on top.
 
 - **Two sign-in methods, one session layer.** `ROMULUS_AUTH` lists `oidc` (Zitadel: the hosted
   service, unchanged) and `password` (romulus's own accounts: the self-host bundle). Both end in

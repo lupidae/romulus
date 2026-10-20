@@ -5,8 +5,8 @@ them, reviews diffs and designs the next version together (SQL and table graph,
 live cursors). The spec is [docs/MVP.md](docs/MVP.md); read it before a feature.
 remus (the CLI twin, `remus-core` on crates.io) is where the schema model lives.
 Open source (AGPL-3.0-only, `LICENSE`, `NOTICE`; contributions under `CLA.md`);
-hosted by lupidae and self-hostable for one organization
-([docs/business-model.md](docs/business-model.md), `deploy/self-host`).
+hosted by lupidae and self-hostable for one organization (`deploy/self-host`,
+[docs/self-host](docs/self-host)).
 
 ## Repo map
 

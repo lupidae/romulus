@@ -2,8 +2,7 @@
 
 This directory will hold romulus's paid features, under the license in
 `ee/LICENSE` (source available, production use under a commercial agreement),
-not the AGPL that covers the rest of the repository. docs/business-model.md
-has the decisions.
+not the AGPL that covers the rest of the repository.
 
 **It is empty for now.** Planned:
 
@@ -17,8 +16,7 @@ Priority support is a paid feature too, but it is a service, not code.
 ## The boundary
 
 - **The AGPL core never depends on `ee/`.** Building and running romulus
-  without this directory gives the full open-source product (docs/business-model.md,
-  "Free self-hosted tier"). No crate or package outside `ee/` imports
+  without this directory gives the full open-source product. No crate or package outside `ee/` imports
   anything from it.
 - **`ee/` builds on the core**, through the core's public interfaces: an
   enterprise crate depends on core crates, never the reverse.
