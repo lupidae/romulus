@@ -398,13 +398,19 @@ async fn a_developer_creates_a_playground_of_a_version_and_it_builds(db: PgPool)
     let created = create(&app, &team, &team.developer, json!({ "seed": "7f3a91" })).await;
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.json());
     let body = created.json();
-    assert_eq!(body["status"], "building");
+    // The fake host builds at once, so on a fast machine the build can be
+    // done before the answer is written.
+    assert!(
+        body["status"] == "building" || body["status"] == "ready",
+        "{body}"
+    );
     assert_eq!(body["version"], 1);
     assert_eq!(body["seed"], "7f3a91");
     assert_eq!(body["size"], "small");
     let id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
 
     let id = {
+        let mut built = false;
         for _ in 0..100 {
             let got = app
                 .as_user(&team.reviewer)
@@ -418,10 +424,12 @@ async fn a_developer_creates_a_playground_of_a_version_and_it_builds(db: PgPool)
                 );
                 assert_eq!(got["generator"], "fake-1");
                 assert_eq!(got["live"]["running"], true);
+                built = true;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        assert!(built, "the playground never became ready");
         id
     };
     {
