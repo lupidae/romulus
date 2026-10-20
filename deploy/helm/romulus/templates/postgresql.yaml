@@ -1,0 +1,171 @@
+{{- if not .Values.postgresql.external.enabled -}}
+{{- $name := include "romulus.postgresqlName" . -}}
+{{- $pg := .Values.postgresql -}}
+# The application database: the only state worth keeping (with the Secret).
+# Never exposed outside the cluster; the NetworkPolicy lets only the API and
+# the backup and setup jobs reach it. Postgres runs as its own user (999)
+# straight away: the image's entrypoint needs root only to chown, and the
+# volume's group (fsGroup) already makes it writable.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "postgresql") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  revisionHistoryLimit: 3
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      {{- include "romulus.selectorLabels" (dict "root" . "component" "postgresql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "romulus.podLabels" (dict "root" . "component" "postgresql") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "romulus.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "romulus.podSecurity" (dict "uid" 999) | nindent 8 }}
+      # A smart shutdown: sessions end, then a checkpoint.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: {{ include "romulus.postgresqlImage" . }}
+          imagePullPolicy: {{ $pg.image.pullPolicy }}
+          args:
+            - postgres
+            {{- range $key, $value := $pg.settings }}
+            - -c
+            - {{ printf "%s=%v" $key $value | quote }}
+            {{- end }}
+          env:
+            - name: POSTGRES_USER
+              value: romulus
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "romulus.secretName" . }}
+                  key: postgres-password
+            - name: POSTGRES_DB
+              value: romulus
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          # Over TCP: during its first start the image runs a temporary
+          # server on the socket only.
+          startupProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, romulus, -d, romulus]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, romulus, -d, romulus]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, romulus, -d, romulus]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "romulus.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml $pg.resources | nindent 12 }}
+          volumeMounts:
+            # 18's image keeps its data in /var/lib/postgresql/18/docker,
+            # its VOLUME one level up.
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+            {{- if .Values.backup.enabled }}
+            # The dumps, beside the database they restore: `kubectl cp` them
+            # off, `restore.sh` reads them (docs/self-host/kubernetes.md).
+            - name: backups
+              mountPath: /backups
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $pg.shmSize }}
+        {{- if .Values.backup.enabled }}
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "romulus.backupClaim" . }}
+        - name: scripts
+          configMap:
+            name: {{ include "romulus.fullname" . }}-backup
+            defaultMode: 0555
+        {{- end }}
+        {{- if not $pg.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with $pg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if $pg.persistence.enabled }}
+  # Kept when the release is uninstalled (persistentVolumeClaimRetentionPolicy).
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "romulus.selectorLabels" (dict "root" . "component" "postgresql") | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $pg.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pg.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "postgresql") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "romulus.selectorLabels" (dict "root" . "component" "postgresql") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+{{- end }}

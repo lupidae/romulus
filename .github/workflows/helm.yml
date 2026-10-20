@@ -1,0 +1,199 @@
+name: Helm
+
+# The Kubernetes chart (deploy/helm/romulus, docs/self-host/kubernetes.md).
+#   lint     every pull request touching it, every run: helm lint, the
+#            values files rendered and checked by kubeconform (strict,
+#            Kubernetes 1.30 and the newest schemas), what the chart must
+#            refuse (deploy/helm/test/lint.sh). Nothing else runs on a pull
+#            request.
+#   e2e      by hand (workflow_dispatch, e2e: true): a k3d cluster, install,
+#            upgrade, restore, uninstall (deploy/helm/test/e2e.sh), on the
+#            images the Images workflow published for the dispatched commit.
+#   publish  a release tag vX.Y.Z (RELEASING.md): Chart.yaml must say X.Y.Z
+#            (version and appVersion); it waits for the Images workflow to
+#            publish X.Y.Z from this commit, then pushes the chart to
+#            oci://ghcr.io/<owner>/charts/romulus, its images' registry
+#            ghcr.io/<owner> (a fork publishes to its own). One tag
+#            publishes everything.
+on:
+  pull_request:
+    paths:
+      - "deploy/helm/**"
+      - "deploy/self-host/backup.sh"
+      - ".github/workflows/helm.yml"
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: "Run the k3d end-to-end test"
+        type: boolean
+        default: true
+      tag:
+        description: "The images' tag (default: the dispatched commit's sha)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helm-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  HELM_VERSION: v4.3.1
+  KUBECONFORM_VERSION: v0.8.0
+  K3D_VERSION: v5.9.0
+
+jobs:
+  lint:
+    name: lint, template, kubeconform
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install kubeconform and shellcheck
+        run: |
+          curl -fsSL -o /tmp/kubeconform-linux-amd64.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          curl -fsSL -o /tmp/kubeconform.txt \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS"
+          (cd /tmp && grep ' kubeconform-linux-amd64.tar.gz$' kubeconform.txt | sha256sum -c -)
+          sudo tar -xzf /tmp/kubeconform-linux-amd64.tar.gz -C /usr/local/bin kubeconform
+          command -v shellcheck || sudo apt-get install -y shellcheck
+      - run: deploy/helm/test/lint.sh
+
+  e2e:
+    name: k3d end to end
+    needs: lint
+    if: github.event_name == 'workflow_dispatch' && inputs.e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install k3d
+        run: |
+          curl -fsSL -o /tmp/k3d-linux-amd64 "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          curl -fsSL -o /tmp/k3d.txt "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/checksums.txt"
+          (cd /tmp && grep ' _dist/k3d-linux-amd64$' k3d.txt | sed 's| _dist/| |' | sha256sum -c -)
+          sudo install -m 0755 /tmp/k3d-linux-amd64 /usr/local/bin/k3d
+      - name: Install, upgrade, restore, uninstall
+        env:
+          ROMULUS_REGISTRY: ghcr.io/${{ github.repository_owner }}
+          ROMULUS_IMAGE_TAG: ${{ inputs.tag || github.sha }}
+        run: |
+          export ROMULUS_REGISTRY=${ROMULUS_REGISTRY,,}
+          deploy/helm/test/e2e.sh
+
+  publish:
+    name: publish the chart
+    needs: lint
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # The images build meanwhile (the Images workflow, same tag).
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Version, from the tag and Chart.yaml
+        id: meta
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] ||
+            { echo "::error::$GITHUB_REF_NAME is not vX.Y.Z"; exit 1; }
+          chart=$(sed -n 's/^version: //p' deploy/helm/romulus/Chart.yaml)
+          app=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' deploy/helm/romulus/Chart.yaml)
+          if [ "$chart" != "$version" ] || [ "$app" != "$version" ]; then
+            echo "::error::Chart.yaml says version $chart, appVersion $app: bump both to $version before tagging (RELEASING.md)"
+            exit 1
+          fi
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "registry=ghcr.io/$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # A chart whose images do not exist would install nothing: wait until
+      # the Images workflow (the same tag) has pushed X.Y.Z of each, built
+      # from this commit (its revision label), or stop when that run fails.
+      - name: Wait for the release's images
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          REGISTRY: ${{ steps.meta.outputs.registry }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          revision() {
+            docker buildx imagetools inspect "$REGISTRY/$1" --format '{{json .Image}}' 2>/dev/null |
+              jq -r 'if has("linux/amd64") then .["linux/amd64"] else . end
+                     | .config.Labels["org.opencontainers.image.revision"] // empty'
+          }
+          images="romulus-api:$VERSION romulus-sandbox:$VERSION romulus-sandbox:$VERSION-pg15
+                  romulus-sandbox:$VERSION-pg16 romulus-sandbox:$VERSION-pg18"
+          deadline=$((SECONDS + 7200))
+          after_success=0
+          while :; do
+            missing=""
+            for image in $images; do
+              [ "$(revision "$image")" = "$GITHUB_SHA" ] || missing="$missing $image"
+            done
+            if [ -z "$missing" ]; then
+              echo "all published from $GITHUB_SHA"
+              break
+            fi
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow images.yml --event push \
+              --branch "$GITHUB_REF_NAME" --limit 1 --json status,conclusion,url \
+              --jq '.[0] | "\(.status) \(.conclusion) \(.url)"' || true)
+            case $run in
+            "completed success "*)
+              after_success=$((after_success + 1))
+              if [ "$after_success" -gt 3 ]; then
+                echo "::error::the Images run succeeded but did not publish:$missing ($run)"
+                exit 1
+              fi
+              ;;
+            completed\ *)
+              echo "::error::the Images run for $GITHUB_REF_NAME did not succeed: $run"
+              exit 1
+              ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::still not published after 2 hours:$missing"
+              exit 1
+            fi
+            echo "waiting for:$missing (${run:-no Images run yet})"
+            sleep 60
+          done
+      - name: Package
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          REGISTRY: ${{ steps.meta.outputs.registry }}
+        run: |
+          # A fork's chart names the fork's images and repository.
+          sed -i "s|^  registry: ghcr.io/lupidae$|  registry: $REGISTRY|" deploy/helm/romulus/values.yaml
+          grep -q "^  registry: $REGISTRY$" deploy/helm/romulus/values.yaml
+          sed -i "s|https://github.com/lupidae/romulus$|https://github.com/$GITHUB_REPOSITORY|" deploy/helm/romulus/Chart.yaml
+          helm package deploy/helm/romulus --destination dist
+          test -f "dist/romulus-$VERSION.tgz"
+      - name: Push
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          REGISTRY: ${{ steps.meta.outputs.registry }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "dist/romulus-$VERSION.tgz" "oci://$REGISTRY/charts" | tee push.log
+          echo "Pushed \`oci://$REGISTRY/charts/romulus:$VERSION\`" >> "$GITHUB_STEP_SUMMARY"

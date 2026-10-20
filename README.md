@@ -64,6 +64,17 @@ organization per install. Read [docs/self-host/install.md](docs/self-host/instal
 first; upgrades, backups and hardening are next to it in
 [docs/self-host](docs/self-host).
 
+### Run it on Kubernetes
+
+```bash
+helm install romulus oci://ghcr.io/lupidae/charts/romulus \
+  -n romulus --create-namespace --set host=romulus.example.com
+```
+
+The same images and settings as the installer's, playgrounds aside.
+[docs/self-host/kubernetes.md](docs/self-host/kubernetes.md) is the guide:
+TLS, an external Postgres, upgrades, backups.
+
 ### Work on romulus
 
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up a development

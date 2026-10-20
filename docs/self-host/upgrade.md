@@ -1,8 +1,8 @@
 # Upgrade romulus
 
-Each release publishes its images under its version, and an `install.sh`
-whose default version is that release. `ROMULUS_VERSION` in `.env` is what
-runs.
+Each release, tagged `vX.Y.Z`, publishes its images as `X.Y.Z`, `X.Y`
+and `latest` ([install.md](install.md#versions)). `ROMULUS_VERSION` in
+`.env` is what runs: a version you pinned, or `latest`.
 
 ## Steps
 
@@ -16,8 +16,8 @@ runs.
 3. Run:
 
    ```bash
-   ./install.sh upgrade            # to this script's version
-   ./install.sh upgrade 1.4.0      # or to any published version
+   ./install.sh upgrade 1.4.0      # to a published version
+   ./install.sh upgrade            # to the script's default: latest, the newest release
    ```
 
 ## What it does

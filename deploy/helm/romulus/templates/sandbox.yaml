@@ -1,0 +1,163 @@
+{{- $sb := .Values.sandbox -}}
+{{- range $major := splitList "," (include "romulus.majors" .) }}
+{{- $name := include "romulus.sandboxName" (dict "root" $ "major" $major) }}
+{{- $component := printf "sandbox-%s" $major }}
+---
+# Where SQL compiles for databases on Postgres {{ $major }} (crates/romulus-sandbox,
+# deploy/sandbox/README.md): every compile is rolled back. The image caps
+# each Postgres process's private memory at 128 MB (its entrypoint), each
+# backend raises its own OOM score to 1000 (PG_OOM_ADJUST_*), and Guaranteed
+# QoS gives the postmaster -997: a compile that runs out of memory fails or
+# kills its backend, never the server. Only the API reaches it; it reaches
+# nothing (NetworkPolicy).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  revisionHistoryLimit: 3
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      {{- include "romulus.selectorLabels" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "romulus.podLabels" (dict "root" $ "component" $component) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "romulus.serviceAccountName" $ }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "romulus.podSecurity" (dict "uid" 999) | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: sandbox
+          image: {{ include "romulus.sandboxImage" (dict "root" $ "major" $major) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args: [postgres,
+                 -c, synchronous_commit=off,
+                 -c, wal_level=minimal, -c, max_wal_senders=0, -c, max_wal_size=128MB,
+                 -c, min_wal_size=32MB, -c, checkpoint_timeout=60s,
+                 -c, shared_buffers=32MB, -c, work_mem=4MB, -c, maintenance_work_mem=32MB,
+                 -c, max_connections=60, -c, max_locks_per_transaction=2048]
+          env:
+            - name: POSTGRES_USER
+              value: sandbox_admin
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "romulus.secretName" $ }}
+                  key: sandbox-password
+            - name: POSTGRES_DB
+              value: postgres
+            - name: PG_OOM_ADJUST_FILE
+              value: /proc/self/oom_score_adj
+            - name: PG_OOM_ADJUST_VALUE
+              value: "1000"
+            - name: ROMULUS_SANDBOX_MAX_DATA_KB
+              value: {{ $sb.maxDataKb | int | toString | quote }}
+            {{- if ne $major "18" }}
+            # A directory in the volume, not its root (lost+found…). 18's
+            # image already keeps its data below the mount (18/docker).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            {{- end }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          startupProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, sandbox_admin, -d, postgres]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, sandbox_admin, -d, postgres]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, sandbox_admin, -d, postgres]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "romulus.containerSecurity" $ | nindent 12 }}
+          resources:
+            {{- toYaml $sb.resources | nindent 12 }}
+          volumeMounts:
+            # The image's own VOLUME path, so no anonymous volume of the
+            # runtime's sits over the data (17 and older: …/data; 18: one up).
+            - name: data
+              mountPath: {{ if eq $major "18" }}/var/lib/postgresql{{ else }}/var/lib/postgresql/data{{ end }}
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if not $sb.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+      {{- with $sb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sb.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if $sb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "romulus.selectorLabels" (dict "root" $ "component" $component) | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $sb.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $sb.persistence.size }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" $ "component" $component) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "romulus.selectorLabels" (dict "root" $ "component" $component) | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+{{- end }}

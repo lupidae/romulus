@@ -5,6 +5,8 @@ sets it up: it checks the host, asks a few questions, writes
 `deploy/self-host/.env`, starts the containers and creates the first admin.
 Re-run it any time: it converges, and it never replaces a secret.
 
+On Kubernetes, use the Helm chart instead: [kubernetes.md](kubernetes.md).
+
 The other pages:
 
 - [upgrade.md](upgrade.md): moving to a new release, and back.
@@ -12,6 +14,7 @@ The other pages:
 - [configuration.md](configuration.md): every setting, SMTP examples, the admin commands.
 - [playgrounds.md](playgrounds.md): the host setup playgrounds need.
 - [hardening.md](hardening.md): what to check before people rely on it.
+- [kubernetes.md](kubernetes.md): the Helm chart, for a Kubernetes cluster.
 
 ## Requirements
 
@@ -50,6 +53,23 @@ command (`upgrade`, `backup`, `restore`) runs from it.
 
 The script is not meant to be piped from `curl` into `bash`: it asks
 questions, and it runs Docker as you, so read it first.
+
+### Versions
+
+Releases are tagged `vX.Y.Z` on GitHub (the Releases page has their
+notes). Each publishes its images as `X.Y.Z`, as `X.Y` (the newest
+`X.Y.*`) and as `latest` (the newest release). `install.sh` installs
+`latest` unless you name a version, and writes what it installed to `.env`
+(`ROMULUS_VERSION`). Pin one, recommended for anything people rely on:
+
+```bash
+git clone https://github.com/lupidae/romulus.git
+cd romulus && git checkout v0.1.0 && cd deploy/self-host
+./install.sh --version 0.1.0
+```
+
+The script from the release's tag goes with its images. Later,
+`./install.sh upgrade 0.2.0` moves to another one ([upgrade.md](upgrade.md)).
 
 ### What it asks
 

@@ -1,0 +1,36 @@
+{{- $fullname := include "romulus.fullname" . -}}
+{{- if .Values.serviceAccount.create }}
+# No pod talks to the Kubernetes API: no token is mounted, no role bound.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "romulus.serviceAccountName" . }}
+  labels:
+    {{- include "romulus.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+{{- end }}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- $components := list "api" }}
+{{- if not .Values.postgresql.external.enabled }}
+{{- $components = append $components "postgresql" }}
+{{- end }}
+{{- range $components }}
+---
+# One replica: a drain waits until you move it yourself.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-{{ . }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" $ "component" .) | nindent 4 }}
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "romulus.selectorLabels" (dict "root" $ "component" .) | nindent 6 }}
+{{- end }}
+{{- end }}

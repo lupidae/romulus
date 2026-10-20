@@ -1,0 +1,17 @@
+# A managed Postgres, its password from values (URL-encoded by the chart),
+# behind a LoadBalancer Service with no Ingress.
+publicUrl: https://romulus.example.com
+ingress:
+  enabled: false
+api:
+  service:
+    type: LoadBalancer
+postgresql:
+  external:
+    enabled: true
+    host: db.internal.example.com
+    port: 6432
+    database: romulus_prod
+    user: romulus@prod
+    sslmode: verify-full
+    password: "p@ss word/with:odd chars+"

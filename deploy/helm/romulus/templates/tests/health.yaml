@@ -1,0 +1,40 @@
+# `helm test`: the API answers /api/health with its database ok.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "romulus.fullname" . }}-test-health
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "romulus.serviceAccountName" . }}
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    {{- include "romulus.podSecurity" (dict "uid" 10001) | nindent 4 }}
+  containers:
+    - name: health
+      image: {{ include "romulus.apiImage" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command:
+        - bash
+        - -c
+        - |
+          body=$(curl -fsS --max-time 10 "http://{{ include "romulus.fullname" . }}-api:{{ .Values.api.service.port }}/api/health") || exit 1
+          echo "$body"
+          case $body in *'"database":"ok"'*) ;; *) exit 1 ;; esac
+      securityContext:
+        {{- include "romulus.containerSecurity" . | nindent 8 }}
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 64Mi

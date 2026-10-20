@@ -1,0 +1,547 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "romulus chart values",
+  "description": "docs/self-host/kubernetes.md describes each value.",
+  "type": "object",
+  "additionalProperties": false,
+  "definitions": {
+    "resources": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "object"
+        },
+        "limits": {
+          "type": "object"
+        },
+        "claims": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "existingClaim": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "$ref": "#/definitions/pullPolicy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pullPolicy": {
+      "type": "string",
+      "enum": [
+        "Always",
+        "IfNotPresent",
+        "Never"
+      ]
+    },
+    "scheduling": {
+      "nodeSelector": {
+        "type": "object"
+      },
+      "tolerations": {
+        "type": "array"
+      },
+      "affinity": {
+        "type": "object"
+      }
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object"
+    },
+    "host": {
+      "description": "The name people open romulus at: the Ingress's host, and https://<host> unless publicUrl says otherwise.",
+      "type": "string",
+      "pattern": "^$|^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$"
+    },
+    "publicUrl": {
+      "description": "The browser's origin, without a path. Default: https://<host>.",
+      "type": "string",
+      "pattern": "^$|^https?://"
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "$ref": "#/definitions/pullPolicy"
+        }
+      },
+      "additionalProperties": false
+    },
+    "imagePullSecrets": {
+      "type": "array"
+    },
+    "existingSecret": {
+      "description": "A Secret with postgres-password and sandbox-password; empty: generated once and kept.",
+      "type": "string"
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "methods": {
+          "description": "password, or password,oidc.",
+          "type": "string",
+          "pattern": "^\\s*(password|oidc)\\s*(,\\s*(password|oidc)\\s*)*$"
+        },
+        "signup": {
+          "type": "string",
+          "enum": [
+            "invite",
+            "open"
+          ]
+        },
+        "oidc": {
+          "type": "object",
+          "properties": {
+            "issuer": {
+              "type": "string",
+              "pattern": "^$|^https?://"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "clientSecret": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "existingSecretKey": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "smtp": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": [
+            "string",
+            "integer"
+          ],
+          "pattern": "^$|^[0-9]{1,5}$",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "tls": {
+          "type": "string",
+          "enum": [
+            "",
+            "starttls",
+            "implicit",
+            "none"
+          ]
+        },
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "existingSecretKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "admin": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "pattern": "^$|^[^@\\s]+@[^@\\s]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "organization": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]+(-[a-z0-9]+)*$",
+          "maxLength": 63
+        },
+        "setupJob": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "api": {
+      "type": "object",
+      "properties": {
+        "trustedProxies": {
+          "description": "IPs and CIDRs, comma-separated, whose X-Forwarded-For gives the client's address.",
+          "type": "string"
+        },
+        "logLevel": {
+          "type": "string"
+        },
+        "extraEnv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ClusterIP",
+                "NodePort",
+                "LoadBalancer"
+              ]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "additionalProperties": false
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 30
+        }
+      },
+      "additionalProperties": false
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string"
+            },
+            "clusterIssuer": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "postgresql": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          }
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "shmSize": {
+          "type": "string"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "external": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "database": {
+              "type": "string",
+              "minLength": 1
+            },
+            "user": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sslmode": {
+              "type": "string",
+              "enum": [
+                "disable",
+                "allow",
+                "prefer",
+                "require",
+                "verify-ca",
+                "verify-full"
+              ]
+            },
+            "password": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "existingSecretPasswordKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "existingSecretUrlKey": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sandbox": {
+      "type": "object",
+      "properties": {
+        "extraMajors": {
+          "description": "Other Postgres majors to compile for: 15, 16, 18 (17 always runs).",
+          "type": "array",
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "enum": [
+              15,
+              16,
+              18,
+              "15",
+              "16",
+              "18"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "maxDataKb": {
+          "description": "Each Postgres process's private memory cap in the sandboxes, KiB (128 MB by default).",
+          "type": "integer",
+          "minimum": 65536
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeZone": {
+          "type": "string",
+          "minLength": 1
+        },
+        "keepDays": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "beforeUpgrade": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "string"
+        },
+        "persistence": {
+          "$ref": "#/definitions/persistence"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      },
+      "additionalProperties": false
+    },
+    "playgrounds": {
+      "description": "Not supported on Kubernetes yet (docs/self-host/kubernetes.md, \"Playgrounds\").",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "apiAllowFrom": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        }
+      },
+      "additionalProperties": false
+    },
+    "commonLabels": {
+      "$ref": "#/definitions/stringMap"
+    }
+  }
+}

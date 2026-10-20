@@ -1,0 +1,63 @@
+{{- $fullname := include "romulus.fullname" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $url := include "romulus.publicUrl" . -}}
+{{- $admin := .Values.admin -}}
+romulus {{ include "romulus.version" . }} is {{ if .Release.IsInstall }}installing{{ else }}upgrading{{ end }} in the namespace {{ $ns }}.
+
+URL: {{ $url }}/app/
+{{- if .Values.ingress.enabled }}
+  through the Ingress {{ $fullname }} (host {{ .Values.host }}{{ if .Values.ingress.tls.enabled }}, TLS from the Secret {{ .Values.ingress.tls.secretName | default (printf "%s-tls" $fullname) }}{{ end }}).
+{{- else }}
+  No Ingress: reach the Service {{ $fullname }}-api yourself, e.g.
+    kubectl -n {{ $ns }} port-forward svc/{{ $fullname }}-api 8080:{{ .Values.api.service.port }}
+  (publicUrl must then be http://localhost:8080).
+{{- end }}
+
+1. Wait until it is ready, then check its health (database, sandbox: "ok"):
+
+  kubectl -n {{ $ns }} rollout status deploy/{{ $fullname }}-api --timeout=10m
+  kubectl -n {{ $ns }} exec deploy/{{ $fullname }}-api -- curl -fsS http://127.0.0.1:8080/api/health
+{{- if .Values.admin.setupJob }}
+
+2. The first admin: the setup Job printed a one-time link (24 hours) that
+   sets {{ $admin.email }}'s password:
+
+  kubectl -n {{ $ns }} logs job/{{ $fullname }}-setup
+{{- else }}
+
+2. Create the first admin and the organization. It prints a one-time link
+   (24 hours) that sets the admin's password:
+
+  kubectl -n {{ $ns }} exec deploy/{{ $fullname }}-api -- romulus-api setup \
+    --email {{ $admin.email | default "you@example.com" | quote }} --name {{ $admin.name | default "Your Name" | quote }} --org {{ $admin.organization | default "Your organization" | quote }}{{ with $admin.slug }} --slug {{ . | quote }}{{ end }}
+{{- end }}
+
+   A fresh link later (1 hour), for any account:
+
+  kubectl -n {{ $ns }} exec deploy/{{ $fullname }}-api -- romulus-api password-link EMAIL
+{{- if not .Values.smtp.host }}
+
+Mail is off (no smtp.host): copy invitation links by hand, and make password
+links with the command above.
+{{- end }}
+{{- if and .Values.ingress.enabled (not .Values.api.trustedProxies) }}
+
+Note: api.trustedProxies is empty, so every visitor counts as your ingress
+controller for per-client limits (sign-in attempts). Set it to the
+addresses the controller's pods connect from (docs/self-host/kubernetes.md,
+"Client addresses").
+{{- end }}
+{{- if and (hasPrefix "http://" $url) (not (regexMatch "^http://(localhost|127\\.[0-9.]+|\\[::1\\])(:[0-9]+)?$" $url)) }}
+
+Warning: {{ $url }} is http: passwords and session cookies travel in clear.
+Serve romulus over https.
+{{- end }}
+{{- if .Values.backup.enabled }}
+
+Backups: a dump every day ({{ .Values.backup.schedule }}, {{ .Values.backup.timeZone }}) into the volume
+{{ include "romulus.backupClaim" . }}{{ if .Values.backup.beforeUpgrade }}, and one before each upgrade{{ end }}. Copy them off the cluster.
+{{- end }}
+
+Uninstalling keeps the data: the volumes and the Secret {{ include "romulus.secretName" . }}.
+Playgrounds are not available on Kubernetes yet.
+Guide: https://github.com/lupidae/romulus/blob/main/docs/self-host/kubernetes.md

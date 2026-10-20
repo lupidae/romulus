@@ -1,0 +1,277 @@
+# romulus on Kubernetes (docs/self-host/kubernetes.md). The same images and
+# settings as the compose bundle (deploy/self-host/compose.yaml): the API
+# (one instance, serving the web app at /app), a sandbox Postgres per major
+# SQL compiles on (17 always), the app's database, a daily dump. One
+# organization per install, made by `romulus-api setup` (NOTES.txt prints it).
+
+# -- The name people open romulus at, e.g. romulus.example.com: the Ingress's
+# host, and the public URL (https://<host>) unless publicUrl says otherwise.
+host: ""
+# -- The browser's origin, without a path: https://romulus.example.com, or
+# http://localhost:8080 for a trial through `kubectl port-forward`. Every
+# unsafe request must come with this Origin, cookies are Secure when it is
+# https, and links in emails start with it. Default: https://<host>.
+publicUrl: ""
+
+image:
+  # -- Where romulus-api and romulus-sandbox come from. A release of the
+  # chart published from a fork names the fork's registry.
+  registry: ghcr.io/lupidae
+  # -- The images' tag. Default: the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# -- A Secret of yours holding `postgres-password` (the bundled database's
+# superuser) and `sandbox-password` (the sandboxes' admin), each 16
+# characters or more. Empty: the chart generates both once, keeps them
+# across upgrades and uninstalls (`helm.sh/resource-policy: keep`), and
+# never replaces them.
+existingSecret: ""
+
+auth:
+  # -- Sign-in methods (ROMULUS_AUTH): `password`, or `password,oidc` for
+  # single sign-on beside it. The first admin is a password account
+  # (`romulus-api setup`), so password stays.
+  methods: password
+  # -- Who may create an account (ROMULUS_SIGNUP): `invite` (from an
+  # invitation link, with the invited address) or `open` (anyone who reaches
+  # the URL, proving the address by email: needs smtp).
+  signup: invite
+  # Your OpenID Connect provider (with `oidc` in methods): all three, or none.
+  # Redirect URI: <publicUrl>/api/auth/callback.
+  oidc:
+    issuer: ""
+    clientId: ""
+    # -- Stored in the chart's `<release>-env` Secret. Or name a Secret of
+    # yours: existingSecret, its key existingSecretKey.
+    clientSecret: ""
+    existingSecret: ""
+    existingSecretKey: oidc-client-secret
+
+# Mail (ROMULUS_SMTP_*): off without a host. With it, invitations, sign-up
+# links and password resets are emailed; without it, invitation links are
+# copied by hand and an admin makes password links (`romulus-api
+# password-link EMAIL`). docs/self-host/configuration.md has provider examples.
+smtp:
+  host: ""
+  # -- Default: 587 for starttls, 465 for implicit.
+  port: ""
+  # -- starttls (default), implicit, or none (a relay on loopback only).
+  tls: ""
+  username: ""
+  # -- Stored in the chart's `<release>-env` Secret; or existingSecret.
+  password: ""
+  existingSecret: ""
+  existingSecretKey: smtp-password
+  # -- The sender, e.g. "romulus <romulus@example.com>". Required with a host.
+  from: ""
+
+# The first admin and the organization. NOTES.txt prints the `kubectl exec
+# … romulus-api setup` command with these; setupJob runs it for you.
+admin:
+  email: ""
+  name: ""
+  organization: ""
+  # -- Default: derived from the organization's name.
+  slug: ""
+  # -- A Job running `romulus-api setup` after each install and upgrade (a
+  # no-op once the admin has a password). Its log holds the one-time link
+  # that sets the admin's password (24 hours): anyone who can read the
+  # namespace's logs, or your log collector, sees it. Off by default.
+  setupJob: false
+
+api:
+  # -- Who may say who the client is (ROMULUS_TRUSTED_PROXIES): the
+  # addresses your ingress controller's pods connect from, as IPs and CIDRs,
+  # comma-separated. Empty: X-Forwarded-For is ignored, and every visitor
+  # counts as the controller for per-client limits (sign-in attempts).
+  # docs/self-host/kubernetes.md, "Client addresses".
+  trustedProxies: ""
+  # -- RUST_LOG, as tracing's EnvFilter reads it.
+  logLevel: romulus_api=info,tower_http=info,sqlx=warn
+  # -- More environment variables for the API (name/value or valueFrom).
+  extraEnv: []
+  # Memory: compose's 1 GB limit (drafts being edited live in the API).
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  service:
+    # -- ClusterIP behind the Ingress. NodePort or LoadBalancer only with
+    # TLS in front of it: the API speaks plain HTTP.
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- Graceful shutdown closes the draft sockets and writes every open draft.
+  terminationGracePeriodSeconds: 30
+
+ingress:
+  enabled: true
+  # -- The IngressClass. Empty: the cluster's default class.
+  className: ""
+  # -- Ingress annotations. The defaults only concern ingress-nginx: imports
+  # up to 64 MB, websockets (live drafts, the console) open for an hour, the
+  # import progress streamed. Set one to null to drop it.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    enabled: true
+    # -- The certificate's Secret: one you made, or the one cert-manager
+    # writes. Default: <release>-tls.
+    secretName: ""
+    # -- A cert-manager ClusterIssuer (adds `cert-manager.io/cluster-issuer`).
+    clusterIssuer: ""
+
+# The application database: the only state worth keeping (with the Secret).
+postgresql:
+  # The bundled StatefulSet (postgres:18.6, as compose runs it).
+  image:
+    repository: docker.io/library/postgres
+    tag: "18.6"
+    pullPolicy: IfNotPresent
+  persistence:
+    # -- Off: an emptyDir, gone with the pod. A trial only.
+    enabled: true
+    size: 8Gi
+    # -- Empty: the cluster's default StorageClass.
+    storageClass: ""
+  # -- Server settings (compose's): `-c` arguments.
+  settings:
+    shared_buffers: 192MB
+    effective_cache_size: 512MB
+    max_connections: "100"
+  # Memory: compose's 768 MB limit; /dev/shm as compose's shm_size.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+  shmSize: 256Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # A database you run (a managed Postgres, an operator's cluster): the
+  # bundled StatefulSet is not created. Postgres 15 or later.
+  external:
+    enabled: false
+    host: ""
+    port: 5432
+    database: romulus
+    user: romulus
+    # -- disable, prefer, require, verify-ca or verify-full.
+    sslmode: require
+    # -- Stored URL-encoded in the chart's `<release>-env` Secret.
+    password: ""
+    # -- A Secret of yours: its existingSecretPasswordKey (URL-safe
+    # characters only), or, with existingSecretUrlKey set, the whole URL
+    # (postgres://user:password@host:port/database?sslmode=…).
+    existingSecret: ""
+    existingSecretPasswordKey: password
+    existingSecretUrlKey: ""
+
+# Where SQL compiles (crates/romulus-sandbox, deploy/sandbox/README.md):
+# every compile is rolled back, so it holds nothing worth keeping.
+sandbox:
+  # -- The other Postgres majors a database may target, each its own
+  # sandbox (about 768 MB): any of 15, 16, 18. 17, the default, always runs.
+  extraMajors: []
+  # Requests equal to limits (Guaranteed QoS): Kubernetes then gives the
+  # postmaster an OOM score of -997 while each backend sets its own to 1000,
+  # so an oversized compile kills its backend, never the server (compose's
+  # oom_score_adj -1000). 768 MB: a pool of 4 + 2 backends of 128 MB each.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+  # -- Each Postgres process's private memory cap, in KiB
+  # (ROMULUS_SANDBOX_MAX_DATA_KB, deploy/sandbox/README.md): an oversized
+  # value fails with "out of memory" instead of growing. The pool and the
+  # memory limit are sized for 128 MB: raise them together.
+  maxDataKb: 131072
+  persistence:
+    # -- The compile pool's roles and databases live here: a sandbox that
+    # comes back empty stops compiling until the API restarts. Off: an
+    # emptyDir (restart the API after a sandbox pod moves).
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# A dump of the app database every day, and before each upgrade, into a
+# PersistentVolumeClaim (<release>-backups, kept on uninstall). Copy the
+# dumps off the cluster: docs/self-host/kubernetes.md, "Backups".
+backup:
+  enabled: true
+  # -- Cron syntax, in timeZone. Default: 03:00 UTC, as compose.
+  schedule: "0 3 * * *"
+  timeZone: Etc/UTC
+  # -- Daily dumps older than this are deleted once a new one is written.
+  # Pre-upgrade and manual dumps are never deleted.
+  keepDays: 14
+  # -- A pre-upgrade hook dumps the database first; if the dump fails, the
+  # upgrade stops before anything changes (install.sh upgrade does the same).
+  beforeUpgrade: true
+  # -- pg_dump's image. Default: postgresql.image (pg_dump 18 reads 15 to 18).
+  image: ""
+  persistence:
+    size: 8Gi
+    storageClass: ""
+    # -- Use a PersistentVolumeClaim you made instead.
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# Playgrounds are not supported on Kubernetes yet: their runner drives Docker
+# Engine through its socket, which a cluster's nodes do not offer, and the
+# ways around that weaken isolation (docs/self-host/kubernetes.md,
+# "Playgrounds"). The chart refuses true.
+playgrounds:
+  enabled: false
+
+networkPolicy:
+  # -- Only the API reaches the sandboxes, only the API and the backup and
+  # setup jobs reach Postgres, and neither Postgres nor the sandboxes
+  # connect anywhere. Needs a network plugin that enforces NetworkPolicy.
+  enabled: true
+  # -- Who may reach the API's port, as NetworkPolicy `from` peers (e.g. your
+  # ingress controller's namespace). Empty: anyone.
+  apiAllowFrom: []
+
+# -- PodDisruptionBudgets (maxUnavailable 0) for the API and Postgres. Each
+# runs one replica (the API by design: drafts' live documents live in one
+# process), so a budget cannot keep them up through a drain; it only makes
+# `kubectl drain` wait until you move them yourself. Off by default.
+podDisruptionBudget:
+  enabled: false
+
+serviceAccount:
+  # -- One ServiceAccount for every pod; none of them talks to the
+  # Kubernetes API, so no token is mounted.
+  create: true
+  name: ""
+  annotations: {}
+
+# -- Labels added to every resource.
+commonLabels: {}

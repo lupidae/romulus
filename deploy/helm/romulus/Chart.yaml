@@ -1,0 +1,28 @@
+apiVersion: v2
+name: romulus
+description: >-
+  romulus on Kubernetes: version, diff and review Postgres schemas together.
+  The API, a sandbox Postgres per major SQL compiles on, and the app's
+  database (bundled or yours). docs/self-host/kubernetes.md is the guide.
+type: application
+# One version for romulus and its chart: a release bumps both to X.Y.Z, then
+# tags vX.Y.Z, which publishes the images and this chart (RELEASING.md; the
+# publish job refuses a tag they do not match). appVersion is the images'
+# tag by default (image.tag).
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/lupidae/romulus
+sources:
+  - https://github.com/lupidae/romulus
+icon: https://raw.githubusercontent.com/lupidae/romulus/main/site/public/favicon.svg
+keywords:
+  - postgres
+  - schema
+  - migrations
+  - database
+maintainers:
+  - name: lupidae
+    url: https://github.com/lupidae
+annotations:
+  artifacthub.io/license: AGPL-3.0-only

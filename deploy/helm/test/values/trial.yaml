@@ -1,0 +1,14 @@
+# A trial through `kubectl port-forward`: no Ingress, no volumes, no backups.
+publicUrl: http://localhost:8080
+ingress:
+  enabled: false
+postgresql:
+  persistence:
+    enabled: false
+sandbox:
+  persistence:
+    enabled: false
+backup:
+  enabled: false
+networkPolicy:
+  enabled: false

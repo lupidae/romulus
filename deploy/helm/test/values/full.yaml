@@ -1,0 +1,62 @@
+# Every option the chart renders differently: all majors, TLS by
+# cert-manager, mail and single sign-on from values, the setup Job, budgets,
+# the API's port limited to an ingress controller.
+host: romulus.example.com
+image:
+  tag: 0.1.0
+  pullPolicy: Always
+imagePullSecrets:
+  - name: ghcr
+auth:
+  methods: password,oidc
+  signup: open
+  oidc:
+    issuer: https://id.example.com
+    clientId: romulus
+    clientSecret: an-oidc-client-secret
+smtp:
+  host: smtp.example.com
+  port: 465
+  tls: implicit
+  username: resend
+  password: re_a-test-api-key
+  from: romulus <romulus@example.com>
+admin:
+  email: ada@example.com
+  name: Ada Lovelace
+  organization: Acme
+  slug: acme
+  setupJob: true
+api:
+  trustedProxies: 10.42.0.0/16
+  logLevel: romulus_api=debug
+  extraEnv:
+    - name: ROMULUS_LOG_FORMAT
+      value: json
+  podAnnotations:
+    example.com/scrape: "false"
+  nodeSelector:
+    kubernetes.io/os: linux
+ingress:
+  className: nginx
+  tls:
+    clusterIssuer: letsencrypt
+sandbox:
+  extraMajors: [15, 16, 18]
+postgresql:
+  persistence:
+    size: 20Gi
+    storageClass: fast
+backup:
+  schedule: "30 2 * * *"
+  timeZone: Europe/Paris
+  keepDays: 30
+networkPolicy:
+  apiAllowFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+podDisruptionBudget:
+  enabled: true
+commonLabels:
+  team: platform

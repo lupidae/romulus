@@ -48,9 +48,9 @@
 # replaced.
 set -euo pipefail
 
-# The version `install` and `upgrade` use when none is given. The release
-# coordinator sets it, at release time, to the images published with this
-# script.
+# The version `install` and `upgrade` use when none is given: `latest`, the
+# newest release (each vX.Y.Z tag publishes X.Y.Z, X.Y and latest:
+# RELEASING.md). --version X.Y.Z pins one.
 ROMULUS_DEFAULT_VERSION=latest
 
 DEFAULT_REGISTRY=ghcr.io/lupidae

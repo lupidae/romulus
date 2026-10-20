@@ -1,0 +1,90 @@
+{{- if .Values.networkPolicy.enabled -}}
+{{- $fullname := include "romulus.fullname" . -}}
+{{- $sandboxes := list -}}
+{{- range splitList "," (include "romulus.majors" .) -}}
+{{- $sandboxes = append $sandboxes (printf "sandbox-%s" .) -}}
+{{- end -}}
+# The sandboxes: only the API connects, on 5432; they connect to nothing
+# (no egress at all: compiles run SQL people wrote).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-sandbox
+  labels:
+    {{- include "romulus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "romulus.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: {{ toJson $sandboxes }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "romulus.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+      ports:
+        - port: 5432
+          protocol: TCP
+  egress: []
+{{- if not .Values.postgresql.external.enabled }}
+---
+# The app database: the API, and the backup and setup jobs; it connects to
+# nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-postgresql
+  labels:
+    {{- include "romulus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "romulus.selectorLabels" (dict "root" . "component" "postgresql") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "romulus.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, backup, setup]
+      ports:
+        - port: 5432
+          protocol: TCP
+  egress: []
+{{- end }}
+---
+# The API's port: from networkPolicy.apiAllowFrom (your ingress controller),
+# or from anywhere when it is empty.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "romulus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "romulus.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+      {{- with .Values.networkPolicy.apiAllowFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+        # `helm test`'s pod.
+        - podSelector:
+            matchLabels:
+              {{- include "romulus.selectorLabels" (dict "root" $ "component" "test") | nindent 14 }}
+      {{- end }}
+{{- end }}

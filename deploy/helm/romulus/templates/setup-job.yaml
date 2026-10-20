@@ -1,0 +1,75 @@
+{{- if .Values.admin.setupJob -}}
+{{- $admin := .Values.admin -}}
+{{- if not (and $admin.email $admin.name $admin.organization) -}}
+{{- fail "admin.setupJob: set admin.email, admin.name and admin.organization" -}}
+{{- end -}}
+# `romulus-api setup` after each install and upgrade, as install.sh runs it:
+# the admin (email verified, no password yet), the organization, and a
+# one-time link to set the password (24 hours) in this Job's log. Again: a
+# fresh link while the password was never set, then nothing. An install set
+# up by another admin is left alone (exit 2: a warning here, not a failure).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "romulus.fullname" . }}-setup
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "setup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    # Kept until the next run, so its log (the link) can be read.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "romulus.podLabels" (dict "root" . "component" "setup") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "romulus.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "romulus.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      initContainers:
+        {{- include "romulus.waitForDatabase" . | nindent 8 }}
+      containers:
+        - name: setup
+          image: {{ include "romulus.apiImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - bash
+            - -c
+            - |
+              romulus-api setup --email "$ADMIN_EMAIL" --name "$ADMIN_NAME" --org "$ADMIN_ORG" ${ADMIN_SLUG:+--slug "$ADMIN_SLUG"}
+              rc=$?
+              if [ "$rc" -eq 2 ]; then
+                echo "setup: this install already has an organization with another admin than $ADMIN_EMAIL; nothing changed" >&2
+                exit 0
+              fi
+              exit "$rc"
+          env:
+            {{- include "romulus.apiEnv" . | nindent 12 }}
+            - name: ADMIN_EMAIL
+              value: {{ $admin.email | quote }}
+            - name: ADMIN_NAME
+              value: {{ $admin.name | quote }}
+            - name: ADMIN_ORG
+              value: {{ $admin.organization | quote }}
+            - name: ADMIN_SLUG
+              value: {{ $admin.slug | quote }}
+          securityContext:
+            {{- include "romulus.containerSecurity" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+{{- end }}

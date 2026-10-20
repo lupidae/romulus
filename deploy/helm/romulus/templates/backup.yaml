@@ -1,0 +1,88 @@
+{{- if .Values.backup.enabled -}}
+{{- $fullname := include "romulus.fullname" . -}}
+{{- $b := .Values.backup -}}
+# backup.sh is deploy/self-host/backup.sh (a test keeps the copies equal);
+# restore.sh runs in the bundled Postgres's pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-backup
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "backup") | nindent 4 }}
+data:
+  backup.sh: |-
+    {{- .Files.Get "files/backup.sh" | nindent 4 }}
+  restore.sh: |-
+    {{- .Files.Get "files/restore.sh" | nindent 4 }}
+{{- if not $b.persistence.existingClaim }}
+---
+# The dumps. Kept when the release is uninstalled; copy them off the cluster
+# too (docs/self-host/kubernetes.md, "Backups").
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "romulus.backupClaim" . }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "backup") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $b.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $b.persistence.size }}
+{{- end }}
+---
+# A dump every day (`backup.sh nightly`): written beside, checked to read
+# back, then renamed; daily dumps older than keepDays go once a new one is
+# safely written.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $fullname }}-backup
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "backup") | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  timeZone: {{ $b.timeZone | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200
+      template:
+        {{- include "romulus.backupPod" (dict "root" . "args" (list "nightly")) | nindent 8 }}
+{{- /* Dumps before the upgrade changes anything; skipped on the upgrade that
+       turns backups on (its volume and scripts do not exist yet). */}}
+{{- if and $b.beforeUpgrade .Release.IsUpgrade (lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-backup" $fullname)) }}
+{{- $previous := "unknown" }}
+{{- with lookup "apps/v1" "Deployment" .Release.Namespace (printf "%s-api" $fullname) }}
+{{- $previous = index (.metadata.labels | default dict) "app.kubernetes.io/version" | default "unknown" }}
+{{- end }}
+---
+# install.sh upgrade's first step: a dump labelled pre-upgrade-<old>-to-<new>.
+# If it fails, the upgrade stops before anything changes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-backup-pre-upgrade
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "backup") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  template:
+    {{- $label := regexReplaceAll "[^A-Za-z0-9._-]" (printf "pre-upgrade-%s-to-%s" $previous (include "romulus.version" .)) "-" }}
+    {{- include "romulus.backupPod" (dict "root" . "args" (list "now" $label)) | nindent 4 }}
+{{- end }}
+{{- end }}

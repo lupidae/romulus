@@ -1,0 +1,2 @@
+# The quick start: a host, everything else the chart's defaults.
+host: romulus.example.com

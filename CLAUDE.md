@@ -35,9 +35,14 @@ deploy/preview/       lupidae's hosted preview (romulus.lupidae.com): compose, d
 deploy/self-host/     the self-host bundle: compose.yaml (published images), install.sh (install, upgrade,
                       backup, restore, admin-link), Caddyfile, test/install-test.sh (CI: self-host.yml);
                       docs in docs/self-host/
+deploy/helm/          the Kubernetes chart (romulus/: the same images and settings as the bundle, playgrounds
+                      refused; files/backup.sh = deploy/self-host/backup.sh), test/lint.sh (CI: helm.yml),
+                      test/e2e.sh (k3d, by hand); docs/self-host/kubernetes.md; published to ghcr.io/<owner>/charts on vX.Y.Z tags
+                      (its version = the release's; RELEASING.md)
 ee/                   the future separately licensed (commercial) features: empty, ee/LICENSE a placeholder
 docs/oss/             going open source: the history's secret scan, what is lupidae's own
 Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
+RELEASING.md          cutting a release: bump the chart, tag vX.Y.Z; the images and the chart publish from the tag
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
 scripts/export-migrations/  alembic.sh, django.sh, rails.sh: run in a user's project, print the SQL to import
 docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner, mail (Mailpit)

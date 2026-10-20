@@ -1,0 +1,166 @@
+{{- $fullname := include "romulus.fullname" . -}}
+{{- $api := .Values.api -}}
+# The API, serving the web app at /app and itself at /api (one origin). It
+# applies pending migrations when it starts, as with compose: one instance
+# (drafts' live documents and their sockets live in its process), replaced
+# with Recreate so two never run at once; sqlx's migrator also holds an
+# advisory lock while it migrates. docs/self-host/kubernetes.md, "Migrations".
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "romulus.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "romulus.podLabels" (dict "root" . "component" "api") | nindent 8 }}
+        {{- with $api.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Secrets from values change no field of this template: their
+        # checksum does, so the API restarts with them.
+        checksum/env-secret: {{ include "romulus.envSecretData" . | sha256sum }}
+        {{- with $api.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "romulus.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "romulus.podSecurity" (dict "uid" 10001) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $api.terminationGracePeriodSeconds }}
+      initContainers:
+        {{- include "romulus.waitForDatabase" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "romulus.apiImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [serve]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            {{- include "romulus.apiEnv" . | nindent 12 }}
+          # Time for a long migration at start (compose's start_period: 5
+          # minutes), then the image's check. Liveness gives a minute before
+          # a restart: a database that is away for a moment is not a reason.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            {{- include "romulus.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml $api.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- with $api.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $api.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $api.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-api
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+  {{- with $api.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $api.service.type }}
+  selector:
+    {{- include "romulus.selectorLabels" (dict "root" . "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $api.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.ingress.enabled }}
+---
+# TLS, then everything to the API: /app (the web app), /api (REST and
+# websockets) and / (which the API redirects to /app/).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "romulus.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
+  {{- $annotations := .Values.ingress.annotations | default dict }}
+  {{- if .Values.ingress.tls.clusterIssuer }}
+  {{- $annotations = merge (dict "cert-manager.io/cluster-issuer" .Values.ingress.tls.clusterIssuer) $annotations }}
+  {{- end }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "%s-tls" $fullname) }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-api
+                port:
+                  name: http
+{{- end }}

@@ -15,9 +15,15 @@ name: Images
 # `main` on main. A pull request from this repository pushes its head's sha
 # as well, so a branch can be deployed to the preview before it merges
 # (deploy/preview/README.md); `main` only ever moves with main.
+# A release tag vX.Y.Z (RELEASING.md) also pushes X.Y.Z, then X.Y and
+# `latest` when it is the newest release of its line and of all (a fix to
+# an older line never moves them back); a prerelease (vX.Y.Z-rc.1) only its
+# own tag. romulus-sandbox's other majors get the same tags with their
+# suffix (0.1.0-pg15, 0.1-pg15, latest-pg15). Branch pushes are unchanged.
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
   pull_request:
     paths-ignore:
       - "docs/**"
@@ -31,7 +37,7 @@ permissions:
 
 concurrency:
   group: images-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   image:
@@ -86,7 +92,26 @@ jobs:
           suffix="${{ matrix.suffix }}"
           sha=$(git rev-parse HEAD)
           tags="$image:$sha$suffix"
-          if [ "$GITHUB_REF" = refs/heads/main ]; then tags="$tags,$image:main$suffix"; fi
+          case $GITHUB_REF in
+          refs/heads/main) tags="$tags,$image:main$suffix" ;;
+          refs/tags/v*)
+            version=${GITHUB_REF_NAME#v}
+            if [[ $version =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+              line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+              tags="$tags,$image:$version$suffix"
+              # The newest X.Y.Z among the release tags matching $1.
+              git fetch --quiet --force --tags origin
+              newest() { git tag -l "$1" | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' | sort -V | tail -n 1; }
+              if [ "$(newest "v$line.*")" = "$version" ]; then tags="$tags,$image:$line$suffix"; fi
+              if [ "$(newest 'v*')" = "$version" ]; then tags="$tags,$image:latest$suffix"; fi
+            elif [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+              tags="$tags,$image:$version$suffix"
+            else
+              echo "::error::$GITHUB_REF_NAME is not a release tag (vX.Y.Z, or vX.Y.Z-rc.1)"
+              exit 1
+            fi
+            ;;
+          esac
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
