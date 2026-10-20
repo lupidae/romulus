@@ -11,6 +11,10 @@ expression: "plain[0].content"
 --     its columns fails on rows that still hold it.
 --   - Domain public.good_mood is created again over public.mood, and its
 --     columns converted.
+--   - Functions and triggers are not in romulus's model, and Postgres does
+--     not rewrite their bodies: check any that use public.days.overall (now
+--     public.good_mood), public.people.history (now public.mood[]),
+--     public.people.mood (now public.mood).
 
 BEGIN;
 

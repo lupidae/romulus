@@ -45,7 +45,9 @@ pub mod view;
 
 pub use diagnostic::{Code, Diagnostic, LineIndex, Severity, Span};
 use remus_core::Schema;
-use romulus_migration::{File, Format, Meta, Options, Statement, Warning};
+use romulus_migration::{
+    Candidate, File, Format, Meta, Options, RenameChoices, Statement, Warning,
+};
 use serde::{Deserialize, Serialize};
 
 /// What a compile gives: a model, or the errors that block one; notes
@@ -160,6 +162,9 @@ pub struct MigrationRequest {
     /// The database's Postgres major.
     #[serde(default = "default_major")]
     pub major: u32,
+    /// Detected renames turned on or off, by key (the API's `renames`).
+    #[serde(default)]
+    pub renames: std::collections::BTreeMap<String, bool>,
 }
 
 fn default_major() -> u32 {
@@ -178,6 +183,7 @@ pub struct SchemaMigration {
     pub files: Vec<File>,
     pub archive: String,
     pub pg_major: u32,
+    pub renames: Vec<Candidate>,
 }
 
 /// The migration from `old` to `new`, laid out for a tool, as the API's
@@ -218,17 +224,14 @@ pub fn migration(old: &Schema, new: &Schema, request: &MigrationRequest) -> Sche
         &Options {
             concurrently: request.concurrently,
             major,
+            renames: RenameChoices {
+                decisions: request.renames.clone(),
+                ..RenameChoices::default()
+            },
         },
     );
     let down = if format.has_down() {
-        romulus_migration::migration(
-            new,
-            old,
-            &Options {
-                major,
-                ..Options::default()
-            },
-        )
+        romulus_migration::down(old, new, &up)
     } else {
         romulus_migration::Migration::default()
     };
@@ -243,5 +246,6 @@ pub fn migration(old: &Schema, new: &Schema, request: &MigrationRequest) -> Sche
         files,
         archive: romulus_migration::archive_name(format, &meta),
         pg_major: request.major,
+        renames: up.renames,
     }
 }

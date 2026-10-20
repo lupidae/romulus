@@ -636,6 +636,7 @@ async fn upload(
         migration_sql: None,
         compiled_on: Some(database.pg_major),
         discussion: Vec::new(),
+        renames: None,
     };
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.

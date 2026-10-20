@@ -30,10 +30,14 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use remus_core::{INTROSPECT_SQL, Schema};
+use remus_core::{
+    INTROSPECT_SQL, Schema,
+    emit::ident::{qualified, quote_ident, quote_literal},
+    model::{Column, TypeKind},
+};
 use romulus_migration::{
     File as MigrationFile, FileRole as MigrationFileRole, Format, Meta, Migration, Options,
-    WarningCode, files, migration, without_extension_objects,
+    RenameKind, WarningCode, files, migration, without_extension_objects,
 };
 use romulus_sandbox::{Compiler, parse, render_sql};
 use sqlx::{AssertSqlSafe, Connection, PgConnection, Row, raw_sql};
@@ -42,6 +46,10 @@ use tokio::task::JoinSet;
 use crate::admin_url;
 
 static SCRATCH: AtomicUsize = AtomicUsize::new(0);
+
+/// Tool runs whose tables were given rows, and how many tables in all.
+static SEEDED_RUNS: AtomicUsize = AtomicUsize::new(0);
+static SEEDED_TABLES: AtomicUsize = AtomicUsize::new(0);
 
 /// One pair, laid out for one tool.
 #[derive(Clone)]
@@ -55,6 +63,148 @@ pub struct ToolCase {
     /// models: a partitioned table's index then has its partitions' copies,
     /// named by Postgres (`render_sql` creates it `ON ONLY`, without them).
     pub sources: Option<(String, String)>,
+    /// Give every table that takes one a row first (`DEFAULT VALUES`), and
+    /// check that a migration flagging nothing destructive keeps it, up
+    /// (under the table's new name) and down.
+    pub rows: bool,
+}
+
+/// A value of `column`'s type a row can hold, for a column that needs one
+/// (`NOT NULL`, no default): 1 for numbers (what a parent's first serial
+/// key is, so a foreign key finds it), `'x'` for text, an enum's first
+/// label… `None` for a type left alone (the table gets no row).
+fn value_for(schema: &Schema, column: &Column) -> Option<String> {
+    if column.is_array {
+        return Some(format!("'{{}}'::{}", column.r#type));
+    }
+    let literal = match column.type_kind {
+        TypeKind::Enum => {
+            let e = schema
+                .enums
+                .iter()
+                .find(|e| e.schema == column.type_schema && e.name == column.type_name)?;
+            quote_literal(e.labels.first()?)
+        }
+        TypeKind::Base => match column.type_name.as_str() {
+            "int2" | "int4" | "int8" | "numeric" | "float4" | "float8" | "money" | "oid" => {
+                "1".to_owned()
+            }
+            "text" | "varchar" | "bpchar" | "name" | "citext" | "char" => "'x'".to_owned(),
+            "bool" => "true".to_owned(),
+            "date" | "timestamp" | "timestamptz" | "time" | "timetz" => "now()".to_owned(),
+            "interval" => "'1 day'".to_owned(),
+            "uuid" => "'00000000-0000-0000-0000-000000000001'".to_owned(),
+            "json" | "jsonb" => "'{}'".to_owned(),
+            "bytea" => "'\\x00'".to_owned(),
+            "inet" | "cidr" => "'127.0.0.1'".to_owned(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(format!("({literal})::{}", column.r#type))
+}
+
+/// A row in every table of `schema` that takes one (parents before what
+/// references them: a few passes): the tables that have one.
+async fn seed_rows(db: &mut PgConnection, schema: &Schema) -> Vec<(String, String)> {
+    let mut seeded: Vec<(String, String)> = Vec::new();
+    for _ in 0..3 {
+        for e in schema.entities.iter().filter(|e| e.kind.is_table()) {
+            if seeded.iter().any(|(s, n)| *s == e.schema && *n == e.name) {
+                continue;
+            }
+            let needed: Vec<&Column> = e
+                .columns
+                .iter()
+                .filter(|c| {
+                    c.not_null
+                        && c.default.is_none()
+                        && c.identity.is_none()
+                        && c.generated.is_none()
+                })
+                .collect();
+            let Some(values) = needed
+                .iter()
+                .map(|c| value_for(schema, c))
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            let table = qualified(&e.schema, &e.name);
+            let insert = if needed.is_empty() {
+                format!("INSERT INTO {table} DEFAULT VALUES;")
+            } else {
+                let columns: Vec<String> = needed
+                    .iter()
+                    .map(|c| quote_ident(&c.name).into_owned())
+                    .collect();
+                format!(
+                    "INSERT INTO {table} ({}) VALUES ({});",
+                    columns.join(", "),
+                    values.join(", ")
+                )
+            };
+            if script(db, &insert).await.is_ok() {
+                seeded.push((e.schema.clone(), e.name.clone()));
+            }
+        }
+    }
+    seeded
+}
+
+/// Whether each table of `seeded` (named as `renamed` maps it) still has
+/// a row, when `m` flags nothing destructive (a table it drops on purpose
+/// is flagged).
+async fn rows_kept(
+    db: &mut PgConnection,
+    m: &Migration,
+    seeded: &[(String, String)],
+    renamed: impl Fn(&str, &str) -> (String, String),
+    target: &Schema,
+) -> Result<(), String> {
+    if m.statements.iter().any(|s| s.destructive) {
+        return Ok(());
+    }
+    for (schema, table) in seeded {
+        let (schema, table) = renamed(schema, table);
+        if !target
+            .entities
+            .iter()
+            .any(|e| e.schema == schema && e.name == table && e.kind.is_table())
+        {
+            continue;
+        }
+        let count: i64 = sqlx::query(AssertSqlSafe(format!(
+            "SELECT count(*) FROM {}",
+            qualified(&schema, &table)
+        )))
+        .fetch_one(&mut *db)
+        .await
+        .map_err(|e| format!("count {schema}.{table}: {e}"))?
+        .get(0);
+        if count == 0 {
+            return Err(format!(
+                "{schema}.{table} lost its row in a migration flagging nothing destructive"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Where the up migration `m` takes table `schema.table`: its renames and
+/// moves.
+fn table_after(m: &Migration, schema: &str, table: &str) -> (String, String) {
+    m.applied
+        .iter()
+        .find(|r| {
+            matches!(r.kind, RenameKind::Table | RenameKind::Partition)
+                && r.schema == schema
+                && r.from == table
+        })
+        .map_or_else(
+            || (schema.to_owned(), table.to_owned()),
+            |r| (r.final_schema().to_owned(), r.to.clone()),
+        )
 }
 
 /// How a case went, when it did not fail.
@@ -478,11 +628,24 @@ pub async fn run(compiler: &Compiler, admin: &str, case: &ToolCase) -> Result<To
             .map_err(|e| format!("the old schema does not build: {e}"))?;
         let old = introspect(&mut db).await?;
         let up = migration(&old, &new, &crate::options_for(compiler, &case.options));
-        let down = migration(
-            &new,
-            &old,
-            &crate::options_for(compiler, &Options::default()),
-        );
+        let down = romulus_migration::down(&old, &new, &up);
+        // Rows only where the up flags nothing and the down cannot fail on
+        // them: what is flagged is proven by data.rs; this proves what is
+        // not (the down's rows are checked only when it flags nothing).
+        let harmless = |m: &Migration| !m.statements.iter().any(|s| s.destructive);
+        let down_runs = !down
+            .statements
+            .iter()
+            .any(|s| s.hazard == Some(romulus_migration::Hazard::CanFail));
+        let seeded = if case.rows && harmless(&up) && down_runs {
+            seed_rows(&mut db, &old).await
+        } else {
+            Vec::new()
+        };
+        if !seeded.is_empty() {
+            SEEDED_RUNS.fetch_add(1, Ordering::Relaxed);
+            SEEDED_TABLES.fetch_add(seeded.len(), Ordering::Relaxed);
+        }
         let laid_out = files(&up, &down, case.format, &meta(case.format));
         apply(&mut db, case.format, &laid_out, false)
             .await
@@ -494,6 +657,9 @@ pub async fn run(compiler: &Compiler, admin: &str, case: &ToolCase) -> Result<To
             &new,
         )
         .map_err(|e| format!("{e}{}", listing(&laid_out)))?;
+        rows_kept(&mut db, &up, &seeded, |s, t| table_after(&up, s, t), &new)
+            .await
+            .map_err(|e| format!("up: {e}{}", listing(&laid_out)))?;
         if case.format.has_down() {
             apply(&mut db, case.format, &laid_out, true)
                 .await
@@ -505,6 +671,15 @@ pub async fn run(compiler: &Compiler, admin: &str, case: &ToolCase) -> Result<To
                 &old,
             )
             .map_err(|e| format!("{e}{}", listing(&laid_out)))?;
+            rows_kept(
+                &mut db,
+                &down,
+                &seeded,
+                |s, t| (s.to_owned(), t.to_owned()),
+                &old,
+            )
+            .await
+            .map_err(|e| format!("down: {e}{}", listing(&laid_out)))?;
         }
         Ok::<_, String>(())
     }
@@ -556,9 +731,11 @@ pub async fn check_tools(compiler: &Compiler, cases: Vec<ToolCase>) {
     #[allow(clippy::print_stderr)]
     {
         eprintln!(
-            "{total} tool runs: {} passed, {excluded_total} excluded {excluded:?}, {} failed",
+            "{total} tool runs: {} passed, {excluded_total} excluded {excluded:?}, {} failed; rows kept in {} runs ({} tables)",
             total - excluded_total - failures.len(),
-            failures.len()
+            failures.len(),
+            SEEDED_RUNS.load(Ordering::Relaxed),
+            SEEDED_TABLES.load(Ordering::Relaxed),
         );
         for failure in &failures {
             let mut lines = failure.lines();

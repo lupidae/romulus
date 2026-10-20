@@ -70,10 +70,11 @@ export function CompileStatus({ compile, major, onJump, checker = "sandbox" }: C
           size="sm"
           data-testid="compile-status"
           aria-live="polite"
-          className={cn("min-w-0 gap-1.5 font-medium", tone)}
+          className={cn("min-w-0 shrink gap-1.5 font-medium", tone)}
         >
           {icon}
-          <span className="truncate">
+          {/* A phone's bar is icons, this one's word read out. */}
+          <span className="truncate max-sm:sr-only">
             {label}
             {suffix && <span className="max-sm:sr-only">{suffix}</span>}
           </span>

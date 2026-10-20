@@ -99,6 +99,44 @@ test("save a version, change it, see the diff and the migration", async ({ page 
   expect(errors).toEqual([]);
 });
 
+/** The migration file's whole text: CodeMirror renders only the lines in view. */
+const fileText = (live: Locator) =>
+  live
+    .locator(".cm-content")
+    .first()
+    .evaluate(
+      (element) =>
+        (
+          element as unknown as {
+            cmTile?: { view?: { state: { doc: { toString(): string } } } };
+          }
+        ).cmTile?.view?.state.doc.toString() ?? "",
+    );
+
+test("a column renamed in the SQL is a rename in the migration, unless switched off", async ({
+  page,
+}) => {
+  const errors = watchErrors(page);
+  const live = await liveHero(page);
+  // `name` becomes `full_name`, typed in place.
+  await live.getByRole("button", { name: /Change the SQL or the graph/ }).click();
+  await expect(live.locator(".cm-activeLine").first()).toContainText("created_at");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("Home");
+  await page.keyboard.type("full_");
+  await expect(node(live, "customers")).toContainText("full_name");
+
+  await live.getByRole("radio", { name: /^Migration/ }).click();
+  const rename = live.getByRole("switch", { name: "Renamed name to full_name?" });
+  await expect(rename).toBeChecked();
+  await expect.poll(() => fileText(live)).toContain("RENAME COLUMN name TO full_name;");
+  await rename.click();
+  await expect(rename).not.toBeChecked();
+  await expect.poll(() => fileText(live)).toContain("DROP COLUMN name;");
+  await expect(live.getByText(/name is dropped and full_name added/)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("a --- line in the SQL becomes a comment on the table below", async ({ page }) => {
   const errors = watchErrors(page);
   const live = await liveHero(page);

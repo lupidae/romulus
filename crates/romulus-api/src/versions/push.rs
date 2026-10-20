@@ -208,6 +208,7 @@ async fn push(
         // from a server, whatever its major (`other_major`).
         compiled_on: (source_kind == SourceKind::Sql).then_some(token.database_major),
         discussion: Vec::new(),
+        renames: None,
     };
     let database_id = new.database_id;
     Ok(match store(&state.db, new, true).await? {

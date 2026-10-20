@@ -464,7 +464,11 @@ async fn reviewers_read_playgrounds_but_cannot_create_reset_migrate_or_delete(db
     );
     for (method, rest, body) in [
         ("post", "/reset", json!({})),
-        ("post", "/migration", json!({ "sha256": "x" })),
+        (
+            "post",
+            "/migration",
+            json!({ "sha256": "x", "renames": { "table/public//customers/clients": true } }),
+        ),
         ("delete", "", json!({})),
     ] {
         let url = path(&team, &format!("/{id}{rest}"));
@@ -1444,4 +1448,68 @@ async fn a_database_on_another_postgres_major_gets_no_playground_yet(db: PgPool)
             .contains("Postgres 15")
     );
     assert!(host.calls().builds.is_empty());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_run_takes_the_renames_on_screen(db: PgPool) {
+    use super::renames::{KEY, RENAMED, V1, rename_compiler};
+    // Drafts compile with a compiler that knows columns: a rename to offer.
+    let hub = romulus_api::collab::Hub::with_settings(db.clone(), rename_compiler(), quick());
+    let host = FakeHost::default();
+    let mut state = romulus_api::AppState::new(db.clone(), romulus_api::Config::for_tests())
+        .with_collab(hub)
+        .with_playgrounds(Host::new(host.clone()));
+    state.compiler = state.collab.compiler().clone();
+    let app = TestApp::with_state(state);
+    let team = Team::new(&db, "acme").await;
+    let shop = database(&db, team.org, "shop").await;
+    super::renames::version(&db, shop, 1, V1).await;
+    let draft = app
+        .as_user(&team.developer)
+        .post_empty(&team.path("/databases/shop/drafts"))
+        .await
+        .json();
+    let draft: Uuid = draft["id"].as_str().unwrap().parse().unwrap();
+    let id = ready(&app, &team, json!({ "draft_id": draft })).await;
+    let addr = serve(&app).await;
+    let mut alice = Client::join(
+        addr,
+        &format!("/api/orgs/acme/drafts/{draft}/ws"),
+        &team.developer,
+    )
+    .await;
+    alice
+        .edit(|roots, txn| {
+            use yrs::{GetString, Text};
+            let len = u32::try_from(roots.sql.get_string(txn).encode_utf16().count()).unwrap();
+            roots.sql.remove_range(txn, 0, len);
+            roots.sql.insert(txn, 0, RENAMED);
+        })
+        .await;
+    let sha256 = romulus_api::collab::compile::sha256_hex(RENAMED);
+    alice
+        .until(|c| {
+            c.events
+                .iter()
+                .any(|e| e["type"] == "compile" && e["sha256"] == sha256.as_str())
+        })
+        .await;
+
+    // On by itself (confident); the run plans with it off, as on screen.
+    let run = app
+        .as_user(&team.developer)
+        .post(
+            &path(&team, &format!("/{id}/migration")),
+            &json!({ "sha256": sha256, "renames": { KEY: false } }),
+        )
+        .await;
+    assert_eq!(run.status, StatusCode::OK);
+    let calls = host.calls();
+    let (_, migrate, _) = &calls.migrations[0];
+    let sql: Vec<&str> = migrate.statements.iter().map(|s| s.sql.as_str()).collect();
+    assert!(
+        sql.contains(&"ALTER TABLE public.users DROP COLUMN email;"),
+        "{sql:?}"
+    );
+    assert!(!sql.iter().any(|s| s.contains("RENAME")), "{sql:?}");
 }

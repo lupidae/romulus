@@ -16,6 +16,8 @@
 //!   returned. The statement-level merge and graph edits build on it.
 //! - [`allowlist::check`] refuses everything that is not schema DDL, with a
 //!   located error and a hint (its module documents the threat model).
+//! - [`known_renames`] reads the `ALTER … RENAME` statements a text runs
+//!   beyond its base's: the renames a migration knows for sure.
 //! - [`render_sql`] renders a model as SQL (remus-sql, reordered where it
 //!   would not compile back), for drafts started from a version pushed as
 //!   remus JSON.
@@ -73,6 +75,7 @@ mod parse;
 pub mod playground;
 pub mod prepare;
 mod refine;
+mod renames;
 mod render;
 pub mod source;
 pub mod stubs;
@@ -88,6 +91,7 @@ pub use parse::{ParsedSql, Statement, parse};
 /// The `pg_query` this crate parses with, for callers that walk
 /// [`Statement::node`].
 pub use pg_query;
+pub use renames::known_renames;
 pub use render::render_sql;
 pub use source::{LineIndex, Position, Span};
 pub use stubs::Stub;

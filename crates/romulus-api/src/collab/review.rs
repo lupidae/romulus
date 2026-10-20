@@ -1,11 +1,13 @@
 //! Approvals and review requests in a room (docs/MVP.md "Review round 1").
 //!
 //! The room knows who edited the SQL (it sees every update: the first one
-//! of a person's that changes the text makes them an editor, recorded in
-//! `draft_editors`), and the approvals given, each of one text: an approval
-//! counts while the SQL hashes as it did when it was given and its author
-//! has not edited the draft, so any edit resets them (and taking the edit
-//! back brings them back: it is the text they approved). Everyone hears of
+//! of a person's that changes the text, or switches a rename of its
+//! migration, makes them an editor, recorded in `draft_editors`), and the
+//! approvals given, each of one text and its rename switches
+//! (`compile::review_hash`): an approval counts while they hash as they did
+//! when it was given and its author has not edited the draft, so any edit
+//! or switch resets them (and taking it back brings them back: it is what
+//! they approved). Everyone hears of
 //! a change as a [`ServerEvent::Review`]; publishing asks the room who
 //! approved the frozen text ([`super::room::Content::approved_by`]), which
 //! nothing written later can contradict.

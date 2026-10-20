@@ -30,7 +30,11 @@ enum Move {
 ///
 /// All three are remus#16 (fixed upstream for the next remus release):
 /// remove these workarounds, and their tests, once the workspace depends on
-/// it.
+/// it. And:
+///
+/// - the copies Postgres makes of a foreign key to a partitioned table, one
+///   per partition (`…_fkey1` referencing the partition), are left out: the
+///   key makes them again, and creating one fails ("already exists").
 ///
 /// Everything else is remus-sql's output, byte for byte. Known gaps of
 /// remus 0.2 this does not paper over: `NOT VALID` CHECKs are written
@@ -134,10 +138,13 @@ fn fixed(schema: &Schema) -> Option<Schema> {
         .flat_map(|p| [&p.using, &p.check])
         .flatten()
         .any(|expr| !is_parenthesized(expr));
-    if !needs_parens {
+    let mut without_clones = schema.clone();
+    romulus_migration::without_fk_clones(&mut without_clones);
+    let clones = without_clones != *schema;
+    if !needs_parens && !clones {
         return None;
     }
-    let mut schema = schema.clone();
+    let mut schema = without_clones;
     for policy in schema.entities.iter_mut().flat_map(|e| &mut e.policies) {
         for expr in [&mut policy.using, &mut policy.check].into_iter().flatten() {
             if !is_parenthesized(expr) {

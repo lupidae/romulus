@@ -79,6 +79,13 @@ pub struct ApproveDraft {
     /// SHA-256 (hex) of the SQL the person reviewed: an approval is of one
     /// text.
     pub sha256: String,
+    /// The renames turned on or off in the migration as the person saw them
+    /// (the draft's, `SchemaMigration.renames[].key` → on or off): an
+    /// approval is of those too, and refused (409 `draft_changed`) when the
+    /// draft's are others now. Absent: none switched (`{}`).
+    #[serde(default)]
+    #[schema(value_type = std::collections::BTreeMap<String, bool>)]
+    pub renames: std::collections::BTreeMap<String, bool>,
 }
 
 /// What publishing would need, for the publish dialog.
@@ -147,10 +154,11 @@ pub(super) async fn approve(
     if editors_unknown && member.role.can_write() {
         return Err(unknown_editors());
     }
-    // What the approval is of: the text the person saw, on its base.
+    // What the approval is of: the text the person saw, on its base, and
+    // the renames they saw.
     let (sha256, digest) = match state
         .collab
-        .check_approval(id, member.user.id, sha256.clone())
+        .check_approval(id, member.user.id, sha256.clone(), body.renames)
         .await
         .map_err(hub_error)?
     {

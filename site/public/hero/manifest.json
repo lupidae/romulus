@@ -1,14 +1,14 @@
 {
   "note": "Built by site/tools/hero.mjs: do not edit. `--check` compares the files with `files` and the inputs with `inputs`.",
   "inputs": {
-    "own": "8013cb6ed784842a",
-    "engine": "fb4c3b2a46107d67",
-    "app": "b1eed4822ae6ecc3"
+    "own": "d9f80778dfd26d60",
+    "engine": "2c603f343b0b5a80",
+    "app": "efb2b1b38c988440"
   },
   "total": {
-    "raw": 5443397,
-    "gzip": 1591579,
-    "brotli": 1241296
+    "raw": 5649299,
+    "gzip": 1663612,
+    "brotli": 1292868
   },
   "files": {
     "assets/codemirror-ondR3cUP.js": {
@@ -53,23 +53,23 @@
       "gzip": 627,
       "brotli": 541
     },
-    "assets/romulus_wasm_bg-CYd61VhO.wasm": {
-      "sha256": "822c6acad0a8cb10381064e6e8dca1b2ab90351e173ad3c850d7cdbda6fc2afb",
-      "raw": 1019512,
-      "gzip": 392818,
-      "brotli": 304630
+    "assets/romulus_wasm_bg-BaHTNXLP.wasm": {
+      "sha256": "74c00417b64863b76ad49d60872b555d8562953bd9d567275a4a79c3bff06a35",
+      "raw": 1193239,
+      "gzip": 458357,
+      "brotli": 351515
     },
     "hero.css": {
-      "sha256": "ff6e4789e5524fd93cb0ce9ef656909007e75223ace768a7be88d2f2a30e2269",
-      "raw": 149542,
-      "gzip": 19717,
-      "brotli": 15993
+      "sha256": "d7e45df4a9cf9a106a0a6d11ee44ccfa18786c5f8be2792a11e2c793ce1df884",
+      "raw": 163208,
+      "gzip": 21077,
+      "brotli": 17008
     },
     "hero.js": {
-      "sha256": "5e39299d358a6cf99d4e2f334d52d6ffaa47f5dc9c7644c80cb6273df8d2075c",
-      "raw": 1096513,
-      "gzip": 338752,
-      "brotli": 282901
+      "sha256": "abdf3aba62b88e400f5fede45ab97adfa19649566bf6f0e7693327bfbdb9c50d",
+      "raw": 1115022,
+      "gzip": 343886,
+      "brotli": 286573
     }
   }
 }

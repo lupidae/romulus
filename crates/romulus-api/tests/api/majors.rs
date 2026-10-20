@@ -704,6 +704,7 @@ async fn a_version_compiled_before_a_move_is_not_stored_after_it(db: PgPool) {
         migration_sql: None,
         compiled_on,
         discussion: Vec::new(),
+        renames: None,
     };
     // Compiled on 17, the database meanwhile on 15.
     sqlx::query!("UPDATE databases SET pg_major = 15 WHERE id = $1", id)
@@ -808,6 +809,7 @@ async fn publishing_after_a_move_answers_major_changed(db: PgPool) {
             approvals: None,
             compiled_on: PgMajor::DEFAULT,
             discussion: Vec::new(),
+            renames: None,
         },
     )
     .await

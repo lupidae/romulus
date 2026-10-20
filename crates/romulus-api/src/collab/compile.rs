@@ -3,7 +3,7 @@
 //! (`compile_for`: coalesced per draft, `Rejected::Superseded` when a newer
 //! text replaced a waiting one).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use romulus_sandbox::ObjectKind;
 use serde::Serialize;
@@ -48,6 +48,32 @@ pub fn input_hash(mode: DraftMode, base: &str, source: &str) -> String {
                 })
         }
     }
+}
+
+/// What a person reviews of a draft and approves, as publishing checks it:
+/// what is compiled ([`input_hash`]) and the renames turned on or off in
+/// its migration (`doc::RENAMES`), when any are (a draft without hashes as
+/// before). A toggle is a change to review, as an edit is.
+pub fn review_hash(input: &str, renames: &BTreeMap<String, bool>) -> String {
+    use std::fmt::Write as _;
+    if renames.is_empty() {
+        return input.to_owned();
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"renames\0");
+    hasher.update(input.as_bytes());
+    for (key, on) in renames {
+        hasher.update((key.len() as u64).to_be_bytes());
+        hasher.update(key.as_bytes());
+        hasher.update([u8::from(*on)]);
+    }
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 /// Where each relation the graph draws (tables, views, materialized views,

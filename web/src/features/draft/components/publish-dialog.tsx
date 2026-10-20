@@ -27,7 +27,8 @@ import {
   PageIcon,
 } from "@/components/icons";
 import { toast } from "@/components/ui/toaster";
-import { MigrationView } from "@/features/migration/components/migration-view";
+import { MigrationView, type RenameControl } from "@/features/migration/components/migration-view";
+import { RenamesNote } from "@/features/migration/components/renames-note";
 import { draftMigrationQuery } from "@/features/migration/queries";
 import { save } from "@/features/migration/zip";
 import { CodeView } from "@/features/schema/text/code-view";
@@ -62,6 +63,8 @@ interface PublishDialogProps {
   onPublished: (number: number) => void;
   /** Comment threads, open and resolved: kept with the version as its review. */
   threads?: { open: number; resolved: number };
+  /** The draft's rename decisions: the migration shown, and what the version keeps. */
+  renames?: RenameControl;
 }
 
 interface Change {
@@ -104,7 +107,7 @@ function changesOf(preview: PublishPreview): Change[] {
 export function PublishDialog(props: PublishDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="top-[max(1rem,6vh)] flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-4 sm:max-h-[88dvh]">
+      <DialogContent className="top-[max(1rem,6vh)] flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-4 overflow-y-auto sm:max-h-[88dvh]">
         {props.open && <PublishBody {...props} />}
       </DialogContent>
     </Dialog>
@@ -124,6 +127,7 @@ function PublishBody({
   onJump,
   onPublished,
   threads,
+  renames,
 }: PublishDialogProps) {
   const queryClient = useQueryClient();
   const preview = useQuery(publishPreviewQuery(org, db, draftId));
@@ -137,7 +141,22 @@ function PublishBody({
   const changes = data ? changesOf(data) : [];
   const gate = useApprovalGate(data?.approvals);
   const unpublishable = !data || data.stale || errors.length > 0 || !data.diff;
-  const blocked = unpublishable || gate.blocked;
+  // A rename switched reaches the server through the draft's socket: until
+  // the preview has it (and the migration shown is of it), what would be
+  // published is not what is on screen.
+  const onScreen = renames?.decisions;
+  const previewBehind = !!data && !!onScreen && !sameDecisions(data.renames, onScreen);
+  const [migrationPending, setMigrationPending] = React.useState(false);
+  const catchingUp = previewBehind || migrationPending;
+  const blocked = unpublishable || gate.blocked || catchingUp;
+  React.useEffect(() => {
+    if (!previewBehind) return;
+    const timer = window.setTimeout(
+      () => void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) }),
+      300,
+    );
+    return () => window.clearTimeout(timer);
+  }, [previewBehind, data, queryClient, org, db, draftId]);
 
   const submit = () => {
     if (!data || blocked || publish.isPending) return;
@@ -147,13 +166,20 @@ function PublishBody({
         sha256: data.sha256,
         message: message.trim() || undefined,
         override_reason: gate.overrideReason,
+        renames: renames?.decisions,
       },
       {
         onSuccess: (version) => onPublished(version.number),
         onError: (error) => {
           if (!(error instanceof ApiError)) return setNotice("Could not publish. Try again.");
           if (
-            ["draft_changed", "validation", "stale_base", "approvals_required"].includes(error.code)
+            [
+              "draft_changed",
+              "renames_changed",
+              "validation",
+              "stale_base",
+              "approvals_required",
+            ].includes(error.code)
           ) {
             // Show what is true now.
             void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) });
@@ -239,6 +265,8 @@ function PublishBody({
           layout={layout}
           groups={groups}
           fileName={migrationFileName(draftName)}
+          renames={renames}
+          onMigrationPending={setMigrationPending}
           migration={(choice) =>
             draftMigrationQuery(org, db, draftId, data!.sha256, choice, () => {
               // The draft moved since the preview: show what is true now.
@@ -283,7 +311,7 @@ function PublishBody({
             type="submit"
             variant="primary"
             disabled={blocked}
-            loading={publish.isPending}
+            loading={publish.isPending || (catchingUp && !unpublishable)}
             aria-keyshortcuts="Meta+Enter Control+Enter"
             title={`${modKey} Enter`}
           >
@@ -293,6 +321,12 @@ function PublishBody({
       </form>
     </>
   );
+}
+
+/** Whether two sets of rename decisions say the same. */
+function sameDecisions(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
 }
 
 /** "3 comment threads (1 open)". */
@@ -309,16 +343,22 @@ function Changes({
   groups,
   fileName,
   migration,
+  renames,
+  onMigrationPending,
 }: {
   preview: PublishPreview;
   changes: Change[];
   layout: Layout;
   groups: Groups;
   fileName: string;
+  renames?: RenameControl;
+  /** The migration tab is catching up with what was switched. */
+  onMigrationPending: (pending: boolean) => void;
   /** The draft's migration, for a tool. */
   migration: React.ComponentProps<typeof MigrationView>["query"];
 }) {
   const { model: rawModel, base_model: rawBase, diff } = preview;
+  const [tab, setTab] = React.useState("list");
   const graph = React.useMemo(() => {
     try {
       if (!rawModel || !diff) return null;
@@ -347,7 +387,9 @@ function Changes({
   }
 
   return (
-    <Tabs defaultValue="list" className="flex min-h-0 flex-1 flex-col gap-3">
+    // Its own height (the panes are sized): with the approvals and a reason
+    // below, the dialog scrolls rather than the panes overlapping them.
+    <Tabs value={tab} onValueChange={setTab} className="flex shrink-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-base font-medium text-foreground">
           {preview.diff!.summary.text[0]!.toUpperCase() + preview.diff!.summary.text.slice(1)}
@@ -375,8 +417,13 @@ function Changes({
       </div>
       <TabsContent
         value="list"
-        className="mt-0 min-h-0 flex-1 overflow-y-auto rounded-lg border border-border"
+        className="mt-0 max-h-[50dvh] overflow-y-auto rounded-lg border border-border"
       >
+        <RenamesNote
+          query={migration}
+          decisions={renames?.decisions}
+          onShow={() => setTab("migration")}
+        />
         <ul className="divide-y divide-border">
           {changes.map((change) => (
             <li key={change.key} className="grid gap-1 px-3 py-2.5">
@@ -421,7 +468,12 @@ function Changes({
         {preview.mode === "migration" ? (
           <WrittenMigrationPreview text={preview.migration ?? ""} fileName={fileName} />
         ) : (
-          <MigrationView query={migration} primary={false} />
+          <MigrationView
+            query={migration}
+            primary={false}
+            renames={renames}
+            onPendingChange={onMigrationPending}
+          />
         )}
       </TabsContent>
     </Tabs>

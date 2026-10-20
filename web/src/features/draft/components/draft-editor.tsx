@@ -54,6 +54,7 @@ import {
   WrittenMigrationActions,
 } from "./migration-tab";
 import { PublishDialog } from "./publish-dialog";
+import type { RenameControl } from "@/features/migration/components/migration-view";
 
 const emptySchema = (database: string): Schema => ({
   remus_version: "0.2",
@@ -338,6 +339,31 @@ export function Workspace({
     (state ? state.role === null || mayEdit(state) : true) &&
     status === "open";
   const compile = state?.compile ?? WAITING;
+  // The renames of the migration: the draft's (everyone's), switched by
+  // those who may edit it.
+  const rawRenames = useYMap(session?.renames);
+  // What the server reads of them: booleans, keys of a sane length.
+  const renameDecisions = React.useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(rawRenames).filter(
+          ([key, on]) => typeof on === "boolean" && key.length <= 2048,
+        ),
+      ) as Record<string, boolean>,
+    [rawRenames],
+  );
+  const renames = React.useMemo<RenameControl>(
+    () => ({
+      decisions: renameDecisions,
+      onChange:
+        canEdit && session ? (patch, defaults) => session.setRenames(patch, defaults) : undefined,
+      readOnly: canEdit
+        ? undefined
+        : "Developers and admins switch renames here, for everyone in the draft.",
+      known: "Known renames: the draft runs ALTER … RENAME for them (graph edits do).",
+    }),
+    [renameDecisions, canEdit, session],
+  );
   // The compiled model, with this tab's schema edits in flight (and an
   // editor to make them, for those who may).
   const { schema: shown, editor } = useGraphEdits({
@@ -593,6 +619,7 @@ export function Workspace({
             }}
             onUpdate={runUpdate}
             updating={update.isPending}
+            renames={renames}
           />
         ),
       },
@@ -610,6 +637,7 @@ export function Workspace({
     org,
     db,
     update.isPending,
+    renames,
   ]);
 
   return (
@@ -634,6 +662,7 @@ export function Workspace({
         sql={sql}
         mode={mode}
         migration={migration}
+        renames={renameDecisions}
         onSwitchMode={setSwitching}
         onRewrite={(expected) => session?.expectRewrite(expected)}
         onJump={jump}
@@ -815,6 +844,7 @@ export function Workspace({
           open={publishing}
           onOpenChange={setPublishing}
           onJump={(d) => requestAnimationFrame(() => jump(d))}
+          renames={renames}
           threads={{
             open: discussion.threads?.filter((t) => !t.resolved).length ?? 0,
             resolved: discussion.threads?.filter((t) => t.resolved).length ?? 0,

@@ -11,6 +11,10 @@
 //!   draft first.
 //! - A draft whose SQL does not compile has none: 422 `compile_failed`, with
 //!   the diagnostics.
+//! - Renames: the ones its text runs beyond its base (`ALTER … RENAME`,
+//!   graph edits included) are known; detected ones are on or off as the
+//!   draft's doc says (`renames`, what its editors chose), and `renames` in
+//!   the request (what the person has on screen) over that.
 
 use axum::extract::State;
 use remus_core::Schema;
@@ -62,7 +66,7 @@ pub struct Reviewed {
     ),
     responses(
         (status = 200, body = SchemaMigration),
-        (status = 400, description = "`bad_request`: an unknown format, no `sha256`", body = ErrorBody),
+        (status = 400, description = "`bad_request`: an unknown format, no `sha256`, `renames` that is not a JSON object of booleans", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first", body = ErrorBody),
         (status = 422, description = "`compile_failed`: the SQL has errors (`details.diagnostics`)", body = ErrorBody),
@@ -88,7 +92,7 @@ pub(super) async fn draft_migration(
         return Err(stale_base(latest));
     }
     let content = state.collab.content(id).await.map_err(hub_error)?;
-    if reviewed.sha256 != publish::reviewed(&content) {
+    if !publish::is_current(&content, &reviewed.sha256) {
         return Err(ApiError::Conflict {
             code: "draft_changed",
             message: "The draft changed since you reviewed it. Review the changes again.".into(),
@@ -116,6 +120,10 @@ pub(super) async fn draft_migration(
         empty.extensions.clear();
         empty
     };
+    let mut decisions = content.renames.clone();
+    if let Some(on_screen) = options.rename_decisions()? {
+        decisions.extend(on_screen);
+    }
     let sides = Sides {
         old: &old,
         new: &new,
@@ -128,6 +136,7 @@ pub(super) async fn draft_migration(
         name: row.name.clone(),
         database: format!("{org}/{db_slug}"),
         major: content.major,
+        renames: content.rename_choices(Some(&decisions)),
     };
     Ok(Json(build(sides, options).await?))
 }

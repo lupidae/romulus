@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,\n                               message, created_by, created_by_token, migration_sql)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,\n                               message, created_by, created_by_token, migration_sql, renames)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -50,12 +50,13 @@
         "Text",
         "Uuid",
         "Uuid",
-        "Text"
+        "Text",
+        "Jsonb"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "813f1a5f173424cd6cf72373ab598895221675034e9c10bc564d011ca06083cf"
+  "hash": "781e3d9e353aabeff9ff59c03262f91ee89240f0d433f923eba6ff332f6e2131"
 }

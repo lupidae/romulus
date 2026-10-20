@@ -46,7 +46,7 @@ use crate::{
     domain::{AuditAction, DraftMode, DraftStatus, PlaygroundRunKind, PlaygroundRunStatus},
     drafts::{
         Person,
-        publish::{compiled, hub_error, reviewed},
+        publish::{compiled, hub_error, is_current},
         versions::by_id,
     },
     error::ErrorBody,
@@ -154,6 +154,10 @@ pub struct RunMigration {
     /// migration tab's), so a run is never of a text nobody saw (409
     /// `draft_changed` when the draft moved on).
     pub sha256: String,
+    /// The renames turned on or off as the person sees them, over the
+    /// draft's (`SchemaMigration.renames[].key` → on or off).
+    #[serde(default)]
+    pub renames: Option<std::collections::BTreeMap<String, bool>>,
 }
 
 /// The statements a run applies: planned (schema mode) or as written
@@ -163,9 +167,10 @@ async fn statements(
     row: &Row,
     draft: Uuid,
     sha256: &str,
+    on_screen: Option<&std::collections::BTreeMap<String, bool>>,
 ) -> ApiResult<Vec<MigrationStatement>> {
     let content = state.collab.content(draft).await.map_err(hub_error)?;
-    if reviewed(&content) != sha256 {
+    if !is_current(&content, sha256) {
         return Err(ApiError::Conflict {
             code: "draft_changed",
             message: "The draft changed since you looked at its migration. Look at it again."
@@ -185,6 +190,9 @@ async fn statements(
                 .await?
                 .ok_or_else(|| ApiError::not_found("The playground's version is gone."))?;
             let old = base.schema()?;
+            let mut decisions = content.renames.clone();
+            decisions.extend(on_screen.cloned().unwrap_or_default());
+            let renames = content.rename_choices(Some(&decisions));
             let planned = tokio::task::spawn_blocking(move || {
                 // As the playground's Postgres runs it.
                 romulus_migration::migration(
@@ -192,6 +200,7 @@ async fn statements(
                     &new,
                     &Options {
                         major: Some(MAJOR.number()),
+                        renames,
                         ..Options::default()
                     },
                 )
@@ -325,7 +334,14 @@ pub(super) async fn run_migration(
     state.limits.playground_actions.check(id)?;
     // Checked before the statements are planned: a host that is off answers now.
     let backend = state.playgrounds.host.backend()?;
-    let statements = statements(&state, &row, draft, &request.sha256).await?;
+    let statements = statements(
+        &state,
+        &row,
+        draft,
+        &request.sha256,
+        request.renames.as_ref(),
+    )
+    .await?;
     let script: String = statements
         .iter()
         .map(|s| s.sql.as_str())

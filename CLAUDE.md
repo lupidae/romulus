@@ -12,7 +12,8 @@ hosted by lupidae and self-hostable for one organization
 
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
-crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API
+crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API;
+                      `rename`: renames between two models (known, detected and scored, chosen)
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
                       (a catalog in miniature, ruleutils' printing), diff, migration; oracle in tests/
 crates/romulus-migration/ model → model migration (ALTER … in dependency order), tool files; no I/O; oracle in tests/
@@ -332,6 +333,37 @@ Made in the skeleton (S0):
   model has no names for a partition's own keys and indexes, so a detached
   one's are Postgres's defaults, guessed (`IF EXISTS`/`IF NOT EXISTS`, a
   `guessed_names` warning).
+- **Renames in migrations** (docs/MVP.md "Migrations: renames and
+  dependents"): `Options::renames` (`RenameChoices`: `known`, `decisions` by
+  `Rename::key`, `detect`) goes to `romulus_diff::resolve`, which detects
+  and scores candidates level by level, follows known renames (chains,
+  swaps) and hands the planner the old model as Postgres has it after the
+  renames (`rename/sql.rs` rewrites dependents as `pg_get_*def` prints
+  them; views it cannot follow are rebuilt). `Migration::renames` lists
+  every candidate, `Migration::applied` what ran. Known renames: a draft's
+  `Content::rename_choices` (its text's `ALTER … RENAME` beyond its base:
+  `romulus_sandbox::known_renames`, plus the doc's `renames` map of
+  decisions, editors only); a version's `versions.renames` (stored at
+  publish: what ran and what was left off;
+  `versions::migration::stored_renames` composes a range version by
+  version: `RenameChoices::compose`, each version's renames a batch,
+  `RenameChoices::batches`, run to the end, swaps included, before the
+  next; `reversed()` going back). Every migration
+  endpoint takes `renames` (a JSON object key → bool) merged over those.
+  The doc's decisions are part of what is reviewed: `compile::review_hash`
+  (`publish::reviewed`; `publish::is_current` also accepts the text's own
+  hash, for a request carrying its renames), so a switch outdates
+  approvals and makes its author an editor (`Room::renames_may_have_changed`),
+  `ApproveDraft::renames` must be the doc's, and publish refuses other
+  `PublishDraft::renames` (409 `renames_changed`). The web removes a
+  decision equal to romulus's own (`DraftSession.setRenames(patch,
+  defaults)`), so switching back brings approvals back. Moves are renames
+  with `to_schema` (`ALTER … SET SCHEMA`, `plan::rename_statements`).
+  Dependents a change drops come back after it (the scenarios
+  `dependents_of_*` and `rename_*`, and the oracle's down run, prove it):
+  keep it so when you touch `plan.rs`. Foreign keys Postgres copies per
+  partition of a referenced partitioned table are never created or dropped
+  (`plan::fk_clone`, `without_fk_clones`).
 - **Postgres majors** (`databases::major`, docs/MVP.md "Several Postgres
   majors"): `POST …/major/check` (the latest version compiled on another
   major: `MajorCheck`) and `PUT …/major` (refused with 422
@@ -395,7 +427,8 @@ src/components/ui/       the kit: Button, Input/Textarea (Input `prefix`), Passw
                          TabNav (link tabs, one URL each), CodeBlock (copyable
                          lines), FileButton (opens the file picker), Checkbox, Combobox
                          (a field with suggestions: ARIA combobox, the field keeps focus),
-                         MentionTextarea (`@` suggests people); Sheet takes `side` (left, right)
+                         MentionTextarea (`@` suggests people), Switch (on/off at once); Sheet
+                         takes `side` (left, right)
 src/components/shell/    AppShell (top bar, org switcher, user menu, nav: a rail by default,
                          opened with ⌘\, remembered per user; panel), PageHeader,
                          PageBody, status pages (404/500), the sign-in preview
@@ -422,9 +455,11 @@ src/features/comments/   comment threads (see "Comments" below): the model (anch
                          CommentsPanel, CommentPins (graph + comment mode), sqlThreads (CodeMirror)
 src/features/time-machine/  the time machine: versions superposed (history, scale, frames,
                          timeline, history panel); /app/dev/time-machine shows it on fixtures
-src/features/migration/  MigrationView (tool picker, concurrently, warnings, files with destructive
-                         lines tinted, Copy, Download/.zip; no router): the diff page's Migration
-                         view (?view=migration) and the publish dialog's Migration tab
+src/features/migration/  MigrationView (tool picker, concurrently, renames to switch (`Renames`;
+                         `renames` prop: a draft's decisions, else its own), warnings, files with
+                         destructive lines tinted, Copy, Download/.zip; no router): the diff page's
+                         Migration view (?view=migration) and the publish dialog's Migration tab;
+                         RenamesNote (above a by-name change list: how many are renames)
 src/api/                 client.ts (typed openapi-fetch + CSRF header), generated types
 src/styles/globals.css   every token; the only file with raw colors
 ```

@@ -80,7 +80,7 @@
 //!   its socket with 4413).
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -355,6 +355,8 @@ pub struct Content {
     pub approved_by: Vec<Uuid>,
     /// The comment threads, with their comments (`comments::discussion`).
     pub discussion: Vec<comments::DocThread>,
+    /// The renames people turned on or off in the migration (`doc::RENAMES`).
+    pub renames: BTreeMap<String, bool>,
 }
 
 impl Content {
@@ -363,6 +365,26 @@ impl Content {
         match self.mode {
             DraftMode::Schema => &self.sql,
             DraftMode::Migration => &self.migration,
+        }
+    }
+
+    /// What the migration from the base takes for renames: the ones the
+    /// source runs beyond its base (`ALTER … RENAME`, graph edits'
+    /// included) as known, and the decisions in the doc, or `decisions`
+    /// (what a person has on screen) when given.
+    pub fn rename_choices(
+        &self,
+        decisions: Option<&BTreeMap<String, bool>>,
+    ) -> romulus_migration::RenameChoices {
+        let known = match self.mode {
+            DraftMode::Schema => romulus_sandbox::known_renames(&self.base_sql, &self.sql),
+            DraftMode::Migration => romulus_sandbox::known_renames("", &self.migration),
+        };
+        romulus_migration::RenameChoices {
+            known,
+            batches: Vec::new(),
+            decisions: decisions.unwrap_or(&self.renames).clone(),
+            detect: true,
         }
     }
 }
@@ -466,8 +488,11 @@ pub enum Command {
     CheckApproval {
         user_id: Uuid,
         sha256: String,
-        /// With what the approval is of: the source on its base
-        /// (`compile::input_hash`), what approvals are kept and counted by.
+        /// The renames turned on or off as the person saw them.
+        renames: BTreeMap<String, bool>,
+        /// With what the approval is of: the source on its base and the
+        /// renames (`compile::review_hash`), what approvals are kept and
+        /// counted by.
         reply: oneshot::Sender<Result<String, ApprovalError>>,
     },
     Review(ReviewChange),
@@ -721,6 +746,11 @@ struct Room {
     /// Set when a transaction changes `sql` / `migration` (observers).
     touched_sql: Arc<AtomicBool>,
     touched_migration: Arc<AtomicBool>,
+    /// Set when a transaction changes `renames` (an observer).
+    touched_renames: Arc<AtomicBool>,
+    /// The renames turned on or off (`doc::RENAMES`) as of the last update
+    /// applied: part of what is reviewed.
+    renames: BTreeMap<String, bool>,
     /// What the last transaction changed in the threads and comments
     /// (observers), for [`Room::check_comments`].
     comment_changes: Arc<std::sync::Mutex<Changes>>,
@@ -952,6 +982,7 @@ impl Room {
         let mode = roots.mode(&doc.transact());
         let source = roots.source(&doc.transact(), mode);
         let inactive = roots.source(&doc.transact(), other(mode));
+        let renames = roots.rename_decisions(&doc.transact());
         // A database deleted while this loaded: its drafts are deleted too.
         let database_deleted = hub.attach(loaded.database_id, &shared);
         let status = match loaded.status {
@@ -988,6 +1019,8 @@ impl Room {
             inactive,
             touched_sql: Arc::new(AtomicBool::new(false)),
             touched_migration: Arc::new(AtomicBool::new(false)),
+            touched_renames: Arc::new(AtomicBool::new(false)),
+            renames,
             comment_changes: Arc::default(),
             op_budgets: HashMap::new(),
             conns: HashMap::new(),
@@ -1081,6 +1114,10 @@ impl Room {
             let flag = Arc::clone(flag);
             text.observe("room", move |_, _| flag.store(true, Ordering::Relaxed));
         }
+        let flag = Arc::clone(&self.touched_renames);
+        self.roots
+            .renames
+            .observe("room", move |_, _| flag.store(true, Ordering::Relaxed));
         comments::observe(
             &self.roots.threads,
             &self.roots.comments,
@@ -1170,9 +1207,10 @@ impl Room {
             Command::CheckApproval {
                 user_id,
                 sha256,
+                renames,
                 reply,
             } => {
-                let _ = reply.send(self.check_approval(user_id, &sha256));
+                let _ = reply.send(self.check_approval(user_id, &sha256, &renames));
             }
             Command::Review(change) => self.review_changed(change),
             Command::Rewrite {
@@ -1470,7 +1508,7 @@ impl Room {
             let mode = self.mode;
             self.server_edit(|roots, txn| roots.set_mode(txn, mode));
         }
-        if self.source_may_have_changed() {
+        if self.source_may_have_changed() | self.renames_may_have_changed() {
             self.edited_by(user_id);
         }
         self.retry_waiting();
@@ -2057,13 +2095,17 @@ impl Room {
         let compiled_now = self.last_compile.as_ref().is_some_and(|last| {
             last.state == CompileState::Ok && last.input.as_deref() == Some(&input)
         });
+        let renames = self.roots.rename_decisions(&txn);
         Content {
             mode: self.mode,
             layout: self.roots.layout(&txn),
             model: compiled_now.then(|| self.good_model.clone()).flatten(),
             merged: self.roots.merged(&txn),
-            approved_by: self.review.approved_by(&input),
+            approved_by: self
+                .review
+                .approved_by(&compile::review_hash(&input, &renames)),
             discussion: self.roots.discussion(&txn),
+            renames,
             sql: self.roots.sql(&txn),
             migration: self.roots.migration(&txn),
             base_version: self.base_version,
@@ -2075,19 +2117,23 @@ impl Room {
     // ---- Review ---------------------------------------------------------------
 
     /// The hash approvals are compared with: what is reviewed (the source;
-    /// in migration mode on its base, `compile::input_hash`), when there is
-    /// any approval to compare (hashing a large text for nothing on every
-    /// keystroke is not free).
+    /// in migration mode on its base; and the renames:
+    /// `compile::review_hash`), when there is any approval to compare
+    /// (hashing a large text for nothing on every keystroke is not free).
     fn sha256_for_review(&self) -> String {
         if self.review.approvals.is_empty() {
             String::new()
         } else {
-            compile::input_hash(self.mode, &self.base_sql, &self.source)
+            compile::review_hash(
+                &compile::input_hash(self.mode, &self.base_sql, &self.source),
+                &self.renames,
+            )
         }
     }
 
-    /// Someone's update changed the SQL: they are an editor now (written
-    /// once), and the approvals may no longer count.
+    /// Someone's update changed the SQL or the renames turned on or off:
+    /// they are an editor now (written once), and the approvals may no
+    /// longer count.
     fn edited_by(&mut self, user_id: Uuid) {
         let new = self.review.editors.insert(user_id);
         if new {
@@ -2128,21 +2174,32 @@ impl Room {
     }
 
     /// Whether `user_id` may approve the source as it is now, the text
-    /// hashing to `sha256` (what the person saw); with what their approval
-    /// is then of: that text on its base (`compile::input_hash`), so that
-    /// in migration mode an "Update draft" outdates it.
-    fn check_approval(&self, user_id: Uuid, sha256: &str) -> Result<String, ApprovalError> {
+    /// hashing to `sha256` with the renames `renames` (what the person
+    /// saw); with what their approval is then of: that text on its base and
+    /// the renames (`compile::review_hash`), so that in migration mode an
+    /// "Update draft" outdates it, and a rename switched does everywhere.
+    fn check_approval(
+        &self,
+        user_id: Uuid,
+        sha256: &str,
+        renames: &BTreeMap<String, bool>,
+    ) -> Result<String, ApprovalError> {
         if self.status != LiveStatus::Open {
             return Err(ApprovalError::NotOpen);
         }
         if self.review.editors.contains(&user_id) {
             return Err(ApprovalError::Editor);
         }
-        let current = self.roots.source(&self.doc.transact(), self.mode);
-        if sha256_hex(&current) != sha256 {
+        let txn = self.doc.transact();
+        let current = self.roots.source(&txn, self.mode);
+        let decisions = self.roots.rename_decisions(&txn);
+        if sha256_hex(&current) != sha256 || *renames != decisions {
             return Err(ApprovalError::Changed);
         }
-        Ok(compile::input_hash(self.mode, &self.base_sql, &current))
+        Ok(compile::review_hash(
+            &compile::input_hash(self.mode, &self.base_sql, &current),
+            &decisions,
+        ))
     }
 
     // ---- Awareness ----------------------------------------------------------
@@ -2311,6 +2368,21 @@ impl Room {
     // ---- Compiling ------------------------------------------------------------
 
     /// Whether it did.
+    /// Whether the renames turned on or off changed: what is reviewed did,
+    /// as with an edit of the source (nothing compiles again: the model is
+    /// the same).
+    fn renames_may_have_changed(&mut self) -> bool {
+        if !self.touched_renames.swap(false, Ordering::Relaxed) {
+            return false;
+        }
+        let renames = self.roots.rename_decisions(&self.doc.transact());
+        if renames == self.renames {
+            return false;
+        }
+        self.renames = renames;
+        true
+    }
+
     fn source_may_have_changed(&mut self) -> bool {
         let source = self.roots.source(&self.doc.transact(), self.mode);
         if source == self.source {

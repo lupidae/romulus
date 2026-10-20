@@ -132,6 +132,7 @@ fn every_corpus_schema_is_built_and_dropped_by_each_tool() {
             let format = Format::ALL[i % Format::ALL.len()];
             for format in [format, Format::GolangMigrate, Format::Dbmate] {
                 cases.push(ToolCase {
+                    rows: false,
                     label: format!("nothing → {name}"),
                     old: nothing.clone(),
                     new: model.clone(),
@@ -142,6 +143,7 @@ fn every_corpus_schema_is_built_and_dropped_by_each_tool() {
             }
             let (next, next_model) = &models[(i + 1) % models.len()];
             cases.push(ToolCase {
+                rows: false,
                 label: format!("{name} → {next}"),
                 old: model.clone(),
                 new: next_model.clone(),

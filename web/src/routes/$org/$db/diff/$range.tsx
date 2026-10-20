@@ -17,6 +17,7 @@ import { Identical } from "@/features/diff/components/identical";
 import { SchemaDiffView } from "@/features/diff/components/schema-diff-view";
 import { diffQuery, parseRange, rangeParam } from "@/features/diff/queries";
 import { MigrationView } from "@/features/migration/components/migration-view";
+import { RenamesNote } from "@/features/migration/components/renames-note";
 import { versionMigrationQuery } from "@/features/migration/queries";
 import { parseSchema, SchemaParseError } from "@/features/schema/model";
 import { useDebounced } from "@/lib/use-debounced";
@@ -169,6 +170,7 @@ function Compare() {
           query={(choice) =>
             versionMigrationQuery(org, db, database.id, database.pg_major, from, to, choice)
           }
+          knownRenames="Known renames: chosen when a version in this range was published."
           className="min-h-0 flex-1"
         />
       </div>
@@ -222,28 +224,37 @@ function Compare() {
     );
   } else {
     body = (
-      <SchemaDiffView
-        // A new pair is a new view: its own selection, graph and scroll.
-        key={rangeParam(from, to)}
-        before={models.before}
-        after={models.after}
-        diff={diff.data.diff}
-        sql={diff.data.sql}
-        layout={diff.data.layout.layout}
-        groups={diff.data.layout.groups}
-        labels={{ before: `v${from}`, after: `v${to}` }}
-        defaultSelected={search.change}
-        onSelectedChange={selectInUrl}
-        filter={search.show ?? "all"}
-        onFilterChange={(show) =>
-          void navigate({
-            search: (s) => ({ ...s, show: show === "all" ? undefined : show }),
-            replace: true,
-            resetScroll: false,
-          })
-        }
-        storageKey="romulus:diff-view"
-      />
+      <div className="flex h-full min-h-0 flex-col">
+        <RenamesNote
+          query={(choice) =>
+            versionMigrationQuery(org, db, database.id, database.pg_major, from, to, choice)
+          }
+          onShow={() => setView("migration")}
+        />
+        <SchemaDiffView
+          // A new pair is a new view: its own selection, graph and scroll.
+          key={rangeParam(from, to)}
+          className="h-auto min-h-0 flex-1"
+          before={models.before}
+          after={models.after}
+          diff={diff.data.diff}
+          sql={diff.data.sql}
+          layout={diff.data.layout.layout}
+          groups={diff.data.layout.groups}
+          labels={{ before: `v${from}`, after: `v${to}` }}
+          defaultSelected={search.change}
+          onSelectedChange={selectInUrl}
+          filter={search.show ?? "all"}
+          onFilterChange={(show) =>
+            void navigate({
+              search: (s) => ({ ...s, show: show === "all" ? undefined : show }),
+              replace: true,
+              resetScroll: false,
+            })
+          }
+          storageKey="romulus:diff-view"
+        />
+      </div>
     );
   }
 

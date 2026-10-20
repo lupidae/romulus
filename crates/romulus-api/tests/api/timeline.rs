@@ -314,6 +314,7 @@ async fn the_layout_places_every_table_the_history_had(db: PgPool) {
             migration_sql: None,
             compiled_on: None,
             discussion: Vec::new(),
+            renames: None,
         }
     };
     store(

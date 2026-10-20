@@ -6,19 +6,31 @@
 //! tool has one. A draft's migration ([`crate::drafts::migration`]) shares
 //! [`SchemaMigration`] and [`build`].
 //!
+//! Renames: the versions in the range keep the renames they were
+//! published with (`versions.renames`, see [`stored_renames`]); they are
+//! known, and the renames detected beyond them are on or off as decided then.
+//! `renames` (a JSON object of `romulus_diff::Rename::key` → on or off)
+//! turns detected ones on or off over those. The response lists every
+//! candidate ([`SchemaMigration::renames`]) for the person to choose.
+//!
 //! Nothing is cached: two models in, a few milliseconds of planning out.
 //! The file names carry the time of the request (UTC), as the tools' own
 //! `migrate add` would.
+
+use std::collections::BTreeMap;
 
 use axum::extract::State;
 use chrono::Utc;
 use remus_core::Schema;
 use romulus_migration::{
-    File, Format, Meta, Options, Statement, Warning, archive_name, files, migration, slug,
+    Candidate, File, Format, Meta, Options, RenameChoices, Statement, Warning, archive_name, files,
+    migration, slug,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use utoipa::{IntoParams, ToSchema};
 use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 use super::detail;
 use crate::{
@@ -55,6 +67,32 @@ pub struct MigrationOptions {
     /// golang-migrate sequence like `000042`; by default the time,
     /// `YYYYMMDDHHMMSS`). Files after it take the next ones.
     pub version: Option<String>,
+    /// Renames turned on or off, over what is stored (the draft's choices,
+    /// the versions'): a JSON object of rename keys
+    /// (`SchemaMigration.renames[].key`) to `true` or `false`, like
+    /// `{"column/public/users/email/email_address":false}`.
+    pub renames: Option<String>,
+}
+
+impl MigrationOptions {
+    /// The decisions in `renames`, or 400 `bad_request` when it is not a
+    /// JSON object of booleans (at most 2000, keys at most 2048 bytes).
+    pub(crate) fn rename_decisions(&self) -> ApiResult<Option<BTreeMap<String, bool>>> {
+        let Some(text) = self.renames.as_deref().filter(|t| !t.trim().is_empty()) else {
+            return Ok(None);
+        };
+        let decisions: BTreeMap<String, bool> = serde_json::from_str(text).map_err(|_| {
+            ApiError::BadRequest("renames: a JSON object of rename keys to true or false".into())
+        })?;
+        if decisions.len() > crate::collab::doc::MAX_RENAME_DECISIONS
+            || decisions.keys().any(|k| k.len() > 2048)
+        {
+            return Err(ApiError::BadRequest(
+                "renames: too many, or keys too long".into(),
+            ));
+        }
+        Ok(Some(decisions))
+    }
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -89,6 +127,9 @@ pub struct SchemaMigration {
     pub archive: String,
     /// The Postgres major it is written for: the database's.
     pub pg_major: PgMajor,
+    /// Every rename considered, known or detected, applied or not: what a
+    /// person turns on or off (`renames` in the request, by `key`).
+    pub renames: Vec<Candidate>,
 }
 
 /// The two sides, for [`build`].
@@ -107,6 +148,8 @@ pub(crate) struct Sides<'a> {
     pub database: String,
     /// The major the database targets: what the migration is planned for.
     pub major: PgMajor,
+    /// The renames to plan with.
+    pub renames: RenameChoices,
 }
 
 /// Plans the migration and lays it out (off the async workers: a few
@@ -145,6 +188,7 @@ pub(crate) async fn build(
     let (old, new) = (sides.old.clone(), sides.new.clone());
     let concurrently = options.concurrently;
     let major = Some(sides.major.number());
+    let renames = sides.renames;
     let (up, files) = tokio::task::spawn_blocking(move || {
         let up = migration(
             &old,
@@ -152,17 +196,11 @@ pub(crate) async fn build(
             &Options {
                 concurrently,
                 major,
+                renames,
             },
         );
         let down = if format.has_down() {
-            migration(
-                &new,
-                &old,
-                &Options {
-                    major,
-                    ..Options::default()
-                },
-            )
+            romulus_migration::down(&old, &new, &up)
         } else {
             romulus_migration::Migration::default()
         };
@@ -181,6 +219,45 @@ pub(crate) async fn build(
         files,
         archive,
         pg_major: sides.major,
+        renames: up.renames,
+    })
+}
+
+/// The renames the versions from `from` (excluded) to `to` were published
+/// with, in order: what a migration between them goes by, composed
+/// version by version (`RenameChoices::compose`: each version's renames a
+/// batch, swaps included, before the next version's; its decisions as they
+/// read after the later versions' renames). Going back (`to` below
+/// `from`), the same renames reversed, last first, batch by batch; their
+/// decisions are about the way forward, and do not apply. Removed versions
+/// count (an exception to filtering them out): their renames happened
+/// between the two all the same.
+pub(crate) async fn stored_renames(
+    db: &PgPool,
+    database_id: Uuid,
+    from: i32,
+    to: i32,
+) -> ApiResult<RenameChoices> {
+    let (low, high) = (from.min(to), from.max(to));
+    let rows = sqlx::query_scalar!(
+        "SELECT renames FROM versions
+         WHERE database_id = $1 AND number > $2 AND number <= $3
+         ORDER BY number",
+        database_id,
+        low,
+        high,
+    )
+    .fetch_all(db)
+    .await?;
+    // `{}` (not published from a draft) reads as nothing known.
+    let forward = RenameChoices::compose(
+        rows.into_iter()
+            .map(|value| serde_json::from_value::<RenameChoices>(value).unwrap_or_default()),
+    );
+    Ok(if from <= to {
+        forward
+    } else {
+        forward.reversed()
     })
 }
 
@@ -224,7 +301,7 @@ fn checked_version(format: Format, version: &str) -> ApiResult<String> {
     ),
     responses(
         (status = 200, body = SchemaMigration),
-        (status = 400, description = "`bad_request`: a number that is not one, an unknown format", body = ErrorBody),
+        (status = 400, description = "`bad_request`: a number that is not one, an unknown format, `renames` that is not a JSON object of booleans", body = ErrorBody),
         (status = 404, description = "`not_found`: no such database, or no such version", body = ErrorBody),
         (status = 422, description = "`validation`: a number below 1", body = ErrorBody),
     )
@@ -250,6 +327,10 @@ async fn version_migration(
     };
     let old = Schema::deserialize(&from.model).map_err(ApiError::internal)?;
     let new = Schema::deserialize(&to.model).map_err(ApiError::internal)?;
+    let mut renames = stored_renames(&state.db, database.id, versions.from, versions.to).await?;
+    if let Some(decisions) = options.rename_decisions()? {
+        renames.decisions.extend(decisions);
+    }
     let name = to
         .message
         .as_deref()
@@ -274,6 +355,7 @@ async fn version_migration(
         name,
         database: format!("{org}/{slug}"),
         major: database.pg_major,
+        renames,
     };
     Ok(Json(build(sides, options).await?))
 }

@@ -247,6 +247,7 @@ function engine(parser: PgQueryModule): Engine {
                 date,
                 timestamp,
                 major: 17,
+                renames: choice.renames ?? {},
               }),
             ),
           ),

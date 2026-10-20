@@ -10,6 +10,10 @@ export type MigrationStatement = components["schemas"]["MigrationStatement"];
 export type MigrationWarning = components["schemas"]["MigrationWarning"];
 export type MigrationHazard = components["schemas"]["MigrationHazard"];
 export type MigrationMark = components["schemas"]["MigrationMark"];
+export type RenameCandidate = components["schemas"]["RenameCandidate"];
+
+/** Renames turned on or off, by key (`RenameCandidate.key`). */
+export type RenameDecisions = Record<string, boolean>;
 
 /** How a migration is laid out: the tool, indexes built concurrently or not, and the first file's version. */
 export interface MigrationChoice {
@@ -17,6 +21,14 @@ export interface MigrationChoice {
   concurrently: boolean;
   /** Where the tool numbers its migrations: Flyway's next `V<n>`, golang-migrate's next sequence. */
   version?: string;
+  /** Renames turned on or off, over the stored ones (the draft's, the versions'). */
+  renames?: RenameDecisions;
+}
+
+/** The query parameters of a choice: `renames` as JSON, only when there are some. */
+function params({ renames, ...rest }: MigrationChoice) {
+  const decided = renames && Object.keys(renames).length > 0;
+  return { ...rest, ...(decided ? { renames: JSON.stringify(renames) } : {}) };
 }
 
 /** Tools whose versions are often the user's own numbering, not a timestamp. */
@@ -79,7 +91,7 @@ export const versionMigrationQuery = (
     queryFn: () =>
       unwrap(
         api.GET("/api/orgs/{org}/databases/{db}/migration", {
-          params: { path: { org, db }, query: { from, to, ...choice } },
+          params: { path: { org, db }, query: { from, to, ...params(choice) } },
         }),
       ),
     // Versions never change; the files' timestamp is the first request's.
@@ -102,7 +114,7 @@ export const draftMigrationQuery = (
       try {
         return await unwrap(
           api.GET("/api/orgs/{org}/databases/{db}/drafts/{id}/migration", {
-            params: { path: { org, db, id }, query: { ...choice, sha256 } },
+            params: { path: { org, db, id }, query: { ...params(choice), sha256 } },
           }),
         );
       } catch (error) {

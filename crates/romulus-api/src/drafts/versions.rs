@@ -97,6 +97,9 @@ pub struct DraftVersion {
     pub compiled_on: PgMajor,
     /// Its comment threads, frozen with the version as review history.
     pub discussion: Vec<crate::collab::comments::DocThread>,
+    /// The renames of the migration from its base, as the person saw it
+    /// (`None`: a first version).
+    pub renames: Option<romulus_migration::RenameChoices>,
 }
 
 pub struct Created {
@@ -127,6 +130,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             migration_sql: new.migration_sql,
             compiled_on: Some(new.compiled_on),
             discussion: new.discussion,
+            renames: new.renames,
         },
         false,
     )

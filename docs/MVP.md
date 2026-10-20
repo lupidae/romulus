@@ -309,7 +309,8 @@ A diff is computed between two **models**, not two texts:
 
 - Semantic: tables / columns / constraints / indexes / enums / policies added,
   removed, changed (type, nullability, default, comment…). Matched by qualified
-  name, which also means a rename shows up as drop + add in the MVP.
+  name, which also means a rename shows up as drop + add in the change list
+  (migrations rename: see "Migrations: renames and dependents").
 - Shown three ways: a change list, the graph with added/removed/changed
   highlighted, and a side-by-side text diff of the rendered SQL.
 
@@ -507,8 +508,9 @@ Two features, built in this order:
    two versions, produce a ready-to-review migration (`ALTER …` statements in
    dependency order, with destructive changes flagged) in the formats above
    (file naming per tool), downloadable or copyable.
-   Built (crates/romulus-migration): renames appear as a drop and an add,
-   flagged "possibly a rename" with the `RENAME` offered in a comment; columns
+   Built (crates/romulus-migration): renames are `ALTER … RENAME` (see
+   "Migrations: renames and dependents" below; a rename left off is a drop
+   and an add, with the `RENAME` offered in a comment); columns
    added in the middle go last (Postgres cannot reorder; a warning says so);
    an enum losing or reordering labels, or a domain changing type, is
    recreated and its columns converted; a table changing kind or partition
@@ -682,6 +684,95 @@ Two features, built in this order:
 below), then a **playground** (a real throwaway database per draft with generated fake data,
 to run SQL and try migrations) — design document first: [docs/playground.md](playground.md)
 (proposed, awaiting approval).
+
+## Migrations: renames and dependents (decided 2026-10-19, built: task MIG2)
+
+A rename is `ALTER … RENAME`, never a drop and an add that loses the data, and
+everything a change drops to be possible comes back after it.
+
+- **Detect, then confirm.** `romulus_diff::resolve` pairs removed and added objects
+  that look like one object renamed: tables, views, materialized views, partitions,
+  columns, constraints, indexes, policies, the sequences serial columns draw from,
+  enums, domains, composites, enum labels (`RENAME VALUE`) and composite attributes.
+  Functions and triggers are not modelled, so they are not either. Each pair is scored
+  out of 100 (the rules are in `crates/romulus-diff/src/rename/mod.rs`): **high** (an
+  exact structural match scoring 72 or more, with evidence beyond the shape: a similar
+  name or the same comment; a table also its keys following it, or a move) is applied
+  unless turned off; **medium** (from 45: a compatible type in the same place, most of
+  a table's columns, or an exact match with unalike names, `password_hash` → `bio`) is
+  offered, off. Two pairs within 5 points of each other for one object are
+  **rivals**: both offered, neither chosen. The name only breaks ties (25 points at
+  most).
+- **Moves** (`ALTER … SET SCHEMA`) are renames into another schema: a table, view or
+  type found under the same name in another schema is detected (high), and `SET
+  SCHEMA` in a draft's text is known; a moved table takes its keys, indexes and
+  sequences along. The schema is created first when the old model has none.
+- **Known renames need no confirmation**: the `ALTER … RENAME` statements a draft's
+  text runs beyond its base's text (graph edits append them; a migration-mode draft
+  has them), read by `romulus_sandbox::known_renames`, and the renames a version was
+  published with. Chains and swaps are followed object by object (a swap goes through
+  a temporary name); renames waiting on each other's names are applied cycle by
+  cycle, so one waiting on an unrelated name does not hold back a swap, and what names
+  a swapped object by its new name (a column of a swapped table, under the table's
+  final name) is tried again once the swap is done.
+- **Levels**: types, tables, columns, labels and attributes, sequences, keys, indexes,
+  policies, partitions, views, each on the old model with the renames chosen so far
+  done. A key or index Postgres named after a renamed table or column
+  (`users_email_key`) is renamed with it ("along with it"), without a choice of its
+  own; one that only changed its name is its own candidate.
+- **Postgres semantics.** The migration runs the renames first, then is planned from
+  the old model as Postgres has it after them: indexes, keys, checks, policies,
+  views, defaults and casts follow by OID, so they are rewritten as `pg_get_*def`
+  prints them then, not dropped and created again. A view keeps its output names
+  (`code AS old_name`); a view the rewrite cannot follow (a `UNION`, a subquery) is
+  built again. A renamed column that changes type is converted after its rename.
+- **Choices are the draft's**: its Y.Doc's `renames` map (rename key → on or off),
+  live for everyone in it, switched by editors. Every migration endpoint takes
+  `renames` (what the person has on screen) over the stored choices and answers every
+  candidate. Publishing stores, with the version (`versions.renames`), the renames its
+  migration ran and the ones it left off; a migration between versions goes by the
+  renames of the versions in between, **version by version** (`RenameChoices::compose`:
+  each version's renames a batch, its swaps included, done before the next version's,
+  so a later rename lands on the object that version had under that name; each
+  version's decisions as they read after the later versions' renames, off where two
+  versions decided one key differently: one turned it off on purpose), reversed going
+  back batch by batch, so
+  v(N−1) → vN is the one seen at publish. The version diff page offers the same switches. **Approvals are of
+  the text and the switches**: what is reviewed (`compile::review_hash`) covers the
+  doc's decisions, so switching a rename outdates approvals as an edit does (and makes
+  the person an editor), switching it back brings them back (a decision equal to
+  romulus's own choice is removed from the doc), an approval names the switches seen,
+  and a publish whose switches are not the doc's is refused (409 `renames_changed`).
+  The publish dialog waits for the preview and the migration to catch up with a
+  switch before it lets anyone publish.
+- **Versions published before renames existed** store none: their migrations detect
+  renames anew on every download (high ones on, as for a draft), so an older pair's
+  migration may now rename where it used to drop and add. Download it again before
+  running one generated earlier.
+- **Function and trigger bodies are not in the model**: a migration that renames or
+  converts columns, tables, views or types warns (`function_bodies`) that bodies
+  naming them are not rewritten, by Postgres or by romulus.
+- **Down migrations mirror the up** (`romulus_migration::down`): its renames reversed,
+  nothing detected anew.
+- **Dependents come back.** Every object dropped to make a change possible is created
+  again after it, in dependency order, up and down: views (and views over them),
+  policies, keys and the foreign keys referencing them (dropped before the key, added
+  after), indexes, checks, defaults, generated columns, comments of a column added
+  again, composite attributes and domains over a recreated enum. Fixed while building:
+  a re-added column lost its comment; a recreated enum left defaults, checks,
+  generated columns, composite attributes and domains on the old type; the
+  per-partition copies of a foreign key to a partitioned table were created twice
+  (and `render_sql` wrote them out); a removed table's partitions held names new ones
+  took; an index on a dropped column was dropped `CONCURRENTLY` after the column took
+  it; a dropped generated column went after the column it reads.
+- **Proven by the oracle** (`crates/romulus-migration/tests/oracle`): a scenario per
+  dependency kind and per rename kind (rewritten, and with `ALTER … RENAME` known),
+  every scenario again with renames off, the down migration run after the up and
+  checked against the old schema, random edits that rename what others depend on.
+- Follow-ups: the change list and the graph of a diff still compare by name (a rename
+  reads as removed + added there; a line above them says how many changes the
+  migration runs as renames, with the way to it); renaming a schema itself is not
+  detected.
 
 ## Several Postgres majors (decided 2026-10-16, built: task PGV)
 

@@ -39,9 +39,26 @@ import {
   type MigrationTool,
   type MigrationWarning,
   NUMBERED,
+  type RenameDecisions,
   TOOLS,
 } from "../queries";
 import { save, zip } from "../zip";
+import { Renames } from "./renames";
+
+/** Where rename decisions live when not in the view itself (a draft's: everyone's). */
+export interface RenameControl {
+  /** What is on screen. */
+  decisions: RenameDecisions;
+  /**
+   * Changes them, with what romulus does for each by itself (`defaults`);
+   * absent or with `readOnly`, the switches are disabled.
+   */
+  onChange?: (patch: RenameDecisions, defaults: RenameDecisions) => void;
+  /** Why they cannot be changed here. */
+  readOnly?: string;
+  /** What makes a known rename known here. */
+  known?: string;
+}
 
 export interface MigrationViewProps {
   /** The query for a tool and options: between two versions, or for a draft. */
@@ -59,6 +76,21 @@ export interface MigrationViewProps {
   storageKey?: string;
   /** The tool shown until one is picked. */
   defaultFormat?: MigrationTool;
+  /**
+   * Where the rename decisions live (a draft's: everyone's), when not in
+   * the view itself: what is on screen, and how to change it (absent or
+   * `readOnly`: the switches are disabled, saying why). Without it the
+   * view keeps them while it is shown.
+   */
+  renames?: RenameControl;
+  /** What makes a known rename known here, when the view keeps the decisions. */
+  knownRenames?: string;
+  /**
+   * Whether the migration on screen is behind what was chosen (fetching
+   * after a rename was switched, or a tool picked): a dialog publishing it
+   * waits. Called with `false` when the view goes.
+   */
+  onPendingChange?: (pending: boolean) => void;
   className?: string;
 }
 
@@ -81,8 +113,16 @@ export function MigrationView({
   busy = false,
   storageKey = "romulus:migration",
   defaultFormat = "plain",
+  renames,
+  knownRenames,
+  onPendingChange,
   className,
 }: MigrationViewProps) {
+  const [ownDecisions, setOwnDecisions] = React.useState<RenameDecisions>({});
+  const decisions = renames?.decisions ?? ownDecisions;
+  const changeRenames = renames
+    ? renames.onChange
+    : (patch: RenameDecisions) => setOwnDecisions((d) => ({ ...d, ...patch }));
   const [format, setFormat] = usePreference(`${storageKey}-tool`, defaultFormat, isTool);
   const [concurrently, setConcurrently] = usePreference(
     `${storageKey}-concurrently`,
@@ -104,12 +144,25 @@ export function MigrationView({
     versionText.trim() !== "" &&
     !numbered.pattern.test(versionText.trim());
   const migration = useQuery({
-    ...query({ format, concurrently, version: numbered ? version : undefined }),
+    ...query({
+      format,
+      concurrently,
+      version: numbered ? version : undefined,
+      renames: decisions,
+    }),
     // Another tool keeps the last files on screen while the new ones load.
     placeholderData: keepPreviousData,
     enabled: !blocked,
   });
   const data = blocked ? undefined : migration.data;
+  // The migration shown is of what is on screen (not the last one, kept
+  // while the next loads).
+  const fresh = migration.isSuccess && !migration.isPlaceholderData;
+  const pending = !blocked && !fresh && !migration.isError;
+  React.useEffect(() => {
+    onPendingChange?.(pending);
+  }, [pending, onPendingChange]);
+  React.useEffect(() => () => onPendingChange?.(false), [onPendingChange]);
   const uid = React.useId();
 
   const [fileIndex, setFileIndex] = React.useState(0);
@@ -365,6 +418,14 @@ export function MigrationView({
         </div>
       ) : (
         <>
+          <Renames
+            candidates={data.renames}
+            decisions={decisions}
+            fresh={fresh}
+            onChange={changeRenames}
+            readOnly={renames?.readOnly}
+            known={renames?.known ?? knownRenames}
+          />
           {data.warnings.length > 0 && <Warnings warnings={data.warnings} />}
           {files.length > 1 && (
             <div className="shrink-0 overflow-x-auto border-b border-border px-3 py-1.5">

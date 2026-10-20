@@ -2533,6 +2533,15 @@
             }
           },
           {
+            "name": "renames",
+            "in": "query",
+            "description": "Renames turned on or off, over what is stored (the draft's choices,\nthe versions'): a JSON object of rename keys\n(`SchemaMigration.renames[].key`) to `true` or `false`, like\n`{\"column/public/users/email/email_address\":false}`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "sha256",
             "in": "query",
             "description": "What the person reviewed (the publish preview's `sha256`, or a live\ncompile's SHA-256 of the SQL; in migration mode it covers the base\ntoo: `compile::input_hash`): the migration of exactly that, or 409\n`draft_changed`. Required: a migration is never of a text unseen.",
@@ -2553,7 +2562,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: an unknown format, no `sha256`",
+            "description": "`bad_request`: an unknown format, no `sha256`, `renames` that is not a JSON object of booleans",
             "content": {
               "application/json": {
                 "schema": {
@@ -2875,7 +2884,7 @@
             }
           },
           "409": {
-            "description": "`draft_changed` (review again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)",
+            "description": "`draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4018,6 +4027,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "renames",
+            "in": "query",
+            "description": "Renames turned on or off, over what is stored (the draft's choices,\nthe versions'): a JSON object of rename keys\n(`SchemaMigration.renames[].key`) to `true` or `false`, like\n`{\"column/public/users/email/email_address\":false}`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4031,7 +4049,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: a number that is not one, an unknown format",
+            "description": "`bad_request`: a number that is not one, an unknown format, `renames` that is not a JSON object of booleans",
             "content": {
               "application/json": {
                 "schema": {
@@ -6950,6 +6968,16 @@
           "sha256"
         ],
         "properties": {
+          "renames": {
+            "type": "object",
+            "description": "The renames turned on or off in the migration as the person saw them\n(the draft's, `SchemaMigration.renames[].key` → on or off): an\napproval is of those too, and refused (409 `draft_changed`) when the\ndraft's are others now. Absent: none switched (`{}`).",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "sha256": {
             "type": "string",
             "description": "SHA-256 (hex) of the SQL the person reviewed: an approval is of one\ntext."
@@ -11090,6 +11118,7 @@
         "description": "The parts of a migration, in order.",
         "enum": [
           "schemas",
+          "renames",
           "dependents",
           "types",
           "tables",
@@ -11125,7 +11154,7 @@
               "string",
               "null"
             ],
-            "description": "SQL to run instead, when this statement is half of a likely rename\n(a `RENAME` keeps the data a drop and an add would lose). Files show\nit commented out."
+            "description": "SQL to run instead, when this statement is half of a rename left\noff (a `RENAME` keeps the data a drop and an add would lose). Files\nshow it commented out."
           },
           "destructive": {
             "type": "boolean",
@@ -11170,6 +11199,7 @@
         "description": "What a statement does, for grouping and icons.",
         "enum": [
           "create_schema",
+          "rename",
           "create_extension",
           "alter_extension",
           "drop_extension",
@@ -11263,7 +11293,8 @@
           "unsupported",
           "empty_schema",
           "guessed_names",
-          "newer_postgres"
+          "newer_postgres",
+          "function_bodies"
         ]
       },
       "NewThread": {
@@ -12709,6 +12740,19 @@
             ],
             "description": "Publish without the approvals the organization requires, saying why\n(admins; the audit log keeps it)."
           },
+          "renames": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The renames turned on or off as the person saw the migration (rename\nkey → on or off): the draft's, or 409 `renames_changed`. The version\nkeeps what ran and what was left off.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "sha256": {
             "type": "string",
             "description": "The `sha256` of the preview the person confirmed."
@@ -12723,6 +12767,7 @@
           "stale",
           "mode",
           "sha256",
+          "renames",
           "diagnostics",
           "approvals"
         ],
@@ -12793,9 +12838,19 @@
             "format": "int32",
             "description": "The number the new version would get."
           },
+          "renames": {
+            "type": "object",
+            "description": "The renames turned on or off it was previewed with (the draft's):\na preview whose renames are not the ones on screen is not the one\nto publish (the toggle has not reached the server yet).",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "sha256": {
             "type": "string",
-            "description": "What was previewed (`compile::input_hash`: the SQL; in migration\nmode the migration and the base it applies to): send it back to\npublish exactly this."
+            "description": "What was previewed (`compile::review_hash`: the SQL, in migration\nmode the migration and the base it applies to, and the renames\nturned on or off): send it back to publish exactly this."
           },
           "stale": {
             "type": "boolean",
@@ -12928,6 +12983,105 @@
           }
         }
       },
+      "Rename": {
+        "type": "object",
+        "description": "One rename: `from` becomes `to`, in `schema`, under `parent`.",
+        "required": [
+          "kind",
+          "schema",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RenameKind"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The table of a column, constraint, index, policy or sequence; the\ntype of an enum value or an attribute; `null` for the rest. Named\nas it is when the rename runs: after its own rename, if any."
+          },
+          "schema": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "to_schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The schema a table, view or type moves to (`ALTER … SET SCHEMA`),\nwhen it moves; `null` otherwise. A move may come with a rename."
+          }
+        }
+      },
+      "RenameCandidate": {
+        "type": "object",
+        "description": "A rename, known or detected, and whether the migration applies it.",
+        "required": [
+          "key",
+          "rename",
+          "confidence",
+          "score",
+          "applied",
+          "rivals",
+          "reason"
+        ],
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/RenameConfidence"
+          },
+          "follows": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The candidate this one comes with (a constraint renamed with its\ncolumn, a table's sequence with the table): applied with it, no\nchoice of its own."
+          },
+          "key": {
+            "type": "string",
+            "description": "[`Rename::key`]: what [`RenameChoices::decisions`] turn on or off."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it looks like a rename, as facts: `Same type, nullability,\ndefault and keys; same place; similar name.`"
+          },
+          "rename": {
+            "$ref": "#/components/schemas/Rename"
+          },
+          "rivals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Candidates about as good for one of the same objects: applying this\none leaves them off. Never applied by default."
+          },
+          "score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Out of 100 (see the module documentation); 100 when known.",
+            "minimum": 0
+          }
+        }
+      },
+      "RenameConfidence": {
+        "type": "string",
+        "description": "How sure the rename is.",
+        "enum": [
+          "certain",
+          "high",
+          "medium"
+        ]
+      },
       "RenameDraft": {
         "type": "object",
         "required": [
@@ -12939,6 +13093,26 @@
             "description": "1 to 200 characters."
           }
         }
+      },
+      "RenameKind": {
+        "type": "string",
+        "description": "What is renamed.",
+        "enum": [
+          "table",
+          "view",
+          "materialized_view",
+          "partition",
+          "column",
+          "constraint",
+          "index",
+          "policy",
+          "sequence",
+          "enum",
+          "domain",
+          "composite",
+          "enum_value",
+          "attribute"
+        ]
       },
       "ResetLink": {
         "type": "object",
@@ -13058,6 +13232,19 @@
           "sha256"
         ],
         "properties": {
+          "renames": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The renames turned on or off as the person sees them, over the\ndraft's (`SchemaMigration.renames[].key` → on or off).",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "sha256": {
             "type": "string",
             "description": "What the person reviewed: the draft's live compile SHA-256 (the\nmigration tab's), so a run is never of a text nobody saw (409\n`draft_changed` when the draft moved on)."
@@ -13154,7 +13341,8 @@
           "destructive",
           "files",
           "archive",
-          "pg_major"
+          "pg_major",
+          "renames"
         ],
         "properties": {
           "archive": {
@@ -13187,6 +13375,13 @@
           "pg_major": {
             "$ref": "#/components/schemas/PgMajor",
             "description": "The Postgres major it is written for: the database's."
+          },
+          "renames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenameCandidate"
+            },
+            "description": "Every rename considered, known or detected, applied or not: what a\nperson turns on or off (`renames` in the request, by `key`)."
           },
           "statements": {
             "type": "array",

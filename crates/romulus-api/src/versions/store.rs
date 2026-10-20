@@ -56,6 +56,10 @@ pub struct NewVersion {
     /// The comment threads of the draft it publishes: kept with it, frozen,
     /// in the same transaction (`discussion::freeze`).
     pub discussion: Vec<crate::collab::comments::DocThread>,
+    /// The renames the migration from the version before it was planned
+    /// with, when a person saw one (a draft publishing it):
+    /// `versions.renames`.
+    pub renames: Option<romulus_migration::RenameChoices>,
 }
 
 /// Why [`store`] stored nothing.
@@ -224,10 +228,14 @@ pub async fn store(
     }
 
     let number = last_number + 1;
+    let renames = match &new.renames {
+        Some(renames) => serde_json::to_value(renames).map_err(ApiError::internal)?,
+        None => serde_json::json!({}),
+    };
     let id = sqlx::query_scalar!(
         "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,
-                               message, created_by, created_by_token, migration_sql)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+                               message, created_by, created_by_token, migration_sql, renames)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
         database_id,
         number,
         model,
@@ -239,6 +247,7 @@ pub async fn store(
         new.created_by,
         new.created_by_token,
         new.migration_sql,
+        renames,
     )
     .fetch_one(&mut *tx)
     .await?;

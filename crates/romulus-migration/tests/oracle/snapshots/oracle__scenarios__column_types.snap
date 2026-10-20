@@ -9,6 +9,11 @@ expression: "plain[0].content"
 -- Warnings:
 --   - items.ref goes from uuid to bigint through text: the conversion fails
 --     unless every value reads as bigint.
+--   - Functions and triggers are not in romulus's model, and Postgres does
+--     not rewrite their bodies: check any that use public.accounts.code (now
+--     character varying(20)), public.accounts.id (now bigint),
+--     public.items.account_id (now bigint), public.items.flags (now boolean)
+--     and 5 more.
 
 BEGIN;
 

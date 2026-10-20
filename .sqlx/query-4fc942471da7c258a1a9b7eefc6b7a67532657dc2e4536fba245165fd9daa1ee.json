@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT renames FROM versions WHERE database_id = $1 AND number = 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "renames",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "renames"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4fc942471da7c258a1a9b7eefc6b7a67532657dc2e4536fba245165fd9daa1ee"
+}

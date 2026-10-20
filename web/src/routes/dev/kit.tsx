@@ -74,6 +74,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toaster";
 import { RadioCard, RadioGroup } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -101,7 +102,7 @@ const sections = [
   ["badges", "Badge, Kbd, Tooltip"],
   ["avatars", "Avatar"],
   ["tabs", "Tabs"],
-  ["toggles", "ToggleGroup, Checkbox, RadioGroup"],
+  ["toggles", "ToggleGroup, Checkbox, Switch, RadioGroup"],
   ["overlays", "Menu, Popover, Dialog, Toast"],
   ["feedback", "Alert, Spinner, Progress, Skeleton"],
   ["empty", "Empty state"],
@@ -603,8 +604,9 @@ function Toggles() {
   const [layout, setLayout] = React.useState("split");
   const [picked, setPicked] = React.useState<Record<string, boolean>>({ v3: true });
   const [size, setSize] = React.useState("small");
+  const [renamed, setRenamed] = React.useState(true);
   return (
-    <Section id="toggles" title="ToggleGroup, Checkbox, RadioGroup">
+    <Section id="toggles" title="ToggleGroup, Checkbox, Switch, RadioGroup">
       <Card className="grid gap-5 p-4">
         <div className="grid gap-2">
           <p className="text-sm text-muted-foreground">
@@ -640,6 +642,21 @@ function Toggles() {
             <div className="flex items-center gap-2">
               <Checkbox id="kit-disabled" disabled />
               <Label htmlFor="kit-disabled">Disabled</Label>
+            </div>
+          </div>
+        </div>
+        <div className="grid gap-2">
+          <p className="text-sm text-muted-foreground">
+            On or off, taking effect at once (no Save): a setting, a suggestion to accept.
+          </p>
+          <div className="flex flex-wrap items-center gap-5">
+            <div className="flex items-center gap-2">
+              <Switch id="kit-switch" checked={renamed} onCheckedChange={setRenamed} />
+              <Label htmlFor="kit-switch">Treat as a rename</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch id="kit-switch-off" disabled />
+              <Label htmlFor="kit-switch-off">Disabled</Label>
             </div>
           </div>
         </div>

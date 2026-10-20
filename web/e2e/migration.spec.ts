@@ -15,11 +15,12 @@ CREATE TABLE orders (
   note text
 );
 `;
-// customers.legacy_code dropped, orders.customer_id required: destructive.
+// customers.legacy_code dropped (nothing like it added: not a rename),
+// orders.customer_id required: destructive.
 const V2 = `CREATE TABLE customers (
   id bigint PRIMARY KEY,
   email text NOT NULL,
-  name text
+  created_at timestamptz
 );
 CREATE TABLE orders (
   id bigint PRIMARY KEY,

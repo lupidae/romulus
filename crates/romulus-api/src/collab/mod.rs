@@ -42,7 +42,7 @@ mod socket;
 pub mod store;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -515,8 +515,9 @@ impl Hub {
     }
 
     /// Whether `user_id` may approve the draft's source as it is now, the
-    /// text hashing to `sha256` (loading the draft if needed); with what the
-    /// approval is of (the source on its base: `compile::input_hash`). The
+    /// text hashing to `sha256` with the renames `renames` (loading the
+    /// draft if needed); with what the approval is of (the
+    /// source on its base and the renames: `compile::review_hash`). The
     /// approval is then the caller's to write, and to announce
     /// ([`Hub::approved`]).
     pub async fn check_approval(
@@ -524,6 +525,7 @@ impl Hub {
         draft: Uuid,
         user_id: Uuid,
         sha256: String,
+        renames: BTreeMap<String, bool>,
     ) -> Result<Result<String, ApprovalError>, HubError> {
         let (reply, wait) = oneshot::channel();
         self.0.send(
@@ -531,6 +533,7 @@ impl Hub {
             Command::CheckApproval {
                 user_id,
                 sha256,
+                renames,
                 reply,
             },
         )?;

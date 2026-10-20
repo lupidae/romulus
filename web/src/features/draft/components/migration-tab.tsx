@@ -17,7 +17,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
-import { MigrationView } from "@/features/migration/components/migration-view";
+import { MigrationView, type RenameControl } from "@/features/migration/components/migration-view";
 import { type MigrationChoice, draftMigrationQuery } from "@/features/migration/queries";
 import { save } from "@/features/migration/zip";
 import { CodeView } from "@/features/schema/text/code-view";
@@ -78,11 +78,14 @@ export function GeneratedMigration({
   onJump,
   onUpdate,
   updating,
+  renames,
 }: {
   org: string;
   db: string;
   draft: Draft;
   compile: CompileView;
+  /** The draft's rename decisions: everyone's, switched by editors. */
+  renames?: RenameControl;
   /** The tab is shown: nothing is fetched while it is not. */
   active: boolean;
   /** May edit now (a developer or admin, the draft open). */
@@ -185,6 +188,7 @@ export function GeneratedMigration({
           primary={false}
           blocked={blocked}
           busy={compile.stale || compile.sha256 !== sha}
+          renames={renames}
           className="min-h-0 flex-1"
         />
       ) : (

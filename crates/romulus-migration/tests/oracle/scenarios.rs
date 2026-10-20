@@ -1,7 +1,12 @@
 //! Hand-written pairs, one file per kind of change (`tests/scenarios`): the
 //! old schema, a `-- ==== new ====` line, the new one. Each is checked both
-//! ways and with `concurrently`, and its migration is snapshotted, so a
-//! change to the generated SQL shows in review.
+//! ways, with `concurrently`, and with every rename left off, and its
+//! migration is snapshotted, so a change to the generated SQL shows in
+//! review.
+//!
+//! The `ALTER … RENAME` statements the new text runs beyond the old one's
+//! are known renames, as in a draft (`romulus_sandbox::known_renames`). A
+//! `-- decide: <key> on|off` line turns a detected rename on or off.
 
 use romulus_migration::{Format, Meta, Options, files, migration};
 
@@ -10,6 +15,29 @@ use crate::{
     tools::{ToolCase, check_tools},
     with_compiler,
 };
+
+/// A scenario's `-- decide: <key> on|off` lines.
+fn decisions(text: &str) -> Vec<(String, bool)> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("-- decide: "))
+        .filter_map(|rest| {
+            let (key, state) = rest.trim().rsplit_once(' ')?;
+            Some((key.to_owned(), state == "on"))
+        })
+        .collect()
+}
+
+/// The options a scenario's migration is planned with: the renames its
+/// text runs, its decisions.
+fn options(old_sql: &str, new_sql: &str) -> Options {
+    let mut options = Options::default();
+    options.renames.known = romulus_sandbox::known_renames(old_sql, new_sql);
+    options
+        .renames
+        .decisions
+        .extend(decisions(&format!("{old_sql}{new_sql}")));
+    options
+}
 
 fn scenarios() -> Vec<(String, String, String)> {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/scenarios");
@@ -40,15 +68,17 @@ fn scenarios() -> Vec<(String, String, String)> {
 fn every_scenario_migrates_both_ways() {
     with_compiler(|compiler| async move {
         let mut cases = Vec::new();
-        for (name, old, new) in scenarios() {
-            let old = compile(&compiler, &old)
+        for (name, old_sql, new_sql) in scenarios() {
+            let old = compile(&compiler, &old_sql)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: the old schema compiles:\n{e}"));
-            let new = compile(&compiler, &new)
+            let new = compile(&compiler, &new_sql)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: the new schema compiles:\n{e}"));
-            let case = Case::new(name.clone(), &old, &new);
-            let m = migration(&old, &new, &Options::default());
+            let options = options(&old_sql, &new_sql);
+            let mut case = Case::new(name.clone(), &old, &new);
+            case.options = options.clone();
+            let m = migration(&old, &new, &options);
             assert!(!m.is_empty(), "{name}: the scenario changes nothing");
             let meta = Meta {
                 database: "acme/app".to_owned(),
@@ -58,7 +88,7 @@ fn every_scenario_migrates_both_ways() {
                 version: "20261016093000".to_owned(),
                 name: name.clone(),
             };
-            let back = migration(&new, &old, &Options::default());
+            let back = romulus_migration::down(&old, &new, &m);
             let plain = files(&m, &back, Format::Plain, &meta);
             // Each major prints view definitions its own way: the
             // snapshots are the default major's.
@@ -67,6 +97,10 @@ fn every_scenario_migrates_both_ways() {
             }
             cases.push(case.concurrently());
             cases.push(case.reversed());
+            if !m.applied.is_empty() || m.renames.iter().any(|c| !c.applied) {
+                cases.push(case.without_renames());
+                cases.push(case.without_renames().reversed());
+            }
             cases.push(case);
         }
         // The only pairs the compile cannot run move an extension (the
@@ -102,14 +136,16 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
             // Built from the text itself too: what render_sql leaves out
             // (partitions' copies of their parent's indexes, under the
             // names Postgres chose) is there to migrate.
+            let options = options(&old_sql, &new_sql);
             for (format, concurrently) in [(Format::GolangMigrate, false), (Format::Plain, true)] {
                 cases.push(ToolCase {
+                    rows: true,
                     label: format!("{name} (as written)"),
                     old: old.clone(),
                     new: new.clone(),
                     options: Options {
                         concurrently,
-                        ..Options::default()
+                        ..options.clone()
                     },
                     format,
                     sources: Some((old_sql.clone(), new_sql.clone())),
@@ -118,12 +154,13 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
             for format in Format::ALL {
                 for concurrently in [false, true] {
                     cases.push(ToolCase {
+                        rows: true,
                         label: name.clone(),
                         old: old.clone(),
                         new: new.clone(),
                         options: Options {
                             concurrently,
-                            ..Options::default()
+                            ..options.clone()
                         },
                         format,
                         sources: None,
@@ -132,6 +169,7 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
             }
             for format in [Format::Plain, Format::GolangMigrate] {
                 cases.push(ToolCase {
+                    rows: true,
                     label: format!("{name} (reversed)"),
                     old: new.clone(),
                     new: old.clone(),
@@ -152,20 +190,20 @@ fn every_scenario_runs_as_each_tool_would_run_it() {
 #[test]
 fn every_scenario_s_editable_migration_compiles_as_a_draft_does() {
     with_compiler(|compiler| async move {
-        for (name, old, new) in scenarios() {
+        for (name, old_sql, new_sql) in scenarios() {
             if name.starts_with("extension_moved") {
                 continue; // the compile role cannot move an extension
             }
-            let old = compile(&compiler, &old)
+            let old = compile(&compiler, &old_sql)
                 .await
                 .expect("the old schema compiles");
-            let new = compile(&compiler, &new)
+            let new = compile(&compiler, &new_sql)
                 .await
                 .expect("the new schema compiles");
             let m = migration(
                 &old,
                 &new,
-                &crate::options_for(&compiler, &Options::default()),
+                &crate::options_for(&compiler, &options(&old_sql, &new_sql)),
             );
             let meta = Meta {
                 database: "acme/app".to_owned(),

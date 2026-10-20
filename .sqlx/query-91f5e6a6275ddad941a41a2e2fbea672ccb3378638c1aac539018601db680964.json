@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT renames FROM versions\n         WHERE database_id = $1 AND number > $2 AND number <= $3\n         ORDER BY number",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "renames",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "renames"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "91f5e6a6275ddad941a41a2e2fbea672ccb3378638c1aac539018601db680964"
+}

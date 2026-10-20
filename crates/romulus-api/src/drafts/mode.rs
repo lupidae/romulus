@@ -130,9 +130,12 @@ pub(super) async fn switch_mode(
                 let old = base_model.unwrap_or_else(|| empty_like(&model));
                 let meta = meta(&database_name, base_number, &row.name);
                 let major = content.major;
+                // The renames its editors chose: the migration they saw.
+                let renames = content.rename_choices(None);
                 let seed = tokio::task::spawn_blocking(move || {
                     let options = Options {
                         major: Some(major.number()),
+                        renames,
                         ..Options::default()
                     };
                     editable(&migration(&old, &model, &options), &meta)

@@ -1429,6 +1429,15 @@ export interface components {
     };
     ApproveDraft: {
       /**
+       * @description The renames turned on or off in the migration as the person saw them
+       *     (the draft's, `SchemaMigration.renames[].key` → on or off): an
+       *     approval is of those too, and refused (409 `draft_changed`) when the
+       *     draft's are others now. Absent: none switched (`{}`).
+       */
+      renames?: {
+        [key: string]: boolean;
+      };
+      /**
        * @description SHA-256 (hex) of the SQL the person reviewed: an approval is of one
        *     text.
        */
@@ -2925,6 +2934,7 @@ export interface components {
      */
     MigrationSection:
       | "schemas"
+      | "renames"
       | "dependents"
       | "types"
       | "tables"
@@ -2941,9 +2951,9 @@ export interface components {
     /** @description One SQL statement of a migration. */
     MigrationStatement: {
       /**
-       * @description SQL to run instead, when this statement is half of a likely rename
-       *     (a `RENAME` keeps the data a drop and an add would lose). Files show
-       *     it commented out.
+       * @description SQL to run instead, when this statement is half of a rename left
+       *     off (a `RENAME` keeps the data a drop and an add would lose). Files
+       *     show it commented out.
        */
       alternative?: string | null;
       /** @description `hazard` is `deletes_data` or `can_fail`: existing data is at stake. */
@@ -2967,6 +2977,7 @@ export interface components {
      */
     MigrationStatementKind:
       | "create_schema"
+      | "rename"
       | "create_extension"
       | "alter_extension"
       | "drop_extension"
@@ -3029,7 +3040,8 @@ export interface components {
       | "unsupported"
       | "empty_schema"
       | "guessed_names"
-      | "newer_postgres";
+      | "newer_postgres"
+      | "function_bodies";
     NewThread: {
       anchor: components["schemas"]["Anchor"];
       /** @description The first comment: 1 to 4000 characters. */
@@ -3552,6 +3564,14 @@ export interface components {
        *     (admins; the audit log keeps it).
        */
       override_reason?: string | null;
+      /**
+       * @description The renames turned on or off as the person saw the migration (rename
+       *     key → on or off): the draft's, or 409 `renames_changed`. The version
+       *     keeps what ran and what was left off.
+       */
+      renames?: {
+        [key: string]: boolean;
+      } | null;
       /** @description The `sha256` of the preview the person confirmed. */
       sha256: string;
     };
@@ -3580,9 +3600,17 @@ export interface components {
        */
       number: number;
       /**
-       * @description What was previewed (`compile::input_hash`: the SQL; in migration
-       *     mode the migration and the base it applies to): send it back to
-       *     publish exactly this.
+       * @description The renames turned on or off it was previewed with (the draft's):
+       *     a preview whose renames are not the ones on screen is not the one
+       *     to publish (the toggle has not reached the server yet).
+       */
+      renames: {
+        [key: string]: boolean;
+      };
+      /**
+       * @description What was previewed (`compile::review_hash`: the SQL, in migration
+       *     mode the migration and the base it applies to, and the renames
+       *     turned on or off): send it back to publish exactly this.
        */
       sha256: string;
       /** @description Someone published since the draft started: "Update draft" first. */
@@ -3636,10 +3664,81 @@ export interface components {
       restorable_until: string;
       version: components["schemas"]["VersionSummary"];
     };
+    /** @description One rename: `from` becomes `to`, in `schema`, under `parent`. */
+    Rename: {
+      from: string;
+      kind: components["schemas"]["RenameKind"];
+      /**
+       * @description The table of a column, constraint, index, policy or sequence; the
+       *     type of an enum value or an attribute; `null` for the rest. Named
+       *     as it is when the rename runs: after its own rename, if any.
+       */
+      parent?: string | null;
+      schema: string;
+      to: string;
+      /**
+       * @description The schema a table, view or type moves to (`ALTER … SET SCHEMA`),
+       *     when it moves; `null` otherwise. A move may come with a rename.
+       */
+      to_schema?: string | null;
+    };
+    /** @description A rename, known or detected, and whether the migration applies it. */
+    RenameCandidate: {
+      applied: boolean;
+      confidence: components["schemas"]["RenameConfidence"];
+      /**
+       * @description The candidate this one comes with (a constraint renamed with its
+       *     column, a table's sequence with the table): applied with it, no
+       *     choice of its own.
+       */
+      follows?: string | null;
+      /** @description [`Rename::key`]: what [`RenameChoices::decisions`] turn on or off. */
+      key: string;
+      /**
+       * @description Why it looks like a rename, as facts: `Same type, nullability,
+       *     default and keys; same place; similar name.`
+       */
+      reason: string;
+      rename: components["schemas"]["Rename"];
+      /**
+       * @description Candidates about as good for one of the same objects: applying this
+       *     one leaves them off. Never applied by default.
+       */
+      rivals: string[];
+      /**
+       * Format: int32
+       * @description Out of 100 (see the module documentation); 100 when known.
+       */
+      score: number;
+    };
+    /**
+     * @description How sure the rename is.
+     * @enum {string}
+     */
+    RenameConfidence: "certain" | "high" | "medium";
     RenameDraft: {
       /** @description 1 to 200 characters. */
       name: string;
     };
+    /**
+     * @description What is renamed.
+     * @enum {string}
+     */
+    RenameKind:
+      | "table"
+      | "view"
+      | "materialized_view"
+      | "partition"
+      | "column"
+      | "constraint"
+      | "index"
+      | "policy"
+      | "sequence"
+      | "enum"
+      | "domain"
+      | "composite"
+      | "enum_value"
+      | "attribute";
     ResetLink: {
       email: string;
       /** Format: date-time */
@@ -3684,6 +3783,13 @@ export interface components {
       name: string;
     };
     RunMigration: {
+      /**
+       * @description The renames turned on or off as the person sees them, over the
+       *     draft's (`SchemaMigration.renames[].key` → on or off).
+       */
+      renames?: {
+        [key: string]: boolean;
+      } | null;
       /**
        * @description What the person reviewed: the draft's live compile SHA-256 (the
        *     migration tab's), so a run is never of a text nobody saw (409
@@ -3740,6 +3846,11 @@ export interface components {
       from?: number | null;
       /** @description The Postgres major it is written for: the database's. */
       pg_major: components["schemas"]["PgMajor"];
+      /**
+       * @description Every rename considered, known or detected, applied or not: what a
+       *     person turns on or off (`renames` in the request, by `key`).
+       */
+      renames: components["schemas"]["RenameCandidate"][];
       /** @description In order; the same whatever the format. */
       statements: components["schemas"]["MigrationStatement"][];
       /**
@@ -6285,6 +6396,13 @@ export interface operations {
          */
         version?: string;
         /**
+         * @description Renames turned on or off, over what is stored (the draft's choices,
+         *     the versions'): a JSON object of rename keys
+         *     (`SchemaMigration.renames[].key`) to `true` or `false`, like
+         *     `{"column/public/users/email/email_address":false}`.
+         */
+        renames?: string;
+        /**
          * @description What the person reviewed (the publish preview's `sha256`, or a live
          *     compile's SHA-256 of the SQL; in migration mode it covers the base
          *     too: `compile::input_hash`): the migration of exactly that, or 409
@@ -6310,7 +6428,7 @@ export interface operations {
           "application/json": components["schemas"]["SchemaMigration"];
         };
       };
-      /** @description `bad_request`: an unknown format, no `sha256` */
+      /** @description `bad_request`: an unknown format, no `sha256`, `renames` that is not a JSON object of booleans */
       400: {
         headers: {
           [name: string]: unknown;
@@ -6533,7 +6651,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `draft_changed` (review again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it) */
+      /** @description `draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it) */
       409: {
         headers: {
           [name: string]: unknown;
@@ -7267,6 +7385,13 @@ export interface operations {
          *     `YYYYMMDDHHMMSS`). Files after it take the next ones.
          */
         version?: string;
+        /**
+         * @description Renames turned on or off, over what is stored (the draft's choices,
+         *     the versions'): a JSON object of rename keys
+         *     (`SchemaMigration.renames[].key`) to `true` or `false`, like
+         *     `{"column/public/users/email/email_address":false}`.
+         */
+        renames?: string;
       };
       header?: never;
       path: {
@@ -7287,7 +7412,7 @@ export interface operations {
           "application/json": components["schemas"]["SchemaMigration"];
         };
       };
-      /** @description `bad_request`: a number that is not one, an unknown format */
+      /** @description `bad_request`: a number that is not one, an unknown format, `renames` that is not a JSON object of booleans */
       400: {
         headers: {
           [name: string]: unknown;

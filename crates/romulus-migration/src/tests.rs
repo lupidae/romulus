@@ -13,7 +13,7 @@ use remus_core::{
 
 use crate::{
     FileRole, Format, Hazard, Kind, Meta, Migration, Options, Section, Stage, Statement,
-    WarningCode, archive_name, editable, files, migration,
+    WarningCode, archive_name, down, editable, files, migration,
 };
 
 fn schema(entities: Vec<Entity>) -> Schema {
@@ -118,6 +118,21 @@ fn fk(name: &str, column: &str, target: &str) -> Constraint {
 
 fn plan(old: &Schema, new: &Schema) -> Migration {
     migration(old, new, &Options::default())
+}
+
+/// The migration with these renames turned on or off, by key.
+fn plan_deciding(old: &Schema, new: &Schema, decisions: &[(&str, bool)]) -> Migration {
+    let options = Options {
+        renames: crate::RenameChoices {
+            decisions: decisions
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), *v))
+                .collect(),
+            ..crate::RenameChoices::default()
+        },
+        ..Options::default()
+    };
+    migration(old, new, &options)
 }
 
 fn sqls(m: &Migration) -> Vec<&str> {
@@ -341,6 +356,13 @@ fn removing_an_enum_label_recreates_the_type_and_converts_its_columns() {
     old.enums.push(mood(&["sad", "ok", "happy"]));
     let mut new = old.clone();
     new.enums[0] = mood(&["sad", "fine", "happy"]);
+    // One label out and one in at its place, names unalike: offered as a
+    // rename, off unless turned on.
+    let m = plan_deciding(&old, &new, &[("enum_value/public/mood/ok/fine", true)]);
+    assert_eq!(
+        sqls(&m),
+        ["ALTER TYPE public.mood RENAME VALUE 'ok' TO 'fine';"]
+    );
     let m = plan(&old, &new);
     let rename = find(&m, "ALTER TYPE public.mood RENAME TO mood_old");
     assert_eq!(
@@ -373,11 +395,36 @@ fn removing_an_enum_label_recreates_the_type_and_converts_its_columns() {
 }
 
 #[test]
-fn a_dropped_and_an_added_column_alike_suggest_a_rename() {
+fn a_dropped_and_an_added_column_alike_are_a_rename() {
     let old = schema(vec![users()]);
     let mut new = old.clone();
     new.entities[0].columns[1].name = "mail".into();
+    new.entities[0].columns[1].r#type = "character varying(320)".into();
+    // A type change makes it unsure: off until turned on.
     let m = plan(&old, &new);
+    assert!(!m.renames[0].applied);
+    assert_eq!(m.applied, []);
+    let m = plan_deciding(&old, &new, &[("column/public/users/email/mail", true)]);
+    // Renamed in place, then converted: never dropped and added.
+    assert_eq!(
+        sqls(&m),
+        [
+            "ALTER TABLE public.users RENAME COLUMN email TO mail;",
+            "ALTER TABLE public.users ALTER COLUMN mail TYPE character varying(320);",
+        ]
+    );
+    assert_eq!(m.statements[0].section, Section::Renames);
+    assert_eq!(m.applied.len(), 1);
+    assert_eq!(m.renames[0].key, "column/public/users/email/mail");
+    assert!(m.renames[0].applied);
+}
+
+#[test]
+fn a_rename_left_off_is_offered_on_its_drop_and_add() {
+    let old = schema(vec![users()]);
+    let mut new = old.clone();
+    new.entities[0].columns[1].name = "mail".into();
+    let m = plan_deciding(&old, &new, &[("column/public/users/email/mail", false)]);
     let rename = "ALTER TABLE public.users RENAME COLUMN email TO mail;";
     assert_eq!(
         find(&m, "ALTER TABLE public.users ADD COLUMN mail")
@@ -416,6 +463,71 @@ fn a_dropped_and_an_added_table_alike_suggest_a_rename() {
             .as_deref(),
         rename
     );
+}
+
+#[test]
+fn a_table_moved_to_a_new_schema_creates_the_schema_then_moves_it() {
+    let audit = || table("audit", vec![col("id", "bigint"), col("what", "text")]);
+    let old = schema(vec![audit()]);
+    let mut moved = audit();
+    moved.schema = "archive".into();
+    let new = schema(vec![moved]);
+    let m = plan(&old, &new);
+    assert_eq!(
+        sqls(&m),
+        [
+            "CREATE SCHEMA IF NOT EXISTS archive;",
+            "ALTER TABLE public.audit SET SCHEMA archive;"
+        ]
+    );
+    let back = down(&old, &new, &m);
+    assert_eq!(
+        sqls(&back),
+        ["ALTER TABLE archive.audit SET SCHEMA public;"]
+    );
+    let codes: Vec<_> = back.warnings.iter().map(|w| w.code).collect();
+    assert_eq!(
+        codes,
+        [WarningCode::EmptySchema, WarningCode::FunctionBodies],
+        "archive is left empty; a body naming archive.audit breaks"
+    );
+    assert!(
+        m.warnings[0]
+            .message
+            .contains("public.audit → archive.audit (moved)")
+    );
+}
+
+#[test]
+fn renamed_and_converted_columns_warn_about_function_bodies() {
+    let old = schema(vec![table(
+        "people",
+        vec![
+            col("id", "bigint"),
+            col("email", "text"),
+            col("age", "integer"),
+        ],
+    )]);
+    let new = schema(vec![table(
+        "people",
+        vec![
+            col("id", "bigint"),
+            col("email_address", "text"),
+            col("age", "bigint"),
+        ],
+    )]);
+    let m = plan(&old, &new);
+    let w = m
+        .warnings
+        .iter()
+        .find(|w| w.code == WarningCode::FunctionBodies)
+        .expect("a warning about bodies");
+    assert_eq!(
+        w.message,
+        "Functions and triggers are not in romulus's model, and Postgres does not rewrite their bodies: check any that use public.people.email → email_address (renamed), public.people.age (now bigint)."
+    );
+    let same = plan(&old, &old);
+    assert_eq!(same.warnings, []);
 }
 
 #[test]

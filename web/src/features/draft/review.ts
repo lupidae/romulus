@@ -1,6 +1,7 @@
 // Approvals before publishing (docs/MVP.md "Review round 1"), as the
 // collab server tells them (its `review` event): each approval is of one
-// text, so an edit resets them; whoever edited the SQL cannot approve.
+// text and its migration's rename switches, so an edit or a switch resets
+// them; whoever edited the draft (or switched a rename) cannot approve.
 
 import type { components } from "@/api/schema.gen";
 import type { Role } from "@/features/orgs/queries";

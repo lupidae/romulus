@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM version_approvals a JOIN versions v ON v.id = a.version_id\n         WHERE v.database_id = $1 AND v.number = 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5bbba6e293807898412686eca9a5b250c3e75c0b5efdf6260e86712cc16c0bc0"
+}

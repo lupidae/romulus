@@ -137,6 +137,21 @@ describe("schema edits from the graph", () => {
     session.destroy();
   });
 
+  it("keeps a rename decision only while it differs from romulus's own, never in the undo history", () => {
+    const session = local();
+    const key = "column/public/users/email/email_address";
+    session.setRenames({ [key]: false }, { [key]: true });
+    expect(session.renames.toJSON()).toEqual({ [key]: false });
+    expect(session.undo.canUndo()).toBe(false);
+    // Back to what romulus does by itself: no decision left.
+    session.setRenames({ [key]: true }, { [key]: true });
+    expect(session.renames.toJSON()).toEqual({});
+    // Without defaults (a decision against nothing known), kept as given.
+    session.setRenames({ [key]: true });
+    expect(session.renames.toJSON()).toEqual({ [key]: true });
+    session.destroy();
+  });
+
   it("each edit is its own step, and a new table is placed with it", () => {
     const session = local();
     session.editSchema({ kind: "addTable", table: { schema: "public", name: "invoices" } }, blog, {

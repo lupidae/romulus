@@ -5,6 +5,14 @@
 //! (a check on a column that became text, say) is not a case; the test
 //! fails if too few are valid.
 //!
+//! Some cases also rename something others depend on (a column with keys,
+//! indexes and views over it, a table with foreign keys to it, a type, a
+//! label, an index, a constraint, a view), in the text the new model is
+//! compiled from ([`TextEdit`]): with an `ALTER … RENAME` appended (Postgres
+//! renames it, every other name kept), checked with that rename known and
+//! with it detected only; or by rewriting every mention of the name (fresh
+//! names, as editing a `CREATE` does), detected only.
+//!
 //! Seeds are fixed, so a failure names a case that can be run again:
 //! `ROMULUS_ORACLE_SEEDS=<n>` checks more seeds per schema (default 12).
 
@@ -17,7 +25,7 @@ use remus_core::{
     },
 };
 use romulus_migration::{Format, Options};
-use romulus_sandbox::{Compiler, render_sql};
+use romulus_sandbox::{Compiler, known_renames, render_sql};
 
 use crate::{
     Case, check_all, compile, corpus, smoke,
@@ -743,6 +751,288 @@ fn mutate(schema: &mut Schema, rng: &mut Rng, n: usize) -> Option<String> {
     }
 }
 
+/// A rename made in the text the new model compiles from.
+#[derive(Debug, Clone)]
+enum TextEdit {
+    /// An `ALTER … RENAME` appended: Postgres renames, every name kept.
+    Append(String),
+    /// Every mention of the identifier `from` renamed `to` (and, when
+    /// `prefixed`, the names starting `from_`: the ones Postgres derives,
+    /// `users_pkey`): what rewriting a `CREATE` does.
+    Rewrite {
+        from: String,
+        to: String,
+        prefixed: bool,
+    },
+}
+
+impl TextEdit {
+    fn apply(&self, sql: &str) -> String {
+        match self {
+            Self::Append(statement) => format!("{sql}\n{statement}\n"),
+            Self::Rewrite { from, to, prefixed } => rewrite(sql, from, to, *prefixed),
+        }
+    }
+}
+
+/// `sql` with the identifier `from` renamed outside literals and comments.
+fn rewrite(sql: &str, from: &str, to: &str, prefixed: bool) -> String {
+    let chars: Vec<char> = sql.chars().collect();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    let prefix = format!("{from}_");
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' {
+            let start = i;
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\'' {
+                    if chars.get(i + 1) == Some(&'\'') {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.extend(&chars[start..i.min(chars.len())]);
+        } else if c == '-' && chars.get(i + 1) == Some(&'-') {
+            let start = i;
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            out.extend(&chars[start..i]);
+        } else if c.is_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$')
+            {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let call = chars.get(i) == Some(&'(');
+            if word == from && !call {
+                out.push_str(to);
+            } else if prefixed && word.starts_with(&prefix) {
+                out.push_str(to);
+                out.push_str(&word[from.len()..]);
+            } else {
+                out.push_str(&word);
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Every identifier the model names an object by (and the type names its
+/// columns use): a rewrite only renames a name nothing else shares.
+fn names_in(schema: &Schema) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in &schema.entities {
+        out.push(e.schema.clone());
+        out.push(e.name.clone());
+        for c in &e.columns {
+            out.push(c.name.clone());
+            out.extend(
+                c.r#type
+                    .split(|x: char| !(x.is_alphanumeric() || x == '_'))
+                    .map(str::to_owned),
+            );
+        }
+        out.extend(e.constraints.iter().map(|c| c.name.clone()));
+        out.extend(e.indexes.iter().map(|i| i.name.clone()));
+        out.extend(e.policies.iter().map(|p| p.name.clone()));
+    }
+    out.extend(schema.enums.iter().map(|e| e.name.clone()));
+    out.extend(schema.domains.iter().map(|d| d.name.clone()));
+    out.extend(schema.composites.iter().map(|c| c.name.clone()));
+    out.extend(schema.partitions.iter().map(|p| p.child.clone()));
+    out
+}
+
+/// A rename of something others depend on, made in the text.
+#[allow(clippy::too_many_lines)]
+fn rename_edit(schema: &Schema, rng: &mut Rng, n: usize) -> Option<(TextEdit, String)> {
+    let tables = tables(schema);
+    let partitions: Vec<&str> = schema.partitions.iter().map(|p| p.child.as_str()).collect();
+    let roots: Vec<usize> = tables
+        .iter()
+        .copied()
+        .filter(|&t| !partitions.contains(&schema.entities[t].name.as_str()))
+        .collect();
+    let suffix = format!("_r{n}");
+    match rng.below(8) {
+        0 | 1 => {
+            let t = *rng.pick(&roots)?;
+            let e = &schema.entities[t];
+            let c = rng.pick(&e.columns)?;
+            Some((
+                TextEdit::Append(format!(
+                    "ALTER TABLE {} RENAME COLUMN {} TO {};",
+                    qualified(&e.schema, &e.name),
+                    quote_ident(&c.name),
+                    quote_ident(&format!("{}{suffix}", c.name))
+                )),
+                format!("rename column {}.{} with ALTER", e.name, c.name),
+            ))
+        }
+        2 => {
+            let t = *rng.pick(&roots)?;
+            let e = &schema.entities[t];
+            Some((
+                TextEdit::Append(format!(
+                    "ALTER TABLE {} RENAME TO {};",
+                    qualified(&e.schema, &e.name),
+                    quote_ident(&format!("{}{suffix}", e.name))
+                )),
+                format!("rename table {} with ALTER", e.name),
+            ))
+        }
+        3 => {
+            let e = rng.pick(&schema.enums)?;
+            let label = rng.pick(&e.labels)?;
+            Some((
+                TextEdit::Append(format!(
+                    "ALTER TYPE {} RENAME VALUE {} TO {};",
+                    qualified(&e.schema, &e.name),
+                    quote_literal(label),
+                    quote_literal(&format!("{label}{suffix}"))
+                )),
+                format!("rename label {}.{label} with ALTER", e.name),
+            ))
+        }
+        4 => {
+            // A type, an index, a constraint or a view.
+            let mut choices: Vec<(String, String)> = Vec::new();
+            for e in &schema.enums {
+                choices.push((
+                    format!(
+                        "ALTER TYPE {} RENAME TO {};",
+                        qualified(&e.schema, &e.name),
+                        quote_ident(&format!("{}{suffix}", e.name))
+                    ),
+                    format!("rename enum {} with ALTER", e.name),
+                ));
+            }
+            for d in &schema.domains {
+                choices.push((
+                    format!(
+                        "ALTER DOMAIN {} RENAME TO {};",
+                        qualified(&d.schema, &d.name),
+                        quote_ident(&format!("{}{suffix}", d.name))
+                    ),
+                    format!("rename domain {} with ALTER", d.name),
+                ));
+            }
+            for &t in &roots {
+                let e = &schema.entities[t];
+                for i in &e.indexes {
+                    choices.push((
+                        format!(
+                            "ALTER INDEX {} RENAME TO {};",
+                            qualified(&e.schema, &i.name),
+                            quote_ident(&format!("{}{suffix}", i.name))
+                        ),
+                        format!("rename index {} with ALTER", i.name),
+                    ));
+                }
+                for c in e.constraints.iter().filter(|c| {
+                    c.kind != ConstraintKind::ForeignKey || e.kind != EntityKind::PartitionedTable
+                }) {
+                    choices.push((
+                        format!(
+                            "ALTER TABLE {} RENAME CONSTRAINT {} TO {};",
+                            qualified(&e.schema, &e.name),
+                            quote_ident(&c.name),
+                            quote_ident(&format!("{}{suffix}", c.name))
+                        ),
+                        format!("rename constraint {}.{} with ALTER", e.name, c.name),
+                    ));
+                }
+            }
+            for v in schema
+                .entities
+                .iter()
+                .filter(|e| e.kind == EntityKind::View)
+            {
+                choices.push((
+                    format!(
+                        "ALTER VIEW {} RENAME TO {};",
+                        qualified(&v.schema, &v.name),
+                        quote_ident(&format!("{}{suffix}", v.name))
+                    ),
+                    format!("rename view {} with ALTER", v.name),
+                ));
+            }
+            let (sql, label) = rng.pick(&choices)?.clone();
+            Some((TextEdit::Append(sql), label))
+        }
+        5 | 6 => {
+            // A column whose name nothing else shares, rewritten everywhere.
+            let names = names_in(schema);
+            let unique: Vec<(String, String)> = roots
+                .iter()
+                .flat_map(|&t| {
+                    let e = &schema.entities[t];
+                    e.columns
+                        .iter()
+                        .map(move |c| (e.name.clone(), c.name.clone()))
+                })
+                .filter(|(_, c)| {
+                    c.len() >= 4
+                        && c.chars().all(|x| x.is_ascii_lowercase() || x == '_')
+                        && names.iter().filter(|n| *n == c).count() == 1
+                })
+                .collect();
+            let (table, column) = rng.pick(&unique)?.clone();
+            Some((
+                TextEdit::Rewrite {
+                    from: column.clone(),
+                    to: format!("{column}{suffix}"),
+                    prefixed: false,
+                },
+                format!("rename column {table}.{column} in the text"),
+            ))
+        }
+        _ => {
+            // A table whose name nothing else shares, with the names
+            // Postgres derives from it (its key, its sequences) or not.
+            let names = names_in(schema);
+            let unique: Vec<String> = roots
+                .iter()
+                .map(|&t| schema.entities[t].name.clone())
+                .filter(|name| {
+                    name.len() >= 4
+                        && name.chars().all(|x| x.is_ascii_lowercase() || x == '_')
+                        && names.iter().filter(|n| *n == name).count() == 1
+                })
+                .collect();
+            let table = rng.pick(&unique)?.clone();
+            let prefixed = rng.chance(50);
+            Some((
+                TextEdit::Rewrite {
+                    from: table.clone(),
+                    to: format!("{table}{suffix}"),
+                    prefixed,
+                },
+                format!(
+                    "rename table {table} in the text{}",
+                    if prefixed {
+                        ", with its derived names"
+                    } else {
+                        ""
+                    }
+                ),
+            ))
+        }
+    }
+}
+
 /// Seeds per schema: `ROMULUS_ORACLE_SEEDS`, default 12 (2 for the smoke
 /// subset of another major).
 fn seeds(compiler: &Compiler) -> u64 {
@@ -774,8 +1064,19 @@ fn random_edits_of_the_corpus_migrate_both_ways() {
                         edits.push(edit);
                     }
                 }
+                // Every other case renames something too.
+                let text_edit = if rng.chance(50) {
+                    rename_edit(&mutated, &mut rng, edits.len() + 1)
+                } else {
+                    None
+                };
+                let mut sql = render_sql(&mutated);
+                if let Some((edit, label)) = &text_edit {
+                    sql = edit.apply(&sql);
+                    edits.push(label.clone());
+                }
                 tried += 1;
-                let Ok(new) = compile(&compiler, &render_sql(&mutated)).await else {
+                let Ok(new) = compile(&compiler, &sql).await else {
                     invalid += 1;
                     continue;
                 };
@@ -786,6 +1087,14 @@ fn random_edits_of_the_corpus_migrate_both_ways() {
                 let case = Case::new(label, model, &new);
                 if seed % 4 == 0 {
                     cases.push(case.concurrently());
+                }
+                if let Some((TextEdit::Append(statement), _)) = &text_edit {
+                    let mut known = case.clone().knowing(known_renames("", statement));
+                    known.label = format!("{} (known)", known.label);
+                    cases.push(known);
+                }
+                if seed % 3 == 0 {
+                    cases.push(case.without_renames());
                 }
                 cases.push(case.reversed());
                 cases.push(case);
@@ -829,21 +1138,36 @@ fn random_edits_of_the_corpus_run_as_each_tool_would_run_them() {
                         edits.push(edit);
                     }
                 }
-                let Ok(new) = compile(&compiler, &render_sql(&mutated)).await else {
+                let mut sql = render_sql(&mutated);
+                let mut known = Vec::new();
+                if rng.chance(50)
+                    && let Some((edit, label)) = rename_edit(&mutated, &mut rng, edits.len() + 1)
+                {
+                    sql = edit.apply(&sql);
+                    if let TextEdit::Append(statement) = &edit {
+                        known = known_renames("", statement);
+                    }
+                    edits.push(label);
+                }
+                let Ok(new) = compile(&compiler, &sql).await else {
                     continue;
                 };
                 if romulus_diff::diff(model, &new).is_empty() {
                     continue;
                 }
                 let n = i + usize::try_from(seed).unwrap_or(0);
+                let mut options = Options {
+                    concurrently: n % 3 == 0,
+                    ..Options::default()
+                };
+                options.renames.known = known;
                 cases.push(ToolCase {
+                    // Rows in the tables that take one: renames keep them.
+                    rows: true,
                     label: format!("{name} seed {seed}: {}", edits.join("; ")),
                     old: model.clone(),
                     new,
-                    options: Options {
-                        concurrently: n % 3 == 0,
-                        ..Options::default()
-                    },
+                    options,
                     format: Format::ALL[n % Format::ALL.len()],
                     sources: None,
                 });

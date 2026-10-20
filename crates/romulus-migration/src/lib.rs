@@ -39,16 +39,29 @@
 //! # Ok::<(), remus_core::Error>(())
 //! ```
 //!
+//! # Renames
+//!
+//! The model has no identity beyond names, so a renamed column reads as one
+//! removed and one added. [`romulus_diff::resolve`] decides which pairs are
+//! renames ([`Options::renames`]: the ones known to have happened, the ones
+//! detected and confident enough, the ones a person turned on); the
+//! migration runs them first (`ALTER … RENAME`, [`Section::Renames`]) and
+//! plans the rest from the old model as Postgres has it after them, so a
+//! renamed column that also changes type is converted, never dropped and
+//! added, and what depends on it (keys, indexes, views, policies) follows
+//! the rename instead of being built again. [`Migration::renames`] lists
+//! every candidate, applied or not, for a person to choose; the statements
+//! a candidate left off would replace show it as their `alternative`.
+//! [`down`] mirrors a migration's renames exactly.
+//!
 //! # What it does not do
 //!
 //! The model is the schema, not the data, and not everything in a database:
 //! functions, triggers, grants, sequences' state and foreign servers are not
-//! modelled, so they are neither created nor dropped. A rename is a removal
-//! plus an addition (the model has no identity beyond names); when a removed
-//! and an added column or table look alike, the statements say so and offer
-//! the `RENAME` in a comment. Postgres cannot insert a column in the middle
-//! of a table: added columns go last, and a [`WarningCode::ColumnOrder`]
-//! warning says where the new model puts them.
+//! modelled, so they are neither created nor dropped (nor renamed). Postgres
+//! cannot insert a column in the middle of a table: added columns go last,
+//! and a [`WarningCode::ColumnOrder`] warning says where the new model puts
+//! them.
 
 mod cast;
 mod extensions;
@@ -66,6 +79,7 @@ pub use extensions::{
 };
 pub use format::{File, FileRole, Format, Mark, Meta, archive_name, editable, files, slug};
 use remus_core::Schema;
+pub use romulus_diff::{Candidate, Confidence, Rename, RenameChoices, RenameKind};
 use serde::{Deserialize, Serialize};
 
 /// Choices that change the statements, not what they do.
@@ -87,6 +101,10 @@ pub struct Options {
     /// it lacks is a [`WarningCode::NewerPostgres`] warning.
     #[serde(default)]
     pub major: Option<u32>,
+    /// Which removed and added objects are renames: the known ones, the
+    /// decisions taken on detected ones, whether to detect at all.
+    #[serde(default)]
+    pub renames: RenameChoices,
 }
 
 impl Options {
@@ -109,6 +127,16 @@ pub struct Migration {
     /// files' header names it.
     #[serde(default)]
     pub major: Option<u32>,
+    /// Every rename considered: known ones, then detected ones, applied or
+    /// not. A person turns them on or off by key
+    /// ([`RenameChoices::decisions`]).
+    #[serde(default)]
+    pub renames: Vec<Candidate>,
+    /// The renames it runs, from the old name to the final one, in order:
+    /// what [`down`] reverses, and what a version keeps of the migration it
+    /// was published with.
+    #[serde(default)]
+    pub applied: Vec<Rename>,
 }
 
 impl Migration {
@@ -157,9 +185,9 @@ pub struct Statement {
     /// What a reviewer should know: why it is there, what it can do to
     /// existing rows, how to do it more safely.
     pub note: Option<String>,
-    /// SQL to run instead, when this statement is half of a likely rename
-    /// (a `RENAME` keeps the data a drop and an add would lose). Files show
-    /// it commented out.
+    /// SQL to run instead, when this statement is half of a rename left
+    /// off (a `RENAME` keeps the data a drop and an add would lose). Files
+    /// show it commented out.
     pub alternative: Option<String>,
     pub stage: Stage,
     /// The part of the migration it belongs to, for headings.
@@ -173,6 +201,9 @@ pub struct Statement {
 pub enum Section {
     /// Schemas and extensions the rest needs.
     Schemas,
+    /// `ALTER … RENAME`: before anything else, so the rest names objects
+    /// as they are called from then on.
+    Renames,
     /// Dropped first: changed, or in the way of a change (policies, views,
     /// foreign keys, indexes, constraints; tables changing kind).
     Dependents,
@@ -194,6 +225,7 @@ impl Section {
     pub fn title(self) -> &'static str {
         match self {
             Self::Schemas => "Schemas and extensions",
+            Self::Renames => "Renames",
             Self::Dependents => "Dropped first, to change or to make way",
             Self::Types => "Types",
             Self::Tables => "Tables and columns",
@@ -245,6 +277,8 @@ pub enum Stage {
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     CreateSchema,
+    /// `ALTER … RENAME` of a table, column, constraint, index, type, label…
+    Rename,
     CreateExtension,
     AlterExtension,
     DropExtension,
@@ -300,7 +334,8 @@ pub enum WarningCode {
     /// Columns (or composite attributes) end up in another order than the
     /// new model's: Postgres adds them last and cannot reorder them.
     ColumnOrder,
-    /// A removed and an added object look alike: maybe a rename.
+    /// A removed and an added object look alike, and the rename is off:
+    /// dropped and added, the data with it.
     PossibleRename,
     /// An enum lost or reordered labels, or a domain changed its base type:
     /// the type is recreated and every column using it converted.
@@ -329,6 +364,10 @@ pub enum WarningCode {
     /// constraint on a partitioned table 17+, a virtual generated column
     /// 18+…): it is kept, and fails on that server.
     NewerPostgres,
+    /// Columns, tables, views or types renamed, or columns converted:
+    /// function and trigger bodies are not in the model, and Postgres does
+    /// not rewrite them, so any naming those may break when they next run.
+    FunctionBodies,
 }
 
 /// The migration from `old` to `new`. No statements when
@@ -339,6 +378,43 @@ pub fn migration(old: &Schema, new: &Schema, options: &Options) -> Migration {
     let mut new = romulus_diff::normalize(new);
     extensions::without_provided(&mut old);
     extensions::without_provided(&mut new);
-    let moves = partitions::reconcile(&mut old, &mut new);
-    plan::Planner::new(&old, &new, options, moves).plan()
+    let resolved = romulus_diff::resolve(&old, &new, &options.renames);
+    let mut renamed = romulus_diff::normalize(&resolved.schema);
+    let moves = partitions::reconcile(&mut renamed, &mut new);
+    plan::Planner::new(&renamed, &new, options, moves, &resolved, &old).plan()
+}
+
+/// `schema` without the foreign keys Postgres makes itself: the copies, one
+/// per partition, of a key referencing a partitioned table (`…_fkey1`).
+/// They come with the key they copy, and SQL creating them fails ("already
+/// exists"): what renders a model as SQL leaves them out.
+pub fn without_fk_clones(schema: &mut Schema) {
+    let clones: Vec<(usize, String)> = schema
+        .entities
+        .iter()
+        .enumerate()
+        .flat_map(|(i, e)| {
+            e.foreign_keys()
+                .filter(|fk| plan::fk_clone(schema, e, fk))
+                .map(move |fk| (i, fk.name.clone()))
+        })
+        .collect();
+    for (i, name) in clones {
+        schema.entities[i].constraints.retain(|c| c.name != name);
+    }
+}
+
+/// The migration back from `new` to `old` that mirrors `up` (planned from
+/// `old` to `new`): its renames undone, last first, nothing else taken for
+/// one. Planned for the same major, without `CONCURRENTLY`.
+pub fn down(old: &Schema, new: &Schema, up: &Migration) -> Migration {
+    migration(
+        new,
+        old,
+        &Options {
+            concurrently: false,
+            major: up.major,
+            renames: RenameChoices::reverse_of(&up.applied),
+        },
+    )
 }

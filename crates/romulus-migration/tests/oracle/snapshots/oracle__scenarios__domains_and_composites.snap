@@ -14,6 +14,9 @@ expression: "plain[0].content"
 --     converted.
 --   - Domain public.warm is created again over public.color, and its columns
 --     converted.
+--   - Functions and triggers are not in romulus's model, and Postgres does
+--     not rewrite their bodies: check any that use public.contacts.balance
+--     (now public.cents), public.contacts.tint (now public.warm).
 
 BEGIN;
 

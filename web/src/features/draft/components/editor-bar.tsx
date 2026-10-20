@@ -31,6 +31,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { modKey } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
+import type { RenameDecisions } from "@/features/migration/queries";
 import type { Role } from "@/features/orgs/queries";
 import { PlaygroundButton } from "@/features/playground/components/entry";
 
@@ -66,6 +67,8 @@ interface EditorBarProps {
   mode: DraftMode;
   /** The migration now (migration mode: what an approval is of). */
   migration: string;
+  /** The renames switched in the migration (the draft's): an approval is of them too. */
+  renames: RenameDecisions;
   /** Asks to switch modes (a confirm follows). */
   onSwitchMode: (mode: DraftMode) => void;
   /** Tidy is being asked for (true), or it failed or changed nothing (false). */
@@ -257,6 +260,7 @@ export function EditorBar(props: EditorBarProps) {
             open={props.liveOpen}
             // What an approval is of: the text that is the source.
             sql={props.mode === "migration" ? props.migration : props.sql}
+            renames={props.renames}
           />
         )}
         {isWriter && open && (

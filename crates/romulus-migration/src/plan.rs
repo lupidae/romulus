@@ -4,7 +4,9 @@
 //! by stage, then phase, then the order they were planned in. The phases are
 //! the dependency order:
 //!
-//! 1. schemas and extensions the rest needs;
+//! 1. schemas and extensions the rest needs, then the renames (planned
+//!    by `romulus_diff::resolve`, which hands over the old model as it is
+//!    after them: every other statement names objects by their new names);
 //! 2. what stands in the way, dropped: policies, views (dependents first),
 //!    foreign keys, indexes and constraints that are removed, changed, or
 //!    must be rebuilt around a change; tables whose kind changes;
@@ -20,7 +22,10 @@
 //! whose name a view takes, a partition whose bound a new one overlaps);
 //! those are flagged where they stand.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
 use remus_core::{
     Schema,
@@ -30,6 +35,7 @@ use remus_core::{
         EnumType, Index, Partition, Policy, TypeKind,
     },
 };
+use romulus_diff::{Candidate, Confidence, Rename, RenameKind, Resolved};
 
 use crate::{
     Hazard, Kind, Migration, Options, Section, Stage, Statement, Warning, WarningCode,
@@ -45,10 +51,14 @@ use crate::{
 /// A schema and a name: the identity of every schema-qualified object.
 type Name = (String, String);
 
+/// What the function bodies warning names before "and N more".
+const BODIES_SHOWN: usize = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Phase {
     Schemas,
     Extensions,
+    Renames,
     /// Partitions that become tables of their own: detached before they
     /// (or their parent) change, their inherited objects first of all.
     EarlyDetach,
@@ -95,6 +105,7 @@ impl Phase {
         use Phase as P;
         match self {
             P::Schemas | P::Extensions => Section::Schemas,
+            P::Renames => Section::Renames,
             P::DropPolicies
             | P::DropViews
             | P::DropForeignKeys
@@ -283,6 +294,16 @@ pub(crate) struct Planner<'a> {
     /// Planning a table about to be attached: its constraints (the parent's
     /// CHECKs among them) go in before the attach.
     attaching: bool,
+    /// What `romulus_diff::resolve` decided: the renames to run, every
+    /// candidate (the ones left off annotate their drop and add), and the
+    /// views to build again around a rename the rewrite cannot follow.
+    steps: Vec<Rename>,
+    candidates: Vec<Candidate>,
+    applied: Vec<Rename>,
+    rebuild_views: BTreeSet<Name>,
+    /// The schemas the old model has before its renames: a move into one
+    /// it lacks creates it first.
+    old_schemas: BTreeSet<String>,
     out: Vec<Planned>,
     warnings: Vec<Warning>,
 }
@@ -293,6 +314,8 @@ impl<'a> Planner<'a> {
         new: &'a Schema,
         options: &'a Options,
         moves: Moves,
+        resolved: &Resolved,
+        original: &Schema,
     ) -> Self {
         let index = |s: &'a Schema| {
             s.entities
@@ -318,6 +341,14 @@ impl<'a> Planner<'a> {
             moves,
             guessed: BTreeSet::new(),
             attaching: false,
+            steps: resolved.steps.clone(),
+            candidates: resolved.candidates.clone(),
+            applied: resolved.renames.clone(),
+            rebuild_views: resolved.rebuild_views.clone(),
+            old_schemas: Self::schemas_of(original)
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             out: Vec::new(),
             warnings: Vec::new(),
         }
@@ -327,18 +358,71 @@ impl<'a> Planner<'a> {
         self.classify();
         self.schemas();
         self.extensions();
+        self.renames();
         self.enums();
         self.domains();
         self.composites();
         self.drop_views();
         self.entities();
         self.drop_removed_tables();
-        self.possible_table_renames();
         self.partitions();
         self.create_views();
         self.unforce_for_foreign_keys();
         self.empty_schemas();
+        self.renames_left_off();
+        self.function_bodies();
         self.finish()
+    }
+
+    /// What function and trigger bodies may name, renamed or converted: the
+    /// model has no bodies, and Postgres keeps them as written (a trigger
+    /// follows its table, not `NEW.email`), so this is a warning, not a
+    /// statement.
+    fn function_bodies(&mut self) {
+        let mut named: Vec<String> = self
+            .applied
+            .iter()
+            .filter(|r| {
+                !matches!(
+                    r.kind,
+                    RenameKind::Constraint | RenameKind::Index | RenameKind::Policy
+                )
+            })
+            .map(|r| {
+                let what = if r.final_schema() == r.schema {
+                    "renamed"
+                } else {
+                    "moved"
+                };
+                format!("{} ({what})", r.describe())
+            })
+            .collect();
+        for ((schema, table), columns) in &self.converted {
+            let Some(entity) = self.new_entities.get(&name_of(schema, table)) else {
+                continue;
+            };
+            for column in columns {
+                if let Some(c) = entity.column(column) {
+                    named.push(format!("{schema}.{table}.{column} (now {})", c.r#type));
+                }
+            }
+        }
+        if named.is_empty() {
+            return;
+        }
+        let more = named.len().saturating_sub(BODIES_SHOWN);
+        named.truncate(BODIES_SHOWN);
+        let mut list = named.join(", ");
+        if more > 0 {
+            let _ = write!(list, " and {more} more");
+        }
+        self.warn(
+            WarningCode::FunctionBodies,
+            None,
+            format!(
+                "Functions and triggers are not in romulus's model, and Postgres does not rewrite their bodies: check any that use {list}."
+            ),
+        );
     }
 
     fn push(&mut self, phase: Phase, kind: Kind, sql: impl Into<String>) -> &mut Statement {
@@ -426,9 +510,12 @@ impl<'a> Planner<'a> {
         }) {
             // A check dropped needs its name, which the model does not
             // record: the domain is created again rather than guessed at.
+            let names_recreated = |sql: &str| recreate.iter().any(|(_, e)| mentions(sql, e));
             if let (Some(b), Some(a)) = (b, a)
                 && (!same_sql(&b.base_type, &a.base_type)
-                    || recreate.iter().any(|(_, e)| mentions(&b.base_type, e))
+                    || names_recreated(&b.base_type)
+                    || b.constraints.iter().any(|c| names_recreated(c))
+                    || b.default.as_deref().is_some_and(names_recreated)
                     || b.constraints
                         .iter()
                         .any(|check| !a.constraints.iter().any(|c| same_sql(c, check))))
@@ -465,7 +552,11 @@ impl<'a> Planner<'a> {
                 };
                 let new_expression = column.generated.is_some()
                     && column.generated == after.generated
-                    && !same_opt_sql(column.default.as_ref(), after.default.as_ref());
+                    && (!same_opt_sql(column.default.as_ref(), after.default.as_ref())
+                        || after
+                            .default
+                            .as_deref()
+                            .is_some_and(|e| self.mentions_aside(e)));
                 if readd(column, after) || (new_expression && !self.options.has(17)) {
                     let why = if column.generated.is_none() {
                         "It becomes generated, which Postgres cannot do in place: dropped and added again, its values replaced by the generated ones.".to_owned()
@@ -490,6 +581,12 @@ impl<'a> Planner<'a> {
             }
         }
 
+        let old_parts: BTreeMap<Name, &Partition> = self
+            .old
+            .partitions
+            .iter()
+            .map(|p| (name_of(&p.child_schema, &p.child), p))
+            .collect();
         // Names a removed table holds that something new takes.
         let taken_by = |e: &Entity| -> Vec<Name> {
             let mut names: Vec<Name> = e
@@ -507,6 +604,16 @@ impl<'a> Planner<'a> {
                         Some((schema, name)) => name_of(schema, name),
                         None => name_of("public", seq),
                     }),
+            );
+            // Its partitions, at every level, go with it.
+            let root = name_of(&e.schema, &e.name);
+            names.extend(
+                old_parts
+                    .keys()
+                    .filter(|child| {
+                        tree_root(&old_parts, &self.old_entities, child).as_ref() == Some(&root)
+                    })
+                    .cloned(),
             );
             names
         };
@@ -569,12 +676,6 @@ impl<'a> Planner<'a> {
         self.converted.retain(|_, c| !c.is_empty());
         // A partition key's column cannot change type: the table is created
         // again (sub-partitions' keys count too).
-        let old_parts: BTreeMap<Name, &Partition> = self
-            .old
-            .partitions
-            .iter()
-            .map(|p| (name_of(&p.child_schema, &p.child), p))
-            .collect();
         for (name, columns) in self.converted.clone() {
             let b = self.old_entities[&name];
             let keys: Vec<&str> = b
@@ -651,9 +752,9 @@ impl<'a> Planner<'a> {
     /// again: it names a type recreated under it, or a column dropped and
     /// added again.
     fn rebuild_reason(&self, table: &Name, definition: &str) -> Option<String> {
-        if self.converted.contains_key(table)
-            && let Some((schema, ty)) = self.aside.keys().find(|(_, t)| mentions(definition, t))
-        {
+        // Its expression holds the old type (renamed aside), which could
+        // not be dropped under it.
+        if let Some((schema, ty)) = self.aside.keys().find(|(_, t)| mentions(definition, t)) {
             return Some(format!(
                 "Dropped above and built again: it names {schema}.{ty}, which is created again."
             ));
@@ -714,10 +815,12 @@ impl<'a> Planner<'a> {
     }
 
     fn schemas(&mut self) {
-        let before = Self::schemas_of(self.old);
-        let after = Self::schemas_of(self.new);
-        for schema in after.difference(&before) {
-            if *schema != "public" {
+        let new: Vec<&str> = Self::schemas_of(self.new)
+            .into_iter()
+            .filter(|s| !self.old_schemas.contains(*s))
+            .collect();
+        for schema in new {
+            if schema != "public" {
                 let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", quote_ident(schema));
                 self.push(Phase::Schemas, Kind::CreateSchema, sql);
             }
@@ -725,12 +828,12 @@ impl<'a> Planner<'a> {
     }
 
     fn empty_schemas(&mut self) {
-        let before = Self::schemas_of(self.old);
         let after = Self::schemas_of(self.new);
-        let left: Vec<String> = before
-            .difference(&after)
-            .filter(|s| **s != "public")
-            .map(|s| (*s).to_owned())
+        let left: Vec<String> = self
+            .old_schemas
+            .iter()
+            .filter(|s| *s != "public" && !after.contains(s.as_str()))
+            .cloned()
             .collect();
         for schema in left {
             self.warn(
@@ -741,6 +844,149 @@ impl<'a> Planner<'a> {
                     quote_ident(&schema)
                 ),
             );
+        }
+    }
+
+    // ---- Renames -----------------------------------------------------------
+
+    /// `ALTER … RENAME` for each rename applied, in `romulus_diff::resolve`'s
+    /// order (through a temporary name where two objects swap names).
+    fn renames(&mut self) {
+        let steps = std::mem::take(&mut self.steps);
+        for step in &steps {
+            let key = step.key();
+            let note = match self.candidates.iter().find(|c| c.key == key) {
+                Some(c) => rename_note(c, &self.candidates),
+                None => "Through a temporary name: two objects swap names.".to_owned(),
+            };
+            for sql in rename_statements(step) {
+                self.push(Phase::Renames, Kind::Rename, sql)
+                    .noted(note.clone());
+            }
+        }
+        self.steps = steps;
+    }
+
+    /// Renames offered and left off: the drop and the add they would
+    /// replace show the `RENAME` as their alternative, and a warning says
+    /// what is lost meanwhile. Rivals (one column alike two others) share
+    /// one note and one warning.
+    fn renames_left_off(&mut self) {
+        let off: Vec<Candidate> = self
+            .candidates
+            .iter()
+            .filter(|c| !c.applied && c.follows.is_none())
+            .cloned()
+            .collect();
+        // Per statement: whether it adds, what it keeps, the renames.
+        let mut halves: BTreeMap<usize, (bool, &'static str, Vec<Rename>)> = BTreeMap::new();
+        for c in &off {
+            let r = &c.rename;
+            let left = LeftOff::of(r);
+            for (i, planned) in self.out.iter().enumerate() {
+                let sql = &planned.statement.sql;
+                let added = left
+                    .adds
+                    .iter()
+                    .any(|prefix| sql.starts_with(prefix.as_str()));
+                if added || left.drops.iter().any(|drop| sql == drop) {
+                    halves
+                        .entry(i)
+                        .or_insert_with(|| (added, left.keeps, Vec::new()))
+                        .2
+                        .push(r.clone());
+                }
+            }
+        }
+        for (i, (added, keeps, renames)) in halves {
+            let statement = &mut self.out[i].statement;
+            let names = renames
+                .iter()
+                .map(|r| {
+                    if added {
+                        r.from.as_str()
+                    } else {
+                        r.to.as_str()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" or ");
+            let hint = if added {
+                format!("Possibly a rename of {names} (off): a RENAME keeps {keeps}.")
+            } else {
+                format!("Possibly renamed to {names} (off): a RENAME keeps {keeps}.")
+            };
+            statement.note = Some(match statement.note.take() {
+                Some(own) => format!("{own} {hint}"),
+                None => hint,
+            });
+            statement.alternative = Some(
+                renames
+                    .iter()
+                    .flat_map(rename_statements)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+        self.left_off_warnings(&off);
+    }
+
+    /// One warning per rename left off, or per group of rivals.
+    fn left_off_warnings(&mut self, off: &[Candidate]) {
+        let mut groups: Vec<Vec<&Candidate>> = Vec::new();
+        for c in off {
+            match groups.iter_mut().find(|g| {
+                g.iter()
+                    .any(|x| x.rivals.contains(&c.key) || c.rivals.contains(&x.key))
+            }) {
+                Some(group) => group.push(c),
+                None => groups.push(vec![c]),
+            }
+        }
+        for group in groups {
+            let first = &group[0].rename;
+            let left = LeftOff::of(first);
+            let object = match &first.parent {
+                Some(parent) => format!("{}.{parent}.{}", first.schema, first.from),
+                None => format!("{}.{}", first.schema, first.from),
+            };
+            let message = if let [one] = group.as_slice() {
+                format!(
+                    "{} looks like a rename ({}), but the rename is off: {}. Turn it on to keep {}.",
+                    one.rename.describe(),
+                    lowercase_first(one.reason.trim_end_matches('.')),
+                    left.instead,
+                    left.keeps
+                )
+            } else {
+                let at = match &first.parent {
+                    Some(parent) => format!("{}.{parent}.", first.schema),
+                    None => format!("{}.", first.schema),
+                };
+                let names = |f: fn(&Rename) -> &str| {
+                    group
+                        .iter()
+                        .map(|c| f(&c.rename).to_owned())
+                        .collect::<Vec<_>>()
+                };
+                let (froms, tos) = (names(|r| &r.from), names(|r| &r.to));
+                let either = if froms.iter().all(|f| *f == froms[0]) {
+                    format!("{at}{} looks renamed to {}", froms[0], tos.join(" or "))
+                } else if tos.iter().all(|t| *t == tos[0]) {
+                    format!("{at}{} looks renamed to {}", froms.join(" or "), tos[0])
+                } else {
+                    group
+                        .iter()
+                        .map(|c| c.rename.describe())
+                        .collect::<Vec<_>>()
+                        .join(" or ")
+                };
+                format!(
+                    "{either}: equally alike, so neither is chosen and {}. Turn the right one on to keep {}.",
+                    left.instead, left.keeps
+                )
+            };
+            self.warn(WarningCode::PossibleRename, Some(object), message);
         }
     }
 
@@ -841,12 +1087,6 @@ impl<'a> Planner<'a> {
             .filter(|l| !a.labels.contains(l))
             .map(String::as_str)
             .collect();
-        let added: Vec<&str> = a
-            .labels
-            .iter()
-            .filter(|l| !b.labels.contains(l))
-            .map(String::as_str)
-            .collect();
         let quoted = |labels: &[&str]| {
             labels
                 .iter()
@@ -854,12 +1094,30 @@ impl<'a> Planner<'a> {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let rename = (removed.len() == 1 && added.len() == 1).then(|| {
-            format!(
-                "ALTER TYPE {ty} RENAME VALUE {} TO {};",
-                quote_literal(removed[0]),
-                quote_literal(added[0])
-            )
+        // Label renames offered and left off: what would keep the type.
+        let left_off: Vec<Rename> = self
+            .candidates
+            .iter()
+            .filter(|c| {
+                !c.applied
+                    && c.rename.kind == RenameKind::EnumValue
+                    && c.rename.schema == name.0
+                    && c.rename.parent.as_deref() == Some(name.1.as_str())
+            })
+            .map(|c| c.rename.clone())
+            .collect();
+        let rename = (!left_off.is_empty()).then(|| {
+            left_off
+                .iter()
+                .map(|r| {
+                    format!(
+                        "ALTER TYPE {ty} RENAME VALUE {} TO {};",
+                        quote_literal(&r.from),
+                        quote_literal(&r.to)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         });
         let why = if removed.is_empty() {
             "Postgres cannot reorder an enum's labels".to_owned()
@@ -880,9 +1138,9 @@ impl<'a> Planner<'a> {
         if let Some(rename) = &rename {
             statement.alternative = Some(rename.clone());
             statement.note = Some(format!(
-                "{why}: the type is created again and every column using it converted. If {} was renamed to {}, the RENAME VALUE below does it in place instead.",
-                quoted(&removed),
-                quoted(&added)
+                "{why}: the type is created again and every column using it converted. If {} was renamed to {}, the RENAME VALUE below does it in place instead (turn the rename on).",
+                quoted(&left_off.iter().map(|r| r.from.as_str()).collect::<Vec<_>>()),
+                quoted(&left_off.iter().map(|r| r.to.as_str()).collect::<Vec<_>>())
             ));
         }
         self.push(Phase::Types, Kind::CreateType, create_enum(a));
@@ -1081,7 +1339,10 @@ impl<'a> Planner<'a> {
                         ),
                     );
                 }
-                Some(before) if before.r#type != attribute.r#type => {
+                Some(before)
+                    if before.r#type != attribute.r#type
+                        || self.mentions_aside(&attribute.r#type) =>
+                {
                     changed = true;
                     self.push(
                         Phase::Composites,
@@ -1092,10 +1353,17 @@ impl<'a> Planner<'a> {
                             attribute.r#type
                         ),
                     )
-                    .can_fail(format!(
-                        "Converts {} to {}: fails on a value that does not convert.",
-                        before.r#type, attribute.r#type
-                    ));
+                    .can_fail(if before.r#type == attribute.r#type {
+                        format!(
+                            "Points it at {}, which is created again: fails on a value that does not convert.",
+                            attribute.r#type
+                        )
+                    } else {
+                        format!(
+                            "Converts {} to {}: fails on a value that does not convert.",
+                            before.r#type, attribute.r#type
+                        )
+                    });
                 }
                 Some(_) => {}
             }
@@ -1167,6 +1435,9 @@ impl<'a> Planner<'a> {
             .collect();
         let mut dropped: BTreeSet<Name> = BTreeSet::new();
         for (name, view) in &views {
+            // Its output columns too: a view over a renamed column keeps
+            // its own names, which only `CREATE` again changes.
+            let names = |e: &Entity| e.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
             let changed = match self.new_entities.get(*name) {
                 None => true,
                 Some(after) => {
@@ -1175,10 +1446,11 @@ impl<'a> Planner<'a> {
                             view.view_definition.as_deref().unwrap_or(""),
                             after.view_definition.as_deref().unwrap_or(""),
                         )
+                        || names(view) != names(after)
                 }
             };
             let uses_aside = self.mentions_aside(view.view_definition.as_deref().unwrap_or(""));
-            if changed || uses_aside {
+            if changed || uses_aside || self.rebuild_views.contains(*name) {
                 dropped.insert((*name).clone());
             }
         }
@@ -1271,8 +1543,16 @@ impl<'a> Planner<'a> {
         if before.map_or(after.comment.is_some(), |b| b.comment != after.comment) {
             self.comment(keyword, &target, after.comment.as_deref());
         }
+        // A column dropped and added again lost its comment.
+        let readded: BTreeSet<String> = self
+            .readded
+            .get(&name_of(&after.schema, &after.name))
+            .map(|r| r.keys().cloned().collect())
+            .unwrap_or_default();
         for column in &after.columns {
-            let was = before.and_then(|b| b.column(&column.name));
+            let was = before
+                .and_then(|b| b.column(&column.name))
+                .filter(|_| !readded.contains(&column.name));
             let changed = match (before, was) {
                 (None, _) | (Some(_), None) => column.comment.is_some(),
                 (Some(_), Some(was)) => was.comment != column.comment,
@@ -1417,7 +1697,9 @@ impl<'a> Planner<'a> {
             self.own_sequence(Phase::Tables, &name, column);
         }
         for fk in table.foreign_keys() {
-            self.add_constraint(&name, fk, None, None);
+            if !fk_clone(self.new, table, fk) {
+                self.add_constraint(&name, fk, None, None);
+            }
         }
         for index in &table.indexes {
             self.push(
@@ -1684,6 +1966,9 @@ impl<'a> Planner<'a> {
         self.attaching = self.moves.attached.contains(name);
         // Constraints.
         for (_, cb, ca) in pair(&b.constraints, &a.constraints, |c| c.name.clone()) {
+            // Postgres makes and drops these with the key they copy.
+            let cb = cb.filter(|c| !fk_clone(self.old, b, c));
+            let ca = ca.filter(|c| !fk_clone(self.new, a, c));
             match (cb, ca) {
                 (Some(cb), None) => self.drop_constraint(&table, cb),
                 (None, Some(ca)) => {
@@ -1814,6 +2099,12 @@ impl<'a> Planner<'a> {
     }
 
     fn indexes(&mut self, name: &Name, b: &Entity, a: &Entity) {
+        let dropped_columns: Vec<&str> = b
+            .columns
+            .iter()
+            .filter(|c| a.column(&c.name).is_none())
+            .map(|c| c.name.as_str())
+            .collect();
         // Not around a column's conversion: the old index would be rebuilt
         // with it, inside the transaction, before a concurrent drop.
         let concurrent = self.options.concurrently
@@ -1822,9 +2113,14 @@ impl<'a> Planner<'a> {
             && !self.readded.contains_key(name);
         for (index_name, ib, ia) in pair(&b.indexes, &a.indexes, |i| i.name.clone()) {
             let qualified_index = qualified(&name.0, &index_name);
+            // Not an index on a column dropped meanwhile: the column takes it
+            // along, inside the transaction, before a concurrent drop.
             let concurrently = concurrent
                 && ia.is_some_and(|i| !i.unique)
-                && ib.is_none_or(|i| !self.mentions_aside(&i.definition));
+                && ib.is_none_or(|i| {
+                    !self.mentions_aside(&i.definition)
+                        && !dropped_columns.iter().any(|c| mentions(&i.definition, c))
+                });
             match (ib, ia) {
                 (Some(_), None) => {
                     self.drop_index(&index_name, &qualified_index);
@@ -1926,30 +2222,10 @@ impl<'a> Planner<'a> {
             .iter()
             .filter(|c| a.column(&c.name).is_none())
             .collect();
-        let added: Vec<&Column> = a
-            .columns
-            .iter()
-            .filter(|c| b.column(&c.name).is_none())
-            .collect();
-        // A removed and an added column alike: maybe a rename.
-        let mut renames: BTreeMap<&str, &str> = BTreeMap::new();
-        for r in &removed {
-            if let Some(x) = added
-                .iter()
-                .find(|x| !renames.values().any(|v| *v == x.name) && same_shape(r, x))
-            {
-                renames.insert(&r.name, &x.name);
-            }
-        }
-
         for column in &a.columns {
             let Some(before) = b.column(&column.name) else {
                 // Added.
                 self.sequence_for(Phase::Columns, column);
-                let rename_from = renames
-                    .iter()
-                    .find(|(_, to)| **to == column.name)
-                    .map(|(from, _)| *from);
                 let statement = self.push(
                     Phase::Columns,
                     Kind::AddColumn,
@@ -1962,24 +2238,7 @@ impl<'a> Planner<'a> {
                     && column.default.is_none()
                     && column.identity.is_none()
                     && column.generated.is_none();
-                if let Some(from) = rename_from {
-                    statement.alternative = Some(format!(
-                        "ALTER TABLE {table} RENAME COLUMN {} TO {};",
-                        quote_ident(from),
-                        quote_ident(&column.name)
-                    ));
-                    statement.note = Some(format!(
-                        "Possibly a rename of {from}: the RENAME keeps its data, where this ADD and the DROP below lose it.{}",
-                        if fails {
-                            " As it is, this ADD fails if the table has rows (NOT NULL without a default)."
-                        } else {
-                            ""
-                        }
-                    ));
-                    if fails {
-                        statement.hazard = Some(Hazard::CanFail);
-                    }
-                } else if fails {
+                if fails {
                     statement.can_fail("Fails if the table has rows: give it a DEFAULT, or add it nullable, fill it, then SET NOT NULL.");
                 }
                 self.own_sequence(Phase::Columns, &table, column);
@@ -2151,10 +2410,15 @@ impl<'a> Planner<'a> {
                 }
                 self.own_sequence(Phase::Columns, &table, column);
             }
-            // 3. Default.
+            // 3. Default (set again when it names a recreated type: the
+            //    old one, renamed aside, could not be dropped under it).
+            let names_aside = column
+                .default
+                .as_deref()
+                .is_some_and(|d| self.mentions_aside(d));
             if !default_done
                 && !generated
-                && !same_opt_sql(before.default.as_ref(), column.default.as_ref())
+                && (!same_opt_sql(before.default.as_ref(), column.default.as_ref()) || names_aside)
             {
                 match &column.default {
                     Some(default) => {
@@ -2241,7 +2505,8 @@ impl<'a> Planner<'a> {
             }
             if let (Some(kind), Some(_), Some(expression)) =
                 (&column.generated, &before.generated, &column.default)
-                && !same_opt_sql(before.default.as_ref(), column.default.as_ref())
+                && (!same_opt_sql(before.default.as_ref(), column.default.as_ref())
+                    || self.mentions_aside(expression))
             {
                 self.push(
                     Phase::Columns,
@@ -2262,6 +2527,9 @@ impl<'a> Planner<'a> {
         } else {
             Phase::DropColumns
         };
+        // A generated column reads others: it goes first.
+        let mut removed = removed;
+        removed.sort_by_key(|c| c.generated.is_none());
         for column in &removed {
             let col = quote_ident(&column.name);
             let statement = self.push(
@@ -2269,27 +2537,7 @@ impl<'a> Planner<'a> {
                 Kind::DropColumn,
                 format!("ALTER TABLE {table} DROP COLUMN {col};"),
             );
-            if let Some(to) = renames.get(column.name.as_str()) {
-                statement.destroys(format!(
-                    "Deletes the column and its data. Possibly renamed to {to}: see the ADD COLUMN above."
-                ));
-                statement.alternative = Some(format!(
-                    "ALTER TABLE {table} RENAME COLUMN {col} TO {};",
-                    quote_ident(to)
-                ));
-            } else {
-                statement.destroys("Deletes the column and its data.");
-            }
-        }
-        for (from, to) in &renames {
-            self.warn(
-                WarningCode::PossibleRename,
-                Some(format!("{}.{}.{to}", name.0, name.1)),
-                format!(
-                    "{}.{from} is dropped and {}.{to} added, alike: if it is a rename, the RENAME COLUMN in the comment keeps the data.",
-                    name.1, name.1
-                ),
-            );
+            statement.destroys("Deletes the column and its data.");
         }
 
         // Where the columns end up.
@@ -2334,74 +2582,6 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn possible_table_renames(&mut self) {
-        let removed: Vec<&Entity> = self
-            .old_entities
-            .iter()
-            .filter(|(n, e)| e.kind == EntityKind::Table && !self.new_entities.contains_key(*n))
-            .map(|(_, e)| *e)
-            .collect();
-        let added: Vec<&Entity> = self
-            .new_entities
-            .iter()
-            .filter(|(n, e)| e.kind == EntityKind::Table && !self.old_entities.contains_key(*n))
-            .map(|(_, e)| *e)
-            .collect();
-        let shape = |e: &Entity| {
-            e.columns
-                .iter()
-                .map(|c| (c.name.clone(), c.r#type.clone()))
-                .collect::<Vec<_>>()
-        };
-        let mut taken = BTreeSet::new();
-        for r in removed {
-            let Some(x) = added.iter().find(|x| {
-                !taken.contains(&table_name(x))
-                    && x.schema == r.schema
-                    && !r.columns.is_empty()
-                    && shape(x) == shape(r)
-            }) else {
-                continue;
-            };
-            taken.insert(table_name(x));
-            let rename = format!(
-                "ALTER TABLE {} RENAME TO {};",
-                table_name(r),
-                quote_ident(&x.name)
-            );
-            let create = format!("CREATE TABLE {} ", table_name(x));
-            let create_paren = format!("CREATE TABLE {} (", table_name(x));
-            let drop = format!("DROP TABLE {};", table_name(r));
-            for planned in &mut self.out {
-                let s = &mut planned.statement;
-                if s.kind == Kind::CreateTable
-                    && (s.sql.starts_with(&create) || s.sql.starts_with(&create_paren))
-                {
-                    s.alternative = Some(rename.clone());
-                    s.note = Some(format!(
-                        "Possibly a rename of {}: the RENAME keeps its rows, where this CREATE and the DROP below lose them.",
-                        r.name
-                    ));
-                } else if s.kind == Kind::DropTable && s.sql == drop {
-                    s.alternative = Some(rename.clone());
-                    s.note = Some(format!(
-                        "Deletes the table and its rows. Possibly renamed to {}: see the CREATE TABLE above.",
-                        x.name
-                    ));
-                }
-            }
-            self.warn(
-                WarningCode::PossibleRename,
-                Some(dotted(&name_of(&x.schema, &x.name))),
-                format!(
-                    "Table {} is dropped and {} created with the same columns: if it is a rename, use ALTER TABLE … RENAME TO (in the comment) to keep the rows.",
-                    dotted(&name_of(&r.schema, &r.name)),
-                    dotted(&name_of(&x.schema, &x.name))
-                ),
-            );
-        }
-    }
-
     /// Tables only the old schema has, dropped last: tables with foreign
     /// keys to others first, cycles broken by dropping a key.
     fn drop_removed_tables(&mut self) {
@@ -2415,7 +2595,7 @@ impl<'a> Planner<'a> {
         for name in &removed {
             let table = self.old_entities[name];
             for fk in table.foreign_keys() {
-                if self.fk_rebuilt(name, fk).is_some() {
+                if self.fk_rebuilt(name, fk).is_some() && !fk_clone(self.old, table, fk) {
                     self.drop_constraint(&table_name(table), fk);
                 }
             }
@@ -2469,7 +2649,9 @@ impl<'a> Planner<'a> {
                     .as_deref()
                     .zip(fk.ref_table.as_deref())
                     .map(|(s, t)| name_of(s, t));
-                if target.is_some_and(|t| &t != name && cycle_set.contains(&t)) {
+                if target.is_some_and(|t| &t != name && cycle_set.contains(&t))
+                    && !fk_clone(self.old, table, fk)
+                {
                     self.drop_constraint(&table_name(table), fk);
                 }
             }
@@ -2763,6 +2945,8 @@ impl<'a> Planner<'a> {
             statements: self.out.into_iter().map(|p| p.statement).collect(),
             warnings: self.warnings,
             major: self.options.major,
+            renames: self.candidates,
+            applied: self.applied,
         }
     }
 }
@@ -2983,15 +3167,6 @@ fn readd(before: &Column, after: &Column) -> bool {
     }
 }
 
-/// Two columns a rename would explain: everything alike but the name.
-fn same_shape(a: &Column, b: &Column) -> bool {
-    a.r#type == b.r#type
-        && a.not_null == b.not_null
-        && a.identity == b.identity
-        && a.generated == b.generated
-        && same_opt_sql(a.default.as_ref(), b.default.as_ref())
-}
-
 fn same_opt_sql(a: Option<&String>, b: Option<&String>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => same_sql(a, b),
@@ -3091,4 +3266,257 @@ fn describe(entity: &Entity) -> String {
         EntityKind::MaterializedView => "a materialized view".to_owned(),
         EntityKind::ForeignTable => "a foreign table".to_owned(),
     }
+}
+
+/// The statements of a rename: `ALTER … SET SCHEMA` for a move, then
+/// `ALTER … RENAME` when the name changes too.
+pub(crate) fn rename_statements(r: &Rename) -> Vec<String> {
+    let Some(to_schema) = r.to_schema.as_deref().filter(|t| *t != r.schema) else {
+        return vec![rename_statement(r)];
+    };
+    let keyword = match r.kind {
+        RenameKind::View => "VIEW",
+        RenameKind::MaterializedView => "MATERIALIZED VIEW",
+        RenameKind::Enum | RenameKind::Composite => "TYPE",
+        RenameKind::Domain => "DOMAIN",
+        _ => "TABLE",
+    };
+    let mut out = vec![format!(
+        "ALTER {keyword} {} SET SCHEMA {};",
+        qualified(&r.schema, &r.from),
+        quote_ident(to_schema)
+    )];
+    if r.from != r.to {
+        out.push(rename_statement(&Rename {
+            schema: to_schema.to_owned(),
+            to_schema: None,
+            ..r.clone()
+        }));
+    }
+    out
+}
+
+/// The `ALTER … RENAME` statement of a rename in its schema.
+fn rename_statement(r: &Rename) -> String {
+    let q = |name: &str| qualified(&r.schema, name);
+    let parent = r.parent.as_deref().unwrap_or("");
+    let (from, to) = (quote_ident(&r.from), quote_ident(&r.to));
+    match r.kind {
+        RenameKind::Table | RenameKind::Partition => {
+            format!("ALTER TABLE {} RENAME TO {to};", q(&r.from))
+        }
+        RenameKind::View => format!("ALTER VIEW {} RENAME TO {to};", q(&r.from)),
+        RenameKind::MaterializedView => {
+            format!("ALTER MATERIALIZED VIEW {} RENAME TO {to};", q(&r.from))
+        }
+        RenameKind::Index => format!("ALTER INDEX {} RENAME TO {to};", q(&r.from)),
+        RenameKind::Sequence => format!("ALTER SEQUENCE {} RENAME TO {to};", q(&r.from)),
+        RenameKind::Column => {
+            format!("ALTER TABLE {} RENAME COLUMN {from} TO {to};", q(parent))
+        }
+        RenameKind::Constraint => {
+            format!(
+                "ALTER TABLE {} RENAME CONSTRAINT {from} TO {to};",
+                q(parent)
+            )
+        }
+        RenameKind::Policy => format!("ALTER POLICY {from} ON {} RENAME TO {to};", q(parent)),
+        RenameKind::Enum | RenameKind::Composite => {
+            format!("ALTER TYPE {} RENAME TO {to};", q(&r.from))
+        }
+        RenameKind::Domain => format!("ALTER DOMAIN {} RENAME TO {to};", q(&r.from)),
+        RenameKind::EnumValue => format!(
+            "ALTER TYPE {} RENAME VALUE {} TO {};",
+            q(parent),
+            quote_literal(&r.from),
+            quote_literal(&r.to)
+        ),
+        RenameKind::Attribute => {
+            format!("ALTER TYPE {} RENAME ATTRIBUTE {from} TO {to};", q(parent))
+        }
+    }
+}
+
+/// What a rename's statement says about it.
+fn rename_note(c: &Candidate, all: &[Candidate]) -> String {
+    let kept = match c.rename.kind {
+        RenameKind::Column => "Keeps the column and its data.",
+        RenameKind::Table | RenameKind::Partition => {
+            "Keeps the table, its rows, and everything on it or referencing it."
+        }
+        RenameKind::EnumValue => "Rows holding the label read the new one.",
+        RenameKind::Enum | RenameKind::Domain | RenameKind::Composite => {
+            "Its columns keep their values."
+        }
+        RenameKind::View | RenameKind::MaterializedView => "What reads it keeps reading it.",
+        _ => "",
+    };
+    let why = if let Some(parent) = &c.follows {
+        let of = all
+            .iter()
+            .find(|x| x.key == *parent)
+            .map_or_else(|| "its parent".to_owned(), |x| x.rename.describe());
+        format!(
+            "With the rename of {of}: Postgres keeps the old name, which the new schema does not."
+        )
+    } else if c.confidence == Confidence::Certain {
+        if c.rename.final_schema() == c.rename.schema {
+            "A known rename.".to_owned()
+        } else {
+            "A known move.".to_owned()
+        }
+    } else {
+        let what = if c.rename.final_schema() == c.rename.schema {
+            "rename"
+        } else {
+            "move"
+        };
+        format!(
+            "Detected as a {what} ({}): turn it off to drop and add instead.",
+            lowercase_first(c.reason.trim_end_matches('.'))
+        )
+    };
+    if kept.is_empty() {
+        why
+    } else {
+        format!("{why} {kept}")
+    }
+}
+
+/// A foreign key Postgres made itself: the copy, on the referencing table,
+/// of a key to a partitioned table, one per partition (`…_fkey1`,
+/// `…_fkey2`), which references the partition. It comes and goes with the
+/// key it copies; creating or dropping it explicitly fails.
+pub(crate) fn fk_clone(schema: &Schema, table: &Entity, fk: &Constraint) -> bool {
+    let (Some(target_schema), Some(target)) = (&fk.ref_schema, &fk.ref_table) else {
+        return false;
+    };
+    let parents: BTreeMap<Name, Name> = schema
+        .partitions
+        .iter()
+        .map(|p| {
+            (
+                name_of(&p.child_schema, &p.child),
+                name_of(&p.parent_schema, &p.parent),
+            )
+        })
+        .collect();
+    let mut ancestors = BTreeSet::new();
+    let mut at = name_of(target_schema, target);
+    while let Some(up) = parents.get(&at) {
+        if !ancestors.insert(up.clone()) {
+            break;
+        }
+        at = up.clone();
+    }
+    !ancestors.is_empty()
+        && table.foreign_keys().any(|other| {
+            other.name != fk.name
+                && other.columns == fk.columns
+                && other.ref_columns == fk.ref_columns
+                && other.on_update == fk.on_update
+                && other.on_delete == fk.on_delete
+                && other
+                    .ref_schema
+                    .as_deref()
+                    .zip(other.ref_table.as_deref())
+                    .is_some_and(|(s, t)| ancestors.contains(&name_of(s, t)))
+        })
+}
+
+/// What a rename left off would keep, and what runs instead: the statements
+/// it would replace (by prefix for the adds, whole for the drops).
+struct LeftOff {
+    adds: Vec<String>,
+    drops: Vec<String>,
+    keeps: &'static str,
+    instead: &'static str,
+}
+
+impl LeftOff {
+    fn of(r: &Rename) -> Self {
+        let parent = r.parent.as_deref().unwrap_or("");
+        let (from, to) = (
+            qualified(&r.schema, &r.from),
+            qualified(r.final_schema(), &r.to),
+        );
+        let (adds, drops, keeps, instead) = match r.kind {
+            RenameKind::Column => {
+                let table = qualified(&r.schema, parent);
+                (
+                    vec![format!(
+                        "ALTER TABLE {table} ADD COLUMN {} ",
+                        quote_ident(&r.to)
+                    )],
+                    vec![format!(
+                        "ALTER TABLE {table} DROP COLUMN {};",
+                        quote_ident(&r.from)
+                    )],
+                    "its data",
+                    "the column is dropped and added, its data lost",
+                )
+            }
+            RenameKind::Table => (
+                vec![
+                    format!("CREATE TABLE {to} "),
+                    format!("CREATE UNLOGGED TABLE {to} "),
+                ],
+                vec![format!("DROP TABLE {from};")],
+                "its rows",
+                "the table is dropped and created, its rows lost",
+            ),
+            RenameKind::Partition => (
+                vec![format!("CREATE TABLE {to} PARTITION OF ")],
+                vec![format!("DROP TABLE {from};")],
+                "its rows",
+                "the partition is dropped and created, its rows lost",
+            ),
+            RenameKind::View | RenameKind::MaterializedView => {
+                let keyword = if r.kind == RenameKind::View {
+                    "VIEW"
+                } else {
+                    "MATERIALIZED VIEW"
+                };
+                (
+                    vec![format!("CREATE {keyword} {to} ")],
+                    vec![format!("DROP {keyword} {from};")],
+                    "what reads it",
+                    "it is dropped and created again",
+                )
+            }
+            RenameKind::Enum | RenameKind::Composite => (
+                vec![format!("CREATE TYPE {to} ")],
+                vec![format!("DROP TYPE {from};")],
+                "its columns as they are",
+                "the type is created anew and its columns converted to it, which can fail",
+            ),
+            RenameKind::Domain => (
+                vec![format!("CREATE DOMAIN {to} ")],
+                vec![format!("DROP DOMAIN {from};")],
+                "its columns as they are",
+                "the domain is created anew and its columns converted to it, which can fail",
+            ),
+            _ => (
+                Vec::new(),
+                Vec::new(),
+                "it as it is",
+                "it is dropped and created again",
+            ),
+        };
+        Self {
+            adds,
+            drops,
+            keeps,
+            instead,
+        }
+    }
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut out = text.to_owned();
+    if let Some(first) = out.get(..1) {
+        let lower = first.to_lowercase();
+        out.replace_range(..1, &lower);
+    }
+    out
 }

@@ -12,6 +12,12 @@
 //! change (`scenarios/*.sql`); the sandbox corpus and remus's showcase, from
 //! and to nothing and into one another; and random mutations of those.
 //!
+//! **Renames.** Each case is planned with renames detected (and those its
+//! new text runs, `known_renames`, as known), as a draft's migration is;
+//! scenarios run again with every rename left off (drops and adds). Then the
+//! down migration (`romulus_migration::down`, the up's renames reversed) runs
+//! after the up in the same text, and must give back the old schema.
+//!
 //! The compile checks the order of the statements, in one transaction. The
 //! tool runs (`tools.rs`) check the files: each tool's layout applied as the
 //! tool applies it (its transactions, `CONCURRENTLY` for real, down
@@ -37,8 +43,13 @@ mod tools;
 
 use std::{fmt::Write, future::Future, sync::LazyLock, time::Duration};
 
-use remus_core::Schema;
-use romulus_migration::{Kind, Options, Stage, WarningCode, migration};
+use remus_core::{
+    Schema,
+    emit::ident::{qualified, quote_ident},
+};
+use romulus_migration::{
+    Kind, Migration, Options, RenameChoices, RenameKind, Stage, WarningCode, migration,
+};
 use romulus_sandbox::{Compilation, Compiler, SandboxConfig, render_sql};
 use tokio::{runtime::Runtime, sync::OnceCell, task::JoinSet};
 
@@ -173,13 +184,22 @@ impl Case {
         }
     }
 
+    /// The other way, renames detected afresh (decisions and known renames
+    /// are about the forward way).
     #[must_use]
     pub fn reversed(&self) -> Self {
         Self {
             label: format!("{} (reversed)", self.label),
             old: self.new.clone(),
             new: self.old.clone(),
-            options: self.options.clone(),
+            options: Options {
+                renames: if self.options.renames.detect {
+                    RenameChoices::default()
+                } else {
+                    RenameChoices::exactly(Vec::new())
+                },
+                ..self.options.clone()
+            },
         }
     }
 
@@ -189,10 +209,40 @@ impl Case {
             label: format!("{} (concurrently)", self.label),
             options: Options {
                 concurrently: true,
-                ..Options::default()
+                ..self.options.clone()
             },
             ..self.clone()
         }
+    }
+
+    /// Every detected rename left off: what dropping and adding does.
+    #[must_use]
+    pub fn without_renames(&self) -> Self {
+        Self {
+            label: format!("{} (renames off)", self.label),
+            options: Options {
+                renames: RenameChoices::exactly(Vec::new()),
+                ..self.options.clone()
+            },
+            ..self.clone()
+        }
+    }
+
+    /// With the renames a text runs known (its `ALTER … RENAME`s).
+    #[must_use]
+    pub fn knowing(mut self, known: Vec<romulus_migration::Rename>) -> Self {
+        self.options.renames.known = known;
+        self
+    }
+
+    /// With these renames turned on or off.
+    #[must_use]
+    pub fn deciding(mut self, decisions: &[(String, bool)]) -> Self {
+        self.options
+            .renames
+            .decisions
+            .extend(decisions.iter().cloned());
+        self
     }
 }
 
@@ -219,50 +269,90 @@ pub const GUESSED_FUNCTION: &str = "a guessed function signature";
 /// runs (`tools.rs`) check.
 pub const ENUM_VALUES_COMMITTED: &str = "uses enum values it commits first (before 17)";
 
-#[allow(clippy::too_many_lines)]
-pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> {
-    let m = migration(&case.old, &case.new, &options_for(compiler, &case.options));
-    if romulus_diff::diff(&case.old, &case.new).is_empty() != m.is_empty() && m.warnings.is_empty()
-    {
-        return Err(format!(
-            "{}: the diff and the migration disagree on emptiness\n{}",
-            case.label,
-            m.script()
-        ));
-    }
-    // The sandbox's compile role does not own extensions: it cannot move
-    // one to another schema, which a real owner can.
-    if m.statements
-        .iter()
-        .any(|s| s.sql.starts_with("ALTER EXTENSION ") && s.sql.contains(" SET SCHEMA "))
-    {
-        return Ok(Outcome::Skipped(MOVED_EXTENSION));
-    }
-    // `setval` is data (the sandbox runs DDL only); the tool runs execute it.
+/// The statements of `m` as the sandbox's compile can run them: `setval`
+/// is data (the sandbox runs DDL only; the tool runs execute it), and
+/// `CONCURRENTLY` cannot run in its transaction.
+fn compile_script(m: &Migration) -> String {
     let mut script = String::new();
     for statement in m.statements.iter().filter(|s| s.kind != Kind::SetSequence) {
         script.push_str(&statement.sql.replace(" INDEX CONCURRENTLY ", " INDEX "));
         script.push('\n');
     }
-    let old_sql = render_sql(&case.old);
-    // A schema the old side uses for functions alone exists in a real
-    // database, but the sandbox creates it only when the text does not.
-    let mut prelude = String::new();
-    for s in &m.statements {
-        if let Some(schema) = s
-            .sql
-            .strip_prefix("CREATE SCHEMA IF NOT EXISTS ")
-            .and_then(|r| r.strip_suffix(';'))
-            && old_sql.contains(&format!("{schema}."))
+    script
+}
+
+/// Columns Postgres put last, as the migration warned: in `wanted`'s order
+/// in `result`, for the objects warned about (every one when `all`).
+fn reorder(result: &mut Schema, wanted: &Schema, warned: &[&Migration], all: bool) {
+    let objects: Vec<String> = warned
+        .iter()
+        .flat_map(|m| &m.warnings)
+        .filter(|w| w.code == WarningCode::ColumnOrder)
+        .filter_map(|w| w.object.clone())
+        .collect();
+    let named = |schema: &str, name: &str| all || objects.contains(&format!("{schema}.{name}"));
+    for entity in &mut result.entities {
+        if !named(&entity.schema, &entity.name) {
+            continue;
+        }
+        if let Some(target) = wanted
+            .entities
+            .iter()
+            .find(|e| e.schema == entity.schema && e.name == entity.name)
         {
-            let _ = writeln!(prelude, "CREATE SCHEMA IF NOT EXISTS {schema};");
+            entity.columns.sort_by_key(|c| {
+                target
+                    .columns
+                    .iter()
+                    .position(|w| w.name == c.name)
+                    .unwrap_or(usize::MAX)
+            });
         }
     }
-    let sql = format!("{prelude}{old_sql}\n-- ===== migration =====\n{script}");
+    for composite in &mut result.composites {
+        if !named(&composite.schema, &composite.name) {
+            continue;
+        }
+        if let Some(target) = wanted
+            .composites
+            .iter()
+            .find(|c| c.schema == composite.schema && c.name == composite.name)
+        {
+            composite.attributes.sort_by_key(|a| {
+                target
+                    .attributes
+                    .iter()
+                    .position(|w| w.name == a.name)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+    }
+}
+
+/// Compiles `prelude`, the old schema's SQL and `scripts`, and compares the
+/// model with `target`; `Err` explains how it went wrong.
+#[allow(clippy::too_many_arguments)]
+async fn run_scripts(
+    compiler: &Compiler,
+    label: &str,
+    what: &str,
+    prelude: &str,
+    old_sql: &str,
+    scripts: &[(&str, &Migration)],
+    target: &Schema,
+    reorder_all: bool,
+) -> Result<Outcome, String> {
+    let mut sql = format!("{prelude}{old_sql}");
+    let mut shown = String::new();
+    for (name, m) in scripts {
+        let script = compile_script(m);
+        let _ = write!(sql, "\n-- ===== {name} =====\n{script}");
+        let _ = write!(shown, "--- {name} ---\n{script}");
+    }
     let compilation = compiler
         .compile(&sql)
         .await
-        .map_err(|e| format!("{}: the sandbox failed: {e}", case.label))?;
+        .map_err(|e| format!("{label}: the sandbox failed: {e}"))?;
     // Functions the schemas call without defining them are stubs whose
     // types the sandbox guesses from the calls: an old schema and a
     // migration calling one with different types make it guess wrong for
@@ -275,7 +365,9 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
     };
     let Some(mut result) = compilation.model.clone() else {
         if compiler.major() < 17
-            && m.statements.iter().any(|s| s.stage == Stage::Commit)
+            && scripts
+                .iter()
+                .any(|(_, m)| m.statements.iter().any(|s| s.stage == Stage::Commit))
             && compilation
                 .errors()
                 .any(|d| d.sqlstate.as_deref() == Some("55P04"))
@@ -302,74 +394,192 @@ pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> 
             return Ok(Outcome::Skipped(GUESSED_FUNCTION));
         }
         return Err(format!(
-            "{}: the migration does not run\n{errors}\n--- migration ---\n{script}",
-            case.label
+            "{label}: the {what} does not run\n{errors}\n{shown}"
         ));
     };
-    // Columns Postgres put last, as the migration warned.
-    for warning in &m.warnings {
-        if warning.code != WarningCode::ColumnOrder {
-            continue;
-        }
-        let Some(object) = &warning.object else {
-            continue;
-        };
-        let Some(wanted) = case
-            .new
-            .entities
-            .iter()
-            .find(|e| format!("{}.{}", e.schema, e.name) == *object)
-        else {
-            continue;
-        };
-        if let Some(entity) = result
-            .entities
-            .iter_mut()
-            .find(|e| e.schema == wanted.schema && e.name == wanted.name)
-        {
-            entity.columns.sort_by_key(|c| {
-                wanted
-                    .columns
-                    .iter()
-                    .position(|w| w.name == c.name)
-                    .unwrap_or(usize::MAX)
-            });
-        }
-        if let Some(composite) = result
-            .composites
-            .iter_mut()
-            .find(|c| format!("{}.{}", c.schema, c.name) == *object)
-            && let Some(wanted) = case
-                .new
-                .composites
-                .iter()
-                .find(|c| format!("{}.{}", c.schema, c.name) == *object)
-        {
-            composite.attributes.sort_by_key(|a| {
-                wanted
-                    .attributes
-                    .iter()
-                    .position(|w| w.name == a.name)
-                    .unwrap_or(usize::MAX)
-            });
-        }
-    }
-    let diff = romulus_diff::diff(&result, &case.new);
+    let warned: Vec<&Migration> = scripts.iter().map(|(_, m)| *m).collect();
+    reorder(&mut result, target, &warned, reorder_all);
+    let diff = romulus_diff::diff(&result, target);
     if diff.is_empty() {
         return Ok(Outcome::Passed);
     }
     if diff.lines().all(stubbed) {
         return Ok(Outcome::Skipped(GUESSED_FUNCTION));
     }
-    let mut out = format!(
-        "{}: the migrated database is not the new schema:\n",
-        case.label
-    );
+    let mut out =
+        format!("{label}: after the {what}, the database is not the schema it should be:\n");
     for line in diff.lines() {
         let _ = writeln!(out, "  {line}");
     }
-    let _ = write!(out, "--- migration ---\n{script}");
+    let _ = write!(out, "{shown}");
     Err(out)
+}
+
+pub async fn check(compiler: &Compiler, case: &Case) -> Result<Outcome, String> {
+    let m = migration(&case.old, &case.new, &options_for(compiler, &case.options));
+    if romulus_diff::diff(&case.old, &case.new).is_empty() != m.is_empty() && m.warnings.is_empty()
+    {
+        return Err(format!(
+            "{}: the diff and the migration disagree on emptiness\n{}",
+            case.label,
+            m.script()
+        ));
+    }
+    // The sandbox's compile role does not own extensions: it cannot move
+    // one to another schema, which a real owner can.
+    if m.statements
+        .iter()
+        .any(|s| s.sql.starts_with("ALTER EXTENSION ") && s.sql.contains(" SET SCHEMA "))
+    {
+        return Ok(Outcome::Skipped(MOVED_EXTENSION));
+    }
+    if let Some(drop) = drops_a_renamed_name(&m) {
+        return Err(format!(
+            "{}: the migration renames, then drops the old name: {drop}\n{}",
+            case.label,
+            m.script()
+        ));
+    }
+    let old_sql = render_sql(&case.old);
+    // A schema the old side uses for functions alone exists in a real
+    // database, but the sandbox creates it only when the text does not.
+    let mut prelude = String::new();
+    for s in &m.statements {
+        if let Some(schema) = s
+            .sql
+            .strip_prefix("CREATE SCHEMA IF NOT EXISTS ")
+            .and_then(|r| r.strip_suffix(';'))
+            && old_sql.contains(&format!("{schema}."))
+        {
+            let _ = writeln!(prelude, "CREATE SCHEMA IF NOT EXISTS {schema};");
+        }
+    }
+    let up = run_scripts(
+        compiler,
+        &case.label,
+        "migration",
+        &prelude,
+        &old_sql,
+        &[("migration", &m)],
+        &case.new,
+        false,
+    )
+    .await?;
+    if up != Outcome::Passed {
+        return Ok(up);
+    }
+    // The way back, from where the up migration left the database: its
+    // renames reversed, nothing else taken for one. Column order aside
+    // (columns added again go last).
+    let down = romulus_migration::down(&case.old, &case.new, &m);
+    if let Some(drop) = drops_a_renamed_name(&down) {
+        return Err(format!(
+            "{}: the down migration renames, then drops the old name: {drop}\n{}",
+            case.label,
+            down.script()
+        ));
+    }
+    // The compile refuses an extension created twice in one text, and
+    // cannot move one: the tool runs prove those downs on a real database.
+    if down
+        .statements
+        .iter()
+        .any(|s| s.kind == Kind::CreateExtension || s.sql.starts_with("ALTER EXTENSION "))
+    {
+        return Ok(Outcome::Passed);
+    }
+    run_scripts(
+        compiler,
+        &case.label,
+        "down migration",
+        &prelude,
+        &old_sql,
+        &[("migration", &m), ("down", &down)],
+        &case.old,
+        true,
+    )
+    .await
+}
+
+/// A statement dropping what a rename that ran was called before (unless
+/// another rename took the name again, as in a swap): the rename was for
+/// nothing, the object dropped and created all the same.
+pub fn drops_a_renamed_name(m: &Migration) -> Option<String> {
+    m.applied
+        .iter()
+        .filter(|r| r.from != r.to || r.final_schema() != r.schema)
+        .find_map(|r| {
+            let reused = m.applied.iter().any(|o| {
+                o.kind == r.kind
+                    && o.parent == r.parent
+                    && o.final_schema() == r.schema
+                    && o.to == r.from
+            });
+            if reused {
+                return None;
+            }
+            // The parent as it is called once the renames ran.
+            let parent = r.parent.as_deref().map(|p| {
+                let now = m
+                    .applied
+                    .iter()
+                    .find(|t| {
+                        matches!(
+                            t.kind,
+                            RenameKind::Table
+                                | RenameKind::Partition
+                                | RenameKind::View
+                                | RenameKind::MaterializedView
+                        ) && t.schema == r.schema
+                            && t.from == p
+                    })
+                    .map_or((r.schema.as_str(), p), |t| {
+                        (t.final_schema(), t.to.as_str())
+                    });
+                qualified(now.0, now.1)
+            });
+            let old = qualified(&r.schema, &r.from);
+            let name = quote_ident(&r.from);
+            let target = match r.kind {
+                RenameKind::Table | RenameKind::Partition => {
+                    vec![(Kind::DropTable, format!("DROP TABLE {old};"))]
+                }
+                RenameKind::View => vec![(Kind::DropView, format!("DROP VIEW {old};"))],
+                RenameKind::MaterializedView => {
+                    vec![(Kind::DropView, format!("DROP MATERIALIZED VIEW {old};"))]
+                }
+                RenameKind::Enum | RenameKind::Composite => {
+                    vec![(Kind::DropType, format!("DROP TYPE {old};"))]
+                }
+                RenameKind::Domain => vec![(Kind::DropDomain, format!("DROP DOMAIN {old};"))],
+                RenameKind::Sequence => vec![(Kind::DropSequence, format!("DROP SEQUENCE {old};"))],
+                RenameKind::Index => vec![
+                    (Kind::DropIndex, format!("DROP INDEX {old};")),
+                    (Kind::DropIndex, format!("DROP INDEX CONCURRENTLY {old};")),
+                ],
+                RenameKind::Column => vec![(
+                    Kind::DropColumn,
+                    format!("ALTER TABLE {} DROP COLUMN {name};", parent.as_deref()?),
+                )],
+                RenameKind::Constraint => vec![(
+                    Kind::DropConstraint,
+                    format!("ALTER TABLE {} DROP CONSTRAINT {name};", parent.as_deref()?),
+                )],
+                RenameKind::Policy => vec![(
+                    Kind::DropPolicy,
+                    format!("DROP POLICY {name} ON {};", parent.as_deref()?),
+                )],
+                RenameKind::EnumValue | RenameKind::Attribute => return None,
+            };
+            m.statements
+                .iter()
+                .find(|s| {
+                    target
+                        .iter()
+                        .any(|(kind, sql)| s.kind == *kind && s.sql == *sql)
+                })
+                .map(|s| s.sql.clone())
+        })
 }
 
 /// Check every case, a few at a time, and fail with every failure. Returns
@@ -434,7 +644,11 @@ pub async fn check_all(compiler: &Compiler, cases: Vec<Case>) -> Vec<(String, &'
         }
         let shown = failures
             .iter()
-            .take(6)
+            .take(if std::env::var_os("ROMULUS_ORACLE_ALL").is_some() {
+                usize::MAX
+            } else {
+                6
+            })
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join("\n\n=====================================\n\n");

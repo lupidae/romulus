@@ -9,6 +9,9 @@ expression: "plain[0].content"
 -- Warnings:
 --   - Enum public.mood loses 'sad': it is created again, and converting its
 --     columns fails on rows that still hold it.
+--   - Functions and triggers are not in romulus's model, and Postgres does
+--     not rewrite their bodies: check any that use public.days.mood (now
+--     public.mood).
 
 BEGIN;
 

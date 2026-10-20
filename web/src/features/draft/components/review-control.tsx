@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "@/components/ui/toaster";
+import type { RenameDecisions } from "@/features/migration/queries";
 import type { Role } from "@/features/orgs/queries";
 import { fromNow } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,8 @@ interface ReviewControlProps {
   open: boolean;
   /** The SQL now: an approval is of exactly this text. */
   sql: string;
+  /** The renames switched in its migration: and of these. */
+  renames: RenameDecisions;
 }
 
 /**
@@ -59,13 +62,13 @@ export function ReviewControl(props: ReviewControlProps) {
   );
 }
 
-function useApprove({ org, db, draftId, sql }: ReviewControlProps) {
+function useApprove({ org, db, draftId, sql, renames }: ReviewControlProps) {
   const mutation = useApproveDraft(org, db, draftId);
   const queryClient = useQueryClient();
   const run = async () => {
     if (mutation.isPending) return;
     try {
-      const after = await mutation.mutateAsync(await sha256Hex(sql));
+      const after = await mutation.mutateAsync({ sha256: await sha256Hex(sql), renames });
       const left = Math.max(0, after.required - after.approvals);
       toast.success("Approved", {
         description:
@@ -76,9 +79,9 @@ function useApprove({ org, db, draftId, sql }: ReviewControlProps) {
     } catch (error) {
       if (error instanceof ApiError && error.code === "draft_changed") {
         void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, draftId) });
-        toast.warning("The SQL just changed", {
+        toast.warning("The draft just changed", {
           description:
-            "Look at the latest edit, then approve again: an approval is of one version.",
+            "Look at the latest edit or rename switched, then approve again: an approval is of one version.",
         });
       } else {
         toast.error("Could not approve", {
@@ -153,7 +156,8 @@ function ReviewPopover({
           </div>
           <p className="text-sm text-muted-foreground">
             Publishing needs {review.required} approval{review.required === 1 ? "" : "s"} from
-            members who did not edit the SQL. Any edit resets them.
+            members who did not edit the draft. Any edit, or a rename switched in its migration,
+            resets them.
           </p>
         </div>
 
@@ -175,7 +179,7 @@ function ReviewPopover({
           )}
           {review.outdated.length > 0 && (
             <p className="mt-2 text-sm text-muted-foreground">
-              Reset by an edit since: {names(review.outdated)}.
+              Reset by a change since: {names(review.outdated)}.
             </p>
           )}
         </div>
@@ -193,7 +197,7 @@ function ReviewPopover({
         <div className="flex flex-wrap items-center justify-end gap-2 px-3 pb-3">
           {mine === "editor" && (
             <p className="mr-auto text-sm text-muted-foreground">
-              You edited the SQL: someone else approves it.
+              You edited the draft: someone else approves it.
             </p>
           )}
           {mine === "unknown" && (

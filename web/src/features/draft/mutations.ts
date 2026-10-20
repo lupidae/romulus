@@ -90,7 +90,13 @@ export function useUpdateDraft(org: string, db: string, id: string) {
 export function usePublishDraft(org: string, db: string, id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { sha256: string; message?: string; override_reason?: string }) =>
+    mutationFn: (body: {
+      sha256: string;
+      message?: string;
+      override_reason?: string;
+      /** The renames as the person saw the migration: the version keeps them. */
+      renames?: Record<string, boolean>;
+    }) =>
       unwrap(
         api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/publish", {
           params: { path: { org, db, id } },
@@ -137,15 +143,15 @@ function reviewMoved(
   void queryClient.invalidateQueries({ queryKey: draftKeys.preview(org, db, id) });
 }
 
-/** Approves the SQL as this person sees it (`sha256` of it). */
+/** Approves the SQL as this person sees it (`sha256` of it), with the renames switched in its migration. */
 export function useApproveDraft(org: string, db: string, id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (sha256: string) =>
+    mutationFn: (body: { sha256: string; renames: Record<string, boolean> }) =>
       unwrap(
         api.POST("/api/orgs/{org}/databases/{db}/drafts/{id}/approvals", {
           params: { path: { org, db, id } },
-          body: { sha256 },
+          body,
         }),
       ),
     onSettled: () => reviewMoved(queryClient, org, db, id),

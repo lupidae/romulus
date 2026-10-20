@@ -23,11 +23,20 @@
 //! base* (`compile::input_hash`): after "Update draft" moved the base, the
 //! same migration is another review.
 //!
+//! The version keeps the renames of the migration from its base
+//! (`versions.renames`): the ones the text runs, and the detected ones as
+//! the person had them on screen (`renames` in the request; the draft's
+//! choices without it). The migration between the two versions is then
+//! the one they saw.
+//!
 //! Any failure unfreezes the draft, and the clients send back what they
 //! typed while it was frozen.
 
+use std::collections::BTreeMap;
+
 use axum::{extract::State, http::StatusCode};
 use romulus_diff::SchemaDiff;
+use romulus_migration::{Options, RenameChoices};
 use romulus_sandbox::Diagnostic;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -43,7 +52,7 @@ use crate::{
     auth::{Member, min},
     collab::{
         Hub, HubError,
-        compile::input_hash,
+        compile::{input_hash, review_hash},
         room::{Content, FreezeError},
     },
     databases::{self, DatabaseRef},
@@ -64,10 +73,15 @@ pub struct PublishPreview {
     pub stale: bool,
     /// What the draft is edited as: its SQL, or a migration from its base.
     pub mode: DraftMode,
-    /// What was previewed (`compile::input_hash`: the SQL; in migration
-    /// mode the migration and the base it applies to): send it back to
-    /// publish exactly this.
+    /// What was previewed (`compile::review_hash`: the SQL, in migration
+    /// mode the migration and the base it applies to, and the renames
+    /// turned on or off): send it back to publish exactly this.
     pub sha256: String,
+    /// The renames turned on or off it was previewed with (the draft's):
+    /// a preview whose renames are not the ones on screen is not the one
+    /// to publish (the toggle has not reached the server yet).
+    #[schema(value_type = std::collections::BTreeMap<String, bool>)]
+    pub renames: BTreeMap<String, bool>,
     /// Migration mode: the migration the version will keep.
     pub migration: Option<String>,
     /// Errors that prevent publishing (then no diff), then notes.
@@ -94,6 +108,12 @@ pub struct PublishDraft {
     /// Publish without the approvals the organization requires, saying why
     /// (admins; the audit log keeps it).
     pub override_reason: Option<String>,
+    /// The renames turned on or off as the person saw the migration (rename
+    /// key → on or off): the draft's, or 409 `renames_changed`. The version
+    /// keeps what ran and what was left off.
+    #[serde(default)]
+    #[schema(value_type = Option<std::collections::BTreeMap<String, bool>>)]
+    pub renames: Option<BTreeMap<String, bool>>,
 }
 
 /// The version a draft became.
@@ -159,6 +179,7 @@ pub(super) async fn preview(
         stale: row.base_version != latest,
         mode: content.mode,
         sha256,
+        renames: content.renames.clone(),
         migration: (content.mode == DraftMode::Migration).then(|| content.migration.clone()),
         diagnostics,
         diff,
@@ -182,7 +203,7 @@ pub(super) async fn preview(
         (status = 201, body = Published),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`draft_changed` (review again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)", body = ErrorBody),
+        (status = 409, description = "`draft_changed` (review again), `renames_changed` (a rename was switched since: review the migration again), `stale_base` (update the draft first), `draft_published`, `draft_busy` (someone else is publishing it)", body = ErrorBody),
         (status = 422, description = "`compile_failed`: the SQL does not compile (`details.diagnostics`); `unrepresentable`: in migration mode, no SQL romulus can keep compiles back to the schema (`details.objects`)", body = ErrorBody),
         (status = 429, description = "`rate_limited`: the checks publishing compiles (migration mode) count against the compile limits", body = ErrorBody),
         (status = 503, description = "The compiler is unavailable", body = ErrorBody),
@@ -231,6 +252,18 @@ pub(super) async fn publish(
         done: false,
     };
 
+    // The renames the person saw are the draft's: a toggle since (someone
+    // else's, in another tab) is a change to review.
+    if body
+        .renames
+        .as_ref()
+        .is_some_and(|seen| *seen != content.renames)
+    {
+        return Err(ApiError::Conflict {
+            code: "renames_changed",
+            message: "The renames in the migration were switched while you were reviewing it. Review the migration again.".into(),
+        });
+    }
     if reviewed(&content) != body.sha256 {
         return Err(ApiError::Conflict {
             code: "draft_changed",
@@ -248,6 +281,8 @@ pub(super) async fn publish(
         major: content.major,
     };
     let source = version_source(&checks, &content, &model).await?;
+    let renames =
+        published_renames(&state, &database, draft.base_version_id, &content, &model).await?;
     database.slug.clone_into(&mut model.database);
     let created = match store(
         &state,
@@ -259,6 +294,7 @@ pub(super) async fn publish(
         message,
         member.user.id,
         approvals,
+        renames,
     )
     .await
     {
@@ -323,6 +359,7 @@ async fn store(
     message: Option<&str>,
     by: Uuid,
     approvals: Option<approvals::Freeze>,
+    renames: Option<RenameChoices>,
 ) -> ApiResult<versions::Created> {
     let migration_sql = (content.mode == DraftMode::Migration).then(|| content.migration.clone());
     let stored = versions::create_version(
@@ -340,6 +377,7 @@ async fn store(
             approvals,
             compiled_on: content.major,
             discussion: content.discussion.clone(),
+            renames,
         },
     )
     .await;
@@ -353,6 +391,51 @@ async fn store(
             _ => Err(err),
         },
     }
+}
+
+/// The renames the migration from the base to `model` runs, and the ones it
+/// leaves off: what the version keeps (`versions.renames`). `None` for a
+/// first version (nothing to rename).
+async fn published_renames(
+    state: &AppState,
+    database: &DatabaseRef,
+    base: Option<Uuid>,
+    content: &Content,
+    model: &Schema,
+) -> ApiResult<Option<RenameChoices>> {
+    let Some(base) = base else {
+        return Ok(None);
+    };
+    let base = versions::by_id(&state.db, database.id, base)
+        .await?
+        .ok_or_else(|| ApiError::not_found("The draft's base version is gone."))?
+        .schema()?;
+    let choices = content.rename_choices(None);
+    let (model, major) = (model.clone(), content.major.number());
+    let planned = tokio::task::spawn_blocking(move || {
+        romulus_migration::migration(
+            &base,
+            &model,
+            &Options {
+                major: Some(major),
+                renames: choices,
+                ..Options::default()
+            },
+        )
+    })
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Some(RenameChoices {
+        known: planned.applied,
+        batches: Vec::new(),
+        decisions: planned
+            .renames
+            .iter()
+            .filter(|c| !c.applied && c.follows.is_none())
+            .map(|c| (c.key.clone(), false))
+            .collect(),
+        detect: true,
+    }))
 }
 
 /// The version a draft became, once it is published.
@@ -416,10 +499,22 @@ async fn version_source(
     }
 }
 
-/// What a person reviews of a draft, as the preview names it: its source,
-/// on its base in migration mode (`compile::input_hash`).
+/// What a person reviews of a draft, as the preview names it and approvals
+/// keep it: its source, on its base in migration mode, and the renames
+/// turned on or off (`compile::review_hash`).
 pub(crate) fn reviewed(content: &Content) -> String {
-    input_hash(content.mode, &content.base_sql, content.source())
+    review_hash(
+        &input_hash(content.mode, &content.base_sql, content.source()),
+        &content.renames,
+    )
+}
+
+/// Whether `sha256` names the draft as it is: what is reviewed
+/// ([`reviewed`]), or its source alone (`compile::input_hash`, a live
+/// compile's), for a migration whose renames the request carries.
+pub(crate) fn is_current(content: &Content, sha256: &str) -> bool {
+    let input = input_hash(content.mode, &content.base_sql, content.source());
+    sha256 == input || sha256 == review_hash(&input, &content.renames)
 }
 
 /// A frozen draft: unfrozen when dropped, unless it was published.

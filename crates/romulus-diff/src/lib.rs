@@ -15,6 +15,10 @@
 //!   `sql.after`, rendered by `remus-sql`, and [`render_sql`] for whole
 //!   schemas in a consistent order.
 //!
+//! [`resolve`] (module [`rename`]) says which removals and additions are one
+//! object renamed (known, detected and scored, chosen), and gives the old
+//! model as Postgres has it after the renames: what a migration plans from.
+//!
 //! Like `remus-core`, this crate has no I/O and no async, so it builds for
 //! `wasm32-unknown-unknown`.
 //!
@@ -126,6 +130,7 @@ mod compute;
 mod describe;
 mod model;
 mod order;
+pub mod rename;
 mod reverse;
 mod sql;
 #[cfg(test)]
@@ -140,6 +145,7 @@ pub use model::{
     Positions, Relation, SchemaDiff, Sides, Status, StatusMap, Summary, TypeKind,
 };
 use remus_core::Schema;
+pub use rename::{Candidate, Confidence, Rename, RenameChoices, RenameKind, Resolved, resolve};
 pub use sql::{normalize, render_sql};
 
 /// Everything that differs from `old` to `new`.

@@ -12,6 +12,9 @@
 //! comments:  Y.Map<comment id, {thread, author, body…}>     and their comments
 //!                                          (see `comments`: checked and stamped
 //!                                          by the room, reviewers write them too)
+//! renames:   Y.Map<rename key, bool>       the renames people turned on or off
+//!                                          in the migration (`romulus_diff::
+//!                                          Rename::key`); editors write them
 //! meta:      Y.Map: `rewrite` = {count, reason}  (see `Roots::note_rewrite`),
 //!            `merged` = the version "Update draft" merged last (`Roots::note_merged`),
 //!            `mode` = "schema" | "migration" (absent: schema), written by the
@@ -52,6 +55,11 @@ pub const MIGRATION: &str = "migration";
 pub const LAYOUT: &str = "layout";
 pub const GROUPS: &str = "groups";
 pub const META: &str = "meta";
+pub const RENAMES: &str = "renames";
+
+/// At most this many rename decisions in a request (`renames=`): the
+/// migration has a candidate per object at most.
+pub const MAX_RENAME_DECISIONS: usize = 2000;
 pub use super::comments::{COMMENTS, THREADS};
 
 /// The line above the statements graph edits append (web/src/features/
@@ -77,6 +85,7 @@ pub struct Roots {
     pub meta: MapRef,
     pub threads: MapRef,
     pub comments: MapRef,
+    pub renames: MapRef,
 }
 
 impl Roots {
@@ -89,6 +98,7 @@ impl Roots {
             meta: doc.get_or_insert_map(META),
             threads: doc.get_or_insert_map(THREADS),
             comments: doc.get_or_insert_map(COMMENTS),
+            renames: doc.get_or_insert_map(RENAMES),
         }
     }
 
@@ -176,6 +186,17 @@ impl Roots {
         if !with.is_empty() {
             text.insert(txn, 0, with);
         }
+    }
+
+    /// The renames turned on (`true`) or off in the migration, by key:
+    /// booleans only, keys of a sane length. All of them: a migration looks
+    /// up its candidates' keys, so extras cost nothing but their bytes (the
+    /// doc's own limit), and none decides another's fate.
+    pub fn rename_decisions<T: ReadTxn>(&self, txn: &T) -> BTreeMap<String, bool> {
+        read_map::<bool, _>(&self.renames, txn)
+            .into_iter()
+            .filter(|(key, _)| key.len() <= 2048)
+            .collect()
     }
 
     pub fn layout<T: ReadTxn>(&self, txn: &T) -> VersionLayout {

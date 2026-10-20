@@ -29,6 +29,7 @@ mod passwords;
 mod playgrounds;
 mod push;
 mod removal;
+mod renames;
 mod schema;
 mod tidy;
 mod timeline;

@@ -13,6 +13,9 @@
 //   comments:  Y.Map<comment id, {thread, author, body…}>    and their comments
 //              (features/comments/model.ts; the server checks and stamps them,
 //              reviewers write them too)
+//   renames:   Y.Map<rename key, boolean>  the renames turned on or off in the
+//              migration, for everyone in the draft (editors write it; the
+//              server plans every migration of the draft with it)
 //   meta:      Y.Map: `rewrite` = {count, reason}, bumped by the server in the
 //              same transaction as each rewrite of the SQL (Tidy, Update draft);
 //              `mode` = "schema" | "migration" (absent: schema), written by
@@ -82,6 +85,9 @@ const MAX_RESYNCS = 3;
  * action of anyone's, never undone.
  */
 export const LOCAL = { origin: "local" } as const;
+
+/** A choice made in the doc that is no edit of the schema (renames): never undone. */
+const CHOICE = { origin: "choice" } as const;
 export const PLACED = { origin: "placed" } as const;
 /**
  * Comments written here without a server (a local draft): not undone by ⌘Z.
@@ -368,6 +374,8 @@ export class DraftSession {
   readonly comments: Y.Map<unknown>;
   /** Notes from the server about the doc (see `onMeta`). */
   readonly meta: Y.Map<unknown>;
+  /** The renames turned on or off in the migration, by key: never undone. */
+  readonly renames: Y.Map<boolean>;
   /** Null for a local draft. */
   readonly provider: WebsocketProvider | null;
   readonly awareness: Awareness;
@@ -433,6 +441,7 @@ export class DraftSession {
     this.threads = this.doc.getMap("threads");
     this.comments = this.doc.getMap("comments");
     this.meta = this.doc.getMap("meta");
+    this.renames = this.doc.getMap("renames");
     this.meta.observe(this.onMeta);
     this.undo = new Y.UndoManager(
       [this.sql, this.migration, this.layout, this.groups, this.threads, this.comments],
@@ -512,6 +521,24 @@ export class DraftSession {
 
     this.sql.observe(this.onText);
     this.migration.observe(this.onText);
+  }
+
+  /**
+   * Turns renames of the migration on or off for everyone in the draft
+   * (editors; the server drops a reviewer's write). Outside the undo
+   * history: a choice, not an edit of the schema. A decision equal to
+   * `defaults` (what romulus does by itself) is removed, not kept.
+   */
+  setRenames(patch: Record<string, boolean>, defaults: Record<string, boolean> = {}): void {
+    this.doc.transact(() => {
+      for (const [key, on] of Object.entries(patch)) {
+        // Back to what romulus does by itself: no decision (switching one
+        // off and on again brings the approvals back, as undoing an edit
+        // does).
+        if (defaults[key] === on) this.renames.delete(key);
+        else this.renames.set(key, on);
+      }
+    }, CHOICE);
   }
 
   /** The text that is the source now: the SQL, or the migration. */

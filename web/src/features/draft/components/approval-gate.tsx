@@ -55,8 +55,8 @@ export function ApprovalGate({
         variant="warning"
         title={`Waiting for ${left} more approval${left === 1 ? "" : "s"} (${by.length} of ${required})`}
       >
-        {by.length > 0 ? `Approved by ${names(by)}. ` : ""}Someone who did not edit the SQL approves
-        it from the editor.
+        {by.length > 0 ? `Approved by ${names(by)}. ` : ""}Someone who did not edit the draft
+        approves it from the editor.
       </Alert>
       {approvals.can_override && (
         <div className="grid gap-3 rounded-lg border border-border p-3">
