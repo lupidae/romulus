@@ -219,10 +219,9 @@ Nothing to enable: the endpoint is `https://<your romulus>/api/mcp`, and
 signing in works with your install's own sign-in (passwords, or single
 sign-on). Behind your own reverse proxy:
 
-- send `/.well-known/oauth-protected-resource` and
-  `/.well-known/oauth-authorization-server` (and the paths under them) to
-  the API, as well as `/app` and `/api`: that is where MCP clients find how
-  to sign in. The bundle's Caddy and the Helm chart's Ingress send every path
+- send `/.well-known/oauth-protected-resource/api/mcp` and
+  `/.well-known/oauth-authorization-server` to the API, as well as `/app`
+  and `/api`: that is where MCP clients find how to sign in. The bundle's Caddy and the Helm chart's Ingress send every path
   to the API already;
 - pass the `Authorization` header through and allow requests of up to a
   minute (`test_migration` and `create_playground` wait up to 40 seconds).
@@ -259,10 +258,10 @@ authorization spec, OAuth 2.1); your sign-in itself stays the usual one.
 
 | what | where |
 |---|---|
-| protected resource metadata (RFC 9728) | `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/api/mcp`; `/api/mcp` answers `401` with `WWW-Authenticate: Bearer resource_metadata="…"` |
+| protected resource metadata (RFC 9728) | `/.well-known/oauth-protected-resource/api/mcp` (the endpoint's own path; none at the root, which would describe the whole origin); `/api/mcp` answers `401` with `WWW-Authenticate: Bearer resource_metadata="…"` |
 | authorization server metadata (RFC 8414) | `/.well-known/oauth-authorization-server`; the issuer is romulus's address |
 | client registration (RFC 7591) | `POST /api/oauth/register`: open, limited per client address; public clients only (no secret) |
-| authorization | `GET /api/oauth/authorize`, then the consent page `/app/oauth/authorize` |
+| authorization | `GET /api/oauth/authorize`, then the consent page `/app/oauth/authorize`; a request romulus refuses stays on that page, which offers to return to the app (`GET /api/oauth/refusals` builds the way back) |
 | tokens | `POST /api/oauth/token`: `authorization_code`, `refresh_token` |
 | revocation (RFC 7009) | `POST /api/oauth/revoke` |
 
@@ -277,7 +276,8 @@ authorization spec, OAuth 2.1); your sign-in itself stays the usual one.
   9207).
 - **Scopes**: `romulus.read` (a read-only token's access) and
   `romulus.write` (read and write); none asked means both, and you may allow
-  read only.
+  read only. A refresh may ask for less, for the access token it gets (the
+  connection keeps what you allowed), never for more.
 - **Lifetimes**: codes 60 seconds, once; access tokens an hour; refresh
   tokens rotate on every use and last 30 days unused, the connection 90 days
   at most. A code or a refresh token used twice revokes everything the
@@ -293,6 +293,7 @@ authorization spec, OAuth 2.1); your sign-in itself stays the usual one.
 | 401, "issued for another resource" | romulus's address changed since the app connected: connect it again |
 | "This request is over" in the browser | the request to connect expired (20 minutes), was answered, or was opened in another browser: connect again from the agent |
 | "romulus does not know this app" | its registration expired: connect again, it registers anew |
+| "romulus can't accept this request" | the app asked in a way romulus refuses (no PKCE `S256`, an unknown scope, another resource): **Return to** sends it the reason; tell its maker |
 | 403, `insufficient_scope` | the app was allowed to read only: connect it again with read and write |
 | 403 | the request came with another site's `Origin` |
 | 429 | too many requests (with this token, with all your tokens, or with tokens that are not valid): wait the `Retry-After` seconds |

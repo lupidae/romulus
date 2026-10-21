@@ -3,10 +3,13 @@
 //! of the API sends `/.well-known/oauth-*` to it (the homepage's Pages
 //! Function, a self-hosted install's reverse proxy).
 //!
-//! - Protected resource metadata (RFC 9728) at [`PROTECTED_RESOURCE`] and at
-//!   `PROTECTED_RESOURCE` + `/api/mcp` (the form for a resource with a
-//!   path, which clients try first): the MCP endpoint, its one
-//!   authorization server (romulus itself) and the scopes.
+//! - Protected resource metadata (RFC 9728) at [`PROTECTED_RESOURCE`] +
+//!   `/api/mcp`, the form for a resource with a path: the MCP endpoint, its
+//!   one authorization server (romulus itself) and the scopes. Not at
+//!   [`PROTECTED_RESOURCE`] alone: a document there would describe the
+//!   origin as a resource (RFC 9728, 3.3), which romulus does not protect.
+//!   Clients find this one from `/api/mcp`'s `WWW-Authenticate`, or try it
+//!   first.
 //! - Authorization server metadata (RFC 8414) at [`AUTHORIZATION_SERVER`]:
 //!   the endpoints, public clients only (`none`), PKCE S256 only, `iss` in
 //!   authorization responses (RFC 9207).
@@ -35,7 +38,6 @@ const DOCUMENTATION: &str = "https://github.com/lupidae/romulus/blob/main/docs/m
 /// The well-known routes, outside `/api` (`crate::app` merges them).
 pub fn well_known() -> Router<AppState> {
     Router::new()
-        .route(PROTECTED_RESOURCE, get(protected_resource))
         .route(
             &format!("{PROTECTED_RESOURCE}{}", crate::mcp::PATH),
             get(protected_resource),

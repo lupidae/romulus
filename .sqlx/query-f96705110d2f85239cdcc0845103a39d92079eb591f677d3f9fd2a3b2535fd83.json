@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT a.expires_at <= now() AS \"expired!\",\n                  g.id AS grant_id, g.scope AS \"scope: AccessTokenScope\", g.resource,\n                  c.name AS client_name,\n                  u.id AS user_id, u.email, u.email_verified, u.name AS user_name,\n                  u.oidc_subject LIKE 'password|%' AS \"password_account!\"\n           FROM oauth_access_tokens a\n           JOIN oauth_grants g ON g.id = a.grant_id\n           JOIN oauth_clients c ON c.id = g.client_id\n           JOIN users u ON u.id = g.user_id\n           WHERE a.token_hash = $1 AND a.revoked_at IS NULL AND g.revoked_at IS NULL",
+  "query": "SELECT a.expires_at <= now() AS \"expired!\",\n                  a.scope AS \"scope: AccessTokenScope\", g.id AS grant_id, g.resource,\n                  c.name AS client_name,\n                  u.id AS user_id, u.email, u.email_verified, u.name AS user_name,\n                  u.oidc_subject LIKE 'password|%' AS \"password_account!\"\n           FROM oauth_access_tokens a\n           JOIN oauth_grants g ON g.id = a.grant_id\n           JOIN oauth_clients c ON c.id = g.client_id\n           JOIN users u ON u.id = g.user_id\n           WHERE a.token_hash = $1 AND a.revoked_at IS NULL AND g.revoked_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -11,17 +11,6 @@
       },
       {
         "ordinal": 1,
-        "name": "grant_id",
-        "type_info": "Uuid",
-        "origin": {
-          "Table": {
-            "table": "oauth_grants",
-            "name": "id"
-          }
-        }
-      },
-      {
-        "ordinal": 2,
         "name": "scope: AccessTokenScope",
         "type_info": {
           "Custom": {
@@ -36,8 +25,19 @@
         },
         "origin": {
           "Table": {
-            "table": "oauth_grants",
+            "table": "oauth_access_tokens",
             "name": "scope"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "grant_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_grants",
+            "name": "id"
           }
         }
       },
@@ -132,5 +132,5 @@
       null
     ]
   },
-  "hash": "338c371125f7148e7c892edcac109f33da12fd5cfa14bf17c21839e00078c81a"
+  "hash": "f96705110d2f85239cdcc0845103a39d92079eb591f677d3f9fd2a3b2535fd83"
 }

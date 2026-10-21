@@ -5,14 +5,22 @@
 //! - a request whose client or redirect URI cannot be trusted goes to the
 //!   consent page with `?error=` (`unknown_client`, `invalid_redirect_uri`,
 //!   `invalid_request`), never to the redirect URI (RFC 6749, 4.1.2.1);
-//! - any other refusal goes back to the redirect URI with `error`,
-//!   `error_description`, `state` (when the request had one) and `iss`;
+//! - any other refusal ([`Refusal`]: the response type, PKCE, the scope, the
+//!   resource, the rate limit) goes to the consent page too, with
+//!   `?refused=` and what names the client and its redirect URI: the page
+//!   asks `GET /oauth/refusals` for the way back, which checks those again
+//!   against the client's registration, and shows it as a "Return to
+//!   <host>" link. romulus never sends a browser to a redirect URI on its
+//!   own before the person decided: clients register themselves, so an
+//!   automatic redirect there would make romulus an open redirect;
 //! - a good one is kept in `oauth_requests` (at most [`REQUEST_TTL`]), and
 //!   the browser goes to `/app/oauth/authorize?request=<id>`, with a cookie
 //!   that ties the request to it: the page reads it and posts the decision
 //!   from this browser only, so a link to someone else's request shows
-//!   nothing and approves nothing. Signing in first is the page's business
-//!   (it comes back).
+//!   nothing and approves nothing. One cookie holds the browser's last
+//!   [`MAX_BINDINGS`] requests. Signing in first is the page's business (it
+//!   comes back). Only the person's decision (a code, or `access_denied`)
+//!   sends the browser back to the client by itself.
 //!
 //! A request must carry a PKCE S256 `code_challenge` (`plain` is refused)
 //! and, when it names one, the MCP endpoint as its `resource`. `state` is
@@ -82,20 +90,27 @@ impl Back {
         }
         url.into()
     }
-
-    fn error(&self, error: &str, description: &str) -> Response {
-        Redirect::to(&self.with(&[("error", error), ("error_description", description)]))
-            .into_response()
-    }
 }
 
-/// The cookie that ties request `id` to the browser that made it.
-fn binding_cookie_name(config: &Config, id: Uuid) -> String {
-    format!("{}_oauth_{}", config.session_cookie, id.simple())
+/// Requests one browser keeps bound at once: a person connecting two
+/// agents together still can, and the cookie stays small whatever a page
+/// keeps asking.
+pub const MAX_BINDINGS: usize = 3;
+
+/// The cookie that ties requests to the browser that made them: up to
+/// [`MAX_BINDINGS`] `<request id>.<secret>` entries, newest first, joined by
+/// `~`.
+fn binding_cookie_name(config: &Config) -> String {
+    format!("{}_oauth", config.session_cookie)
 }
 
-fn binding_cookie(config: &Config, id: Uuid, value: String) -> Cookie<'static> {
-    Cookie::build((binding_cookie_name(config, id), value))
+fn binding_cookie(config: &Config, entries: &[(Uuid, String)]) -> Cookie<'static> {
+    let value = entries
+        .iter()
+        .map(|(id, secret)| format!("{}.{secret}", id.simple()))
+        .collect::<Vec<_>>()
+        .join("~");
+    let mut cookie = Cookie::build((binding_cookie_name(config), value))
         .http_only(true)
         .secure(config.public_url.scheme() == "https")
         .same_site(SameSite::Lax)
@@ -103,22 +118,35 @@ fn binding_cookie(config: &Config, id: Uuid, value: String) -> Cookie<'static> {
         .max_age(cookie::time::Duration::seconds(
             i64::try_from(REQUEST_TTL.as_secs()).unwrap_or(i64::MAX),
         ))
-        .build()
+        .build();
+    if entries.is_empty() {
+        cookie.make_removal();
+    }
+    cookie
 }
 
-fn binding_removal(config: &Config, id: Uuid) -> Cookie<'static> {
-    let mut cookie = binding_cookie(config, id, String::new());
-    cookie.make_removal();
-    cookie
+/// The requests this browser holds bindings for, newest first (malformed
+/// entries skipped, at most [`MAX_BINDINGS`]).
+fn bindings(jar: &CookieJar, config: &Config) -> Vec<(Uuid, String)> {
+    jar.get(&binding_cookie_name(config))
+        .map_or("", Cookie::value)
+        .split('~')
+        .filter_map(|entry| {
+            let (id, secret) = entry.split_once('.')?;
+            let id = Uuid::try_parse(id).ok()?;
+            token::is_well_formed(secret).then(|| (id, secret.to_owned()))
+        })
+        .take(MAX_BINDINGS)
+        .collect()
 }
 
 /// The binding secret this browser holds for request `id`, hashed as
 /// stored.
 fn binding_hash(jar: &CookieJar, config: &Config, id: Uuid) -> Option<Vec<u8>> {
-    jar.get(&binding_cookie_name(config, id))
-        .map(Cookie::value)
-        .filter(|value| token::is_well_formed(value))
-        .map(token::hash)
+    bindings(jar, config)
+        .into_iter()
+        .find(|(entry, _)| *entry == id)
+        .map(|(_, secret)| token::hash(&secret))
 }
 
 /// Whether `value` is a PKCE S256 challenge: base64url of 32 bytes, no
@@ -148,7 +176,7 @@ fn is_challenge(value: &str) -> bool {
         ("resource" = Option<String>, Query, description = "The MCP endpoint, `<public URL>/api/mcp` (RFC 8707)"),
     ),
     responses(
-        (status = 303, description = "To the consent page (`/app/oauth/authorize?request=…`, with the cookie that binds the request to this browser); to the redirect URI with `error` for a bad request; to `/app/oauth/authorize?error=…` when the client or its redirect URI is unknown"),
+        (status = 303, description = "Always to the consent page, never to the redirect URI: `/app/oauth/authorize?request=…` (with the cookie that binds the request to this browser); `?refused=…&client_id=…&redirect_uri=…[&state=…]` for a bad request (the page offers the way back); `?error=…` when the client or its redirect URI is unknown"),
     )
 )]
 pub(crate) async fn authorize(
@@ -197,14 +225,11 @@ pub(crate) async fn authorize(
 
     let ip = throttle::client_key(client.map(|Extension(ConnectInfo(addr))| addr.ip()));
     if state.limits.oauth_authorizations.check(ip).is_err() {
-        return back.error(
-            "temporarily_unavailable",
-            "Too many authorizations from this address: try again in a minute.",
-        );
+        return refused(Refusal::Busy, client_id, &back);
     }
     let (challenge, scope) = match checked(&state.config, &params, back.state.as_deref()) {
         Ok(checked) => checked,
-        Err((error, description)) => return back.error(error, &description),
+        Err(refusal) => return refused(refusal, client_id, &back),
     };
 
     let binding = token::generate();
@@ -229,71 +254,148 @@ pub(crate) async fn authorize(
         Ok(id) => id,
         Err(err) => {
             tracing::error!(error = %err, "oauth: cannot keep an authorization request");
-            return back.error(
-                "server_error",
-                "romulus could not take the request just now.",
-            );
+            return refused(Refusal::ServerError, client_id, &back);
         }
     };
-    let jar = jar.add(binding_cookie(&state.config, id, binding));
+    let mut entries = bindings(&jar, &state.config);
+    entries.insert(0, (id, binding));
+    entries.truncate(MAX_BINDINGS);
+    let jar = jar.add(binding_cookie(&state.config, &entries));
     (jar, Redirect::to(&format!("{PAGE}?request={id}"))).into_response()
+}
+
+/// Why an authorization request was refused once its client and redirect
+/// URI were known: what the client is told (`error`, `error_description`)
+/// when the person takes the way back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    Busy,
+    ResponseType,
+    StateTooLong,
+    PkceMethod,
+    CodeChallenge,
+    Scope,
+    Resource,
+    ServerError,
+}
+
+impl Refusal {
+    const ALL: [Self; 8] = [
+        Self::Busy,
+        Self::ResponseType,
+        Self::StateTooLong,
+        Self::PkceMethod,
+        Self::CodeChallenge,
+        Self::Scope,
+        Self::Resource,
+        Self::ServerError,
+    ];
+
+    /// Its name in the consent page's URL (`?refused=`).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Busy => "busy",
+            Self::ResponseType => "response_type",
+            Self::StateTooLong => "state",
+            Self::PkceMethod => "pkce",
+            Self::CodeChallenge => "code_challenge",
+            Self::Scope => "scope",
+            Self::Resource => "resource",
+            Self::ServerError => "server_error",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|refusal| refusal.key() == key)
+    }
+
+    /// The OAuth error (RFC 6749, 4.1.2.1; RFC 8707).
+    pub fn error(self) -> &'static str {
+        match self {
+            Self::Busy => "temporarily_unavailable",
+            Self::ResponseType => "unsupported_response_type",
+            Self::StateTooLong | Self::PkceMethod | Self::CodeChallenge => "invalid_request",
+            Self::Scope => "invalid_scope",
+            Self::Resource => "invalid_target",
+            Self::ServerError => "server_error",
+        }
+    }
+
+    /// What went wrong, for the client and the person: fixed sentences,
+    /// never text from the request.
+    pub fn description(self, config: &Config) -> String {
+        match self {
+            Self::Busy => {
+                "Too many authorizations from this address: try again in a minute.".to_owned()
+            }
+            Self::ResponseType => {
+                "romulus answers the authorization code flow only (`response_type=code`)."
+                    .to_owned()
+            }
+            Self::StateTooLong => "`state` is too long (1024 characters at most).".to_owned(),
+            Self::PkceMethod => {
+                "PKCE is required, with `code_challenge_method=S256` (`plain` is refused)."
+                    .to_owned()
+            }
+            Self::CodeChallenge => {
+                "`code_challenge` must be base64url(sha256(code_verifier)), 43 characters."
+                    .to_owned()
+            }
+            Self::Scope => format!(
+                "Unknown scope: romulus offers {} and {}.",
+                super::SCOPE_READ,
+                super::SCOPE_WRITE
+            ),
+            Self::Resource => format!(
+                "romulus issues tokens for its MCP endpoint only: {}.",
+                resource(config)
+            ),
+            Self::ServerError => "romulus could not take the request just now.".to_owned(),
+        }
+    }
+}
+
+/// The consent page for a refusal: what it was, and what names the way back
+/// (checked again by `GET /oauth/refusals` before it is shown).
+fn refused(refusal: Refusal, client_id: Uuid, back: &Back) -> Response {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query
+        .append_pair("refused", refusal.key())
+        .append_pair("client_id", &client_id.to_string())
+        .append_pair("redirect_uri", &back.redirect_uri);
+    if let Some(state) = &back.state {
+        query.append_pair("state", state);
+    }
+    Redirect::to(&format!("{PAGE}?{}", query.finish())).into_response()
 }
 
 /// The checks after the client and its redirect URI are known: the
 /// response type, `state`'s length when sent, PKCE S256, the scope, the
-/// resource. Refusals go back to the client.
+/// resource.
 fn checked<'a>(
     config: &Config,
     params: &'a Params,
-    state: Option<&'a str>,
-) -> Result<(&'a str, AccessTokenScope), (&'static str, String)> {
+    state: Option<&str>,
+) -> Result<(&'a str, AccessTokenScope), Refusal> {
     if params.get("response_type") != Some("code") {
-        return Err((
-            "unsupported_response_type",
-            "romulus answers the authorization code flow only (`response_type=code`).".to_owned(),
-        ));
+        return Err(Refusal::ResponseType);
     }
     if state.is_some_and(|state| state.chars().count() > 1024) {
-        return Err((
-            "invalid_request",
-            "`state` is too long (1024 characters at most).".to_owned(),
-        ));
+        return Err(Refusal::StateTooLong);
     }
     if params.get("code_challenge_method") != Some("S256") {
-        return Err((
-            "invalid_request",
-            "PKCE is required, with `code_challenge_method=S256` (`plain` is refused).".to_owned(),
-        ));
+        return Err(Refusal::PkceMethod);
     }
-    let Some(challenge) = params.get("code_challenge").filter(|c| is_challenge(c)) else {
-        return Err((
-            "invalid_request",
-            "`code_challenge` must be base64url(sha256(code_verifier)), 43 characters.".to_owned(),
-        ));
-    };
-    let scope = match parse_scope(params.get("scope")) {
-        Ok(scope) => scope,
-        Err(unknown) => {
-            return Err((
-                "invalid_scope",
-                format!(
-                    "Unknown scope {unknown:?}: romulus offers {} and {}.",
-                    super::SCOPE_READ,
-                    super::SCOPE_WRITE
-                ),
-            ));
-        }
-    };
-    if let Some(asked) = params.get("resource")
-        && !is_our_resource(config, asked)
+    let challenge = params
+        .get("code_challenge")
+        .filter(|c| is_challenge(c))
+        .ok_or(Refusal::CodeChallenge)?;
+    let scope = parse_scope(params.get("scope")).map_err(|_| Refusal::Scope)?;
+    if params
+        .get("resource")
+        .is_some_and(|asked| !is_our_resource(config, asked))
     {
-        return Err((
-            "invalid_target",
-            format!(
-                "romulus issues tokens for its MCP endpoint only: {}.",
-                resource(config)
-            ),
-        ));
+        return Err(Refusal::Resource);
     }
     Ok((challenge, scope))
 }
@@ -500,10 +602,102 @@ pub(crate) async fn decide(
         ])
     };
     tx.commit().await?;
+    let left: Vec<_> = bindings(&jar, &state.config)
+        .into_iter()
+        .filter(|(entry, _)| *entry != id)
+        .collect();
     Ok((
-        jar.add(binding_removal(&state.config, id)),
+        jar.add(binding_cookie(&state.config, &left)),
         Json(Decided { redirect_url }),
     ))
+}
+
+/// A refused authorization request, as the consent page shows it.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RefusedRequest {
+    /// The OAuth error the client is told (`invalid_request`…).
+    pub error: String,
+    /// What went wrong, in a sentence.
+    pub description: String,
+    /// The client's redirect URI with `error`, `error_description`, `state`
+    /// (when it sent one) and `iss`: one of its registered URIs, checked
+    /// again here.
+    pub return_url: String,
+    /// The return URL's host, as the link names it.
+    pub redirect_host: String,
+    /// A program on this computer.
+    pub loopback: bool,
+    /// The name the client registered under, unverified.
+    pub client_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RefusalQuery {
+    /// The consent page's `?refused=`.
+    pub reason: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    /// The request's own, when it had one.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+/// The way back to a client after its request was refused, for the
+/// consent page's "Return to" link. Signed out too: refusals come before
+/// signing in. Answers only for a registered client and one of its
+/// redirect URIs, so the link can lead nowhere else.
+#[utoipa::path(
+    get,
+    path = "/oauth/refusals",
+    operation_id = "get_authorization_refusal",
+    tag = "oauth",
+    params(RefusalQuery),
+    responses(
+        (status = 200, body = RefusedRequest),
+        (status = 404, description = "Not a refusal romulus makes, an unknown client, or a redirect URI it did not register", body = ErrorBody),
+    )
+)]
+pub(crate) async fn refusal(
+    State(state): State<AppState>,
+    crate::extract::Query(query): crate::extract::Query<RefusalQuery>,
+) -> ApiResult<Json<RefusedRequest>> {
+    let not_one = || ApiError::not_found("This is not a request romulus refused.");
+    let refusal = Refusal::from_key(&query.reason).ok_or_else(not_one)?;
+    let client_id = Uuid::try_parse(&query.client_id).map_err(|_| not_one())?;
+    let client = sqlx::query!(
+        "SELECT name, redirect_uris FROM oauth_clients WHERE id = $1",
+        client_id
+    )
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(not_one)?;
+    if !client
+        .redirect_uris
+        .iter()
+        .any(|known| redirect_matches(known, &query.redirect_uri))
+    {
+        return Err(not_one());
+    }
+    let state_param = query.state.filter(|value| !value.is_empty());
+    let description = refusal.description(&state.config);
+    let back = Back {
+        redirect_uri: query.redirect_uri,
+        state: state_param,
+        issuer: issuer(&state.config),
+    };
+    let return_url = back.with(&[
+        ("error", refusal.error()),
+        ("error_description", &description),
+    ]);
+    Ok(Json(RefusedRequest {
+        error: refusal.error().to_owned(),
+        description,
+        redirect_host: clients::host_of(&back.redirect_uri),
+        loopback: clients::is_loopback_uri(&back.redirect_uri),
+        client_name: client.name,
+        return_url,
+    }))
 }
 
 #[cfg(test)]
@@ -546,14 +740,55 @@ mod tests {
     }
 
     #[test]
-    fn the_binding_cookie_is_scoped_to_the_oauth_endpoints() {
+    fn one_binding_cookie_keeps_the_latest_requests() {
         let config = Config::for_tests();
-        let id = Uuid::nil();
-        let cookie = binding_cookie(&config, id, "v".into());
+        let entries: Vec<_> = (0..MAX_BINDINGS)
+            .map(|n| (Uuid::from_u128(n as u128 + 1), token::generate()))
+            .collect();
+        let cookie = binding_cookie(&config, &entries);
         assert_eq!(cookie.path(), Some("/api/oauth"));
         assert_eq!(cookie.http_only(), Some(true));
         assert_eq!(cookie.same_site(), Some(SameSite::Lax));
-        assert!(cookie.name().ends_with(&id.simple().to_string()));
+        assert_eq!(cookie.name(), format!("{}_oauth", config.session_cookie));
+        let jar = CookieJar::new().add(cookie);
+        assert_eq!(bindings(&jar, &config), entries);
+        assert_eq!(
+            binding_hash(&jar, &config, entries[1].0),
+            Some(token::hash(&entries[1].1))
+        );
+        assert_eq!(binding_hash(&jar, &config, Uuid::nil()), None);
+        // Garbage in the cookie is skipped; nothing left removes it.
+        let jar = CookieJar::new().add(Cookie::new(
+            binding_cookie_name(&config),
+            format!("junk~{}.{}", Uuid::nil().simple(), entries[0].1),
+        ));
+        assert_eq!(
+            bindings(&jar, &config),
+            [(Uuid::nil(), entries[0].1.clone())]
+        );
+        assert_eq!(binding_cookie(&config, &[]).value(), "");
+    }
+
+    #[test]
+    fn refusals_round_trip_their_key_and_never_echo_the_request() {
+        let config = Config::for_tests();
+        for refusal in Refusal::ALL {
+            assert_eq!(Refusal::from_key(refusal.key()), Some(refusal));
+            assert_ne!(refusal.description(&config), "");
+        }
+        assert_eq!(Refusal::from_key("anything"), None);
+        let back = Back {
+            redirect_uri: "http://localhost:9/cb".into(),
+            state: Some("s".into()),
+            issuer: "http://localhost:41000".into(),
+        };
+        let response = refused(Refusal::PkceMethod, Uuid::nil(), &back);
+        let location = response.headers()["location"].to_str().unwrap();
+        assert!(
+            location.starts_with("/app/oauth/authorize?refused=pkce&client_id="),
+            "{location}"
+        );
+        assert!(location.contains("&state=s"), "{location}");
     }
 
     #[test]

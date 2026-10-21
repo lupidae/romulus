@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO oauth_grants (client_id, user_id, scope, resource, expires_at, idle_expires_at)\n         VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5),\n                 now() + make_interval(secs => least($5, $6)))\n         RETURNING id",
+  "query": "INSERT INTO oauth_grants\n             (client_id, user_id, scope, resource, redirect_uri, expires_at, idle_expires_at)\n         VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6),\n                 now() + make_interval(secs => least($6, $7)))\n         RETURNING id",
   "describe": {
     "columns": [
       {
@@ -31,6 +31,7 @@
           }
         },
         "Text",
+        "Text",
         "Float8",
         "Float8"
       ]
@@ -39,5 +40,5 @@
       false
     ]
   },
-  "hash": "98af7c57dea610208fb8db15386e6b42f7405e648fb3560816325c420356d408"
+  "hash": "1c3a236bf227e5a8ec726b283d15f263b368eb56658ed1547ffcc12f5c672782"
 }

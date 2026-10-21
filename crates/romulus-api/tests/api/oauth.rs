@@ -3,8 +3,11 @@
 //! codes once, refresh rotation and replays), revocation, connected apps,
 //! and what an app's token may do at `/api/mcp`.
 
+use std::net::SocketAddr;
+
 use axum::{
     body::Body,
+    extract::ConnectInfo,
     http::{Method, Request, StatusCode, header},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -92,6 +95,19 @@ async fn form(app: &TestApp, path: &str, pairs: &[(&str, &str)]) -> TestResponse
     .await
 }
 
+/// [`form`], from the client address `ip` (as the edge or a trusted proxy
+/// names it).
+async fn form_from(app: &TestApp, ip: [u8; 4], path: &str, pairs: &[(&str, &str)]) -> TestResponse {
+    let mut request = Request::post(path)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(query(pairs)))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from((ip, 50_000))));
+    app.send(request).await
+}
+
 /// The authorization request a client sends the browser to.
 fn authorize_url(
     client_id: &str,
@@ -125,6 +141,11 @@ struct Started {
     binding: String,
 }
 
+/// The one cookie that binds a browser's authorization requests.
+fn binding_cookie() -> String {
+    format!("{}_oauth", Config::for_tests().session_cookie)
+}
+
 fn started(response: &TestResponse) -> Started {
     assert_eq!(response.status, StatusCode::SEE_OTHER);
     let location = response.location();
@@ -133,16 +154,38 @@ fn started(response: &TestResponse) -> Started {
         "{location}"
     );
     let id: Uuid = param(location, "request").unwrap().parse().unwrap();
-    let name = format!(
-        "{}_oauth_{}",
-        Config::for_tests().session_cookie,
-        id.simple()
-    );
+    let name = binding_cookie();
     let value = response.cookie_value(&name).expect("the binding cookie");
     Started {
         id,
         binding: format!("{name}={value}"),
     }
+}
+
+/// A refused authorization request: never sent back to the client by
+/// romulus, but to the consent page, whose way back comes from
+/// `GET /api/oauth/refusals`. Answers the refusal's key and that answer.
+async fn refusal_of(app: &TestApp, response: &TestResponse) -> (String, TestResponse) {
+    assert_eq!(response.status, StatusCode::SEE_OTHER);
+    let location = response.location();
+    assert!(
+        location.starts_with("/app/oauth/authorize?refused="),
+        "{location}"
+    );
+    let get = |name| param(location, name).unwrap_or_default();
+    let mut pairs = vec![
+        ("reason", get("refused")),
+        ("client_id", get("client_id")),
+        ("redirect_uri", get("redirect_uri")),
+    ];
+    if let Some(state) = param(location, "state") {
+        pairs.push(("state", state));
+    }
+    let pairs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let answer = app
+        .get(&format!("/api/oauth/refusals?{}", query(&pairs)))
+        .await;
+    (get("refused"), answer)
 }
 
 /// A browser request: the session and the binding cookie, and what the web
@@ -283,23 +326,26 @@ pub(super) async fn connected(db: &PgPool, who: &Session, scope: AccessTokenScop
     .await
     .unwrap();
     let grant = sqlx::query_scalar!(
-        "INSERT INTO oauth_grants (client_id, user_id, scope, resource, expires_at, idle_expires_at)
-         VALUES ($1, $2, $3, $4, now() + interval '90 days', now() + interval '30 days')
+        "INSERT INTO oauth_grants
+             (client_id, user_id, scope, resource, redirect_uri, expires_at, idle_expires_at)
+         VALUES ($1, $2, $3, $4, $5, now() + interval '90 days', now() + interval '30 days')
          RETURNING id",
         client,
         who.user,
         scope as AccessTokenScope,
         RESOURCE,
+        LOOPBACK,
     )
     .fetch_one(db)
     .await
     .unwrap();
     let secret = format!("{}{}", oauth::ACCESS_PREFIX, token::generate());
     sqlx::query!(
-        "INSERT INTO oauth_access_tokens (grant_id, token_hash, expires_at)
-         VALUES ($1, $2, now() + interval '1 hour')",
+        "INSERT INTO oauth_access_tokens (grant_id, token_hash, scope, expires_at)
+         VALUES ($1, $2, $3, now() + interval '1 hour')",
         grant,
         token::hash(&secret),
+        scope as AccessTokenScope,
     )
     .execute(db)
     .await
@@ -310,25 +356,29 @@ pub(super) async fn connected(db: &PgPool, who: &Session, scope: AccessTokenScop
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn the_metadata_documents_say_where_to_sign_in_and_how(db: PgPool) {
     let app = TestApp::new(db);
-    for path in [
-        "/.well-known/oauth-protected-resource",
-        "/.well-known/oauth-protected-resource/api/mcp",
-    ] {
-        let document = app.get(path).await;
-        assert_eq!(document.status, StatusCode::OK, "{path}");
-        assert_eq!(document.headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
-        let body = document.json();
-        assert_eq!(body["resource"], RESOURCE);
-        assert_eq!(
-            body["authorization_servers"],
-            json!(["http://localhost:41000"])
-        );
-        assert_eq!(
-            body["scopes_supported"],
-            json!(["romulus.read", "romulus.write"])
-        );
-        assert_eq!(body["bearer_methods_supported"], json!(["header"]));
-    }
+    // The resource's own path only (RFC 9728, 3.3): a document at the root
+    // would describe the origin.
+    assert_eq!(
+        app.get("/.well-known/oauth-protected-resource")
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    let path = "/.well-known/oauth-protected-resource/api/mcp";
+    let document = app.get(path).await;
+    assert_eq!(document.status, StatusCode::OK, "{path}");
+    assert_eq!(document.headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+    let body = document.json();
+    assert_eq!(body["resource"], RESOURCE);
+    assert_eq!(
+        body["authorization_servers"],
+        json!(["http://localhost:41000"])
+    );
+    assert_eq!(
+        body["scopes_supported"],
+        json!(["romulus.read", "romulus.write"])
+    );
+    assert_eq!(body["bearer_methods_supported"], json!(["header"]));
 
     let server = app.get("/.well-known/oauth-authorization-server").await;
     assert_eq!(server.status, StatusCode::OK);
@@ -466,6 +516,16 @@ async fn clients_register_https_or_loopback_redirects_and_are_public(db: PgPool)
         assert_eq!(refused.json()["error"], "invalid_redirect_uri", "{uri}");
         assert!(refused.json()["error_description"].is_string());
     }
+    // Names are shown as they read: no bidi override flips part of one, no
+    // invisible character hides in one.
+    let tricky = register(
+        &app,
+        &json!({ "client_name": "Claude\u{202E}edoC \u{200B}Ｃｏｄｅ", "redirect_uris": [LOOPBACK] }),
+    )
+    .await;
+    assert_eq!(tricky.status, StatusCode::CREATED);
+    assert_eq!(tricky.json()["client_name"], "ClaudeedoC Code");
+
     let none = register(&app, &json!({ "client_name": "x" })).await;
     assert_eq!(none.json()["error"], "invalid_redirect_uri");
     let grant = register(
@@ -526,9 +586,7 @@ async fn a_person_signs_in_approves_and_their_agent_works_as_them(db: PgPool) {
         ))
         .await;
     let request = started(&start);
-    let set = start
-        .set_cookie(request.binding.split('=').next().unwrap())
-        .unwrap();
+    let set = start.set_cookie(&binding_cookie()).unwrap();
     assert!(
         set.contains("HttpOnly") && set.contains("Path=/api/oauth"),
         "{set}"
@@ -787,11 +845,10 @@ async fn state_is_optional_and_echoed_only_when_sent(db: PgPool) {
             &[("state", ""), ("code_challenge_method", "plain")],
         ))
         .await;
-    assert_eq!(
-        param(refused.location(), "error").as_deref(),
-        Some("invalid_request")
-    );
-    assert!(!refused.location().contains("state="));
+    let (_, way_back) = refusal_of(&app, &refused).await;
+    let back = way_back.json()["return_url"].as_str().unwrap().to_owned();
+    assert_eq!(param(&back, "error").as_deref(), Some("invalid_request"));
+    assert!(!back.contains("state="), "{back}");
 
     // Sent, it comes back exactly as it was, characters and all.
     let odd = "a b+c/d=é&x";
@@ -875,15 +932,57 @@ async fn an_authorization_request_is_refused_where_it_cannot_be_trusted(db: PgPo
         let refused = app
             .get(&authorize_url(&client_id, LOOPBACK, &verifier, &extra))
             .await;
-        assert_eq!(refused.status, StatusCode::SEE_OTHER, "{extra:?}");
-        let location = refused.location();
-        assert!(location.starts_with(LOOPBACK), "{location}");
-        assert_eq!(
-            param(location, "error").as_deref(),
-            Some(error),
-            "{extra:?}"
-        );
-        assert!(param(location, "iss").is_some());
+        // Never sent to the client by romulus: the page offers the way
+        // back, which says why.
+        assert!(!refused.location().starts_with(LOOPBACK), "{extra:?}");
+        let (_, way_back) = refusal_of(&app, &refused).await;
+        assert_eq!(way_back.status, StatusCode::OK, "{extra:?}");
+        let body = way_back.json();
+        assert_eq!(body["error"], error, "{extra:?}");
+        assert_eq!(body["redirect_host"], "localhost");
+        assert_eq!(body["client_name"], "Loop");
+        let back = body["return_url"].as_str().unwrap();
+        assert!(back.starts_with(LOOPBACK), "{back}");
+        assert_eq!(param(back, "error").as_deref(), Some(error), "{extra:?}");
+        assert!(param(back, "error_description").is_some());
+        assert!(param(back, "iss").is_some());
+        if extra[0].0 != "state" {
+            assert_eq!(param(back, "state").as_deref(), Some("the-state"));
+        }
+    }
+
+    // The way back leads to the client's registered redirect URIs only,
+    // and only for a refusal romulus makes: the page's query is anyone's.
+    let refused = app
+        .get(&authorize_url(
+            &client_id,
+            LOOPBACK,
+            &verifier,
+            &[("code_challenge_method", "plain")],
+        ))
+        .await;
+    let (reason, _) = refusal_of(&app, &refused).await;
+    for pairs in [
+        vec![
+            ("reason", reason.as_str()),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", "https://evil.test/cb"),
+        ],
+        vec![
+            ("reason", "anything"),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", LOOPBACK),
+        ],
+        vec![
+            ("reason", reason.as_str()),
+            ("client_id", "00000000-0000-0000-0000-000000000000"),
+            ("redirect_uri", LOOPBACK),
+        ],
+    ] {
+        let answer = app
+            .get(&format!("/api/oauth/refusals?{}", query(&pairs)))
+            .await;
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{pairs:?}");
     }
 
     // A loopback redirect is the registered one on any port; no resource
@@ -1082,7 +1181,9 @@ async fn the_token_endpoint_answers_in_oauth_s_terms(db: PgPool) {
         refused += 1;
         assert!(refused <= 40, "guesses without end");
     };
-    assert!(refused >= 18, "a burst first: {refused}");
+    // `invalid_client` before is not counted: exactly the burst.
+    // (A slow machine may refill one or two meanwhile.)
+    assert!((20..=24).contains(&refused), "a burst first: {refused}");
     assert_eq!(cut_off.status, StatusCode::TOO_MANY_REQUESTS);
     assert!(cut_off.headers.contains_key(header::RETRY_AFTER));
 }
@@ -1455,4 +1556,266 @@ async fn the_sweeper_forgets_what_can_no_longer_be_used(db: PgPool) {
     let refused = refresh(&app, &ended, &ended.refresh).await;
     assert_eq!(refused.status, StatusCode::UNAUTHORIZED);
     assert_eq!(refused.json()["error"], "invalid_client");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn connected_apps_show_where_the_person_approved_it(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    // A client registers a web redirect first and a loopback one after; the
+    // person approves the loopback one.
+    let registered = register(
+        &app,
+        &json!({ "client_name": "Two ways", "redirect_uris": [CLAUDE, LOOPBACK] }),
+    )
+    .await;
+    let client_id = registered.json()["client_id"].as_str().unwrap().to_owned();
+    let verifier = token::generate();
+    let code = code_for(&app, &alice, &client_id, &verifier, &[], &allow()).await;
+    let tokens = form(
+        &app,
+        "/api/oauth/token",
+        &exchange(&client_id, &code, &verifier),
+    )
+    .await;
+    assert_eq!(tokens.status, StatusCode::OK, "{}", tokens.json());
+    let apps = app
+        .as_user(&alice)
+        .get("/api/me/connected-apps")
+        .await
+        .json();
+    assert_eq!(apps[0]["redirect_host"], "localhost");
+    assert_eq!(apps[0]["loopback"], true);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn codes_not_exchanged_yet_go_with_a_disconnect_or_a_password_change(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    // Connected once, then approved again: a code waiting to be exchanged.
+    let tokens = connect(&app, &alice, "Claude", &allow()).await;
+    let verifier = token::generate();
+    let pending = code_for(&app, &alice, &tokens.client_id, &verifier, &[], &allow()).await;
+    let gone = app
+        .as_user(&alice)
+        .delete(&format!("/api/me/connected-apps/{}", tokens.client_id))
+        .await;
+    assert_eq!(gone.status, StatusCode::NO_CONTENT);
+    let late = form(
+        &app,
+        "/api/oauth/token",
+        &exchange(&tokens.client_id, &pending, &verifier),
+    )
+    .await;
+    assert_eq!(late.json()["error"], "invalid_grant", "{}", late.json());
+
+    // A password reset or change: every app, codes included.
+    let other = client(&app, "Cursor", LOOPBACK).await;
+    let pending = code_for(&app, &alice, &other, &verifier, &[], &allow()).await;
+    let mut conn = db.acquire().await.unwrap();
+    oauth::apps::revoke_all(&mut conn, alice.user)
+        .await
+        .unwrap();
+    let late = form(
+        &app,
+        "/api/oauth/token",
+        &exchange(&other, &pending, &verifier),
+    )
+    .await;
+    assert_eq!(late.json()["error"], "invalid_grant", "{}", late.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn strangers_with_a_client_id_cannot_use_up_its_allowance(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    let tokens = connect(&app, &alice, "Claude", &allow()).await;
+    let (stranger, owner) = ([203, 0, 113, 66], [198, 51, 100, 7]);
+    // Someone else hammers the token endpoint with the client's public id.
+    let mut answered = Vec::new();
+    for _ in 0..40 {
+        let guess = format!("rmls_ort_{}", token::generate());
+        answered.push(
+            form_from(
+                &app,
+                stranger,
+                "/api/oauth/token",
+                &[
+                    ("grant_type", "refresh_token"),
+                    ("client_id", &tokens.client_id),
+                    ("refresh_token", &guess),
+                ],
+            )
+            .await
+            .status,
+        );
+    }
+    assert!(
+        answered.contains(&StatusCode::TOO_MANY_REQUESTS),
+        "the stranger is cut off"
+    );
+    // The client itself, elsewhere, is not.
+    let refreshed = form_from(
+        &app,
+        owner,
+        "/api/oauth/token",
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", &tokens.client_id),
+            ("refresh_token", &tokens.refresh),
+        ],
+    )
+    .await;
+    assert_eq!(refreshed.status, StatusCode::OK, "{}", refreshed.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn failures_count_per_address_and_client_and_unknown_clients_not_at_all(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    let shared = [192, 0, 2, 10];
+    // Unknown clients (registrations that expired): told so, never counted.
+    for _ in 0..30 {
+        let unknown = form_from(
+            &app,
+            shared,
+            "/api/oauth/token",
+            &[
+                ("grant_type", "refresh_token"),
+                ("client_id", &Uuid::new_v4().to_string()),
+                ("refresh_token", "x"),
+            ],
+        )
+        .await;
+        assert_eq!(unknown.status, StatusCode::UNAUTHORIZED);
+    }
+    // One client failing from a shared address is cut off there...
+    let failing = client(&app, "Failing", LOOPBACK).await;
+    let mut refused = 0;
+    let cut_off = loop {
+        let answered = form_from(
+            &app,
+            shared,
+            "/api/oauth/token",
+            &[
+                ("grant_type", "refresh_token"),
+                ("client_id", &failing),
+                ("refresh_token", &format!("rmls_ort_{}", token::generate())),
+            ],
+        )
+        .await;
+        if answered.status != StatusCode::BAD_REQUEST {
+            break answered;
+        }
+        refused += 1;
+        assert!(refused <= 40, "failures without end");
+    };
+    assert!(
+        (20..=24).contains(&refused),
+        "a burst of 20 first: {refused}"
+    );
+    assert_eq!(cut_off.status, StatusCode::TOO_MANY_REQUESTS);
+    // ...while another client behind the same address works on.
+    let tokens = connect(&app, &alice, "Working", &allow()).await;
+    let refreshed = form_from(
+        &app,
+        shared,
+        "/api/oauth/token",
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", &tokens.client_id),
+            ("refresh_token", &tokens.refresh),
+        ],
+    )
+    .await;
+    assert_eq!(refreshed.status, StatusCode::OK, "{}", refreshed.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn one_cookie_binds_a_browser_s_latest_requests(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    let client_id = client(&app, "Busy page", LOOPBACK).await;
+    let verifier = token::generate();
+    // A page that keeps starting authorizations, cookie carried along.
+    let mut cookie: Option<String> = None;
+    let mut ids = Vec::new();
+    for _ in 0..8 {
+        let mut request = Request::get(authorize_url(&client_id, LOOPBACK, &verifier, &[]));
+        if let Some(cookie) = &cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        let response = app.send(request.body(Body::empty()).unwrap()).await;
+        let start = started(&response);
+        ids.push(start.id);
+        assert_eq!(
+            response.headers.get_all(header::SET_COOKIE).iter().count(),
+            1
+        );
+        cookie = Some(start.binding);
+    }
+    let cookie = cookie.unwrap();
+    // Three entries of 75 characters at most, whatever the page did.
+    assert!(cookie.len() < 300, "{} bytes", cookie.len());
+    for (n, id) in ids.iter().enumerate() {
+        let shown = browser(
+            &app,
+            Method::GET,
+            &format!("/api/oauth/requests/{id}"),
+            &[&alice.cookie(), &cookie],
+            None,
+        )
+        .await;
+        let expected = if n >= ids.len() - 3 {
+            StatusCode::OK
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        assert_eq!(shown.status, expected, "request {n}");
+    }
+    // Deciding one takes it out of the cookie, the others stay.
+    let latest = Started {
+        id: ids[7],
+        binding: cookie.clone(),
+    };
+    let decided = decide(&app, &alice, &latest, &allow()).await;
+    let left = decided.cookie_value(&binding_cookie()).unwrap();
+    assert!(!left.contains(&ids[7].simple().to_string()));
+    assert!(left.contains(&ids[6].simple().to_string()));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_refresh_may_ask_for_less_for_that_token_only(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    let tokens = connect(&app, &alice, "Claude", &allow()).await;
+    let narrower = form(
+        &app,
+        "/api/oauth/token",
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", &tokens.client_id),
+            ("refresh_token", &tokens.refresh),
+            ("scope", "romulus.read"),
+        ],
+    )
+    .await;
+    assert_eq!(narrower.status, StatusCode::OK, "{}", narrower.json());
+    assert_eq!(narrower.json()["scope"], "romulus.read");
+    let reader = narrower.json()["access_token"].as_str().unwrap().to_owned();
+    let listed = mcp(&app, &reader, "tools/list", json!({})).await.json();
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"create_draft"), "{names:?}");
+    // The connection itself keeps what was approved.
+    let next = narrower.json()["refresh_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let full = refresh(&app, &tokens, &next).await;
+    assert_eq!(full.json()["scope"], "romulus.read romulus.write");
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE oauth_clients c SET last_used_at = now() FROM users u\n         WHERE c.id = $1 AND u.id = $2\n         RETURNING c.name, c.redirect_uris, u.email",
+  "query": "SELECT name, redirect_uris FROM oauth_clients WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -24,30 +24,17 @@
             "name": "redirect_uris"
           }
         }
-      },
-      {
-        "ordinal": 2,
-        "name": "email",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "users",
-            "name": "email"
-          }
-        }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
         "Uuid"
       ]
     },
     "nullable": [
       true,
-      false,
       false
     ]
   },
-  "hash": "d49d4e24dbd4f54c256addc623bf0ff29948d9f79d53e93b8833647c6d6b7b26"
+  "hash": "4cca2edb56bff3dc959ea94035dd786e806fee6384f68adb56edbceafc3cd14a"
 }

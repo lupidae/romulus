@@ -513,6 +513,28 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/oauth/refusals": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The way back to a client after its request was refused, for the
+     *     consent page's "Return to" link. Signed out too: refusals come before
+     *     signing in. Answers only for a registered client and one of its
+     *     redirect URIs, so the link can lead nowhere else.
+     */
+    get: operations["get_authorization_refusal"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/oauth/register": {
     parameters: {
       query?: never;
@@ -2479,7 +2501,10 @@ export interface components {
       loopback: boolean;
       /** @description The name it registered under, unverified; `null` if it gave none. */
       name?: string | null;
-      /** @description Where its sign-ins go back to (`claude.ai`, `localhost`). */
+      /**
+       * @description Where the person approved it to send them back (`claude.ai`,
+       *     `localhost`): its latest grant's redirect URI.
+       */
       redirect_host: string;
       /** @description The widest access among its grants. */
       scope: components["schemas"]["AccessTokenScope"];
@@ -5024,6 +5049,25 @@ export interface components {
     Received: {
       received: boolean;
     };
+    /** @description A refused authorization request, as the consent page shows it. */
+    RefusedRequest: {
+      /** @description The name the client registered under, unverified. */
+      client_name?: string | null;
+      /** @description What went wrong, in a sentence. */
+      description: string;
+      /** @description The OAuth error the client is told (`invalid_request`…). */
+      error: string;
+      /** @description A program on this computer. */
+      loopback: boolean;
+      /** @description The return URL's host, as the link names it. */
+      redirect_host: string;
+      /**
+       * @description The client's redirect URI with `error`, `error_description`, `state`
+       *     (when it sent one) and `iss`: one of its registered URIs, checked
+       *     again here.
+       */
+      return_url: string;
+    };
     /** @description A client as registered (RFC 7591, 3.2.1). No secret: it is public. */
     RegisteredClient: {
       client_id: string;
@@ -7516,8 +7560,8 @@ export interface operations {
         client_id: string;
         /** @description One the client registered (any port on a loopback one); optional when it registered only one */
         redirect_uri?: string;
-        /** @description Required */
-        state: string;
+        /** @description Optional (PKCE protects the flow): echoed back unchanged, 1024 characters at most */
+        state?: string;
         /** @description PKCE: base64url(sha256(verifier)) */
         code_challenge: string;
         /** @description `S256` only */
@@ -7533,12 +7577,47 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description To the consent page (`/app/oauth/authorize?request=…`, with the cookie that binds the request to this browser); to the redirect URI with `error` for a bad request; to `/app/oauth/authorize?error=…` when the client or its redirect URI is unknown */
+      /** @description Always to the consent page, never to the redirect URI: `/app/oauth/authorize?request=…` (with the cookie that binds the request to this browser); `?refused=…&client_id=…&redirect_uri=…[&state=…]` for a bad request (the page offers the way back); `?error=…` when the client or its redirect URI is unknown */
       303: {
         headers: {
           [name: string]: unknown;
         };
         content?: never;
+      };
+    };
+  };
+  get_authorization_refusal: {
+    parameters: {
+      query: {
+        /** @description The consent page's `?refused=`. */
+        reason: string;
+        client_id: string;
+        redirect_uri: string;
+        /** @description The request's own, when it had one. */
+        state?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RefusedRequest"];
+        };
+      };
+      /** @description Not a refusal romulus makes, an unknown client, or a redirect URI it did not register */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
     };
   };

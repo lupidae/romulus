@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT c.id AS client_id, c.name, c.redirect_uris,\n                  max(g.scope) AS \"scope!: AccessTokenScope\",\n                  min(g.created_at) AS \"connected_at!\",\n                  max(g.last_used_at) AS last_used_at,\n                  (array_agg(g.last_client ORDER BY g.last_used_at DESC NULLS LAST))[1] AS last_client,\n                  max(g.idle_expires_at) AS \"expires_at!\"\n           FROM oauth_grants g JOIN oauth_clients c ON c.id = g.client_id\n           WHERE g.user_id = $1 AND g.revoked_at IS NULL\n             AND g.idle_expires_at > now() AND g.expires_at > now()\n           GROUP BY c.id\n           ORDER BY max(coalesce(g.last_used_at, g.created_at)) DESC, c.id",
+  "query": "SELECT c.id AS client_id, c.name,\n                  (array_agg(g.redirect_uri ORDER BY g.created_at DESC))[1] AS \"redirect_uri!\",\n                  max(g.scope) AS \"scope!: AccessTokenScope\",\n                  min(g.created_at) AS \"connected_at!\",\n                  max(g.last_used_at) AS last_used_at,\n                  (array_agg(g.last_client ORDER BY g.last_used_at DESC NULLS LAST))[1] AS last_client,\n                  max(g.idle_expires_at) AS \"expires_at!\"\n           FROM oauth_grants g JOIN oauth_clients c ON c.id = g.client_id\n           WHERE g.user_id = $1 AND g.revoked_at IS NULL\n             AND g.idle_expires_at > now() AND g.expires_at > now()\n           GROUP BY c.id\n           ORDER BY max(coalesce(g.last_used_at, g.created_at)) DESC, c.id",
   "describe": {
     "columns": [
       {
@@ -27,14 +27,9 @@
       },
       {
         "ordinal": 2,
-        "name": "redirect_uris",
-        "type_info": "TextArray",
-        "origin": {
-          "Table": {
-            "table": "oauth_clients",
-            "name": "redirect_uris"
-          }
-        }
+        "name": "redirect_uri!",
+        "type_info": "Text",
+        "origin": "Expression"
       },
       {
         "ordinal": 3,
@@ -85,7 +80,7 @@
     "nullable": [
       false,
       true,
-      false,
+      null,
       null,
       null,
       null,
@@ -93,5 +88,5 @@
       null
     ]
   },
-  "hash": "d5f5db5bb775547fc902c11da11cdbe9390460468316825eb1089c1466181004"
+  "hash": "4120f806441037694e1c703b8041de4031d6dfe93d9f302a90bcf579a4788154"
 }

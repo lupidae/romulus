@@ -23,7 +23,6 @@ function recorder(response = new Response("ok")) {
 
 /** Where MCP clients look for how to sign in (RFC 9728, RFC 8414). */
 const WELL_KNOWN = [
-  "/.well-known/oauth-protected-resource",
   "/.well-known/oauth-protected-resource/api/mcp",
   "/.well-known/oauth-authorization-server",
 ];
@@ -48,7 +47,10 @@ test("only the app, the API and OAuth's discovery documents are proxied", () => 
     "/mentions-legales",
     "/legal-notice",
     "/.well-known/security.txt",
+    // The root form would describe the origin as a resource (RFC 9728, 3.3).
+    "/.well-known/oauth-protected-resource",
     "/.well-known/oauth-protected-resources",
+    "/.well-known/oauth-authorization-server/api/mcp",
     "/.well-known/openid-configuration",
   ])
     assert.ok(!proxied(path), path);
@@ -85,6 +87,7 @@ test("_routes.json runs the Function for the app, the API and OAuth's discovery 
     "/sitemap.xml",
     "/apple",
     "/.well-known/security.txt",
+    "/.well-known/oauth-protected-resource",
   ])
     assert.ok(!routed(path), path);
 });

@@ -16,10 +16,20 @@
 //!
 //! Clients are public: `client_id` in the body (or as the user of HTTP
 //! Basic, which some clients send with an empty secret); an unknown one is
-//! a 401 `invalid_client`, on which clients register again. Limits: per
-//! client (`oauth_tokens`), and per client IP for refusals
-//! (`oauth_failures`, checked before anything is read); revocations per
-//! client IP (`oauth_revocations`).
+//! a 401 `invalid_client`, on which clients register again.
+//!
+//! Limits. A `client_id` is public, so nothing anyone can send with it
+//! alone may use up that client's allowance:
+//! - `oauth_tokens`, per client, is charged only once a code or a refresh
+//!   token has checked out, before anything is spent (a refused exchange
+//!   leaves the code or token as it was);
+//! - refusals of a code or refresh token (`invalid_grant`) are counted per
+//!   client address and client (`oauth_failures`), with a higher ceiling
+//!   per address alone (`oauth_ip_failures`): a hosted client serving many
+//!   people from a few addresses is not locked out by other people's
+//!   failures, nor by other clients'. `invalid_client` is not counted (a
+//!   client registers again on it). Both are checked before any lookup;
+//! - revocations per client address (`oauth_revocations`).
 
 use std::net::SocketAddr;
 
@@ -172,15 +182,30 @@ pub(crate) async fn token(
     body: Body,
 ) -> Response {
     let ip = throttle::client_key(client.map(|Extension(ConnectInfo(addr))| addr.ip()));
-    if let Some(wait) = state.limits.oauth_failures.waiting(&ip) {
+    let params = match read_form(&headers, body).await {
+        Ok(params) => params,
+        Err(err) => return err.into_response(),
+    };
+    let client_id = match client_id_of(&params, &headers) {
+        Ok(id) => id,
+        Err(err) => return err.into_response(),
+    };
+    let limits = &state.limits;
+    if let Some(wait) = limits
+        .oauth_failures
+        .waiting(&(ip, client_id))
+        .or_else(|| limits.oauth_ip_failures.waiting(&ip))
+    {
         return OAuthError::too_many(wait).into_response();
     }
-    match exchange(&state, &headers, body).await {
+    match exchange(&state, client_id, &params).await {
         Ok(tokens) => (StatusCode::OK, super::no_store(), Json(tokens)).into_response(),
         Err(err) => {
-            if matches!(err.error, "invalid_grant" | "invalid_client") {
-                // Counted; past the burst this client is refused first.
-                let _ = state.limits.oauth_failures.check(ip);
+            if err.error == "invalid_grant" {
+                // Counted; past the burst this client, from this address,
+                // is refused before anything is looked up.
+                let _ = limits.oauth_failures.check((ip, client_id));
+                let _ = limits.oauth_ip_failures.check(ip);
             }
             err.into_response()
         }
@@ -189,11 +214,9 @@ pub(crate) async fn token(
 
 async fn exchange(
     state: &AppState,
-    headers: &HeaderMap,
-    body: Body,
+    client_id: Uuid,
+    params: &Params,
 ) -> Result<TokenResponse, OAuthError> {
-    let params = read_form(headers, body).await?;
-    let client_id = client_id_of(&params, headers)?;
     let known = sqlx::query_scalar!(
         r#"SELECT EXISTS (SELECT 1 FROM oauth_clients WHERE id = $1) AS "known!""#,
         client_id
@@ -203,20 +226,24 @@ async fn exchange(
     if !known {
         return Err(OAuthError::invalid_client());
     }
-    if let Err(crate::ApiError::RateLimited { retry_after }) =
-        state.limits.oauth_tokens.check(client_id)
-    {
-        return Err(OAuthError::too_many(retry_after));
-    }
     match params.get("grant_type") {
-        Some("authorization_code") => authorization_code(state, client_id, &params).await,
-        Some("refresh_token") => refresh(state, client_id, &params).await,
+        Some("authorization_code") => authorization_code(state, client_id, params).await,
+        Some("refresh_token") => refresh(state, client_id, params).await,
         Some(other) => Err(OAuthError::new(
             StatusCode::BAD_REQUEST,
             "unsupported_grant_type",
             format!("Grant type {other:?} is not supported: authorization_code or refresh_token."),
         )),
         None => Err(OAuthError::invalid_request("`grant_type` is required.")),
+    }
+}
+
+/// Counts an exchange that checked out against its client's allowance.
+/// Refused, nothing was spent: the caller's transaction is dropped.
+fn charge(state: &AppState, client_id: Uuid) -> Result<(), OAuthError> {
+    match state.limits.oauth_tokens.check(client_id) {
+        Err(crate::ApiError::RateLimited { retry_after }) => Err(OAuthError::too_many(retry_after)),
+        _ => Ok(()),
     }
 }
 
@@ -269,12 +296,6 @@ async fn authorization_code(
             "This code was already used: the tokens it gave are revoked. Connect again.",
         ));
     }
-    sqlx::query!(
-        "UPDATE oauth_codes SET used_at = now() WHERE code_hash = $1",
-        token::hash(code)
-    )
-    .execute(&mut *tx)
-    .await?;
     let refused = refusal(
         state,
         params,
@@ -289,18 +310,24 @@ async fn authorization_code(
     );
     if let Some(refused) = refused {
         // The code is spent all the same.
+        spend(&mut tx, code).await?;
         tx.commit().await?;
         return Err(refused);
     }
+    // A good code: only now does it count against its client.
+    charge(state, client_id)?;
+    spend(&mut tx, code).await?;
     let grant = sqlx::query_scalar!(
-        "INSERT INTO oauth_grants (client_id, user_id, scope, resource, expires_at, idle_expires_at)
-         VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5),
-                 now() + make_interval(secs => least($5, $6)))
+        "INSERT INTO oauth_grants
+             (client_id, user_id, scope, resource, redirect_uri, expires_at, idle_expires_at)
+         VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6),
+                 now() + make_interval(secs => least($6, $7)))
          RETURNING id",
         client_id,
         found.user_id,
         found.scope as AccessTokenScope,
         found.resource,
+        found.redirect_uri,
         GRANT_TTL.as_secs_f64(),
         REFRESH_IDLE.as_secs_f64(),
     )
@@ -317,7 +344,7 @@ async fn authorization_code(
     let notice = sqlx::query!(
         "UPDATE oauth_clients c SET last_used_at = now() FROM users u
          WHERE c.id = $1 AND u.id = $2
-         RETURNING c.name, c.redirect_uris, u.email",
+         RETURNING c.name, u.email",
         client_id,
         found.user_id,
     )
@@ -333,6 +360,17 @@ async fn authorization_code(
         &state.config.public_url,
     ));
     Ok(tokens)
+}
+
+/// Marks a code used: it never works again.
+async fn spend(tx: &mut PgConnection, code: &str) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "UPDATE oauth_codes SET used_at = now() WHERE code_hash = $1",
+        token::hash(code)
+    )
+    .execute(tx)
+    .await
+    .map(drop)
 }
 
 /// What a code exchange is checked against.
@@ -427,39 +465,42 @@ async fn refresh(
             "This connection expired: connect again.",
         ));
     }
-    // Absent, the scope is the grant's; named, it may not be wider.
-    if let Some(asked) = params.get("scope") {
-        match parse_scope(Some(asked)) {
-            Ok(AccessTokenScope::Write) if found.scope == AccessTokenScope::Read => {
-                return Err(OAuthError::new(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_scope",
-                    "This connection was allowed to read only: connect again to allow more.",
-                ));
-            }
-            Ok(_) => {}
-            Err(unknown) => {
-                return Err(OAuthError::new(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_scope",
-                    format!("Unknown scope {unknown:?}."),
-                ));
-            }
+    // Absent, the scope is the grant's; named, it may be narrower (that
+    // access token only: the refresh token keeps the grant's, RFC 6749, 6),
+    // never wider.
+    let scope = match params.get("scope").map(|asked| parse_scope(Some(asked))) {
+        None => found.scope,
+        Some(Ok(AccessTokenScope::Write)) if found.scope == AccessTokenScope::Read => {
+            return Err(OAuthError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_scope",
+                "This connection was allowed to read only: connect again to allow more.",
+            ));
         }
-    }
+        Some(Ok(asked)) => asked,
+        Some(Err(unknown)) => {
+            return Err(OAuthError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_scope",
+                format!("Unknown scope {unknown:?}."),
+            ));
+        }
+    };
     if params
         .get("resource")
         .is_some_and(|asked| !is_our_resource(&state.config, asked))
     {
         return Err(invalid_target(state));
     }
+    // A good refresh token: only now does it count against its client.
+    charge(state, client_id)?;
     sqlx::query!(
         "UPDATE oauth_refresh_tokens SET used_at = now() WHERE id = $1",
         found.id
     )
     .execute(&mut *tx)
     .await?;
-    let tokens = issue(&mut tx, found.grant_id, found.scope).await?;
+    let tokens = issue(&mut tx, found.grant_id, scope).await?;
     sqlx::query!(
         "UPDATE oauth_clients SET last_used_at = now() WHERE id = $1",
         client_id
@@ -470,8 +511,9 @@ async fn refresh(
     Ok(tokens)
 }
 
-/// A new access token and refresh token for `grant`, neither outliving it;
-/// the grant's idle expiry follows the refresh token's.
+/// A new access token (of `scope`: the grant's, or narrower) and refresh
+/// token for `grant`, neither outliving it; the grant's idle expiry follows
+/// the refresh token's.
 async fn issue(
     tx: &mut PgConnection,
     grant: Uuid,
@@ -480,13 +522,14 @@ async fn issue(
     let access = format!("{ACCESS_PREFIX}{}", token::generate());
     let refresh = format!("{REFRESH_PREFIX}{}", token::generate());
     let expires_in = sqlx::query_scalar!(
-        r#"INSERT INTO oauth_access_tokens (grant_id, token_hash, expires_at)
-           SELECT id, $2, least(now() + make_interval(secs => $3), expires_at)
+        r#"INSERT INTO oauth_access_tokens (grant_id, token_hash, scope, expires_at)
+           SELECT id, $2, $4, least(now() + make_interval(secs => $3), expires_at)
            FROM oauth_grants WHERE id = $1
            RETURNING ceil(extract(epoch FROM expires_at - now()))::bigint AS "expires_in!""#,
         grant,
         token::hash(&access),
         ACCESS_TTL.as_secs_f64(),
+        scope as AccessTokenScope,
     )
     .fetch_one(&mut *tx)
     .await?;

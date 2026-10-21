@@ -1205,8 +1205,9 @@ to romulus as usual and approve it (MCP's authorization flow, OAuth 2.1). What w
   identity provider only (it has no dynamic client registration, and the MCP resource is
   romulus's). The endpoints are under `/api/oauth/…` (register, authorize, token, revoke) so
   the existing proxying holds; the discovery documents are at the origin's
-  `/.well-known/oauth-protected-resource` (and its `/api/mcp` form) and
-  `/.well-known/oauth-authorization-server`, which the homepage's Function proxies too. The
+  `/.well-known/oauth-protected-resource/api/mcp` (none at the root: it would describe the
+  origin, RFC 9728 3.3) and `/.well-known/oauth-authorization-server`, which the homepage's
+  Function proxies too. The
   issuer is the public URL's origin; tokens are for `<public URL>/api/mcp` only (RFC 8707).
 - **Dynamic client registration, open, public clients only.** Limited per client address;
   no client secret (PKCE protects the code); https redirect URIs, or loopback http on any
@@ -1214,6 +1215,11 @@ to romulus as usual and approve it (MCP's authorization flow, OAuth 2.1). What w
   its redirect URI's host. Clients unused for 30 days with no grant left are deleted. Client
   ID metadata documents (which Claude prefers when offered) are not served yet: fetching a
   URL a stranger names is its own piece of work.
+- **romulus never redirects to a client on its own before the person decided.** Clients
+  register themselves, so a refusal sent straight back to a redirect URI would make romulus an
+  open redirect: refusals (PKCE, scope, resource, rate limit) stay on the consent page, which
+  offers "Return to <host>", built and checked again by the API. Only the person's decision
+  (a code, or `access_denied`) goes back by itself.
 - **The consent screen is the web app's** (`/app/oauth/authorize`), after the usual sign-in.
   The request is kept by the API and bound to the browser that started it by a cookie: a
   link to someone else's request shows and approves nothing. The person may allow less than

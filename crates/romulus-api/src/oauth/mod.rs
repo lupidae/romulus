@@ -7,9 +7,9 @@
 //! What MCP's authorization spec asks of a server, as clients (Claude Code,
 //! claude.ai and Claude Desktop, Cursor, VS Code, `mcp-remote`) read it:
 //! - **Discovery** ([`metadata`], outside `/api`): the protected resource
-//!   metadata (RFC 9728) at `/.well-known/oauth-protected-resource` and its
-//!   path-suffixed form `/.well-known/oauth-protected-resource/api/mcp`, and
-//!   the authorization server metadata (RFC 8414) at
+//!   metadata (RFC 9728) at `/.well-known/oauth-protected-resource/api/mcp`
+//!   (the resource's own path; none at the root, which would describe the
+//!   origin), and the authorization server metadata (RFC 8414) at
 //!   `/.well-known/oauth-authorization-server`. The issuer is the public
 //!   URL's origin. `/api/mcp` answers 401 with `WWW-Authenticate: Bearer
 //!   resource_metadata="…"` (`mcp::unauthorized`).
@@ -19,13 +19,16 @@
 //!   or http on a loopback host with any port (RFC 8252).
 //! - **Authorization** ([`authorize`], `GET /oauth/authorize`): checks the
 //!   request (PKCE S256, the scope, `resource` = the MCP endpoint; `state`
-//!   optional, echoed back unchanged),
-//!   keeps it, ties it to this browser with a cookie, and sends the browser
-//!   to the consent page, `/app/oauth/authorize` (signing in first when
-//!   needed). The page reads it (`GET /oauth/requests/{id}`) and posts the
-//!   person's decision (`POST /oauth/requests/{id}`), which answers where
-//!   to send the browser: the client's redirect URI, with a code (60 s,
-//!   single use) or `access_denied`, and `iss` (RFC 9207).
+//!   optional, echoed back unchanged), keeps it, ties it to this browser
+//!   with a cookie, and sends the browser to the consent page,
+//!   `/app/oauth/authorize` (signing in first when needed). The page reads
+//!   it (`GET /oauth/requests/{id}`) and posts the person's decision (`POST
+//!   /oauth/requests/{id}`), which answers where to send the browser: the
+//!   client's redirect URI, with a code (60 s, single use) or
+//!   `access_denied`, and `iss` (RFC 9207). A refused request lands on the
+//!   page too, which offers the way back (`GET /oauth/refusals`): romulus
+//!   never sends a browser to a client by itself before the person decided
+//!   (clients register themselves: that would be an open redirect).
 //! - **Tokens** ([`token`], `POST /oauth/token`, `POST /oauth/revoke`):
 //!   the code with its PKCE verifier, then refresh tokens, which rotate on
 //!   every use; a refresh token or a code presented twice revokes the whole
@@ -110,6 +113,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .merge(open)
         .routes(routes!(authorize::authorize))
+        .routes(routes!(authorize::refusal))
         .routes(routes!(authorize::request, authorize::decide))
         .routes(routes!(apps::list))
         .routes(routes!(apps::disconnect))

@@ -203,9 +203,13 @@ pub struct Limits {
     pub oauth_authorizations: Limiter<std::net::IpAddr>,
     /// Token requests per OAuth client (codes exchanged, refreshes).
     pub oauth_tokens: Limiter<Uuid>,
-    /// Token requests refused (`invalid_grant`, `invalid_client`) per
-    /// client IP: past the burst, refused before anything is read.
-    pub oauth_failures: Limiter<std::net::IpAddr>,
+    /// Token requests refused for their code or refresh token
+    /// (`invalid_grant`) per client IP and OAuth client: past the burst,
+    /// that client from that address is refused before any lookup.
+    pub oauth_failures: Limiter<(std::net::IpAddr, Uuid)>,
+    /// The same per client IP alone, much higher: a hosted client serves
+    /// many people from a few addresses.
+    pub oauth_ip_failures: Limiter<std::net::IpAddr>,
     /// Revocations per client IP.
     pub oauth_revocations: Limiter<std::net::IpAddr>,
 }
@@ -232,6 +236,7 @@ impl Default for Limits {
             oauth_authorizations: Limiter::new(30, Duration::from_secs(2)),
             oauth_tokens: Limiter::new(20, Duration::from_secs(3)),
             oauth_failures: Limiter::new(20, Duration::from_secs(3)),
+            oauth_ip_failures: Limiter::new(200, Duration::from_millis(500)),
             oauth_revocations: Limiter::new(30, Duration::from_secs(2)),
         }
     }

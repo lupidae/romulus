@@ -19,6 +19,7 @@ import {
   type AccessTokenScope,
   type AuthorizationRequest,
   authorizationRequestQuery,
+  refusalQuery,
 } from "../queries";
 
 /** What an app that gave no name is called (the API's `UNNAMED` too). */
@@ -202,6 +203,59 @@ function Decide({ request }: { request: AuthorizationRequest }) {
       <p className="text-sm text-muted-foreground">
         You can disconnect it later, in your account&rsquo;s Connected apps.
       </p>
+    </div>
+  );
+}
+
+/**
+ * A request romulus refused before asking anyone (it asked in a way romulus
+ * does not accept). Nothing goes back to the app by itself: the person may
+ * return to it, to the host the API checked and the link names.
+ */
+export function ConsentRefused({
+  reason,
+  clientId,
+  redirectUri,
+  state,
+}: {
+  reason: string;
+  clientId: string;
+  redirectUri: string;
+  state?: string;
+}) {
+  const refusal = useQuery(
+    refusalQuery({ reason, client_id: clientId, redirect_uri: redirectUri, state }),
+  );
+  if (refusal.isPending) return <ConsentSkeleton />;
+  if (refusal.isError) return <ConsentDeadEnd code="invalid_request" />;
+  const { data } = refusal;
+  const name = data.client_name ?? UNNAMED_APP;
+  return (
+    <div className="grid gap-5">
+      <div className="flex size-11 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-xs [&_svg]:size-5">
+        <WarningTriangleIcon aria-hidden />
+      </div>
+      <div className="grid gap-1.5">
+        <h1 className="text-2xl font-semibold text-balance text-foreground">
+          romulus can&rsquo;t accept this request
+        </h1>
+        <p className="text-base text-pretty text-muted-foreground">
+          {name} asked to connect in a way romulus doesn&rsquo;t accept. Nothing was shared.
+        </p>
+      </div>
+      <p className="rounded-md bg-muted px-3 py-2 text-sm break-words text-muted-foreground">
+        {data.description}
+      </p>
+      <div className="grid gap-2">
+        <Button className="justify-self-start" asChild>
+          <a href={data.return_url}>Return to {data.redirect_host}</a>
+        </Button>
+        <p className="text-sm text-muted-foreground">
+          {data.loopback
+            ? "A program on this computer. It will be told why."
+            : "It will be told why."}
+        </p>
+      </div>
     </div>
   );
 }

@@ -1223,10 +1223,12 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
   (`Ctx::link`), never models or layouts (`whoami` alone adds `structuredContent`).
 - **OAuth** (`oauth`, docs/MVP.md "Agents connect by signing in"): romulus is the
   authorization server of `/api/mcp`. Discovery at the root (`oauth::metadata::well_known`,
-  merged in `app()`: `/.well-known/oauth-protected-resource[/api/mcp]`,
+  merged in `app()`: `/.well-known/oauth-protected-resource/api/mcp` (none at the root),
   `/.well-known/oauth-authorization-server`; Vite and the homepage's Function proxy them);
   `POST /oauth/register` (DCR, public clients), `GET /oauth/authorize` (checks, keeps an
-  `oauth_requests` row bound to the browser by a cookie, sends it to `/app/oauth/authorize`),
+  `oauth_requests` row bound to the browser by one cookie holding its last 3, sends it to
+  `/app/oauth/authorize`; never redirects to a client before the person decided: a refusal
+  lands on the page with `?refused=`, and `GET /oauth/refusals` re-checks the way back),
   `GET/POST /oauth/requests/{id}` (the consent page), `POST /oauth/token` and `/oauth/revoke`
   (forms, OAuth's `{error, error_description}`: `OAuthError`; CSRF-exempt, `oauth::OPEN_PATHS`;
   CORS `*`). `rmls_oat_` tokens resolve in `Agent::lookup` (`oauth::apps::agent`) to the same

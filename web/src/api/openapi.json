@@ -1636,8 +1636,8 @@
           {
             "name": "state",
             "in": "query",
-            "description": "Required",
-            "required": true,
+            "description": "Optional (PKCE protects the flow): echoed back unchanged, 1024 characters at most",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -1681,7 +1681,73 @@
         ],
         "responses": {
           "303": {
-            "description": "To the consent page (`/app/oauth/authorize?request=…`, with the cookie that binds the request to this browser); to the redirect URI with `error` for a bad request; to `/app/oauth/authorize?error=…` when the client or its redirect URI is unknown"
+            "description": "Always to the consent page, never to the redirect URI: `/app/oauth/authorize?request=…` (with the cookie that binds the request to this browser); `?refused=…&client_id=…&redirect_uri=…[&state=…]` for a bad request (the page offers the way back); `?error=…` when the client or its redirect URI is unknown"
+          }
+        }
+      }
+    },
+    "/api/oauth/refusals": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The way back to a client after its request was refused, for the\nconsent page's \"Return to\" link. Signed out too: refusals come before\nsigning in. Answers only for a registered client and one of its\nredirect URIs, so the link can lead nowhere else.",
+        "operationId": "get_authorization_refusal",
+        "parameters": [
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "The consent page's `?refused=`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "The request's own, when it had one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusedRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a refusal romulus makes, an unknown client, or a redirect URI it did not register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -10545,7 +10611,7 @@
           },
           "redirect_host": {
             "type": "string",
-            "description": "Where its sign-ins go back to (`claude.ai`, `localhost`)."
+            "description": "Where the person approved it to send them back (`claude.ai`,\n`localhost`): its latest grant's redirect URI."
           },
           "scope": {
             "$ref": "#/components/schemas/AccessTokenScope",
@@ -17289,6 +17355,46 @@
         "properties": {
           "received": {
             "type": "boolean"
+          }
+        }
+      },
+      "RefusedRequest": {
+        "type": "object",
+        "description": "A refused authorization request, as the consent page shows it.",
+        "required": [
+          "error",
+          "description",
+          "return_url",
+          "redirect_host",
+          "loopback"
+        ],
+        "properties": {
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the client registered under, unverified."
+          },
+          "description": {
+            "type": "string",
+            "description": "What went wrong, in a sentence."
+          },
+          "error": {
+            "type": "string",
+            "description": "The OAuth error the client is told (`invalid_request`…)."
+          },
+          "loopback": {
+            "type": "boolean",
+            "description": "A program on this computer."
+          },
+          "redirect_host": {
+            "type": "string",
+            "description": "The return URL's host, as the link names it."
+          },
+          "return_url": {
+            "type": "string",
+            "description": "The client's redirect URI with `error`, `error_description`, `state`\n(when it sent one) and `iss`: one of its registered URIs, checked\nagain here."
           }
         }
       },

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO oauth_grants (client_id, user_id, scope, resource, expires_at, idle_expires_at)\n         VALUES ($1, $2, $3, $4, now() + interval '90 days', now() + interval '30 days')\n         RETURNING id",
+  "query": "INSERT INTO oauth_grants\n             (client_id, user_id, scope, resource, redirect_uri, expires_at, idle_expires_at)\n         VALUES ($1, $2, $3, $4, $5, now() + interval '90 days', now() + interval '30 days')\n         RETURNING id",
   "describe": {
     "columns": [
       {
@@ -30,6 +30,7 @@
             }
           }
         },
+        "Text",
         "Text"
       ]
     },
@@ -37,5 +38,5 @@
       false
     ]
   },
-  "hash": "620cc37dcb2bc56cb01f3bc15232b54516a3ce35f4a316c0a02cdc18fb36c3fd"
+  "hash": "645dc84259504d41a6d5ac4450f9db70c664faece3338338349e0046632071a2"
 }

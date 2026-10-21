@@ -152,3 +152,25 @@ test("signed out, the consent page goes through sign-in and comes back", async (
     page.getByRole("heading", { level: 1, name: `Allow ${agent.name} to use romulus?` }),
   ).toBeVisible();
 });
+
+test("a request romulus refuses stays here: the person may return to the app, which is told why", async ({
+  page,
+}) => {
+  const agent = await registerAgent(page.request, unique("Plain"));
+  const url = new URL(agent.authorizeUrl, "http://romulus.invalid");
+  url.searchParams.set("code_challenge_method", "plain");
+  const callback = catchCallback(page);
+  await page.goto(`${url.pathname}${url.search}`);
+  // Never sent back by itself: the page says so, and names the way back.
+  await expect(
+    page.getByRole("heading", { level: 1, name: "romulus can’t accept this request" }),
+  ).toBeVisible();
+  await expect(page.getByText(/PKCE is required/)).toBeVisible();
+  const back = page.getByRole("link", { name: "Return to 127.0.0.1" });
+  await expect(back).toHaveAttribute("href", new RegExp(`^${CALLBACK}\\?error=invalid_request`));
+  await back.click();
+  const returned = await callback;
+  expect(returned.searchParams.get("error")).toBe("invalid_request");
+  expect(returned.searchParams.get("state")).toBe("e2e-state");
+  expect(returned.searchParams.get("iss")).toBeTruthy();
+});

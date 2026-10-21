@@ -20,18 +20,22 @@
 export const KEY_HEADER = "x-romulus-edge-key";
 export const CLIENT_IP_HEADER = "x-romulus-client-ip";
 
-const PREFIXES = [
-  "/app",
-  "/api",
-  // RFC 9728 and RFC 8414, at the root and path-suffixed (…/api/mcp).
-  "/.well-known/oauth-protected-resource",
-  "/.well-known/oauth-authorization-server",
-];
+const PREFIXES = ["/app", "/api"];
+
+// OAuth's discovery, where MCP clients look for how to sign in: the
+// protected resource metadata of /api/mcp (RFC 9728, path-suffixed; none at
+// the root) and the authorization server metadata (RFC 8414).
+const RESOURCE_METADATA = "/.well-known/oauth-protected-resource/";
+const SERVER_METADATA = "/.well-known/oauth-authorization-server";
 
 /** Whether the API answers this path (the rest is the homepage). */
 export function proxied(pathname) {
-  return PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  return (
+    PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    ) ||
+    pathname.startsWith(RESOURCE_METADATA) ||
+    pathname === SERVER_METADATA
   );
 }
 

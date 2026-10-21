@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM oauth_codes WHERE user_id = $1 AND client_id = $2 AND used_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "689c94c9a173e2ae79ace9f7bb39b42f5b6036cb411f8d13c3bb7115c4a9c7c9"
+}

@@ -52,6 +52,7 @@ CREATE TABLE oauth_grants (
     user_id uuid NOT NULL REFERENCES users ON DELETE CASCADE,
     scope access_token_scope NOT NULL,
     resource text NOT NULL,
+    redirect_uri text NOT NULL CHECK (char_length(redirect_uri) <= 2000),
     created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL CHECK (expires_at > created_at),
     idle_expires_at timestamptz NOT NULL CHECK (idle_expires_at <= expires_at),
@@ -64,6 +65,7 @@ COMMENT ON TABLE oauth_grants IS
     'One approval (a code exchanged): the family of its access and refresh tokens. Revoking it (Disconnect, a refresh token replayed, a code exchanged twice, a password reset or change) ends every token of it at once.';
 COMMENT ON COLUMN oauth_grants.scope IS '`read`: reading tools only (romulus.read); `write`: everything the person''s roles allow (romulus.write).';
 COMMENT ON COLUMN oauth_grants.resource IS 'The resource its tokens are for (RFC 8707): the MCP endpoint''s URL when it was approved. A token is refused anywhere else.';
+COMMENT ON COLUMN oauth_grants.redirect_uri IS 'The redirect URI the person approved it for (one of its client''s): where Connected apps says it signs in.';
 COMMENT ON COLUMN oauth_grants.expires_at IS 'At most 90 days after the approval, refreshed or not.';
 COMMENT ON COLUMN oauth_grants.idle_expires_at IS 'Its refresh token''s expiry: 30 days after the last refresh, never past expires_at.';
 COMMENT ON COLUMN oauth_grants.last_client IS 'The MCP client that last said who it is with it (its clientInfo), as it said it.';
@@ -97,12 +99,14 @@ CREATE TABLE oauth_access_tokens (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
     grant_id uuid NOT NULL REFERENCES oauth_grants ON DELETE CASCADE,
     token_hash bytea NOT NULL UNIQUE CHECK (octet_length(token_hash) = 32),
+    scope access_token_scope NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL CHECK (expires_at > created_at),
     revoked_at timestamptz
 );
 
 COMMENT ON TABLE oauth_access_tokens IS '`rmls_oat_` + a random token, an hour, only its sha256 stored. Accepted at /api/mcp only, as its grant''s person.';
+COMMENT ON COLUMN oauth_access_tokens.scope IS 'Its grant''s scope, or narrower when a refresh asked for less (RFC 6749, 6).';
 
 CREATE INDEX oauth_access_tokens_grant_id_idx ON oauth_access_tokens (grant_id);
 CREATE INDEX oauth_access_tokens_expires_at_idx ON oauth_access_tokens (expires_at);

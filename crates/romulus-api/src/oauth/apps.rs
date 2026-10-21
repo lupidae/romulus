@@ -4,14 +4,15 @@
 //! - `GET /me/connected-apps`: one entry per client with a live grant
 //!   (approved, not revoked, not expired), newest use first.
 //! - `DELETE /me/connected-apps/{client_id}`: Disconnect, every grant of
-//!   that client for the person, at once.
+//!   that client for the person, at once, and the codes they approved and
+//!   it did not exchange yet.
 //!
 //! Signed in with the session cookie: a token never manages apps. A
 //! password reset or change calls [`revoke_all`] (as it revokes personal
 //! tokens); deleting an account deletes its grants with it. [`agent`] is
 //! `access_tokens::Agent::lookup` for `rmls_oat_` tokens: the person, the
-//! grant's scope, refused when the token expired, was revoked or was issued
-//! for another resource.
+//! token's scope (its grant's, or narrower), refused when the token
+//! expired, was revoked or was issued for another resource.
 
 use axum::{extract::State, http::StatusCode};
 use chrono::{DateTime, Utc};
@@ -41,7 +42,8 @@ pub struct ConnectedApp {
     pub client_id: Uuid,
     /// The name it registered under, unverified; `null` if it gave none.
     pub name: Option<String>,
-    /// Where its sign-ins go back to (`claude.ai`, `localhost`).
+    /// Where the person approved it to send them back (`claude.ai`,
+    /// `localhost`): its latest grant's redirect URI.
     pub redirect_host: String,
     /// Its redirect is a loopback address: a program on the person's
     /// computer.
@@ -76,7 +78,8 @@ pub(crate) async fn list(
 ) -> ApiResult<Json<Vec<ConnectedApp>>> {
     by_the_person(&user)?;
     let rows = sqlx::query!(
-        r#"SELECT c.id AS client_id, c.name, c.redirect_uris,
+        r#"SELECT c.id AS client_id, c.name,
+                  (array_agg(g.redirect_uri ORDER BY g.created_at DESC))[1] AS "redirect_uri!",
                   max(g.scope) AS "scope!: AccessTokenScope",
                   min(g.created_at) AS "connected_at!",
                   max(g.last_used_at) AS last_used_at,
@@ -94,7 +97,9 @@ pub(crate) async fn list(
     Ok(Json(
         rows.into_iter()
             .map(|row| {
-                let uri = row.redirect_uris.first().map_or("", String::as_str);
+                // Where the person approved it for (its latest grant's), not
+                // whatever else its client registered.
+                let uri = row.redirect_uri.as_str();
                 ConnectedApp {
                     client_id: row.client_id,
                     name: row.name,
@@ -131,16 +136,28 @@ pub(crate) async fn disconnect(
     Path(client_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     by_the_person(&user)?;
+    let mut tx = db.begin().await?;
+    // Codes first: one being exchanged right now is waited for, and its
+    // grant, committed by then, is revoked below.
+    let codes = sqlx::query!(
+        "DELETE FROM oauth_codes WHERE user_id = $1 AND client_id = $2 AND used_at IS NULL",
+        user.id,
+        client_id,
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     let revoked = sqlx::query!(
         "UPDATE oauth_grants SET revoked_at = now()
          WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL",
         user.id,
         client_id,
     )
-    .execute(&db)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
-    if revoked == 0 {
+    tx.commit().await?;
+    if revoked == 0 && codes == 0 {
         return Err(ApiError::not_found(
             "No such app is connected. It may already be disconnected.",
         ));
@@ -172,8 +189,17 @@ pub async fn revoke_grant(db: &mut PgConnection, grant: Uuid) -> Result<bool, sq
 }
 
 /// Disconnects every app of `user_id` (a password reset or change signs
-/// them out everywhere); answers how many grants it revoked.
+/// them out everywhere), codes approved but not exchanged yet included;
+/// answers how many grants it revoked. In the caller's transaction.
 pub async fn revoke_all(db: &mut PgConnection, user_id: Uuid) -> Result<u64, sqlx::Error> {
+    // Codes first: one being exchanged right now is waited for, and its
+    // grant, committed by then, is revoked below.
+    sqlx::query!(
+        "DELETE FROM oauth_codes WHERE user_id = $1 AND used_at IS NULL",
+        user_id,
+    )
+    .execute(&mut *db)
+    .await?;
     sqlx::query!(
         "UPDATE oauth_grants SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
         user_id,
@@ -193,7 +219,7 @@ const NOT_VALID: &str = "This access token is not valid: the app may have been d
 pub async fn agent(state: &AppState, secret: &str) -> Result<Agent, ApiError> {
     let row = sqlx::query!(
         r#"SELECT a.expires_at <= now() AS "expired!",
-                  g.id AS grant_id, g.scope AS "scope: AccessTokenScope", g.resource,
+                  a.scope AS "scope: AccessTokenScope", g.id AS grant_id, g.resource,
                   c.name AS client_name,
                   u.id AS user_id, u.email, u.email_verified, u.name AS user_name,
                   u.oidc_subject LIKE 'password|%' AS "password_account!"

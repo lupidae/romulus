@@ -40,7 +40,7 @@ export default defineConfig(({ mode }) => {
   // clients look for them (crates/romulus-api/src/oauth/metadata.rs).
   const proxy = {
     "/api": api,
-    "/.well-known/oauth-protected-resource": api,
+    "/.well-known/oauth-protected-resource/": api,
     "/.well-known/oauth-authorization-server": api,
   };
 

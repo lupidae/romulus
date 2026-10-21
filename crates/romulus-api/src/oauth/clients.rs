@@ -26,6 +26,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
+use unicode_normalization::UnicodeNormalization;
 use url::{Host, Url};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -234,9 +235,14 @@ fn read_metadata(bytes: &[u8]) -> Result<Metadata, OAuthError> {
     })
 }
 
-/// A client's name as it can be shown: controls removed, spaces collapsed,
-/// cut at [`MAX_NAME`] characters; `None` if nothing is left.
+/// A client's name as it can be shown: NFKC-normalized (full-width and
+/// other compatibility forms read as what they look like), format
+/// characters removed (bidi overrides, zero-width characters, the BOM: they
+/// would let "Claude\u{202E}edoc" read as something else), controls and
+/// runs of spaces collapsed, cut at [`MAX_NAME`] characters; `None` if
+/// nothing is left.
 fn clean_name(name: &str) -> Option<String> {
+    let name: String = name.nfkc().filter(|c| !is_format(*c)).collect();
     let name = name
         .split(|c: char| c.is_whitespace() || c.is_control())
         .filter(|word| !word.is_empty())
@@ -245,6 +251,35 @@ fn clean_name(name: &str) -> Option<String> {
     let name: String = name.chars().take(MAX_NAME).collect();
     let name = name.trim_end().to_owned();
     (!name.is_empty()).then_some(name)
+}
+
+/// Unicode's format characters (general category Cf, Unicode 16): bidi
+/// controls and overrides, zero-width joiners and spaces, the BOM, tags.
+fn is_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{600}'..='\u{605}'
+            | '\u{61C}'
+            | '\u{6DD}'
+            | '\u{70F}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 /// Whether `uri` may be registered as a redirect URI; `Err` says why not.
@@ -448,5 +483,24 @@ mod tests {
         assert_eq!(clean_name("\u{7}\t "), None);
         assert_eq!(clean_name(&"x".repeat(150)).unwrap().chars().count(), 100);
         assert_eq!(clean_name("Cursor").as_deref(), Some("Cursor"));
+    }
+
+    #[test]
+    fn names_lose_bidi_overrides_and_invisible_characters() {
+        // "Claude" then an override that would show "edoc" reversed.
+        assert_eq!(
+            clean_name("Claude\u{202E}edoC").as_deref(),
+            Some("ClaudeedoC")
+        );
+        assert_eq!(
+            clean_name("\u{FEFF}Cl\u{200B}au\u{200D}de\u{2066}").as_deref(),
+            Some("Claude")
+        );
+        assert_eq!(clean_name("\u{202E}\u{200F}"), None);
+        // Compatibility forms: full-width letters, ligatures.
+        assert_eq!(clean_name("Ｃｌａｕｄｅ").as_deref(), Some("Claude"));
+        assert_eq!(clean_name("ﬁle").as_deref(), Some("file"));
+        // Accents and other scripts stay.
+        assert_eq!(clean_name("Éditeur 日本").as_deref(), Some("Éditeur 日本"));
     }
 }

@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { LogoMark } from "@/components/brand/logo";
 import { Card } from "@/components/ui/card";
-import { Consent, ConsentDeadEnd } from "@/features/agent/components/consent";
+import { Consent, ConsentDeadEnd, ConsentRefused } from "@/features/agent/components/consent";
 import { requireUser } from "@/features/auth/session";
 
 interface AuthorizeSearch {
@@ -10,7 +10,17 @@ interface AuthorizeSearch {
   request?: string;
   /** Why the API could not even ask (an unknown app, a redirect it never registered). */
   error?: string;
+  /**
+   * A request the API refused (PKCE, the scope…), with what names its way
+   * back: checked again by the API before the page offers it.
+   */
+  refused?: string;
+  client_id?: string;
+  redirect_uri?: string;
+  state?: string;
 }
+
+const text = (value: unknown) => (typeof value === "string" ? value : undefined);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -21,7 +31,11 @@ export const Route = createFileRoute("/oauth/authorize")({
   validateSearch: (search: Record<string, unknown>): AuthorizeSearch => ({
     request:
       typeof search.request === "string" && UUID.test(search.request) ? search.request : undefined,
-    error: typeof search.error === "string" ? search.error : undefined,
+    error: text(search.error),
+    refused: text(search.refused),
+    client_id: text(search.client_id),
+    redirect_uri: text(search.redirect_uri),
+    state: text(search.state),
   }),
   beforeLoad: async ({ context: { queryClient }, location, search }) => {
     // A dead end explains itself to anyone; a request needs its person.
@@ -32,7 +46,8 @@ export const Route = createFileRoute("/oauth/authorize")({
 });
 
 function AuthorizePage() {
-  const { request, error } = Route.useSearch();
+  const search = Route.useSearch();
+  const { request, error, refused } = search;
   return (
     <div className="flex min-h-dvh flex-col bg-background">
       <header className="flex h-14 items-center px-5">
@@ -48,6 +63,13 @@ function AuthorizePage() {
         <Card className="w-full max-w-md p-6 sm:p-8">
           {request && !error ? (
             <Consent key={request} id={request} />
+          ) : refused && search.client_id && search.redirect_uri && !error ? (
+            <ConsentRefused
+              reason={refused}
+              clientId={search.client_id}
+              redirectUri={search.redirect_uri}
+              state={search.state}
+            />
           ) : (
             <ConsentDeadEnd code={error ?? "invalid_request"} />
           )}
