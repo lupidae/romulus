@@ -734,6 +734,82 @@ async fn denying_sends_access_denied_back_to_the_app(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn state_is_optional_and_echoed_only_when_sent(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    let client_id = client(&app, "No state", LOOPBACK).await;
+    let verifier = token::generate();
+
+    // Without `state`, PKCE alone protects the flow: approved, and the way
+    // back carries the code and `iss`, no `state`.
+    let request = started(
+        &app.get(&authorize_url(
+            &client_id,
+            LOOPBACK,
+            &verifier,
+            &[("state", "")],
+        ))
+        .await,
+    );
+    let decided = decide(&app, &alice, &request, &allow()).await;
+    assert_eq!(decided.status, StatusCode::OK, "{}", decided.json());
+    let url = decided.json()["redirect_url"].as_str().unwrap().to_owned();
+    assert!(!url.contains("state="), "{url}");
+    assert!(param(&url, "iss").is_some());
+    let code = param(&url, "code").expect("a code");
+    let tokens = form(
+        &app,
+        "/api/oauth/token",
+        &exchange(&client_id, &code, &verifier),
+    )
+    .await;
+    assert_eq!(tokens.status, StatusCode::OK, "{}", tokens.json());
+
+    // Denied or refused, the same: no `state` invented.
+    let request = started(
+        &app.get(&authorize_url(
+            &client_id,
+            LOOPBACK,
+            &verifier,
+            &[("state", "")],
+        ))
+        .await,
+    );
+    let denied = decide(&app, &alice, &request, &json!({ "allow": false })).await;
+    let url = denied.json()["redirect_url"].as_str().unwrap().to_owned();
+    assert_eq!(param(&url, "error").as_deref(), Some("access_denied"));
+    assert!(!url.contains("state="), "{url}");
+    let refused = app
+        .get(&authorize_url(
+            &client_id,
+            LOOPBACK,
+            &verifier,
+            &[("state", ""), ("code_challenge_method", "plain")],
+        ))
+        .await;
+    assert_eq!(
+        param(refused.location(), "error").as_deref(),
+        Some("invalid_request")
+    );
+    assert!(!refused.location().contains("state="));
+
+    // Sent, it comes back exactly as it was, characters and all.
+    let odd = "a b+c/d=é&x";
+    let request = started(
+        &app.get(&authorize_url(
+            &client_id,
+            LOOPBACK,
+            &verifier,
+            &[("state", odd)],
+        ))
+        .await,
+    );
+    let decided = decide(&app, &alice, &request, &allow()).await;
+    let url = decided.json()["redirect_url"].as_str().unwrap().to_owned();
+    assert_eq!(param(&url, "state").as_deref(), Some(odd));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn an_authorization_request_is_refused_where_it_cannot_be_trusted(db: PgPool) {
     let app = TestApp::new(db.clone());
     let client_id = client(&app, "Loop", LOOPBACK).await;
@@ -775,8 +851,9 @@ async fn an_authorization_request_is_refused_where_it_cannot_be_trusted(db: PgPo
     }
 
     // The rest goes back to the client, with the reason.
+    let long_state = "s".repeat(1025);
     for (extra, error) in [
-        (vec![("state", "")], "invalid_request"),
+        (vec![("state", long_state.as_str())], "invalid_request"),
         (vec![("code_challenge_method", "plain")], "invalid_request"),
         (vec![("code_challenge_method", "")], "invalid_request"),
         (vec![("code_challenge", "")], "invalid_request"),

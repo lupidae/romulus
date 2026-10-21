@@ -1217,7 +1217,9 @@ to romulus as usual and approve it (MCP's authorization flow, OAuth 2.1). What w
 - **The consent screen is the web app's** (`/app/oauth/authorize`), after the usual sign-in.
   The request is kept by the API and bound to the browser that started it by a cookie: a
   link to someone else's request shows and approves nothing. The person may allow less than
-  asked (read only). Localhost redirects get a warning: any local program can ask.
+  asked (read only). Localhost redirects get a warning: any local program can ask. PKCE
+  (S256 only) is required; `state` is not (OAuth 2.1 with PKCE, and some MCP clients omit
+  it): echoed back unchanged when sent.
 - **Tokens are the personal tokens' identity.** Access tokens (`rmls_oat_`, an hour, sha256
   stored) resolve to the same agent acting as its person, so tools, roles, caps, limits and
   audit (`agent_action`, with the app's name) are unchanged. Scopes `romulus.read` and

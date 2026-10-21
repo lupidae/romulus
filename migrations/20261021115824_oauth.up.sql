@@ -30,7 +30,7 @@ CREATE TABLE oauth_requests (
     client_id uuid NOT NULL REFERENCES oauth_clients ON DELETE CASCADE,
     redirect_uri text NOT NULL CHECK (char_length(redirect_uri) <= 2000),
     redirect_uri_given boolean NOT NULL,
-    state text NOT NULL CHECK (char_length(state) BETWEEN 1 AND 1024),
+    state text CHECK (state IS NULL OR char_length(state) BETWEEN 1 AND 1024),
     code_challenge text NOT NULL CHECK (char_length(code_challenge) = 43),
     scope access_token_scope NOT NULL,
     resource text NOT NULL,
@@ -39,6 +39,7 @@ CREATE TABLE oauth_requests (
 
 COMMENT ON TABLE oauth_requests IS
     'Authorization requests waiting for consent (20 minutes at most). The browser that started one holds a cookie with the secret whose sha256 is binding_hash: the request is shown and decided in that browser only.';
+COMMENT ON COLUMN oauth_requests.state IS 'The client''s own value, echoed back unchanged; NULL when it sent none (optional with PKCE).';
 COMMENT ON COLUMN oauth_requests.redirect_uri_given IS 'The request named its redirect_uri (rather than the client''s only one): the token request must then name the same.';
 
 CREATE INDEX oauth_requests_client_id_idx ON oauth_requests (client_id);

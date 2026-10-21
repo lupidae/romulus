@@ -18,7 +18,8 @@
 //!   public (no secret: PKCE protects the code). Redirect URIs are https,
 //!   or http on a loopback host with any port (RFC 8252).
 //! - **Authorization** ([`authorize`], `GET /oauth/authorize`): checks the
-//!   request (`state`, PKCE S256, the scope, `resource` = the MCP endpoint),
+//!   request (PKCE S256, the scope, `resource` = the MCP endpoint; `state`
+//!   optional, echoed back unchanged),
 //!   keeps it, ties it to this browser with a cookie, and sends the browser
 //!   to the consent page, `/app/oauth/authorize` (signing in first when
 //!   needed). The page reads it (`GET /oauth/requests/{id}`) and posts the

@@ -6,7 +6,7 @@
 //!   consent page with `?error=` (`unknown_client`, `invalid_redirect_uri`,
 //!   `invalid_request`), never to the redirect URI (RFC 6749, 4.1.2.1);
 //! - any other refusal goes back to the redirect URI with `error`,
-//!   `error_description`, `state` and `iss`;
+//!   `error_description`, `state` (when the request had one) and `iss`;
 //! - a good one is kept in `oauth_requests` (at most [`REQUEST_TTL`]), and
 //!   the browser goes to `/app/oauth/authorize?request=<id>`, with a cookie
 //!   that ties the request to it: the page reads it and posts the decision
@@ -14,8 +14,11 @@
 //!   nothing and approves nothing. Signing in first is the page's business
 //!   (it comes back).
 //!
-//! A request must carry `state`, a PKCE S256 `code_challenge` (`plain` is
-//! refused) and, when it names one, the MCP endpoint as its `resource`.
+//! A request must carry a PKCE S256 `code_challenge` (`plain` is refused)
+//! and, when it names one, the MCP endpoint as its `resource`. `state` is
+//! the client's own and optional (OAuth 2.1 with PKCE; some MCP clients
+//! omit it): romulus echoes it back unchanged when it is sent, and never
+//! needs it, since PKCE is what binds the code to the client that asked.
 //! Approving makes a code ([`super::CODE_TTL`], single use) for the person, with
 //! the scope they allowed: what was asked, or read only.
 
@@ -56,8 +59,8 @@ fn dead_end(code: &str) -> Response {
     Redirect::to(&format!("{PAGE}?error={code}")).into_response()
 }
 
-/// The way back to the client: its redirect URI, `state` and `iss` added to
-/// whatever the URI carries.
+/// The way back to the client: its redirect URI, `state` (if the request
+/// had one) and `iss` added to whatever the URI carries.
 struct Back {
     redirect_uri: String,
     state: Option<String>,
@@ -138,7 +141,7 @@ fn is_challenge(value: &str) -> bool {
         ("response_type" = String, Query, description = "`code`"),
         ("client_id" = String, Query, description = "From registration"),
         ("redirect_uri" = Option<String>, Query, description = "One the client registered (any port on a loopback one); optional when it registered only one"),
-        ("state" = String, Query, description = "Required"),
+        ("state" = Option<String>, Query, description = "Optional (PKCE protects the flow): echoed back unchanged, 1024 characters at most"),
         ("code_challenge" = String, Query, description = "PKCE: base64url(sha256(verifier))"),
         ("code_challenge_method" = String, Query, description = "`S256` only"),
         ("scope" = Option<String>, Query, description = "`romulus.read`, `romulus.write` (both when absent)"),
@@ -199,11 +202,10 @@ pub(crate) async fn authorize(
             "Too many authorizations from this address: try again in a minute.",
         );
     }
-    let (client_state, challenge, scope) =
-        match checked(&state.config, &params, back.state.as_deref()) {
-            Ok(checked) => checked,
-            Err((error, description)) => return back.error(error, &description),
-        };
+    let (challenge, scope) = match checked(&state.config, &params, back.state.as_deref()) {
+        Ok(checked) => checked,
+        Err((error, description)) => return back.error(error, &description),
+    };
 
     let binding = token::generate();
     let stored = sqlx::query_scalar!(
@@ -216,7 +218,7 @@ pub(crate) async fn authorize(
         client_id,
         back.redirect_uri,
         given,
-        client_state,
+        back.state.as_deref(),
         challenge,
         scope as AccessTokenScope,
         resource(&state.config),
@@ -237,24 +239,21 @@ pub(crate) async fn authorize(
     (jar, Redirect::to(&format!("{PAGE}?request={id}"))).into_response()
 }
 
-/// The checks after the client and its redirect URI are known: `state`, the
-/// response type, PKCE S256, the scope, the resource. Refusals go back to
-/// the client.
+/// The checks after the client and its redirect URI are known: the
+/// response type, `state`'s length when sent, PKCE S256, the scope, the
+/// resource. Refusals go back to the client.
 fn checked<'a>(
     config: &Config,
     params: &'a Params,
     state: Option<&'a str>,
-) -> Result<(&'a str, &'a str, AccessTokenScope), (&'static str, String)> {
+) -> Result<(&'a str, AccessTokenScope), (&'static str, String)> {
     if params.get("response_type") != Some("code") {
         return Err((
             "unsupported_response_type",
             "romulus answers the authorization code flow only (`response_type=code`).".to_owned(),
         ));
     }
-    let Some(client_state) = state else {
-        return Err(("invalid_request", "`state` is required.".to_owned()));
-    };
-    if client_state.chars().count() > 1024 {
+    if state.is_some_and(|state| state.chars().count() > 1024) {
         return Err((
             "invalid_request",
             "`state` is too long (1024 characters at most).".to_owned(),
@@ -296,7 +295,7 @@ fn checked<'a>(
             ),
         ));
     }
-    Ok((client_state, challenge, scope))
+    Ok((challenge, scope))
 }
 
 /// A request for the person to decide on.
@@ -451,7 +450,7 @@ pub(crate) async fn decide(
     .ok_or_else(request_gone)?;
     let back = Back {
         redirect_uri: request.redirect_uri.clone(),
-        state: Some(request.state.clone()),
+        state: request.state.clone(),
         issuer: issuer(&state.config),
     };
     let redirect_url = if decision.allow {
@@ -523,6 +522,19 @@ mod tests {
         assert_eq!(
             back.with(&[("code", "abc")]),
             "http://localhost:3118/callback?x=1&code=abc&state=s+t&iss=https%3A%2F%2Fromulus.example"
+        );
+    }
+
+    #[test]
+    fn without_a_state_none_is_added() {
+        let back = Back {
+            redirect_uri: "https://claude.ai/api/mcp/auth_callback".into(),
+            state: None,
+            issuer: "https://romulus.example".into(),
+        };
+        assert_eq!(
+            back.with(&[("code", "abc")]),
+            "https://claude.ai/api/mcp/auth_callback?code=abc&iss=https%3A%2F%2Fromulus.example"
         );
     }
 

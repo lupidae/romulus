@@ -270,9 +270,11 @@ authorization spec, OAuth 2.1); your sign-in itself stays the usual one.
   `[::1]`, `localhost`) on any port (RFC 8252), such as Claude Code's
   `http://localhost:<port>/callback` and claude.ai's
   `https://claude.ai/api/mcp/auth_callback`. Custom schemes are refused.
-- **Requests** need `state` and PKCE with `S256` (`plain` is refused), and a
+- **Requests** need PKCE with `S256` (`plain` is refused), and a
   `resource`, when given, of `https://<your romulus>/api/mcp` (RFC 8707):
-  tokens are for the MCP endpoint only. Responses carry `iss` (RFC 9207).
+  tokens are for the MCP endpoint only. `state` is optional (PKCE protects
+  the flow) and comes back unchanged when sent. Responses carry `iss` (RFC
+  9207).
 - **Scopes**: `romulus.read` (a read-only token's access) and
   `romulus.write` (read and write); none asked means both, and you may allow
   read only.
