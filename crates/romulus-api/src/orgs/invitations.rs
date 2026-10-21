@@ -460,7 +460,7 @@ pub struct Accepted {
         (status = 200, body = Accepted),
         (status = 401, body = ErrorBody),
         (status = 402, description = "`plan_limit`: the organization's plan has no room for another member", body = ErrorBody),
-        (status = 403, description = "`wrong_account` or `email_unverified`", body = ErrorBody),
+        (status = 403, description = "`wrong_account`, `email_unverified`, or `terms_required`: the Terms of Service are not accepted yet", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`invitation_expired` or `invitation_used`", body = ErrorBody),
     )
@@ -470,6 +470,7 @@ async fn accept(
     State(state): State<AppState>,
     Path(link): Path<String>,
 ) -> ApiResult<Json<Accepted>> {
+    crate::legal::require_accepted(&state.db, &state.config, user.id).await?;
     let found = find(&state.db, &link, Some(&user))
         .await?
         .ok_or_else(not_found)?;

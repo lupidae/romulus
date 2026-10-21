@@ -1223,7 +1223,7 @@
             }
           },
           "403": {
-            "description": "`wrong_account` or `email_unverified`",
+            "description": "`wrong_account`, `email_unverified`, or `terms_required`: the Terms of Service are not accepted yet",
             "content": {
               "application/json": {
                 "schema": {
@@ -1587,6 +1587,143 @@
           },
           "404": {
             "description": "No such app connected for the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/preferences": {
+      "patch": {
+        "tags": [
+          "legal"
+        ],
+        "summary": "The language of the person's contract and billing emails.",
+        "operationId": "update_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Preferences"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermsStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`not_for_agents`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/terms": {
+      "get": {
+        "tags": [
+          "legal"
+        ],
+        "summary": "The signed-in person's acceptance of the Terms, and where the legal\ndocuments are.",
+        "operationId": "terms_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermsStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "legal"
+        ],
+        "summary": "Accepts the Terms in force (the box at sign-in), in the language they\nwere read in, which becomes the person's. Recorded every time a version\nis first accepted; accepting the same version again only changes the\nlanguage.",
+        "operationId": "accept_terms",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptTerms"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TermsStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`not_for_agents`: an access token cannot accept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This server has no Terms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`terms_changed`: another version (or the boxes' wording) is in force: read it again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (`professional_use`): the professional edition needs the attestation",
             "content": {
               "application/json": {
                 "schema": {
@@ -2087,7 +2224,7 @@
             }
           },
           "403": {
-            "description": "`single_org`: this install keeps one organization",
+            "description": "`single_org`: this install keeps one organization; `terms_required`: the Terms of Service are not accepted yet",
             "content": {
               "application/json": {
                 "schema": {
@@ -2283,7 +2420,7 @@
         "tags": [
           "billing"
         ],
-        "summary": "Starts paying for a plan: the Terms accepted (kept in the audit log, with\na consumer's requests), then a Stripe Checkout Session to send the\nbrowser to. Admins only. An organization already subscribed changes plan\nin the portal.",
+        "summary": "Starts paying for a plan: as a business or a consumer (never assumed),\nthe Terms accepted, a business's statement and name, or a consumer's two\nrequests (recorded with the session, 10 years, and in the audit log),\nthen a Stripe Checkout Session to send the browser to. Admins only, in\nperson. An organization already subscribed changes plan in the portal.",
         "operationId": "start_checkout",
         "parameters": [
           {
@@ -2335,7 +2472,7 @@
             }
           },
           "409": {
-            "description": "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid",
+            "description": "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload",
             "content": {
               "application/json": {
                 "schema": {
@@ -2345,7 +2482,7 @@
             }
           },
           "422": {
-            "description": "`validation`: the Terms (or a consumer's requests) not accepted, or Free",
+            "description": "`validation` naming the field: no buyer chosen, the Terms or a box not ticked, a business's name or country missing, or Free",
             "content": {
               "application/json": {
                 "schema": {
@@ -2497,6 +2634,86 @@
           },
           "503": {
             "description": "`billing_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/billing/withdrawal": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Withdraws from the organization's plan (a consumer, within 14 days of\nsubscribing): recorded and acknowledged by email at once, the\norganization on Free, the subscription cancelled and the days not used\nrefunded through Stripe. Admins only, in person (not with an access\ntoken).",
+        "operationId": "withdraw_from_plan",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Withdraw"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Withdrawn"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`not_a_consumer`: a business's plan is cancelled instead; `not_for_agents`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_subscription`, `already_withdrawn`, `withdrawal_period_over`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`billing_unavailable`: Stripe could not be read; nothing was recorded",
             "content": {
               "application/json": {
                 "schema": {
@@ -8978,6 +9195,32 @@
   },
   "components": {
     "schemas": {
+      "AcceptTerms": {
+        "type": "object",
+        "required": [
+          "version",
+          "locale",
+          "copy_version"
+        ],
+        "properties": {
+          "copy_version": {
+            "type": "string",
+            "description": "The version of the boxes' wording shown (`LegalLinks::copy_version`)."
+          },
+          "locale": {
+            "$ref": "#/components/schemas/Locale",
+            "description": "The language the Terms were read in: the contract's and the emails'."
+          },
+          "professional_use": {
+            "type": "boolean",
+            "description": "The professional edition: the person attests using romulus for their\ntrade, business or profession (required then)."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version shown, which must be the one in force."
+          }
+        }
+      },
       "Accepted": {
         "type": "object",
         "required": [
@@ -9393,7 +9636,8 @@
           "subscription_duplicate_cancelled",
           "agent_action",
           "database_purged",
-          "admin_appointed"
+          "admin_appointed",
+          "contract_withdrawn"
         ]
       },
       "AuditActor": {
@@ -9824,6 +10068,13 @@
               "null"
             ]
           },
+          "copy_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version of the boxes' wording ticked, and the page's language."
+          },
           "currency": {
             "type": [
               "string",
@@ -9876,6 +10127,12 @@
               "null"
             ]
           },
+          "locale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "month": {
             "type": [
               "string",
@@ -9892,6 +10149,13 @@
                 "type": "null"
               }
             ]
+          },
+          "professional_use": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The professional edition: the buyer attested buying for their\nbusiness, not as a consumer."
           },
           "status": {
             "type": [
@@ -9973,7 +10237,7 @@
       },
       "Buyer": {
         "type": "string",
-        "description": "Who buys: the checkout page asks a consumer for more.",
+        "description": "Who buys a plan (`buyer`): a business, or a consumer (who may withdraw\nfor 14 days and is asked for more at checkout).",
         "enum": [
           "business",
           "consumer"
@@ -11935,6 +12199,27 @@
           }
         }
       },
+      "DocumentLinks": {
+        "type": "object",
+        "description": "The pages of one language.",
+        "required": [
+          "terms",
+          "privacy",
+          "dpa"
+        ],
+        "properties": {
+          "dpa": {
+            "type": "string",
+            "description": "The Data Processing Agreement (English only)."
+          },
+          "privacy": {
+            "type": "string"
+          },
+          "terms": {
+            "type": "string"
+          }
+        }
+      },
       "DomainChange": {
         "oneOf": [
           {
@@ -13648,6 +13933,17 @@
             "type": "boolean",
             "description": "Plans and billing (the hosted service, `ROMULUS_BILLING`): the app\nshows the billing page and upgrade prompts."
           },
+          "legal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LegalLinks",
+                "description": "The hosted service's Terms and Privacy Policy (`ROMULUS_TERMS_VERSION`):\nthe sign-in pages and the app's footer link them. `null` on a\nself-hosted install, which has none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "mail": {
             "type": "boolean",
             "description": "romulus sends email (invitations, sign-up and reset links)."
@@ -13880,6 +14176,46 @@
           }
         }
       },
+      "LegalLinks": {
+        "type": "object",
+        "description": "Where the hosted service's legal documents in force are published, in\nEnglish and in French (the French version prevails for consumers in\nFrance).",
+        "required": [
+          "terms_version",
+          "edition",
+          "consumer_sales",
+          "copy_version",
+          "en",
+          "fr",
+          "contact"
+        ],
+        "properties": {
+          "consumer_sales": {
+            "type": "boolean",
+            "description": "Consumers may buy (`ROMULUS_CONSUMER_SALES`): the checkout asks\nwhether a business or a consumer buys. Off: businesses only, and\naccepting the Terms includes attesting professional use."
+          },
+          "contact": {
+            "type": "string",
+            "description": "The seller's address for withdrawals, complaints and contract\nquestions."
+          },
+          "copy_version": {
+            "type": "string",
+            "description": "The version of the boxes' wording (sign-in and checkout) in force:\nwhat a request sends with what was ticked."
+          },
+          "edition": {
+            "$ref": "#/components/schemas/TermsEdition"
+          },
+          "en": {
+            "$ref": "#/components/schemas/DocumentLinks"
+          },
+          "fr": {
+            "$ref": "#/components/schemas/DocumentLinks"
+          },
+          "terms_version": {
+            "type": "string",
+            "description": "The Terms in force: their version and edition."
+          }
+        }
+      },
       "Limits": {
         "type": "object",
         "description": "What a plan costs and allows. `None` is unlimited.",
@@ -13978,6 +14314,14 @@
           "updating",
           "published",
           "deleted"
+        ]
+      },
+      "Locale": {
+        "type": "string",
+        "description": "The language of a person's contract and billing emails (`locale`): the\nhosted service speaks English and French there (the `legal` module).",
+        "enum": [
+          "en",
+          "fr"
         ]
       },
       "MajorCheck": {
@@ -15498,13 +15842,32 @@
           "usage",
           "plans",
           "can_manage",
-          "terms_url",
-          "terms_version"
+          "documents",
+          "checkout_copy_version"
         ],
         "properties": {
+          "buyer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Buyer",
+                "description": "As whom the subscription was bought (`null`: no record of its\ncheckout, or no subscription)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "can_manage": {
             "type": "boolean",
             "description": "The caller may change billing (admins)."
+          },
+          "checkout_copy_version": {
+            "type": "string",
+            "description": "The version of the checkout boxes' wording a checkout must send."
+          },
+          "documents": {
+            "$ref": "#/components/schemas/LegalLinks",
+            "description": "The Terms checkout has people accept, and the other documents, in\nEnglish and in French."
           },
           "plan": {
             "$ref": "#/components/schemas/Plan",
@@ -15527,15 +15890,19 @@
               }
             ]
           },
-          "terms_url": {
-            "type": "string",
-            "description": "The Terms of Service checkout has people accept."
-          },
-          "terms_version": {
-            "type": "string"
-          },
           "usage": {
             "$ref": "#/components/schemas/Usage"
+          },
+          "withdrawal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WithdrawalInfo",
+                "description": "A consumer's right of withdrawal: until when, or the withdrawal\nmade. `null` for a business."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -16972,6 +17339,17 @@
           "status": {
             "$ref": "#/components/schemas/CompilerStatus",
             "description": "Whether its compiles run now: `ok`, `unavailable` (starting, or its\nsandbox is down) or `off` (this server has no sandbox for it)."
+          }
+        }
+      },
+      "Preferences": {
+        "type": "object",
+        "required": [
+          "locale"
+        ],
+        "properties": {
+          "locale": {
+            "$ref": "#/components/schemas/Locale"
           }
         }
       },
@@ -18726,26 +19104,73 @@
       },
       "StartCheckout": {
         "type": "object",
+        "description": "What the buyer states before paying (Terms 3.4 c, 3.5 and 9.3): as whom,\nand the boxes of each, in the words of `checkout_copy_version`.",
         "required": [
           "plan",
           "interval",
           "accept_terms",
-          "buyer"
+          "copy_version"
         ],
         "properties": {
           "accept_terms": {
             "type": "boolean",
-            "description": "The Terms of Service (`terms_url`, `terms_version`) are accepted."
+            "description": "The Terms of Service in force are read and accepted."
+          },
+          "business_confirmed": {
+            "type": "boolean",
+            "description": "A business: subscribing for its trade, business or profession, on\nbehalf of the business named, authorised to bind it (the professional\nedition's box adds: not as a consumer)."
           },
           "buyer": {
-            "$ref": "#/components/schemas/Buyer"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Buyer",
+                "description": "Required, never assumed, when consumers may buy (`consumer_sales`):\na business or a consumer. Businesses only otherwise: absent, or\n`business`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "company_country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "company_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A business: its name and country (ISO 3166-1 alpha-2), required;\nits VAT or registration number, optional."
+          },
+          "company_tax_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "copy_version": {
+            "type": "string",
+            "description": "The version of the wording the boxes showed."
           },
           "immediate_start": {
             "type": "boolean",
-            "description": "A consumer asks for the service to start before the withdrawal period\nends…"
+            "description": "A consumer expressly asks for the service to start before the\nwithdrawal period ends…"
           },
           "interval": {
             "$ref": "#/components/schemas/Interval"
+          },
+          "locale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Locale",
+                "description": "The language of the page: the payment page's and the contract's."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "plan": {
             "$ref": "#/components/schemas/Plan",
@@ -18753,7 +19178,7 @@
           },
           "withdrawal_acknowledged": {
             "type": "boolean",
-            "description": "…and acknowledges losing the right of withdrawal once it is fully\nperformed."
+            "description": "…and acknowledges paying for the service until a withdrawal, and\nlosing the right once it is fully performed."
           }
         }
       },
@@ -19065,6 +19490,67 @@
           "y": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "TermsEdition": {
+        "type": "string",
+        "description": "Which Terms are in force (`terms_edition`): the professional edition\nwhile romulus sells to businesses only (`ROMULUS_CONSUMER_SALES` off),\nthe full one once consumers may buy too.",
+        "enum": [
+          "professional",
+          "full"
+        ]
+      },
+      "TermsStatus": {
+        "type": "object",
+        "description": "The signed-in person and the Terms.",
+        "required": [
+          "required",
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "The person accepted the version in force (true when there are no\nTerms)."
+          },
+          "accepted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "accepted_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The latest version the person accepted, and when; `null`: never."
+          },
+          "documents": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LegalLinks"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "locale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Locale",
+                "description": "The language of their contract and billing emails; `null`: never\nchosen (the app follows the browser)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "This server has Terms (the hosted service); false on a self-hosted\ninstall, where the rest is empty."
           }
         }
       },
@@ -20198,6 +20684,80 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "Withdraw": {
+        "type": "object",
+        "properties": {
+          "locale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Locale",
+                "description": "The language of the page, which the acknowledgement is written in."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WithdrawalInfo": {
+        "type": "object",
+        "description": "The withdrawal right of the subscription, for a consumer's: until when\nit can be used, or the withdrawal made. `null` for a business.",
+        "properties": {
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The end of the withdrawal period while it runs."
+          },
+          "withdrawn": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Withdrawn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Withdrawn": {
+        "type": "object",
+        "description": "A withdrawal, as the billing page shows it.",
+        "required": [
+          "requested_at",
+          "paid_cents",
+          "refund_cents",
+          "currency",
+          "completed"
+        ],
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "description": "Stripe cancelled the subscription and made the refund."
+          },
+          "currency": {
+            "type": "string"
+          },
+          "paid_cents": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "refund_cents": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What is refunded: the days not used."
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When romulus received it."
           }
         }
       },

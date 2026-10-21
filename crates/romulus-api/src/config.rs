@@ -94,6 +94,122 @@ pub struct Config {
     /// from, else <https://github.com/lupidae/romulus>: a fork points to
     /// itself.
     pub source_url: Url,
+    /// `ROMULUS_TERMS_VERSION` and `ROMULUS_LEGAL_URL`: the hosted service's
+    /// Terms, which everyone accepts at their first sign-in (the `legal`
+    /// module). `None` (unset): no Terms, the self-hosted default. Billing
+    /// needs them.
+    pub legal: Option<LegalConfig>,
+}
+
+/// The hosted service's legal documents, as the homepage publishes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegalConfig {
+    /// `ROMULUS_LEGAL_URL`: the site that publishes them (its origin):
+    /// `/legal/terms`, `/fr/legal/conditions`, `/legal/privacy`,
+    /// `/fr/legal/confidentialite`, `/legal/dpa`.
+    pub site: Url,
+    /// `ROMULUS_TERMS_VERSION`: the Terms in force, e.g. `1.0`: what an
+    /// acceptance is of; a new version is accepted again.
+    pub terms_version: String,
+    /// `ROMULUS_LEGAL_CONTACT`: the seller's address the Terms give for
+    /// withdrawals, complaints and contract questions, which the contract
+    /// emails repeat.
+    pub contact: String,
+    /// `ROMULUS_CONSUMER_SALES=true`: consumers may buy too (the full
+    /// edition of the Terms, the business-or-consumer choice at checkout,
+    /// withdrawal). Off (the default): romulus is sold to businesses only,
+    /// under the professional edition, and everyone attests professional use.
+    pub consumer_sales: bool,
+}
+
+impl LegalConfig {
+    fn from_lookup(
+        get: &impl Fn(&'static str) -> Option<String>,
+        public_url: &Url,
+        fake_billing: bool,
+    ) -> Result<Option<Self>, ConfigError> {
+        if get("ROMULUS_TERMS_URL").is_some() {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_TERMS_URL",
+                reason: "replaced by ROMULUS_LEGAL_URL, the origin of the site that publishes the Terms (/legal/terms)".to_owned(),
+            });
+        }
+        let site = get("ROMULUS_LEGAL_URL")
+            .map(|site| {
+                let url = Url::parse(&site).map_err(|err| ConfigError::Invalid {
+                    var: "ROMULUS_LEGAL_URL",
+                    reason: err.to_string(),
+                })?;
+                if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                    return Err(ConfigError::Invalid {
+                        var: "ROMULUS_LEGAL_URL",
+                        reason: "expected the site's origin, e.g. https://romulus.example"
+                            .to_owned(),
+                    });
+                }
+                Ok(url)
+            })
+            .transpose()?;
+        let version = match get("ROMULUS_TERMS_VERSION") {
+            Some(version) if !version.trim().is_empty() && version.chars().count() <= 64 => {
+                Some(version.trim().to_owned())
+            }
+            Some(_) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_TERMS_VERSION",
+                    reason: "1 to 64 characters, e.g. 1.0".to_owned(),
+                });
+            }
+            None => None,
+        };
+        let consumer_sales = flag(get, "ROMULUS_CONSUMER_SALES")?;
+        let contact = get("ROMULUS_LEGAL_CONTACT").map(|c| c.trim().to_owned());
+        if contact.as_deref().is_some_and(|c| {
+            c.len() > 254
+                || c.split_once('@')
+                    .is_none_or(|(l, d)| l.is_empty() || d.is_empty())
+        }) {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_LEGAL_CONTACT",
+                reason: "expected an email address".to_owned(),
+            });
+        }
+        match (site, version) {
+            (Some(site), Some(terms_version)) => Ok(Some(Self {
+                site,
+                terms_version,
+                contact: contact.ok_or(ConfigError::Missing("ROMULUS_LEGAL_CONTACT"))?,
+                consumer_sales,
+            })),
+            (None, None) if fake_billing => Ok(Some(Self {
+                site: public_url.clone(),
+                terms_version: "test".to_owned(),
+                contact: contact.unwrap_or_else(|| "legal@romulus.test".to_owned()),
+                consumer_sales,
+            })),
+            (None, None) => Ok(None),
+            (Some(_), None) => Err(ConfigError::Missing("ROMULUS_TERMS_VERSION")),
+            (None, Some(_)) => Err(ConfigError::Missing("ROMULUS_LEGAL_URL")),
+        }
+    }
+
+    /// The edition of the Terms in force.
+    pub fn edition(&self) -> crate::domain::TermsEdition {
+        if self.consumer_sales {
+            crate::domain::TermsEdition::Full
+        } else {
+            crate::domain::TermsEdition::Professional
+        }
+    }
+
+    /// The URL of `path` on the legal site.
+    pub fn url(&self, path: &str) -> String {
+        let mut url = self.site.clone();
+        url.set_path(path);
+        url.set_query(None);
+        url.set_fragment(None);
+        url.to_string()
+    }
 }
 
 /// The commit this binary was built from (`ROMULUS_COMMIT` at build time:
@@ -110,16 +226,11 @@ const DEFAULT_SOURCE_URL: &str = match option_env!("ROMULUS_SOURCE_URL") {
     _ => "https://github.com/lupidae/romulus",
 };
 
-/// Hosted billing: Stripe's keys, the Terms the checkout page has people
-/// accept, and the mentions every invoice carries.
+/// Hosted billing: Stripe's keys and the mentions every invoice carries
+/// (the Terms checkout has people accept are [`LegalConfig`]'s).
 #[derive(Debug, Clone)]
 pub struct BillingConfig {
     pub stripe: StripeKeys,
-    /// `ROMULUS_TERMS_URL`: the Terms of Service the checkout links to.
-    pub terms_url: Url,
-    /// `ROMULUS_TERMS_VERSION`: which Terms an acceptance was of (kept in
-    /// the audit log), e.g. `2026-11-01`.
-    pub terms_version: String,
     /// `ROMULUS_INVOICE_FOOTER`: the footer of every invoice (the VAT
     /// mention), set on each customer.
     pub invoice_footer: Option<String>,
@@ -212,31 +323,6 @@ impl BillingConfig {
                 });
             }
         };
-        let fake = matches!(stripe, StripeKeys::Fake { .. });
-        let terms_url = match get("ROMULUS_TERMS_URL") {
-            Some(terms) => Url::parse(&terms).map_err(|err| ConfigError::Invalid {
-                var: "ROMULUS_TERMS_URL",
-                reason: err.to_string(),
-            })?,
-            None if fake => public_url
-                .join("/terms")
-                .map_err(|err| ConfigError::Invalid {
-                    var: "ROMULUS_PUBLIC_URL",
-                    reason: err.to_string(),
-                })?,
-            None => return Err(ConfigError::Missing("ROMULUS_TERMS_URL")),
-        };
-        let terms_version = match get("ROMULUS_TERMS_VERSION") {
-            Some(version) if version.chars().count() <= 64 => version,
-            Some(_) => {
-                return Err(ConfigError::Invalid {
-                    var: "ROMULUS_TERMS_VERSION",
-                    reason: "keep it to 64 characters".to_owned(),
-                });
-            }
-            None if fake => "test".to_owned(),
-            None => return Err(ConfigError::Missing("ROMULUS_TERMS_VERSION")),
-        };
         let invoice_fields = match get("ROMULUS_INVOICE_FIELDS") {
             None => Vec::new(),
             Some(list) => invoice_fields(&list)?,
@@ -253,8 +339,6 @@ impl BillingConfig {
         }
         Ok(Some(Self {
             stripe,
-            terms_url,
-            terms_version,
             invoice_footer,
             invoice_fields,
         }))
@@ -523,6 +607,7 @@ impl Config {
             delete_inactive_accounts: false,
             zitadel_token: None,
             source_url: Url::parse(DEFAULT_SOURCE_URL).expect("a valid default source URL"),
+            legal: None,
         }
     }
 
@@ -669,6 +754,17 @@ impl Config {
         };
 
         let billing = BillingConfig::from_lookup(&get, &public_url, api_addr)?;
+        let legal = LegalConfig::from_lookup(
+            &get,
+            &public_url,
+            billing
+                .as_ref()
+                .is_some_and(|b| matches!(b.stripe, StripeKeys::Fake { .. })),
+        )?;
+        // What a checkout has people accept.
+        if billing.is_some() && legal.is_none() {
+            return Err(ConfigError::Missing("ROMULUS_TERMS_VERSION"));
+        }
         // The hosted terms promise emails (renewal reminders, payment
         // notices): real billing does not run without mail.
         if billing
@@ -741,6 +837,7 @@ impl Config {
             delete_inactive_accounts,
             zitadel_token,
             source_url,
+            legal,
         })
     }
 
@@ -892,14 +989,15 @@ mod tests {
         ];
         assert!(matches!(
             with(&keys),
-            Err(ConfigError::Missing("ROMULUS_TERMS_URL"))
+            Err(ConfigError::Missing("ROMULUS_TERMS_VERSION"))
         ));
         let mut full = keys.to_vec();
         full.extend([
             ("ROMULUS_SMTP_HOST", "smtp.example.com"),
             ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
-            ("ROMULUS_TERMS_URL", "https://romulus.example/terms"),
-            ("ROMULUS_TERMS_VERSION", "2026-11-01"),
+            ("ROMULUS_LEGAL_URL", "https://romulus.example"),
+            ("ROMULUS_TERMS_VERSION", "1.0"),
+            ("ROMULUS_LEGAL_CONTACT", "legal@romulus.example"),
             ("ROMULUS_INVOICE_FOOTER", "VAT not applicable"),
             (
                 "ROMULUS_INVOICE_FIELDS",
@@ -918,8 +1016,9 @@ mod tests {
                 ..
             })
         ));
-        let billing = with(&full).unwrap().billing.unwrap();
-        assert_eq!(billing.terms_version, "2026-11-01");
+        let config = with(&full).unwrap();
+        assert_eq!(config.legal.as_ref().unwrap().terms_version, "1.0");
+        let billing = config.billing.unwrap();
         assert_eq!(
             billing.invoice_fields,
             vec![
@@ -969,11 +1068,17 @@ mod tests {
             ("ROMULUS_PUBLIC_URL", "http://localhost:41000/"),
             ("ROMULUS_BILLING", "fake"),
         ])
-        .unwrap()
-        .billing
         .unwrap();
-        assert_eq!(fake.terms_url.as_str(), "http://localhost:41000/terms");
-        assert!(matches!(fake.stripe, StripeKeys::Fake { .. }));
+        let legal = fake.legal.unwrap();
+        assert_eq!(
+            legal.url("/legal/terms"),
+            "http://localhost:41000/legal/terms"
+        );
+        assert_eq!(legal.terms_version, "test");
+        assert!(matches!(
+            fake.billing.unwrap().stripe,
+            StripeKeys::Fake { .. }
+        ));
         assert!(matches!(
             config(&[
                 ("DATABASE_URL", "postgres://localhost/romulus"),
@@ -982,6 +1087,65 @@ mod tests {
             ]),
             Err(ConfigError::Invalid {
                 var: "ROMULUS_BILLING",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_terms_are_off_unless_configured_and_then_need_their_site_and_version() {
+        let with = |extra: &[(&'static str, &str)]| {
+            let mut vars = BASE.to_vec();
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        assert!(with(&[]).unwrap().legal.is_none());
+        let site = [
+            ("ROMULUS_LEGAL_URL", "https://romulus.example/"),
+            ("ROMULUS_TERMS_VERSION", " 1.0 "),
+        ];
+        assert!(matches!(
+            with(&site),
+            Err(ConfigError::Missing("ROMULUS_LEGAL_CONTACT"))
+        ));
+        let mut full = site.to_vec();
+        full.push(("ROMULUS_LEGAL_CONTACT", "legal@romulus.example"));
+        let legal = with(&full).unwrap().legal.unwrap();
+        assert_eq!(legal.contact, "legal@romulus.example");
+        // Businesses only until consumer sales are switched on.
+        assert!(!legal.consumer_sales);
+        assert_eq!(legal.edition(), crate::domain::TermsEdition::Professional);
+        full.push(("ROMULUS_CONSUMER_SALES", "true"));
+        let legal = with(&full).unwrap().legal.unwrap();
+        assert_eq!(legal.edition(), crate::domain::TermsEdition::Full);
+        assert_eq!(legal.terms_version, "1.0");
+        assert_eq!(
+            legal.url("/fr/legal/conditions"),
+            "https://romulus.example/fr/legal/conditions"
+        );
+        assert!(matches!(
+            with(&[("ROMULUS_LEGAL_URL", "https://romulus.example")]),
+            Err(ConfigError::Missing("ROMULUS_TERMS_VERSION"))
+        ));
+        assert!(matches!(
+            with(&[("ROMULUS_TERMS_VERSION", "1.0")]),
+            Err(ConfigError::Missing("ROMULUS_LEGAL_URL"))
+        ));
+        assert!(matches!(
+            with(&[
+                ("ROMULUS_LEGAL_URL", "romulus.example"),
+                ("ROMULUS_TERMS_VERSION", "1.0")
+            ]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_LEGAL_URL",
+                ..
+            })
+        ));
+        // The old variable says what replaced it.
+        assert!(matches!(
+            with(&[("ROMULUS_TERMS_URL", "https://romulus.example/terms")]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_TERMS_URL",
                 ..
             })
         ));

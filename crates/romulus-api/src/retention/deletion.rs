@@ -18,7 +18,9 @@
 //!   account; the audit log keeps the name it recorded); so do invitations
 //!   others sent to its address (they expire). A single sign-on account is
 //!   deleted at the identity provider first ([`super::idp`]). The address is
-//!   emailed that it is done.
+//!   emailed that it is done. Its contract records (`legal_acceptances`,
+//!   `withdrawals`) stay, with its address, until their own retention ends
+//!   ([`crate::legal::purge`]).
 //! - **The last admin**: an organization never has members without an admin
 //!   (`organization_needs_an_admin`). Deleting, on request, the only admin of
 //!   an organization others belong to is refused: they appoint another admin

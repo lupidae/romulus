@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legal_acceptances (kind, user_id, user_email, user_name, terms_version, edition,\n                                            locale, professional_use, copy_version)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "legal_acceptance_kind",
+            "kind": {
+              "Enum": [
+                "terms",
+                "checkout"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "terms_edition",
+            "kind": {
+              "Enum": [
+                "professional",
+                "full"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "locale",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6ec28dafde28f44f989fa11d2909a58abd6307f4b68d0bb858bcc093459a2e9"
+}

@@ -1,0 +1,119 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kind::text AS \"kind!\", user_id, user_email, user_name, terms_version,\n                  edition::text AS \"edition!\", locale::text AS \"locale!\", professional_use,\n                  copy_version, org_id\n           FROM legal_acceptances",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "user_email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "user_email"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "user_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "user_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "terms_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "terms_version"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "edition!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "locale!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "professional_use",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "professional_use"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "copy_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "copy_version"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "org_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f926a5e28f0cb9fe07ef6792df86f7c009d51c04381a54e62ce78f1af01019e0"
+}

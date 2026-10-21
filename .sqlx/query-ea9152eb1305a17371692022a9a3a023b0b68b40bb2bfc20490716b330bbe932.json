@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_billing SET withdrawn_at = now(), updated_at = clock_timestamp()\n         WHERE org_id = $1 RETURNING withdrawn_at AS \"at!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "withdrawn_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ea9152eb1305a17371692022a9a3a023b0b68b40bb2bfc20490716b330bbe932"
+}

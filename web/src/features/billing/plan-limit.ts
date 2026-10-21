@@ -67,7 +67,7 @@ export function capSummary(limit: PlanLimit): string {
     case "versions":
       return `${plan} keeps ${count(n, "version", "versions")} per database`;
     case "schema_size":
-      return `${plan} keeps ${n.toLocaleString("en-US")} tables and views per schema`;
+      return `${plan} keeps ${n.toLocaleString("en-US")} tables and views per schema version`;
     case "history":
       return `${plan} shows ${historyLabel(n)} of history`;
     case "playground_size":

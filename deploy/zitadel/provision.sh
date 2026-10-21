@@ -51,6 +51,10 @@ implicit) SMTP_PORT=${ROMULUS_SMTP_PORT:-465} ;;
 none) SMTP_PORT=${ROMULUS_SMTP_PORT:-25} ;;
 *) echo "zitadel-provision: ROMULUS_SMTP_TLS: starttls, implicit or none, not $SMTP_TLS" >&2; exit 2 ;;
 esac
+# The hosted service's Terms and Privacy Policy, as the API has them: the
+# site publishing them (empty: no legal links in the login) and the contact.
+LEGAL_URL=${ROMULUS_LEGAL_URL:-}
+LEGAL_CONTACT=${ROMULUS_LEGAL_CONTACT:-}
 
 issuer=$ISSUER
 # Every browser origin of the stack: dev has two (the dev server and the
@@ -286,6 +290,26 @@ upload icon-light.png icon
 upload icon-dark.png icon/dark
 upload inter.woff2 font
 TOLERATE=COMMAND-1m88i api POST /admin/v1/policies/label/_activate '{}' >/dev/null
+
+# The login's legal links (its privacy policy): romulus's own Terms and
+# Privacy Policy when this is the hosted service, none otherwise (never
+# Zitadel's, which are its defaults). Written only when they differ, so a
+# run that changes nothing asks for nothing.
+legal_links=$(jq -cn --arg site "${LEGAL_URL%/}" --arg contact "$LEGAL_CONTACT" '{
+    tosLink: (if $site == "" then "" else $site + "/legal/terms" end),
+    privacyLink: (if $site == "" then "" else $site + "/legal/privacy" end),
+    helpLink: "", docsLink: "", customLink: "", customLinkText: "",
+    supportEmail: $contact
+}')
+current_links=$(api GET /admin/v1/policies/privacy | jq -c '.policy | {
+    tosLink: (.tosLink // ""), privacyLink: (.privacyLink // ""), helpLink: (.helpLink // ""),
+    docsLink: (.docsLink // ""), customLink: (.customLink // ""), customLinkText: (.customLinkText // ""),
+    supportEmail: (.supportEmail // "")
+}')
+if [ "$(jq -S . <<<"$current_links")" != "$(jq -S . <<<"$legal_links")" ]; then
+    api PUT /admin/v1/policies/privacy "$legal_links" >/dev/null
+    log "login legal links: ${LEGAL_URL:-none}"
+fi
 TOLERATE=COMMAND-1m88i api PUT "/management/v1/projects/$project_id" \
     '{"name":"romulus","privateLabelingSetting":"PRIVATE_LABELING_SETTING_ENFORCE_PROJECT_RESOURCE_OWNER_POLICY"}' >/dev/null
 

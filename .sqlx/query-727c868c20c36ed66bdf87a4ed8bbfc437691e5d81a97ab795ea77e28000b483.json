@@ -1,32 +1,21 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT customer_id, subscription_id, plan AS \"plan: Plan\",\n                  interval AS \"interval: Interval\", status, current_period_end,\n                  cancel_at_period_end, amount_cents, currency, past_due_since,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at, updated_at\n           FROM org_billing WHERE org_id = $1",
+  "query": "SELECT org_id, plan AS \"plan: Plan\", current_period_end AS \"period_end!\", amount_cents, currency,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at\n           FROM org_billing\n           WHERE interval = 'year' AND status IN ('active', 'trialing') AND NOT cancel_at_period_end\n             AND withdrawn_at IS NULL\n             AND current_period_end > $1 AND current_period_end <= $1 + make_interval(days => $2)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "customer_id",
-        "type_info": "Text",
+        "name": "org_id",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
             "table": "org_billing",
-            "name": "customer_id"
+            "name": "org_id"
           }
         }
       },
       {
         "ordinal": 1,
-        "name": "subscription_id",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "subscription_id"
-          }
-        }
-      },
-      {
-        "ordinal": 2,
         "name": "plan: Plan",
         "type_info": {
           "Custom": {
@@ -49,40 +38,8 @@
         }
       },
       {
-        "ordinal": 3,
-        "name": "interval: Interval",
-        "type_info": {
-          "Custom": {
-            "name": "billing_interval",
-            "kind": {
-              "Enum": [
-                "month",
-                "year"
-              ]
-            }
-          }
-        },
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "interval"
-          }
-        }
-      },
-      {
-        "ordinal": 4,
-        "name": "status",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "status"
-          }
-        }
-      },
-      {
-        "ordinal": 5,
-        "name": "current_period_end",
+        "ordinal": 2,
+        "name": "period_end!",
         "type_info": "Timestamptz",
         "origin": {
           "Table": {
@@ -92,18 +49,7 @@
         }
       },
       {
-        "ordinal": 6,
-        "name": "cancel_at_period_end",
-        "type_info": "Bool",
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "cancel_at_period_end"
-          }
-        }
-      },
-      {
-        "ordinal": 7,
+        "ordinal": 3,
         "name": "amount_cents",
         "type_info": "Int8",
         "origin": {
@@ -114,7 +60,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 4,
         "name": "currency",
         "type_info": "Text",
         "origin": {
@@ -125,18 +71,7 @@
         }
       },
       {
-        "ordinal": 9,
-        "name": "past_due_since",
-        "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "past_due_since"
-          }
-        }
-      },
-      {
-        "ordinal": 10,
+        "ordinal": 5,
         "name": "scheduled_plan: Plan",
         "type_info": {
           "Custom": {
@@ -159,7 +94,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 6,
         "name": "scheduled_interval: Interval",
         "type_info": {
           "Custom": {
@@ -180,7 +115,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 7,
         "name": "scheduled_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -189,40 +124,24 @@
             "name": "scheduled_at"
           }
         }
-      },
-      {
-        "ordinal": 13,
-        "name": "updated_at",
-        "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "updated_at"
-          }
-        }
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Timestamptz",
+        "Int4"
       ]
     },
     "nullable": [
-      true,
-      true,
       false,
-      true,
-      true,
-      true,
       false,
       true,
       true,
       true,
       true,
       true,
-      true,
-      false
+      true
     ]
   },
-  "hash": "258a871e034220dd436e8c3666fd406f486aaf8703669d225544429f8fc87f01"
+  "hash": "727c868c20c36ed66bdf87a4ed8bbfc437691e5d81a97ab795ea77e28000b483"
 }

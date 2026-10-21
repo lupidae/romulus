@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT buyer AS \"buyer: Buyer\" FROM legal_acceptances WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "buyer: Buyer",
+        "type_info": {
+          "Custom": {
+            "name": "buyer",
+            "kind": {
+              "Enum": [
+                "business",
+                "consumer"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "buyer"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8592b6b0a3879d05ea40542fd414c295d2305bb70f080ac7807517517dbe3e54"
+}

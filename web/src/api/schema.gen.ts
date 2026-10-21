@@ -493,6 +493,49 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/me/preferences": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** The language of the person's contract and billing emails. */
+    patch: operations["update_preferences"];
+    trace?: never;
+  };
+  "/api/me/terms": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The signed-in person's acceptance of the Terms, and where the legal
+     *     documents are.
+     */
+    get: operations["terms_status"];
+    put?: never;
+    /**
+     * Accepts the Terms in force (the box at sign-in), in the language they
+     *     were read in, which becomes the person's. Recorded every time a version
+     *     is first accepted; accepting the same version again only changes the
+     *     language.
+     */
+    post: operations["accept_terms"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/oauth/authorize": {
     parameters: {
       query?: never;
@@ -680,10 +723,11 @@ export interface paths {
     get?: never;
     put?: never;
     /**
-     * Starts paying for a plan: the Terms accepted (kept in the audit log, with
-     *     a consumer's requests), then a Stripe Checkout Session to send the
-     *     browser to. Admins only. An organization already subscribed changes plan
-     *     in the portal.
+     * Starts paying for a plan: as a business or a consumer (never assumed),
+     *     the Terms accepted, a business's statement and name, or a consumer's two
+     *     requests (recorded with the session, 10 years, and in the audit log),
+     *     then a Stripe Checkout Session to send the browser to. Admins only, in
+     *     person. An organization already subscribed changes plan in the portal.
      */
     post: operations["start_checkout"];
     delete?: never;
@@ -725,6 +769,29 @@ export interface paths {
      *     "cancel"}}`. Admins only.
      */
     post: operations["open_billing_portal"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/billing/withdrawal": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Withdraws from the organization's plan (a consumer, within 14 days of
+     *     subscribing): recorded and acknowledged by email at once, the
+     *     organization on Free, the subscription cancelled and the days not used
+     *     refunded through Stripe. Admins only, in person (not with an access
+     *     token).
+     */
+    post: operations["withdraw_from_plan"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1873,6 +1940,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    AcceptTerms: {
+      /** @description The version of the boxes' wording shown (`LegalLinks::copy_version`). */
+      copy_version: string;
+      /** @description The language the Terms were read in: the contract's and the emails'. */
+      locale: components["schemas"]["Locale"];
+      /**
+       * @description The professional edition: the person attests using romulus for their
+       *     trade, business or profession (required then).
+       */
+      professional_use?: boolean;
+      /** @description The version shown, which must be the one in force. */
+      version: string;
+    };
     Accepted: {
       /** @description The caller was a member already; nothing changed. */
       already_member: boolean;
@@ -2052,7 +2132,8 @@ export interface components {
       | "subscription_duplicate_cancelled"
       | "agent_action"
       | "database_purged"
-      | "admin_appointed";
+      | "admin_appointed"
+      | "contract_withdrawn";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -2222,6 +2303,8 @@ export interface components {
       amount_cents?: number | null;
       buyer?: string | null;
       cancel_at_period_end?: boolean | null;
+      /** @description The version of the boxes' wording ticked, and the page's language. */
+      copy_version?: string | null;
       currency?: string | null;
       event_type?: string | null;
       from_plan?: components["schemas"]["Plan"] | null;
@@ -2230,9 +2313,15 @@ export interface components {
       immediate_start?: boolean | null;
       interval?: components["schemas"]["Interval"] | null;
       invoice?: string | null;
+      locale?: string | null;
       /** @description The month whose playground hours ran out (`2026-10`). */
       month?: string | null;
       plan?: components["schemas"]["Plan"] | null;
+      /**
+       * @description The professional edition: the buyer attested buying for their
+       *     business, not as a consumer.
+       */
+      professional_use?: boolean | null;
       /** @description Stripe's subscription status. */
       status?: string | null;
       /** @description The Stripe event applied (webhooks), and its type. */
@@ -2263,7 +2352,8 @@ export interface components {
       tables_total: number;
     };
     /**
-     * @description Who buys: the checkout page asks a consumer for more.
+     * @description Who buys a plan (`buyer`): a business, or a consumer (who may withdraw
+     *     for 14 days and is asked for more at checkout).
      * @enum {string}
      */
     Buyer: "business" | "consumer";
@@ -2978,6 +3068,13 @@ export interface components {
       after: string;
       before: string;
     };
+    /** @description The pages of one language. */
+    DocumentLinks: {
+      /** @description The Data Processing Agreement (English only). */
+      dpa: string;
+      privacy: string;
+      terms: string;
+    };
     /**
      * @description A change to a domain.
      *
@@ -3606,6 +3703,7 @@ export interface components {
        *     shows the billing page and upgrade prompts.
        */
       billing: boolean;
+      legal?: components["schemas"]["LegalLinks"] | null;
       /** @description romulus sends email (invitations, sign-up and reset links). */
       mail: boolean;
       /** @description Playgrounds are set up on this server (`ROMULUS_PLAY_URL`). */
@@ -3701,6 +3799,34 @@ export interface components {
       position: components["schemas"]["Positions"];
       status: components["schemas"]["Status"];
     };
+    /**
+     * @description Where the hosted service's legal documents in force are published, in
+     *     English and in French (the French version prevails for consumers in
+     *     France).
+     */
+    LegalLinks: {
+      /**
+       * @description Consumers may buy (`ROMULUS_CONSUMER_SALES`): the checkout asks
+       *     whether a business or a consumer buys. Off: businesses only, and
+       *     accepting the Terms includes attesting professional use.
+       */
+      consumer_sales: boolean;
+      /**
+       * @description The seller's address for withdrawals, complaints and contract
+       *     questions.
+       */
+      contact: string;
+      /**
+       * @description The version of the boxes' wording (sign-in and checkout) in force:
+       *     what a request sends with what was ticked.
+       */
+      copy_version: string;
+      edition: components["schemas"]["TermsEdition"];
+      en: components["schemas"]["DocumentLinks"];
+      fr: components["schemas"]["DocumentLinks"];
+      /** @description The Terms in force: their version and edition. */
+      terms_version: string;
+    };
     /** @description What a plan costs and allows. `None` is unlimited. */
     Limits: {
       /**
@@ -3749,6 +3875,12 @@ export interface components {
      * @enum {string}
      */
     LiveStatus: "open" | "publishing" | "updating" | "published" | "deleted";
+    /**
+     * @description The language of a person's contract and billing emails (`locale`): the
+     *     hosted service speaks English and French there (the `legal` module).
+     * @enum {string}
+     */
+    Locale: "en" | "fr";
     /** @description Whether the database's latest version compiles on another major. */
     MajorCheck: {
       /**
@@ -4398,16 +4530,22 @@ export interface components {
     };
     /** @description An organization's billing page. */
     OrgBilling: {
+      buyer?: components["schemas"]["Buyer"] | null;
       /** @description The caller may change billing (admins). */
       can_manage: boolean;
+      /** @description The version of the checkout boxes' wording a checkout must send. */
+      checkout_copy_version: string;
+      /**
+       * @description The Terms checkout has people accept, and the other documents, in
+       *     English and in French.
+       */
+      documents: components["schemas"]["LegalLinks"];
       /** @description The plan in force now: the caps are its. */
       plan: components["schemas"]["Plan"];
       plans: components["schemas"]["PlanOffer"][];
       subscription?: components["schemas"]["SubscriptionInfo"] | null;
-      /** @description The Terms of Service checkout has people accept. */
-      terms_url: string;
-      terms_version: string;
       usage: components["schemas"]["Usage"];
+      withdrawal?: components["schemas"]["WithdrawalInfo"] | null;
     };
     OrgMember: {
       email: string;
@@ -4897,6 +5035,9 @@ export interface components {
        *     sandbox is down) or `off` (this server has no sandbox for it).
        */
       status: components["schemas"]["CompilerStatus"];
+    };
+    Preferences: {
+      locale: components["schemas"]["Locale"];
     };
     /** @description Someone who has a draft open right now. */
     Present: {
@@ -5610,21 +5751,41 @@ export interface components {
       /** @description `start` in UTF-16 code units: a JavaScript string index. */
       utf16_start: number;
     };
+    /**
+     * @description What the buyer states before paying (Terms 3.4 c, 3.5 and 9.3): as whom,
+     *     and the boxes of each, in the words of `checkout_copy_version`.
+     */
     StartCheckout: {
-      /** @description The Terms of Service (`terms_url`, `terms_version`) are accepted. */
+      /** @description The Terms of Service in force are read and accepted. */
       accept_terms: boolean;
-      buyer: components["schemas"]["Buyer"];
       /**
-       * @description A consumer asks for the service to start before the withdrawal period
-       *     ends…
+       * @description A business: subscribing for its trade, business or profession, on
+       *     behalf of the business named, authorised to bind it (the professional
+       *     edition's box adds: not as a consumer).
+       */
+      business_confirmed?: boolean;
+      buyer?: components["schemas"]["Buyer"] | null;
+      company_country?: string | null;
+      /**
+       * @description A business: its name and country (ISO 3166-1 alpha-2), required;
+       *     its VAT or registration number, optional.
+       */
+      company_name?: string | null;
+      company_tax_id?: string | null;
+      /** @description The version of the wording the boxes showed. */
+      copy_version: string;
+      /**
+       * @description A consumer expressly asks for the service to start before the
+       *     withdrawal period ends…
        */
       immediate_start?: boolean;
       interval: components["schemas"]["Interval"];
+      locale?: components["schemas"]["Locale"] | null;
       /** @description A paid plan. */
       plan: components["schemas"]["Plan"];
       /**
-       * @description …and acknowledges losing the right of withdrawal once it is fully
-       *     performed.
+       * @description …and acknowledges paying for the service until a withdrawal, and
+       *     losing the right once it is fully performed.
        */
       withdrawal_acknowledged?: boolean;
     };
@@ -5742,6 +5903,32 @@ export interface components {
       x: number;
       /** Format: double */
       y: number;
+    };
+    /**
+     * @description Which Terms are in force (`terms_edition`): the professional edition
+     *     while romulus sells to businesses only (`ROMULUS_CONSUMER_SALES` off),
+     *     the full one once consumers may buy too.
+     * @enum {string}
+     */
+    TermsEdition: "professional" | "full";
+    /** @description The signed-in person and the Terms. */
+    TermsStatus: {
+      /**
+       * @description The person accepted the version in force (true when there are no
+       *     Terms).
+       */
+      accepted: boolean;
+      /** Format: date-time */
+      accepted_at?: string | null;
+      /** @description The latest version the person accepted, and when; `null`: never. */
+      accepted_version?: string | null;
+      documents?: components["schemas"]["LegalLinks"] | null;
+      locale?: components["schemas"]["Locale"] | null;
+      /**
+       * @description This server has Terms (the hosted service); false on a self-hosted
+       *     install, where the rest is empty.
+       */
+      required: boolean;
     };
     /** @description The rows a test runs on. */
     TestData: {
@@ -6228,6 +6415,39 @@ export interface components {
        */
       read_at?: string | null;
       resolved?: components["schemas"]["ThreadResolution"] | null;
+    };
+    Withdraw: {
+      locale?: components["schemas"]["Locale"] | null;
+    };
+    /**
+     * @description The withdrawal right of the subscription, for a consumer's: until when
+     *     it can be used, or the withdrawal made. `null` for a business.
+     */
+    WithdrawalInfo: {
+      /**
+       * Format: date-time
+       * @description The end of the withdrawal period while it runs.
+       */
+      until?: string | null;
+      withdrawn?: components["schemas"]["Withdrawn"] | null;
+    };
+    /** @description A withdrawal, as the billing page shows it. */
+    Withdrawn: {
+      /** @description Stripe cancelled the subscription and made the refund. */
+      completed: boolean;
+      currency: string;
+      /** Format: int64 */
+      paid_cents: number;
+      /**
+       * Format: int64
+       * @description What is refunded: the days not used.
+       */
+      refund_cents: number;
+      /**
+       * Format: date-time
+       * @description When romulus received it.
+       */
+      requested_at: string;
     };
     /**
      * @description The migration a version was written as, in a draft in migration mode:
@@ -7223,7 +7443,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `wrong_account` or `email_unverified` */
+      /** @description `wrong_account`, `email_unverified`, or `terms_required`: the Terms of Service are not accepted yet */
       403: {
         headers: {
           [name: string]: unknown;
@@ -7542,6 +7762,124 @@ export interface operations {
       };
       /** @description No such app connected for the caller */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  update_preferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["Preferences"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TermsStatus"];
+        };
+      };
+      /** @description `not_for_agents` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  terms_status: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TermsStatus"];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  accept_terms: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AcceptTerms"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TermsStatus"];
+        };
+      };
+      /** @description `not_for_agents`: an access token cannot accept */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description This server has no Terms */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `terms_changed`: another version (or the boxes' wording) is in force: read it again */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (`professional_use`): the professional edition needs the attestation */
+      422: {
         headers: {
           [name: string]: unknown;
         };
@@ -7894,7 +8232,7 @@ export interface operations {
           "application/json": components["schemas"]["Org"];
         };
       };
-      /** @description `single_org`: this install keeps one organization */
+      /** @description `single_org`: this install keeps one organization; `terms_required`: the Terms of Service are not accepted yet */
       403: {
         headers: {
           [name: string]: unknown;
@@ -8085,7 +8423,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid */
+      /** @description `already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload */
       409: {
         headers: {
           [name: string]: unknown;
@@ -8094,7 +8432,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `validation`: the Terms (or a consumer's requests) not accepted, or Free */
+      /** @description `validation` naming the field: no buyer chosen, the Terms or a box not ticked, a business's name or country missing, or Free */
       422: {
         headers: {
           [name: string]: unknown;
@@ -8211,6 +8549,67 @@ export interface operations {
         };
       };
       /** @description `billing_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  withdraw_from_plan: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["Withdraw"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Withdrawn"];
+        };
+      };
+      /** @description `not_a_consumer`: a business's plan is cancelled instead; `not_for_agents` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `no_subscription`, `already_withdrawn`, `withdrawal_period_over` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable`: Stripe could not be read; nothing was recorded */
       503: {
         headers: {
           [name: string]: unknown;

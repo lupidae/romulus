@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/toaster";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useLocale } from "@/features/legal/locale";
 import { cn } from "@/lib/utils";
 
+import { billingCopy } from "../copy";
 import { direction, euros, isLive, planFeatures } from "../format";
 import { goTo, useOpenPortal } from "../mutations";
 import type { Interval, OrgBilling, PlanOffer } from "../queries";
@@ -21,6 +23,9 @@ import { CheckoutDialog } from "./checkout-dialog";
  * downgrades at the end of the period). Members read it.
  */
 export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling }) {
+  const locale = useLocale();
+  const words = billingCopy[locale];
+  const t = words.plans;
   const subscription = isLive(billing.subscription) ? billing.subscription : null;
   const [interval, setPeriod] = React.useState<Interval>(subscription?.interval ?? "month");
   const [buying, setBuying] = React.useState<PlanOffer | null>(null);
@@ -35,8 +40,8 @@ export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling 
         onSuccess: ({ url }) => goTo(url),
         onError: (error) => {
           setSwitching(null);
-          toast.error("Could not open billing", {
-            description: error instanceof ApiError ? error.message : "Check your connection.",
+          toast.error(words.summary.portalFailed, {
+            description: error instanceof ApiError ? error.message : words.summary.checkConnection,
           });
         },
       },
@@ -44,17 +49,17 @@ export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling 
   };
 
   return (
-    <Card aria-labelledby="plans-title">
+    <Card aria-labelledby="plans-title" lang={locale}>
       <CardHeader className="flex-wrap items-center">
-        <CardTitle id="plans-title">Plans</CardTitle>
+        <CardTitle id="plans-title">{t.title}</CardTitle>
         <ToggleGroup
           type="single"
           value={interval}
-          aria-label="Billing period"
+          aria-label={t.period}
           onValueChange={(value) => value && setPeriod(value as Interval)}
         >
-          <ToggleGroupItem value="month">Monthly</ToggleGroupItem>
-          <ToggleGroupItem value="year">Yearly, 2 months free</ToggleGroupItem>
+          <ToggleGroupItem value="month">{t.monthly}</ToggleGroupItem>
+          <ToggleGroupItem value="year">{t.yearly}</ToggleGroupItem>
         </ToggleGroup>
       </CardHeader>
       <ul className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -69,14 +74,16 @@ export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling 
             if (!subscription) {
               action = (
                 <Button className="w-full" onClick={() => setBuying(offer)}>
-                  Upgrade to {offer.name}
+                  {t.upgrade(offer.name)}
                 </Button>
               );
             } else if (!(current && sameInterval)) {
               const label =
                 current || move === "same"
-                  ? `Switch to ${interval === "year" ? "yearly" : "monthly"}`
-                  : `${move === "up" ? "Upgrade" : "Downgrade"} to ${offer.name}`;
+                  ? t.switchTo(interval)
+                  : move === "up"
+                    ? t.upgrade(offer.name)
+                    : t.downgrade(offer.name);
               action = (
                 <Button
                   className="w-full"
@@ -88,11 +95,10 @@ export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling 
               );
               // Stripe moves downgrades and shorter periods to the renewal.
               const shorter = subscription.interval === "year" && interval === "month";
-              note =
-                move === "down" || shorter ? "From your next renewal." : "Charged now, prorated.";
+              note = move === "down" || shorter ? t.fromRenewal : t.chargedNow;
             }
           } else if (offer.plan === "free" && subscription && !current) {
-            note = "What the organization keeps after cancelling.";
+            note = t.afterCancel;
           }
           return (
             <li
@@ -105,18 +111,18 @@ export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling 
             >
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-base font-semibold text-foreground">{offer.name}</h3>
-                {current && <Badge variant="primary">Current plan</Badge>}
+                {current && <Badge variant="primary">{t.current}</Badge>}
               </div>
               <p className="flex items-baseline gap-1.5">
                 <span className="text-xl font-semibold text-foreground tabular-nums">
-                  {euros(cents ?? 0)}
+                  {euros(cents ?? 0, locale)}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  {cents == null ? "forever" : `a ${interval}`}
+                  {cents == null ? t.forever : t.per(interval)}
                 </span>
               </p>
               <ul className="grid gap-1.5 text-sm text-muted-foreground">
-                {planFeatures(offer.limits).map((feature) => (
+                {planFeatures(offer.limits, locale).map((feature) => (
                   <li key={feature} className="flex items-start gap-2">
                     <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-success" />
                     <span>{feature}</span>
@@ -134,14 +140,13 @@ export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling 
         })}
       </ul>
       <p className="border-t border-border px-4 py-3 text-sm text-muted-foreground">
-        Prices in euros, VAT not applicable (French tax code, art. 293 B du CGI). Upgrades apply at
-        once, prorated by Stripe; downgrades at the end of the period. Cancel any time.
+        {billing.documents.consumer_sales ? t.footer : t.footerPro}
       </p>
       <CheckoutDialog
         org={org}
         offer={buying}
         interval={interval}
-        termsUrl={billing.terms_url}
+        documents={billing.documents}
         onOpenChange={(open) => !open && setBuying(null)}
       />
     </Card>

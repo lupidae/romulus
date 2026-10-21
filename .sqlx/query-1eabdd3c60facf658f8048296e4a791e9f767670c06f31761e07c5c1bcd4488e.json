@@ -1,0 +1,97 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legal_acceptances (id, kind, user_id, user_email, user_name, terms_version, edition,\n                                        locale, org_id, org_name, plan, interval, buyer, company_name,\n                                        company_country, company_tax_id, business_confirmed,\n                                        immediate_start, withdrawal_acknowledged, copy_version,\n                                        checkout_session_id, professional_use)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,\n                 $19, $20, $21, $22)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "legal_acceptance_kind",
+            "kind": {
+              "Enum": [
+                "terms",
+                "checkout"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "terms_edition",
+            "kind": {
+              "Enum": [
+                "professional",
+                "full"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "locale",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "buyer",
+            "kind": {
+              "Enum": [
+                "business",
+                "consumer"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1eabdd3c60facf658f8048296e4a791e9f767670c06f31761e07c5c1bcd4488e"
+}

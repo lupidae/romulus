@@ -15,6 +15,11 @@ const origin = `http://localhost:${previewPort}`;
 // spec runs with billing off (no caps), as self-hosted.
 const billingPort = process.env.ROMULUS_E2E_BILLING_PORT ?? "40002";
 const billingOrigin = `http://localhost:${billingPort}`;
+// e2e/billing-consumers: the same with consumer sales on
+// (ROMULUS_CONSUMER_SALES=true: the business-or-consumer checkout, withdrawal).
+// e2e/billing runs businesses only, as the hosted service launches.
+const consumersPort = process.env.ROMULUS_E2E_CONSUMERS_PORT ?? "40003";
+const consumersOrigin = `http://localhost:${consumersPort}`;
 // Absolute globs: Playwright matches them against absolute paths, and a
 // relative "billing/**" would also match a checkout whose directory is
 // named billing.
@@ -50,7 +55,43 @@ const playgrounds =
 const billing =
   process.env.ROMULUS_E2E_BILLING !== undefined
     ? process.env.ROMULUS_E2E_BILLING === "1"
-    : named.length === 0 || named.some((arg) => arg.includes("billing"));
+    : named.length === 0 || named.some((arg) => /billing(\/|$|\.)/.test(arg));
+// The consumer-sales API: for a run that includes e2e/billing-consumers.
+const consumers =
+  process.env.ROMULUS_E2E_BILLING !== undefined
+    ? process.env.ROMULUS_E2E_BILLING === "1"
+    : named.length === 0 || named.some((arg) => arg.includes("billing-consumers"));
+
+/** A billing API (Stripe faked) serving the production build on `port`. */
+function billingServer(port: string, origin: string, extra: Record<string, string>) {
+  return {
+    // After the preview server (webServers start in order): its command
+    // makes the production build (web/dist), served here with /api.
+    command:
+      "cargo build -q -p romulus-api && until [ -f web/dist/index.html ]; do sleep 1; done && exec target/debug/romulus-api",
+    cwd: "..",
+    env: env({
+      ROMULUS_API_ADDR: `127.0.0.1:${port}`,
+      ROMULUS_PUBLIC_URL: origin,
+      ROMULUS_WEB_DIR: "web/dist",
+      ROMULUS_BILLING: "fake",
+      ROMULUS_DEV_SIGNIN: "true",
+      // The hosted Terms, version 1.0 (its PDFs are embedded), on this origin.
+      ROMULUS_LEGAL_URL: origin,
+      ROMULUS_TERMS_VERSION: "1.0",
+      ROMULUS_LEGAL_CONTACT: "legal@romulus.test",
+      // No playground host: hours and sizes are the API's, not the host's.
+      ROMULUS_PLAY_URL: "",
+      ROMULUS_PLAY_KEY: "",
+      RUST_LOG: process.env.RUST_LOG ?? "romulus_api=warn,tower_http=warn",
+      ...extra,
+    }),
+    url: `http://127.0.0.1:${port}/api/health`,
+    reuseExistingServer: true,
+    timeout: 300_000,
+    stdout: "ignore" as const,
+  };
+}
 
 export default defineConfig({
   testDir: "./e2e",
@@ -68,13 +109,23 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      testIgnore: [`${specs}/dev/**`, `${specs}/perf/**`, `${specs}/billing/**`],
+      testIgnore: [
+        `${specs}/dev/**`,
+        `${specs}/perf/**`,
+        `${specs}/billing/**`,
+        `${specs}/billing-consumers/**`,
+      ],
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "billing",
       testMatch: `${specs}/billing/**/*.spec.ts`,
       use: { ...devices["Desktop Chrome"], baseURL: `${billingOrigin}/app/` },
+    },
+    {
+      name: "billing-consumers",
+      testMatch: `${specs}/billing-consumers/**/*.spec.ts`,
+      use: { ...devices["Desktop Chrome"], baseURL: `${consumersOrigin}/app/` },
     },
   ],
   webServer: [
@@ -119,29 +170,17 @@ export default defineConfig({
     },
     ...(billing
       ? [
-          {
-            // After the preview server (webServers start in order): its command
-            // makes the production build (web/dist), served here with /api.
-            command:
-              "cargo build -q -p romulus-api && until [ -f web/dist/index.html ]; do sleep 1; done && exec target/debug/romulus-api",
-            cwd: "..",
-            env: env({
-              ROMULUS_API_ADDR: `127.0.0.1:${billingPort}`,
-              ROMULUS_PUBLIC_URL: billingOrigin,
-              ROMULUS_WEB_DIR: "web/dist",
-              ROMULUS_BILLING: "fake",
-              ROMULUS_DEV_SIGNIN: "true",
-              ROMULUS_SANDBOX_PREFIX: "romulus_e2e_billing",
-              // No playground host: hours and sizes are the API's, not the host's.
-              ROMULUS_PLAY_URL: "",
-              ROMULUS_PLAY_KEY: "",
-              RUST_LOG: process.env.RUST_LOG ?? "romulus_api=warn,tower_http=warn",
-            }),
-            url: `http://127.0.0.1:${billingPort}/api/health`,
-            reuseExistingServer: true,
-            timeout: 300_000,
-            stdout: "ignore" as const,
-          },
+          billingServer(billingPort, billingOrigin, {
+            ROMULUS_SANDBOX_PREFIX: "romulus_e2e_billing",
+          }),
+        ]
+      : []),
+    ...(consumers
+      ? [
+          billingServer(consumersPort, consumersOrigin, {
+            ROMULUS_SANDBOX_PREFIX: "romulus_e2e_consumers",
+            ROMULUS_CONSUMER_SALES: "true",
+          }),
         ]
       : []),
   ],

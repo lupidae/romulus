@@ -1,7 +1,7 @@
 //! The romulus API: one axum app under `/api`, documented with utoipa.
 //!
 //! Feature modules (`auth`, `orgs`, `databases`, `versions`, `imports`,
-//! `drafts`, `collab`, `compile`, `playgrounds`, `billing`, `mcp`, `oauth`) each expose `router()`, an [`OpenApiRouter`] whose
+//! `drafts`, `collab`, `compile`, `playgrounds`, `billing`, `legal`, `mcp`, `oauth`) each expose `router()`, an [`OpenApiRouter`] whose
 //! paths are relative to `/api`. [`routes`] merges them; it is the only place
 //! that lists every module, so adding endpoints never means editing it.
 //! With `ROMULUS_WEB_DIR` set, [`app`] also serves the web app at `/app`
@@ -30,6 +30,7 @@ pub mod health;
 pub mod imports;
 pub mod instance;
 mod layers;
+pub mod legal;
 pub mod mail;
 pub mod mcp;
 pub mod migration_tests;
@@ -90,6 +91,7 @@ fn routes() -> OpenApiRouter<AppState> {
         .merge(playgrounds::router())
         .merge(migration_tests::router())
         .merge(billing::router())
+        .merge(legal::router())
         .merge(export::router())
         .merge(mcp::router())
         .merge(oauth::router())

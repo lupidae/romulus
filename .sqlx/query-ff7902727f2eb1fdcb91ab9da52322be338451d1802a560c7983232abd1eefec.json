@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT terms_version AS version, edition AS \"edition: TermsEdition\", accepted_at AS at\n           FROM legal_acceptances\n           WHERE user_id = $1 ORDER BY accepted_at DESC, id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "terms_version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "edition: TermsEdition",
+        "type_info": {
+          "Custom": {
+            "name": "terms_edition",
+            "kind": {
+              "Enum": [
+                "professional",
+                "full"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "edition"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "accepted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ff7902727f2eb1fdcb91ab9da52322be338451d1802a560c7983232abd1eefec"
+}

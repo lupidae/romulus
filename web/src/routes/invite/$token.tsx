@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { authMethodsQuery, meQuery } from "@/features/auth/queries";
 import { appPath, loginUrl, switchAccount } from "@/features/auth/session";
+import { needsTerms, termsQuery } from "@/features/legal/queries";
 import { useAcceptInvitation } from "@/features/orgs/mutations";
 import { type InvitationPreview, invitationPreviewQuery } from "@/features/orgs/queries";
 import { roleAbilities, withArticle } from "@/features/orgs/roles";
@@ -27,6 +28,15 @@ import { formatDate } from "@/lib/time";
 // Where an invitation link lands. Works signed out (it says who is invited and
 // asks to sign in), then tells the signed-in viewer exactly where they stand.
 export const Route = createFileRoute("/invite/$token")({
+  // Signed in without the Terms in force: them first, then back here
+  // (joining is using the Service). Signed out: the page asks to sign in.
+  beforeLoad: async ({ context: { queryClient }, location }) => {
+    const me = await queryClient.ensureQueryData(meQuery).catch(() => null);
+    if (!me) return;
+    if (needsTerms(await queryClient.ensureQueryData(termsQuery))) {
+      throw redirect({ to: "/signin/terms", search: { next: appPath(location.href) } });
+    }
+  },
   head: () => ({ meta: [{ title: "Invitation – romulus" }] }),
   component: AcceptInvitation,
 });

@@ -1,9 +1,8 @@
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
-import { OpenNewWindowIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Dialog,
   DialogContent,
@@ -12,34 +11,42 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { RadioCard, RadioGroup } from "@/components/ui/radio-group";
+import { Consent, DocumentLink } from "@/features/legal/components/consent";
+import { useLocale } from "@/features/legal/locale";
+import { documentsFor, type LegalLinks } from "@/features/legal/queries";
 
-import { checkoutCopy, checkoutProblems } from "../copy";
+import { type Buyer, checkoutCopy, checkoutProblems, copyVersions } from "../copy";
+import { countries, matchCountries } from "../countries";
 import { planNames, priceLine } from "../format";
 import { goTo, useStartCheckout } from "../mutations";
-import type { Buyer, Interval, PlanOffer } from "../queries";
+import type { Interval, PlanOffer } from "../queries";
 
 interface CheckoutDialogProps {
   org: string;
   /** The plan being bought; the dialog is open while it is set. */
   offer: PlanOffer | null;
   interval: Interval;
-  termsUrl: string;
+  /** The Terms in force and the other documents (the billing page's). */
+  documents: LegalLinks;
   onOpenChange: (open: boolean) => void;
 }
 
 /**
- * Before Stripe Checkout: the Terms accepted (required), whether a business
- * or a consumer buys, and a consumer's request to start now with what it
- * means for withdrawal. The API records the acceptance, then answers the
- * Checkout URL the browser goes to.
+ * Before Stripe Checkout (Terms 3.4 c, 3.5, 9.3): the price and the
+ * commitment; as whom the plan is bought, chosen (never preselected) when
+ * consumers may buy, a business otherwise; a business's name, country and
+ * statement, or a consumer's two requests; the Terms, in the reader's
+ * language. The API records all of it, then answers the Checkout URL the
+ * browser goes to.
  */
 export function CheckoutDialog({
   org,
   offer,
   interval,
-  termsUrl,
+  documents,
   onOpenChange,
 }: CheckoutDialogProps) {
   return (
@@ -51,7 +58,7 @@ export function CheckoutDialog({
             org={org}
             offer={offer}
             interval={interval}
-            termsUrl={termsUrl}
+            documents={documents}
             onCancel={() => onOpenChange(false)}
           />
         )}
@@ -64,25 +71,50 @@ function CheckoutForm({
   org,
   offer,
   interval,
-  termsUrl,
+  documents,
   onCancel,
 }: {
   org: string;
   offer: PlanOffer;
   interval: Interval;
-  termsUrl: string;
+  documents: LegalLinks;
   onCancel: () => void;
 }) {
+  const locale = useLocale();
+  const copy = checkoutCopy[locale];
+  const docs = documentsFor(documents, locale);
+  const consumerSales = documents.consumer_sales;
+  // Businesses only (the professional edition): its own box and words.
+  const pro = !consumerSales;
   const start = useStartCheckout(org);
   const id = React.useId();
-  const [buyer, setBuyer] = React.useState<Buyer>("business");
+  const [chosen, setBuyer] = React.useState<Buyer | undefined>();
+  // Businesses only: nothing to choose.
+  const buyer: Buyer | undefined = consumerSales ? chosen : "business";
+  const [companyName, setCompanyName] = React.useState("");
+  const [countryText, setCountryText] = React.useState("");
+  const [country, setCountry] = React.useState<string>();
+  const [taxId, setTaxId] = React.useState("");
   const [acceptTerms, setAcceptTerms] = React.useState(false);
+  const [businessConfirmed, setBusinessConfirmed] = React.useState(false);
   const [immediateStart, setImmediateStart] = React.useState(false);
   const [withdrawal, setWithdrawal] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
   const [failure, setFailure] = React.useState<string>();
-  const consumer = buyer === "consumer";
-  const problems = checkoutProblems({ acceptTerms, consumer, immediateStart, withdrawal });
+  const allCountries = React.useMemo(() => countries(locale), [locale]);
+  const problems = checkoutProblems(
+    {
+      pro,
+      buyer,
+      acceptTerms,
+      businessConfirmed,
+      companyName,
+      country,
+      immediateStart,
+      withdrawal,
+    },
+    locale,
+  );
   const shown = submitted ? problems : {};
   const name = planNames[offer.plan];
 
@@ -90,56 +122,120 @@ function CheckoutForm({
     event.preventDefault();
     setSubmitted(true);
     setFailure(undefined);
-    if (problems.terms || problems.consumer) return;
+    if (Object.values(problems).some(Boolean)) return;
+    const business = buyer === "business";
     start.mutate(
       {
         plan: offer.plan,
         interval,
         accept_terms: true,
         buyer,
-        immediate_start: consumer && immediateStart,
-        withdrawal_acknowledged: consumer && withdrawal,
+        business_confirmed: business,
+        company_name: business ? companyName.trim() : null,
+        company_country: business ? (country ?? null) : null,
+        company_tax_id: business && taxId.trim() ? taxId.trim() : null,
+        immediate_start: !business && immediateStart,
+        withdrawal_acknowledged: !business && withdrawal,
+        copy_version: copyVersions[documents.edition],
+        locale,
       },
       {
         onSuccess: ({ url }) => goTo(url),
         onError: (error) =>
           setFailure(
-            error instanceof ApiError ? error.message : "Could not reach billing. Try again.",
+            error instanceof ApiError
+              ? error.code === "checkout_copy_changed"
+                ? copy.copyChanged
+                : error.message
+              : copy.unreachable,
           ),
       },
     );
   };
 
   return (
-    <form noValidate onSubmit={submit} className="grid gap-4">
+    <form noValidate onSubmit={submit} className="grid gap-4" lang={locale}>
       <DialogHeader>
-        <DialogTitle>Upgrade to {name}</DialogTitle>
+        <DialogTitle>{copy.title(name)}</DialogTitle>
         <DialogDescription>
-          {priceLine(offer, interval)}, {checkoutCopy.commitment(interval)}
+          {priceLine(offer, interval, locale)}, {copy.commitment(interval)}
         </DialogDescription>
       </DialogHeader>
 
-      <fieldset className="grid gap-2">
-        <legend className="mb-2 text-sm font-medium text-foreground">
-          {checkoutCopy.buyerLegend}
-        </legend>
-        <RadioGroup
-          value={buyer}
-          onValueChange={(value) => setBuyer(value as Buyer)}
-          className="sm:grid-cols-2"
-        >
-          <RadioCard
-            value="business"
-            label={checkoutCopy.business.label}
-            description={checkoutCopy.business.description}
-          />
-          <RadioCard
-            value="consumer"
-            label={checkoutCopy.consumer.label}
-            description={checkoutCopy.consumer.description}
-          />
-        </RadioGroup>
-      </fieldset>
+      {pro && <p className="text-sm font-medium text-foreground">{copy.pro.intro}</p>}
+
+      {consumerSales && (
+        <fieldset className="grid gap-2">
+          <legend className="mb-2 text-sm font-medium text-foreground">{copy.buyerLegend}</legend>
+          <RadioGroup
+            value={chosen ?? ""}
+            onValueChange={(value) => setBuyer(value as Buyer)}
+            aria-invalid={shown.buyer ? true : undefined}
+            aria-describedby={shown.buyer ? `${id}-buyer-error` : undefined}
+            className="sm:grid-cols-2"
+          >
+            <RadioCard
+              value="business"
+              label={copy.business.label}
+              description={copy.business.description}
+            />
+            <RadioCard
+              value="consumer"
+              label={copy.consumer.label}
+              description={copy.consumer.description}
+            />
+          </RadioGroup>
+          {shown.buyer && (
+            <p id={`${id}-buyer-error`} role="alert" className="text-sm text-destructive">
+              {shown.buyer}
+            </p>
+          )}
+        </fieldset>
+      )}
+
+      {buyer === "business" && (
+        <div className="grid items-start gap-3 sm:grid-cols-2">
+          <Field label={copy.companyName} error={shown.companyName} className="sm:col-span-2">
+            <Input
+              value={companyName}
+              onChange={(event) => setCompanyName(event.target.value)}
+              autoComplete="organization"
+              maxLength={200}
+            />
+          </Field>
+          <Field label={copy.country} error={shown.country}>
+            <Combobox
+              value={countryText}
+              onValueChange={(text) => {
+                setCountryText(text);
+                // Typed over: the country is the one picked, or none.
+                const exact = allCountries.find(
+                  (c) => c.label.toLowerCase() === text.trim().toLowerCase(),
+                );
+                setCountry(exact?.value);
+              }}
+              options={matchCountries(allCountries, countryText)}
+              onPick={(option) => {
+                setCountry(option.value);
+                setCountryText(option.label);
+              }}
+              empty={copy.countryNone}
+              placeholder={copy.countryPlaceholder}
+              autoComplete="off"
+              selectOnFocus
+            />
+          </Field>
+          <Field label={copy.taxId} description={copy.taxIdHint}>
+            <Input
+              value={taxId}
+              onChange={(event) => setTaxId(event.target.value)}
+              maxLength={40}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+        </div>
+      )}
 
       <div className="grid gap-3">
         <Consent
@@ -148,20 +244,35 @@ function CheckoutForm({
           onCheckedChange={setAcceptTerms}
           error={shown.terms}
         >
-          {checkoutCopy.termsBefore}{" "}
-          <a
-            href={termsUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-4 hover:underline"
-          >
-            {checkoutCopy.termsLink}
-            <OpenNewWindowIcon aria-hidden className="size-3" />
-            <span className="sr-only"> (opens in a new tab)</span>
-          </a>
-          .
+          {copy.termsBefore}{" "}
+          <DocumentLink href={docs.terms} newTab={copy.newTab}>
+            {copy.termsLink}
+          </DocumentLink>{" "}
+          {copy.termsAfter(documents.terms_version)}
         </Consent>
-        {consumer && (
+        <p className="pl-6.5 text-sm text-muted-foreground">
+          {copy.privacyBefore}{" "}
+          <DocumentLink href={docs.privacy} newTab={copy.newTab}>
+            {copy.privacyLink}
+          </DocumentLink>
+          .
+        </p>
+        {buyer === "business" && (
+          <Consent
+            id={`${id}-business`}
+            checked={businessConfirmed}
+            onCheckedChange={setBusinessConfirmed}
+            error={shown.business}
+          >
+            {pro ? copy.pro.businessBefore : copy.businessBefore}
+            {locale === "fr" ? "" : " "}
+            <DocumentLink href={docs.dpa} newTab={copy.newTab}>
+              {pro ? copy.pro.businessLink : copy.businessLink}
+            </DocumentLink>{" "}
+            {pro ? copy.pro.businessAfter : copy.businessAfter}
+          </Consent>
+        )}
+        {buyer === "consumer" && (
           <div className="grid gap-3 rounded-lg border border-border bg-muted/40 p-3">
             <Consent
               id={`${id}-start`}
@@ -169,7 +280,7 @@ function CheckoutForm({
               onCheckedChange={setImmediateStart}
               invalid={!!shown.consumer && !immediateStart}
             >
-              {checkoutCopy.immediateStart}
+              {copy.immediateStart}
             </Consent>
             <Consent
               id={`${id}-withdrawal`}
@@ -177,7 +288,7 @@ function CheckoutForm({
               onCheckedChange={setWithdrawal}
               invalid={!!shown.consumer && !withdrawal}
             >
-              {checkoutCopy.withdrawal}
+              {copy.withdrawal}
             </Consent>
             {shown.consumer && (
               <p role="alert" className="text-sm text-destructive">
@@ -188,59 +299,18 @@ function CheckoutForm({
         )}
       </div>
 
-      <p className="text-sm text-muted-foreground">{checkoutCopy.next}</p>
+      <p className="text-sm text-muted-foreground">{pro ? copy.pro.next : copy.next}</p>
       {failure && (
         <p role="alert" className="text-sm text-destructive">
           {failure}
         </p>
       )}
       <DialogFooter>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{copy.cancel}</Button>
         <Button type="submit" variant="primary" loading={start.isPending}>
-          Continue to payment
+          {copy.submit}
         </Button>
       </DialogFooter>
     </form>
-  );
-}
-
-/** A box to tick and what ticking it says; its error under it. */
-function Consent({
-  id,
-  checked,
-  onCheckedChange,
-  error,
-  invalid,
-  children,
-}: {
-  id: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  error?: string;
-  invalid?: boolean;
-  children: React.ReactNode;
-}) {
-  const errorId = `${id}-error`;
-  return (
-    <div className="grid gap-1">
-      <div className="flex items-start gap-2.5">
-        <Checkbox
-          id={id}
-          checked={checked}
-          onCheckedChange={(value) => onCheckedChange(value === true)}
-          aria-invalid={error || invalid ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
-          className="mt-0.5"
-        />
-        <Label htmlFor={id} className="leading-snug font-normal">
-          {children}
-        </Label>
-      </div>
-      {error && (
-        <p id={errorId} role="alert" className="pl-6.5 text-sm text-destructive">
-          {error}
-        </p>
-      )}
-    </div>
   );
 }

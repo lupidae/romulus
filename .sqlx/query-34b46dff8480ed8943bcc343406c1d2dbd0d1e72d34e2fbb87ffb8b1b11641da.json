@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, plan AS \"plan: Plan\", past_due_since AS \"since!\" FROM org_billing\n           WHERE status IN ('past_due', 'unpaid') AND past_due_since IS NOT NULL",
+  "query": "SELECT org_id, plan AS \"plan: Plan\", past_due_since AS \"since!\" FROM org_billing\n           WHERE status IN ('past_due', 'unpaid') AND past_due_since IS NOT NULL AND withdrawn_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -58,5 +58,5 @@
       true
     ]
   },
-  "hash": "1065a5bcfd23b0ef35e2558dec96023f7e150752a90ac6a9e87e9e88301cc570"
+  "hash": "34b46dff8480ed8943bcc343406c1d2dbd0d1e72d34e2fbb87ffb8b1b11641da"
 }

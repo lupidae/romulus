@@ -14,7 +14,9 @@
 //! - Handled: `checkout.session.completed`, `customer.subscription.created`,
 //!   `.updated`, `.deleted` (and Stripe's other subscription events),
 //!   `invoice.paid`, `invoice.payment_failed`. Every change is audited; a
-//!   failed payment emails the organization's admins (once per invoice).
+//!   failed payment emails the organization's admins (once per invoice); a
+//!   subscription starting confirms it to its buyer, a cancellation to the
+//!   admins (`notices`, once each).
 //!
 //! An event for an organization this server does not know (another
 //! environment sharing the Stripe account) is acknowledged and ignored.
@@ -449,7 +451,9 @@ pub async fn apply_subscription(
             event.duplicate(&mut tx, &before, duplicate).await?;
         }
         let mut failure = None;
+        let mut letters = Letters::default();
         if let Some(next) = next_state(&before, read.as_ref(), id, looked.due) {
+            letters = Letters::of(&before, &next);
             event.store(&mut tx, &before, &next).await?;
             event
                 .payments(&mut tx, &next, invoice.as_ref(), looked.failure_stands)
@@ -478,12 +482,43 @@ pub async fn apply_subscription(
         if let Some((invoice, grace)) = failure {
             notices::payment_failed(state, org, &invoice, grace).await?;
         }
+        if let Some(started) = &letters.started {
+            notices::subscription_confirmed(state, org, started).await?;
+        }
+        if let Some(cancelled) = &letters.cancelled {
+            notices::cancellation_confirmed(state, org, cancelled).await?;
+        }
         return Ok(());
     }
     Err(ApiError::Down {
         code: "billing_unavailable",
         message: "This organization's billing kept changing: deliver the event again later.".into(),
     })
+}
+
+/// The letters a stored change owes (each sent once, after the commit).
+#[derive(Default)]
+struct Letters {
+    /// A subscription began paying: its confirmation.
+    started: Option<Stored>,
+    /// A running one is set to end at its period's end: the cancellation's.
+    cancelled: Option<Stored>,
+}
+
+impl Letters {
+    fn of(before: &Stored, next: &Stored) -> Self {
+        let paying = |s: &Stored| {
+            s.withdrawn_at.is_none() && matches!(s.status.as_deref(), Some("active" | "trialing"))
+        };
+        let same = before.subscription_id == next.subscription_id;
+        Self {
+            started: (paying(next) && !(same && paying(before))).then(|| next.clone()),
+            cancelled: (next.cancel_at_period_end
+                && next.is_live()
+                && !(same && before.cancel_at_period_end))
+                .then(|| next.clone()),
+        }
+    }
 }
 
 /// The row to store after reading subscription `id` (`None` from Stripe: it
@@ -572,8 +607,10 @@ impl Applied<'_> {
         sqlx::query!(
             "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, interval, status,
                                       current_period_end, cancel_at_period_end, amount_cents, currency,
-                                      past_due_since, scheduled_plan, scheduled_interval, scheduled_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                      past_due_since, scheduled_plan, scheduled_interval, scheduled_at,
+                                      acceptance_id, started_at, withdrawn_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17)
              ON CONFLICT (org_id) DO UPDATE SET
                  customer_id = coalesce(EXCLUDED.customer_id, org_billing.customer_id),
                  subscription_id = EXCLUDED.subscription_id, plan = EXCLUDED.plan,
@@ -583,6 +620,8 @@ impl Applied<'_> {
                  amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency,
                  past_due_since = EXCLUDED.past_due_since, scheduled_plan = EXCLUDED.scheduled_plan,
                  scheduled_interval = EXCLUDED.scheduled_interval, scheduled_at = EXCLUDED.scheduled_at,
+                 acceptance_id = EXCLUDED.acceptance_id, started_at = EXCLUDED.started_at,
+                 withdrawn_at = EXCLUDED.withdrawn_at,
                  updated_at = clock_timestamp()",
             self.org,
             next.customer_id,
@@ -598,6 +637,9 @@ impl Applied<'_> {
             next.scheduled_plan as Option<Plan>,
             next.scheduled_interval as Option<Interval>,
             next.scheduled_at,
+            next.acceptance_id,
+            next.started_at,
+            next.withdrawn_at,
         )
         .execute(&mut *tx)
         .await?;
@@ -716,6 +758,16 @@ fn from_subscription(
         scheduled_plan: scheduled.map(|s| s.0),
         scheduled_interval: scheduled.map(|s| s.1),
         scheduled_at: scheduled.map(|s| s.2),
+        // Who bought it (its metadata), when it began; a withdrawal belongs
+        // to the subscription it was made from.
+        acceptance_id: read
+            .acceptance_id
+            .or_else(|| before.acceptance_id.filter(|_| same)),
+        started_at: read
+            .started
+            .or_else(|| before.started_at.filter(|_| same))
+            .or(Some(now)),
+        withdrawn_at: before.withdrawn_at.filter(|_| same),
         updated_at: before.updated_at,
     }
 }

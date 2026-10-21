@@ -1,0 +1,264 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT customer_id, subscription_id, plan AS \"plan: Plan\",\n                  interval AS \"interval: Interval\", status, current_period_end,\n                  cancel_at_period_end, amount_cents, currency, past_due_since,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at, updated_at,\n                  acceptance_id, started_at, withdrawn_at\n           FROM org_billing WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "customer_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subscription_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "subscription_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "plan: Plan",
+        "type_info": {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "plan"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "interval: Interval",
+        "type_info": {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "interval"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "current_period_end",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "current_period_end"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "cancel_at_period_end",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "cancel_at_period_end"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "amount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "amount_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "past_due_since",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "past_due_since"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "scheduled_plan: Plan",
+        "type_info": {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "scheduled_plan"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "scheduled_interval: Interval",
+        "type_info": {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "scheduled_interval"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "scheduled_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "scheduled_at"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "acceptance_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "acceptance_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "withdrawn_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "c9396c00eeb1d1ecd4496146ac3a16bb6e5f84d0f8294fd3f7dcf6c3e26913f9"
+}

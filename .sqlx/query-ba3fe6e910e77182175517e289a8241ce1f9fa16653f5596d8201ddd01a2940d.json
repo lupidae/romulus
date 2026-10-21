@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legal_acceptances\n             (kind, accepted_at, user_email, user_name, terms_version, edition, locale,\n              professional_use, account_deleted_at, org_id, org_name, plan, interval, buyer,\n              company_name, company_country, business_confirmed, copy_version, checkout_session_id)\n         SELECT $1::text::legal_acceptance_kind, now() - make_interval(years => $3), 'x@y.z', 'X', '1.0',\n                $2::text::terms_edition, 'en', CASE WHEN $2 = 'professional' THEN true END,\n                now() - make_interval(years => $4),\n                c.org, c.name, c.plan, c.interval, c.buyer, c.company, c.country, c.confirmed, 'v', c.session\n         FROM (SELECT\n                 CASE WHEN $1 = 'checkout' THEN gen_random_uuid() END AS org,\n                 CASE WHEN $1 = 'checkout' THEN 'acme' END AS name,\n                 CASE WHEN $1 = 'checkout' THEN 'team'::billing_plan END AS plan,\n                 CASE WHEN $1 = 'checkout' THEN 'month'::billing_interval END AS interval,\n                 CASE WHEN $1 = 'checkout' THEN 'business'::buyer END AS buyer,\n                 CASE WHEN $1 = 'checkout' THEN 'Acme SAS' END AS company,\n                 CASE WHEN $1 = 'checkout' THEN 'FR' END AS country,\n                 CASE WHEN $1 = 'checkout' THEN true END AS confirmed,\n                 CASE WHEN $1 = 'checkout' THEN 'cs_' || gen_random_uuid() END AS session) c",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba3fe6e910e77182175517e289a8241ce1f9fa16653f5596d8201ddd01a2940d"
+}

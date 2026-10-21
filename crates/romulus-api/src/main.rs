@@ -50,7 +50,20 @@ hosted billing (no database needed):
                [--webhook-url URL [--secret-file PATH]] [--live]
               products, prices (from the plan table) and the Customer Portal
               in the account of STRIPE_SECRET_KEY, idempotently; a live key
-              needs --live. The webhook's secret goes to PATH, never stdout";
+              needs --live. The webhook's secret goes to PATH, never stdout.
+              The Terms and Privacy URLs default to ROMULUS_LEGAL_URL's pages
+
+the hosted service's notices (ROMULUS_TERMS_VERSION; they need mail):
+  legal-notice --document terms|privacy|dpa --version V --effective YYYY-MM-DD
+               --summary-en FILE --summary-fr FILE [--required-by-law] [--dry-run]
+              emails a change to a legal document 30 days ahead at least: the
+              Terms and the Privacy Policy to every user, the DPA to every
+              admin; once per person and version, in their language
+  price-change [--plan PLAN] [--from YYYY-MM-DD] [--dry-run]
+              after a price changed in the plan table (and stripe-setup): tells
+              each subscription still on its old price of the new one, from its
+              first renewal 30 days away at least; prints each organization and
+              that date (move it to the new price in Stripe then)";
 
 #[derive(Debug, thiserror::Error)]
 enum MainError {
@@ -70,6 +83,10 @@ enum MainError {
     Admin(#[from] AdminError),
     #[error("stripe-setup")]
     StripeSetup(#[from] romulus_api::billing::setup::SetupError),
+    #[error("legal-notice")]
+    Notice(#[from] romulus_api::legal::notice::NoticeError),
+    #[error("price-change")]
+    Api(#[from] romulus_api::ApiError),
 }
 
 impl MainError {
@@ -99,10 +116,44 @@ enum AdminCommand {
     PasswordLink(String),
     Unlock(String),
     VerifyEmail(String),
-    AuthEvents { email: Option<String>, limit: i64 },
+    AuthEvents {
+        email: Option<String>,
+        limit: i64,
+    },
     MailTest(String),
-    DeleteUser { email: String, dry_run: bool },
-    DeleteOrg { slug: String, dry_run: bool },
+    DeleteUser {
+        email: String,
+        dry_run: bool,
+    },
+    DeleteOrg {
+        slug: String,
+        dry_run: bool,
+    },
+    LegalNotice(romulus_api::legal::notice::Change),
+    PriceChange {
+        plan: Option<romulus_api::domain::Plan>,
+        from: Option<chrono::NaiveDate>,
+        dry_run: bool,
+    },
+}
+
+/// `rest` without the boolean `switches`, and which of them were there.
+fn switches<'a>(rest: &[String], switches: &[&'a str]) -> (Vec<String>, Vec<&'a str>) {
+    let on = switches
+        .iter()
+        .copied()
+        .filter(|s| rest.iter().any(|arg| arg == &format!("--{s}")))
+        .collect();
+    let rest = rest
+        .iter()
+        .filter(|arg| !switches.iter().any(|s| **arg == format!("--{s}")))
+        .cloned()
+        .collect();
+    (rest, on)
+}
+
+fn date_flag(value: &str) -> Result<chrono::NaiveDate, MainError> {
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| MainError::Usage)
 }
 
 /// `--flag value` pairs (and `--flag=value`) after the command, by name.
@@ -126,6 +177,10 @@ fn flags(
     Ok(flags)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "every command's flags, one after the other"
+)]
 fn parse(args: &[String]) -> Result<Command, MainError> {
     let rest = args.get(1..).unwrap_or_default();
     let one = || match rest {
@@ -190,13 +245,74 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
                     "secret-file",
                 ],
             )?;
+            // The Terms and Privacy pages of the site that publishes them.
+            let legal = |path: &str| {
+                std::env::var("ROMULUS_LEGAL_URL")
+                    .ok()
+                    .filter(|site| !site.is_empty())
+                    .map(|site| format!("{}{path}", site.trim_end_matches('/')))
+            };
             Command::StripeSetup(romulus_api::billing::setup::Setup {
                 public_url: flags.remove("public-url"),
-                terms_url: flags.remove("terms-url"),
-                privacy_url: flags.remove("privacy-url"),
+                terms_url: flags.remove("terms-url").or_else(|| legal("/legal/terms")),
+                privacy_url: flags
+                    .remove("privacy-url")
+                    .or_else(|| legal("/legal/privacy")),
                 webhook_url: flags.remove("webhook-url"),
                 secret_file: flags.remove("secret-file").map(Into::into),
                 live,
+            })
+        }
+        Some("legal-notice") => {
+            use romulus_api::domain::LegalDocument;
+            let (rest, on) = switches(rest, &["required-by-law", "dry-run"]);
+            let mut flags = flags(
+                &rest,
+                &[
+                    "document",
+                    "version",
+                    "effective",
+                    "summary-en",
+                    "summary-fr",
+                ],
+            )?;
+            let mut take = |name| flags.remove(name).ok_or(MainError::Usage);
+            let document = match take("document")?.as_str() {
+                "terms" => LegalDocument::Terms,
+                "privacy" => LegalDocument::Privacy,
+                "dpa" => LegalDocument::Dpa,
+                _ => return Err(MainError::Usage),
+            };
+            let version = take("version")?;
+            let effective = date_flag(&take("effective")?)?;
+            let summary_en = std::fs::read_to_string(take("summary-en")?)?;
+            let summary_fr = std::fs::read_to_string(take("summary-fr")?)?;
+            Command::Admin(AdminCommand::LegalNotice(
+                romulus_api::legal::notice::Change {
+                    document,
+                    version,
+                    effective,
+                    summary_en,
+                    summary_fr,
+                    required_by_law: on.contains(&"required-by-law"),
+                    dry_run: on.contains(&"dry-run"),
+                },
+            ))
+        }
+        Some("price-change") => {
+            let (rest, on) = switches(rest, &["dry-run"]);
+            let flags = flags(&rest, &["plan", "from"])?;
+            let plan = flags
+                .get("plan")
+                .map(|plan| {
+                    serde_json::from_value(serde_json::Value::String(plan.clone()))
+                        .map_err(|_| MainError::Usage)
+                })
+                .transpose()?;
+            Command::Admin(AdminCommand::PriceChange {
+                plan,
+                from: flags.get("from").map(|d| date_flag(d)).transpose()?,
+                dry_run: on.contains(&"dry-run"),
             })
         }
         Some("auth-events") => {
@@ -380,8 +496,76 @@ async fn run_admin(command: AdminCommand) -> Result<(), MainError> {
                 return Err(AdminError::Refused(refused.to_owned()).into());
             }
         }
+        AdminCommand::LegalNotice(change) => legal_notice(&pool, &config, &change).await?,
+        AdminCommand::PriceChange {
+            plan,
+            from,
+            dry_run,
+        } => {
+            let state = AppState::new(pool, config);
+            price_change(&state, plan, from, dry_run, &mut stdout).await?;
+        }
         AdminCommand::MailTest(_) => unreachable!("handled above"),
     }
+    Ok(())
+}
+
+/// `legal-notice`: emails a change of the Terms, the Privacy Policy or the DPA.
+async fn legal_notice(
+    pool: &sqlx::PgPool,
+    config: &Config,
+    change: &romulus_api::legal::notice::Change,
+) -> Result<(), MainError> {
+    let mailer = romulus_api::mail::Mailer::from_config(config);
+    let sent = romulus_api::legal::notice::send(pool, config, &mailer, change).await?;
+    if change.dry_run {
+        tracing::info!(
+            would_send = sent.sent,
+            told_before = sent.already,
+            "legal-notice: dry run, nothing sent"
+        );
+    } else {
+        tracing::info!(
+            sent = sent.sent,
+            told_before = sent.already,
+            "legal-notice: sent (the mailer sends in the background: wait for it)"
+        );
+        // Messages go out from their own tasks: give them time.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+    Ok(())
+}
+
+/// `price-change`: tells each subscription on an older price, one line each.
+async fn price_change(
+    state: &AppState,
+    plan: Option<romulus_api::domain::Plan>,
+    from: Option<chrono::NaiveDate>,
+    dry_run: bool,
+    stdout: &mut impl Write,
+) -> Result<(), MainError> {
+    let from = from
+        .and_then(|day| day.and_hms_opt(0, 0, 0))
+        .map(|at| at.and_utc());
+    for notice in romulus_api::billing::notices::price_changes(state, plan, from, dry_run).await? {
+        writeln!(
+            stdout,
+            "{}\t{}\t{:?}\t{} cents\tfrom {}\t{}",
+            notice.org,
+            notice.plan.name(),
+            notice.interval,
+            notice.cents,
+            notice.from.format("%Y-%m-%d"),
+            if notice.sent {
+                "sent"
+            } else if dry_run {
+                "dry run"
+            } else {
+                "told before"
+            },
+        )?;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     Ok(())
 }
 
@@ -455,6 +639,8 @@ async fn serve() -> Result<(), MainError> {
     // Billing: playground hours metered every minute, the emails it owes
     // (renewal reminders, payment notices) every hour.
     let billing_tasks = romulus_api::billing::tasks(&state);
+    // The Terms' records past their retention: now, and every day.
+    let legal_tasks = romulus_api::legal::tasks(&state);
     // Versions removed more than 30 days ago: now, and every hour.
     let purger = romulus_api::versions::removal::purger(
         state.db.clone(),
@@ -494,7 +680,7 @@ async fn serve() -> Result<(), MainError> {
         password_sweeper.abort();
     }
     playground_sweeper.abort();
-    for task in billing_tasks {
+    for task in billing_tasks.into_iter().chain(legal_tasks) {
         task.abort();
     }
     compiler.close().await;

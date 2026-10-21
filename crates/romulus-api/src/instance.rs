@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{AppState, extract::Json};
+use crate::{AppState, extract::Json, legal::LegalLinks};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(instance))
@@ -27,6 +27,10 @@ pub struct Instance {
     pub billing: bool,
     /// The version running and where its source is (AGPL-3.0, section 13).
     pub source: InstanceSource,
+    /// The hosted service's Terms and Privacy Policy (`ROMULUS_TERMS_VERSION`):
+    /// the sign-in pages and the app's footer link them. `null` on a
+    /// self-hosted install, which has none.
+    pub legal: Option<LegalLinks>,
 }
 
 /// Which romulus runs here, and where to read its source.
@@ -60,5 +64,6 @@ async fn instance(State(state): State<AppState>) -> Json<Instance> {
             commit: crate::config::COMMIT.map(str::to_owned),
             url: state.config.source_at_commit(),
         },
+        legal: state.config.legal.as_ref().map(LegalLinks::of),
     })
 }

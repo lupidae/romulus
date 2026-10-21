@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
@@ -15,12 +15,16 @@ import { InvoicesCard } from "@/features/billing/components/invoices-card";
 import { PlanPicker } from "@/features/billing/components/plan-picker";
 import { PlanSummary } from "@/features/billing/components/plan-summary";
 import { UsageCard } from "@/features/billing/components/usage-card";
+import { billingCopy } from "@/features/billing/copy";
+import { isLive } from "@/features/billing/format";
 import { billingKeys, billingQuery } from "@/features/billing/queries";
+import { useLocale } from "@/features/legal/locale";
+import { orgQuery } from "@/features/orgs/queries";
 
 interface BillingSearch {
   /** Back from Stripe Checkout. */
   checkout?: "success" | "cancelled";
-  /** The renewal reminder's link: straight to the Cancel button. */
+  /** The renewal reminder's link, the footer's "Cancel your contract": straight to the Cancel button. */
   action?: "cancel";
 }
 
@@ -52,6 +56,9 @@ function scrollToInPage(element: HTMLElement) {
 
 function Billing() {
   const { org } = Route.useParams();
+  const { data: current } = useSuspenseQuery(orgQuery(org));
+  const locale = useLocale();
+  const t = billingCopy[locale].page;
   const { checkout, action } = Route.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -69,14 +76,12 @@ function Billing() {
     if (!checkout || told.current) return;
     told.current = true;
     if (checkout === "success") {
-      toast.success("Payment received", {
-        description: "Your plan shows here as soon as Stripe confirms it.",
-      });
+      toast.success(t.paid, { description: t.paidBody });
     } else {
-      toast.info("Checkout cancelled", { description: "Nothing was charged." });
+      toast.info(t.checkoutCancelled, { description: t.nothingCharged });
     }
     void navigate({ to: ".", search: { action }, replace: true });
-  }, [checkout, action, navigate]);
+  }, [checkout, action, navigate, t]);
 
   React.useEffect(() => {
     if (!waiting) return;
@@ -101,12 +106,15 @@ function Billing() {
     button.focus({ preventScroll: true });
   }, [action, loaded]);
 
+  // Asked to cancel (an email, the footer) with nothing to cancel here: say so.
+  const nothingToCancel =
+    action === "cancel" &&
+    billing.isSuccess &&
+    !(billing.data.can_manage && isLive(billing.data.subscription));
+
   return (
-    <>
-      <PageHeader
-        title="Billing"
-        description="Your plan, what it allows and what you use. Cancel any time."
-      />
+    <div lang={locale} className="contents">
+      <PageHeader title={t.title} description={t.description} />
       {billing.isPending ? (
         <BillingSkeleton />
       ) : billing.isError ? (
@@ -114,17 +122,17 @@ function Billing() {
           <Card>
             <EmptyState
               icon={<CreditCardIcon />}
-              title="No billing on this server"
-              description="This server has no plans: nothing is capped, and there is nothing to pay."
+              title={t.noBilling}
+              description={t.noBillingBody}
             />
           </Card>
         ) : (
           <Alert
             variant="destructive"
-            title="Could not load billing"
+            title={t.loadFailed}
             action={
               <Button size="sm" loading={billing.isFetching} onClick={() => void billing.refetch()}>
-                Retry
+                {t.retry}
               </Button>
             }
           >
@@ -133,13 +141,28 @@ function Billing() {
         )
       ) : (
         <>
-          <PlanSummary org={org} billing={billing.data} cancelRef={cancelRef} />
+          {nothingToCancel && (
+            <Alert
+              variant="info"
+              title={billing.data.can_manage ? t.nothingToCancel : t.notAdmin(current.name)}
+            >
+              {billing.data.can_manage
+                ? t.nothingToCancelBody(current.name, billing.data.documents.contact)
+                : null}
+            </Alert>
+          )}
+          <PlanSummary
+            org={org}
+            orgName={current.name}
+            billing={billing.data}
+            cancelRef={cancelRef}
+          />
           <UsageCard billing={billing.data} />
           <PlanPicker org={org} billing={billing.data} />
           {billing.data.can_manage && <InvoicesCard org={org} />}
         </>
       )}
-    </>
+    </div>
   );
 }
 

@@ -2801,6 +2801,9 @@ code {
   gap: 0.5rem 1.5rem;
   margin-top: 1.25rem;
 }
+.site-footer > .footer-base:first-child {
+  margin-top: 0;
+}
 .footer-base p {
   color: var(--faint-foreground);
   font-size: 0.8125rem;
@@ -2958,6 +2961,351 @@ code {
 }
 .legal address {
   font-style: normal;
+}
+
+/* ---- Legal documents (legal/*.html, fr/legal/*.html) -------------------- */
+/* Rendered by tools/legal.mjs from site/legal/*.md: terms, privacy, DPA. Long
+   texts, so a reading measure, quiet numbered clauses and tables in a frame of
+   their own that scrolls on a phone, never the page. */
+.legal-doc {
+  max-width: none;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+.legal-doc > * {
+  max-width: 42rem;
+}
+.legal-doc h1 {
+  color: var(--foreground);
+}
+/* Above an edition published for later (legal/full/): what is in force instead. */
+.legal-status {
+  max-width: 42rem;
+  margin-bottom: clamp(1.75rem, 1.25rem + 1.5vw, 2.5rem);
+  padding: 0.75rem 1rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.legal-status strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.legal-doc .legal-meta strong {
+  font-weight: 500;
+}
+.legal-print {
+  display: none;
+}
+.legal-doc > :is(p, ul, ol, blockquote, .legal-table) {
+  margin-top: 1rem;
+}
+.legal-doc > .legal-meta + * {
+  margin-top: 2rem;
+}
+.legal-doc h2 {
+  margin-top: clamp(2.75rem, 2.25rem + 1.5vw, 3.75rem);
+  color: var(--foreground);
+  font-size: 1.3125rem;
+  font-weight: 620;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.legal-doc h3 {
+  margin-top: 2.25rem;
+  color: var(--foreground);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+.legal-doc > :is(h2, h3) + * {
+  margin-top: 0.875rem;
+}
+.legal-doc strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.legal-doc a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 0.0625rem;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color var(--duration-fast) var(--ease-out);
+}
+.legal-doc a:hover {
+  text-decoration-color: currentColor;
+}
+.legal-doc code {
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-xs);
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: 0.875em;
+}
+/* "3.1." before a clause's title: the number reads as part of it. */
+.legal-clause {
+  color: var(--foreground);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.legal-doc :is(ul, ol) {
+  padding-left: 1.375rem;
+}
+.legal-doc li + li,
+.legal-doc li > * + * {
+  margin-top: 0.5rem;
+}
+.legal-doc li::marker {
+  color: var(--faint-foreground);
+}
+.legal-doc ol > li + li {
+  margin-top: 1rem;
+}
+/* Lettered items ("a) …", "1° …"), one per line, wrapping under their text. */
+.legal-lines > br {
+  display: none;
+}
+.legal-lines > span {
+  display: block;
+}
+.legal-lines > span + span {
+  margin-top: 0.5rem;
+}
+.legal-item {
+  padding-left: 1.3em;
+  text-indent: -1.3em;
+}
+.legal-mark {
+  color: var(--foreground);
+  font-weight: 550;
+}
+/* The model withdrawal form and the legal guarantee's text: quoted, on a card. */
+.legal-doc blockquote {
+  margin-top: 1.25rem;
+  padding: 1rem 1.25rem;
+  border: 0.0625rem solid var(--border);
+  border-left: 0.1875rem solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  font-size: 0.9375rem;
+  line-height: 1.65;
+}
+.legal-doc blockquote > * + * {
+  margin-top: 0.75rem;
+}
+.legal-doc hr {
+  max-width: none;
+  margin-top: clamp(3rem, 2.5rem + 2vw, 4.5rem);
+  border: 0;
+  border-top: 0.0625rem solid var(--border);
+}
+.legal-doc hr + h2 {
+  margin-top: 2.5rem;
+}
+/* A table in its frame: wide ones keep a width that reads and scroll inside
+   it when the screen is narrower; on a phone each row is a card instead. */
+.legal-doc > .legal-table {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.legal-doc > .legal-table[data-columns="4"],
+.legal-doc > .legal-table[data-columns="5"] {
+  max-width: 60rem;
+}
+.legal-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+.legal-table[data-columns="3"] table {
+  min-width: 30rem;
+}
+.legal-table[data-columns="4"] table {
+  min-width: 36rem;
+}
+.legal-table[data-columns="5"] table {
+  min-width: 40rem;
+}
+.legal-table :is(th, td) {
+  padding: 0.625rem 0.875rem;
+  border-top: 0.0625rem solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.legal-table thead :is(th, td) {
+  border-top: 0;
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 600;
+}
+.legal-table tbody th {
+  color: var(--foreground);
+  font-weight: 550;
+}
+.legal-table tbody th strong {
+  font-weight: inherit;
+}
+.legal-table[data-columns="5"] tbody th {
+  min-width: 10rem;
+}
+.legal-table code {
+  white-space: nowrap;
+}
+/* A phone: a row is a card, its heading cell on top, then each cell beside
+   its column's name (data-label, not read twice: the column headers are). */
+@media (max-width: 35.99rem) {
+  .legal-table :is(table, tbody, tr, th, td) {
+    display: block;
+  }
+  .legal-table[data-columns] table {
+    min-width: 0;
+  }
+  .legal-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .legal-table tbody tr {
+    padding: 0.75rem 1rem 0.875rem;
+  }
+  .legal-table tbody tr + tr {
+    border-top: 0.0625rem solid var(--border);
+  }
+  .legal-table tbody :is(th, td) {
+    padding: 0;
+    border: 0;
+  }
+  .legal-table tbody th {
+    font-size: var(--text-body);
+    line-height: 1.45;
+  }
+  .legal-table td {
+    display: grid;
+    grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
+    gap: 0.75rem;
+    margin-top: 0.375rem;
+  }
+  .legal-table td::before {
+    content: attr(data-label);
+    content: attr(data-label) / "";
+    color: var(--faint-foreground);
+  }
+  .legal-table code {
+    white-space: normal;
+  }
+}
+
+/* Printing a document (and the Terms PDFs tools/legal.mjs prints): A4, the
+   text alone, its title, version and address at the top. */
+@page legal {
+  size: A4;
+  margin: 16mm 18mm 18mm;
+}
+@media print {
+  body:has(.legal-doc) :is(.site-header, .site-footer, .skip-link, .legal-status) {
+    display: none;
+  }
+  /* The body takes the named page: on the document itself, a page could
+     start before it, blank. */
+  body:has(.legal-doc) {
+    page: legal;
+    background: none;
+  }
+  .legal:has(.legal-doc) {
+    max-width: none;
+    padding: 0;
+  }
+  .legal-doc {
+    max-width: none;
+    color: var(--foreground);
+    font-size: 9.5pt;
+    line-height: 1.5;
+  }
+  .legal-doc > *,
+  .legal-doc > .legal-table[data-columns] {
+    max-width: none;
+  }
+  .legal-doc h1 {
+    font-size: 19pt;
+  }
+  .legal-doc .legal-meta {
+    gap: 0.25rem 0.5rem;
+    margin-top: 6pt;
+    font-size: 8.5pt;
+  }
+  .legal-meta > .legal-lang {
+    display: none;
+  }
+  .legal-print {
+    display: inline;
+  }
+  .legal-meta > span + span::before {
+    content: "·";
+    margin-right: 0.5rem;
+  }
+  .legal-doc > .legal-meta + * {
+    margin-top: 14pt;
+  }
+  .legal-doc > :is(p, ul, ol, blockquote, .legal-table) {
+    margin-top: 6pt;
+  }
+  .legal-doc h2 {
+    margin-top: 16pt;
+    font-size: 12pt;
+    break-after: avoid;
+  }
+  .legal-doc h3 {
+    margin-top: 12pt;
+    font-size: 10.5pt;
+    break-after: avoid;
+  }
+  .legal-doc > :is(h2, h3) + * {
+    margin-top: 5pt;
+  }
+  .legal-doc :is(p, li) {
+    orphans: 3;
+    widows: 3;
+  }
+  .legal-doc :is(tr, .legal-item) {
+    break-inside: avoid;
+  }
+  .legal-doc a {
+    text-decoration: none;
+  }
+  .legal-doc blockquote {
+    padding: 6pt 10pt;
+    font-size: 9pt;
+  }
+  .legal-doc > .legal-table {
+    overflow: visible;
+    border-radius: var(--radius-sm);
+    break-inside: avoid;
+  }
+  .legal-table[data-columns] table {
+    min-width: 0;
+    font-size: 8pt;
+  }
+  .legal-table :is(th, td) {
+    padding: 4pt 6pt;
+  }
+  .legal-doc hr {
+    margin-top: 18pt;
+  }
 }
 
 /* ---- 404 ---------------------------------------------------------------- */

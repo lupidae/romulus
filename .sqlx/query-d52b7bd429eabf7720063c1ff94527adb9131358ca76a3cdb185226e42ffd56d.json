@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM legal_acceptances\n         WHERE (edition = 'full' AND kind = 'checkout' AND accepted_at < now() - interval '10 years')\n            OR ((edition = 'professional' OR kind = 'terms')\n                AND account_deleted_at < now() - interval '5 years')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d52b7bd429eabf7720063c1ff94527adb9131358ca76a3cdb185226e42ffd56d"
+}

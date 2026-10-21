@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legal_notices (document, version, user_id) VALUES ($1, $2, $3)\n             ON CONFLICT DO NOTHING RETURNING user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "legal_notices",
+            "name": "user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "legal_document",
+            "kind": {
+              "Enum": [
+                "terms",
+                "privacy",
+                "dpa"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "04507ec61934fbbf5db00f12781c8ac920e451dcfc58ffeecbe0d4f58511a399"
+}

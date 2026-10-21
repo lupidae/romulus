@@ -47,7 +47,8 @@
                 "subscription_duplicate_cancelled",
                 "agent_action",
                 "database_purged",
-                "admin_appointed"
+                "admin_appointed",
+                "contract_withdrawn"
               ]
             }
           }
@@ -161,7 +162,8 @@
                       "subscription_duplicate_cancelled",
                       "agent_action",
                       "database_purged",
-                      "admin_appointed"
+                      "admin_appointed",
+                      "contract_withdrawn"
                     ]
                   }
                 }

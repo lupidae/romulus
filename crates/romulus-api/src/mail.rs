@@ -1,5 +1,7 @@
 //! Email: what romulus sends (sign-up links, password resets, invitations,
-//! security notices) and how (`ROMULUS_SMTP_*`, `Config::mail`).
+//! security notices, billing and contract letters) and how
+//! (`ROMULUS_SMTP_*`, `Config::mail`). A letter may carry attachments (the
+//! Terms as a PDF, a durable medium) and one framed line (a deadline).
 //!
 //! Sending never holds up or fails the request that asked for it: a message
 //! goes out from its own task, and a failure is logged (never the address).
@@ -15,7 +17,7 @@ use std::{
 
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-    message::{Mailbox, MultiPart, SinglePart, header::ContentType},
+    message::{Attachment as Part, Mailbox, MultiPart, SinglePart, header::ContentType},
     transport::smtp::{
         authentication::Credentials,
         client::{Tls, TlsParameters},
@@ -38,6 +40,17 @@ pub struct Email {
     pub subject: String,
     pub text: String,
     pub html: String,
+    pub attachments: Vec<Attachment>,
+}
+
+/// A file sent with a message (the Terms as a PDF): embedded in the binary,
+/// so attaching it never fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub filename: String,
+    /// `application/pdf`.
+    pub content_type: &'static str,
+    pub bytes: &'static [u8],
 }
 
 /// Sends email, or does not. Cheap to clone.
@@ -177,6 +190,8 @@ pub enum MailError {
     Address(#[from] lettre::address::AddressError),
     #[error("the SMTP server")]
     Smtp(#[from] lettre::transport::smtp::Error),
+    #[error("an attachment's content type: {0}")]
+    ContentType(&'static str),
 }
 
 fn transport(mail: &MailConfig) -> AsyncSmtpTransport<Tokio1Executor> {
@@ -200,23 +215,35 @@ fn transport(mail: &MailConfig) -> AsyncSmtpTransport<Tokio1Executor> {
 }
 
 fn message(from: &Mailbox, email: &Email) -> Result<Message, MailError> {
-    Ok(Message::builder()
+    let body = MultiPart::alternative()
+        .singlepart(
+            SinglePart::builder()
+                .header(ContentType::TEXT_PLAIN)
+                .body(email.text.clone()),
+        )
+        .singlepart(
+            SinglePart::builder()
+                .header(ContentType::TEXT_HTML)
+                .body(email.html.clone()),
+        );
+    let builder = Message::builder()
         .from(from.clone())
         .to(Mailbox::new(None, email.to.parse()?))
-        .subject(&email.subject)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(ContentType::TEXT_PLAIN)
-                        .body(email.text.clone()),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(ContentType::TEXT_HTML)
-                        .body(email.html.clone()),
-                ),
-        )?)
+        .subject(&email.subject);
+    if email.attachments.is_empty() {
+        return Ok(builder.multipart(body)?);
+    }
+    let mut mixed = MultiPart::mixed().multipart(body);
+    for attachment in &email.attachments {
+        mixed = mixed.singlepart(
+            Part::new(attachment.filename.clone()).body(
+                attachment.bytes.to_vec(),
+                ContentType::parse(attachment.content_type)
+                    .map_err(|_| MailError::ContentType(attachment.content_type))?,
+            ),
+        );
+    }
+    Ok(builder.multipart(mixed)?)
 }
 
 /// A message in romulus's one layout: a few paragraphs, at most one button
@@ -232,15 +259,35 @@ pub struct Letter<'a> {
     pub footer: String,
 }
 
+/// What a [`Letter`] may add to the one layout: its language, one framed
+/// line after the paragraphs (a deadline the reader must not miss), files.
+#[derive(Debug, Default)]
+pub struct Extras {
+    /// The `lang` of the HTML (`en` when empty).
+    pub lang: &'static str,
+    /// Shown in a box after the paragraphs, before the button.
+    pub framed: Option<String>,
+    pub attachments: Vec<Attachment>,
+}
+
 impl Letter<'_> {
     pub fn email(self) -> Email {
+        self.email_with(Extras::default())
+    }
+
+    pub fn email_with(self, extras: Extras) -> Email {
         let mut text = String::new();
-        let mut html = String::from(
-            "<!doctype html><html><body style=\"margin:0;padding:24px;background:#f6f5f3;\">\
+        let mut html = format!(
+            "<!doctype html><html lang=\"{}\"><body style=\"margin:0;padding:24px;background:#f6f5f3;\">\
              <div style=\"max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e7e5e2;\
              border-radius:8px;padding:32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',\
              Inter,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1c1917;\">\
              <p style=\"margin:0 0 24px;font-weight:600;font-size:16px;\">romulus</p>",
+            if extras.lang.is_empty() {
+                "en"
+            } else {
+                extras.lang
+            },
         );
         for paragraph in &self.paragraphs {
             text.push_str(paragraph);
@@ -248,6 +295,16 @@ impl Letter<'_> {
             html.push_str("<p style=\"margin:0 0 16px;\">");
             html.push_str(&escape(paragraph));
             html.push_str("</p>");
+        }
+        if let Some(framed) = &extras.framed {
+            let rule = "=".repeat(framed.chars().count().min(60));
+            let _ = write!(text, "{rule}\n{framed}\n{rule}\n\n");
+            let _ = write!(
+                html,
+                "<p style=\"margin:24px 0;padding:14px 16px;border:2px solid #1c1917;border-radius:6px;\
+                 font-weight:600;font-size:16px;\">{}</p>",
+                escape(framed)
+            );
         }
         if let Some((label, url)) = self.action {
             text.push_str(url);
@@ -278,6 +335,7 @@ impl Letter<'_> {
             subject: self.subject,
             text,
             html,
+            attachments: extras.attachments,
         }
     }
 }
@@ -342,6 +400,7 @@ mod tests {
             subject: "s".to_owned(),
             text: "t".to_owned(),
             html: "h".to_owned(),
+            attachments: Vec::new(),
         });
         assert_eq!(outbox.to("bob@x.io").len(), 1);
         assert!(!Mailer::off().is_on());

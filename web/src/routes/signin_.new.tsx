@@ -136,6 +136,9 @@ function SignUpForm({
   const emailRef = React.useRef<HTMLInputElement>(null);
   const passwordRef = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => nameRef.current?.focus(), []);
+  // The hosted service while it is sold to professionals only: said before
+  // the account exists (its Terms are accepted at the first sign-in).
+  const professionalOnly = useQuery(instanceQuery).data?.legal?.consumer_sales === false;
 
   if (sentTo) {
     return (
@@ -169,9 +172,12 @@ function SignUpForm({
     <AuthPage
       title={org ? `Join ${org} on romulus` : "Create your romulus account"}
       description={
-        mail
-          ? "We will email you a link to choose your password."
-          : "Use the address you were invited with."
+        <>
+          {professionalOnly && "romulus is for professional use only. "}
+          {mail
+            ? "We will email you a link to choose your password."
+            : "Use the address you were invited with."}
+        </>
       }
       footer={footer}
     >

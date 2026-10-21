@@ -495,12 +495,32 @@ test("an unknown path gets the 404 page", async ({ page }) => {
   expect(response?.status()).toBe(404);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("This page doesn't exist.");
   await expect(page.getByRole("link", { name: "Go to the homepage" })).toHaveAttribute("href", "/");
+  await expect(page.getByRole("navigation", { name: "Legal" }).getByRole("link")).toHaveText([
+    "Legal notice",
+    "Terms",
+    "Privacy",
+    "DPA",
+  ]);
 });
 
 test("the CSP allows exactly the inline theme script", async ({ request }) => {
   const response = await request.get("/");
   const csp = response.headers()["content-security-policy"];
-  for (const page of ["index.html", "404.html", "mentions-legales.html", "legal-notice.html"]) {
+  for (const page of [
+    "index.html",
+    "404.html",
+    "mentions-legales.html",
+    "legal-notice.html",
+    "legal/terms.html",
+    "fr/legal/conditions.html",
+    "legal/privacy.html",
+    "fr/legal/confidentialite.html",
+    "legal/dpa.html",
+    "legal/full/terms.html",
+    "fr/legal/full/conditions.html",
+    "legal/full/privacy.html",
+    "fr/legal/full/confidentialite.html",
+  ]) {
     const scripts = [...publicFile(page).matchAll(/<script>([\s\S]*?)<\/script>/g)];
     expect(scripts).toHaveLength(1);
     const hash = createHash("sha256").update(scripts[0][1]).digest("base64");

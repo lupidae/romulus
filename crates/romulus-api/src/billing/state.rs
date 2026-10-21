@@ -4,7 +4,9 @@
 //! - `active` or `trialing`: the subscribed plan;
 //! - `past_due` or `unpaid`: the subscribed plan for [`GRACE_DAYS`] from the
 //!   unpaid invoice's due date, then Free;
-//! - anything else (`canceled`, `incomplete`, `paused`, none): Free.
+//! - anything else (`canceled`, `incomplete`, `paused`, none): Free;
+//! - withdrawn from (a consumer, within 14 days): Free at once, whatever
+//!   Stripe still says while it cancels.
 //!
 //! Nothing is ever deleted when the plan drops: caps only block creating
 //! the next resource.
@@ -53,6 +55,12 @@ pub struct Stored {
     pub scheduled_plan: Option<Plan>,
     pub scheduled_interval: Option<Interval>,
     pub scheduled_at: Option<DateTime<Utc>>,
+    /// The checkout record of this subscription (who bought it, as whom).
+    pub acceptance_id: Option<Uuid>,
+    /// When it started: a consumer may withdraw for 14 days from then.
+    pub started_at: Option<DateTime<Utc>>,
+    /// A consumer withdrew from it: Free from then on.
+    pub withdrawn_at: Option<DateTime<Utc>>,
     /// When the row last changed (`None`: no row): a webhook that read
     /// Stripe before another one wrote starts again.
     pub updated_at: Option<DateTime<Utc>>,
@@ -64,6 +72,9 @@ impl Stored {
         let Some(status) = self.status.as_deref() else {
             return Plan::Free;
         };
+        if self.withdrawn_at.is_some() {
+            return Plan::Free;
+        }
         match status {
             "active" | "trialing" => self.plan,
             _ if is_past_due(status) => match self.grace_until() {
@@ -88,7 +99,13 @@ impl Stored {
     /// A subscription is running (whatever its payments): changing plans
     /// goes through the portal, not a new checkout.
     pub fn has_live_subscription(&self) -> bool {
-        self.subscription_id.is_some() && self.status.as_deref().is_some_and(is_live)
+        self.subscription_id.is_some() && self.is_live()
+    }
+
+    /// The stored subscription pays for its plan (or did, recently), and
+    /// nobody withdrew from it.
+    pub fn is_live(&self) -> bool {
+        self.withdrawn_at.is_none() && self.status.as_deref().is_some_and(is_live)
     }
 }
 
@@ -100,7 +117,7 @@ pub fn should_apply(stored: &Stored, incoming_id: &str, incoming_status: &str) -
     match stored.subscription_id.as_deref() {
         None => true,
         Some(id) if id == incoming_id => true,
-        Some(_) => is_live(incoming_status) && !stored.status.as_deref().is_some_and(is_live),
+        Some(_) => is_live(incoming_status) && !stored.is_live(),
     }
 }
 
@@ -112,7 +129,7 @@ pub fn is_duplicate(stored: &Stored, incoming_id: &str, incoming_status: &str) -
         .subscription_id
         .as_deref()
         .is_some_and(|id| id != incoming_id)
-        && stored.status.as_deref().is_some_and(is_live)
+        && stored.is_live()
         && is_live(incoming_status)
 }
 
@@ -222,6 +239,19 @@ mod tests {
             "a replacement"
         );
         assert!(!is_duplicate(&Stored::default(), "sub_2", "active"));
+    }
+
+    #[test]
+    fn a_withdrawn_subscription_is_free_at_once_and_a_new_one_may_replace_it() {
+        let mut withdrawn = subscribed("active");
+        withdrawn.withdrawn_at = Some(at(2));
+        assert_eq!(withdrawn.effective(at(3)), Plan::Free);
+        assert!(!withdrawn.has_live_subscription());
+        // Stripe still says active while it cancels: a new checkout's
+        // subscription is not a duplicate of it.
+        assert!(!is_duplicate(&withdrawn, "sub_2", "active"));
+        assert!(should_apply(&withdrawn, "sub_2", "active"));
+        assert!(should_apply(&withdrawn, "sub_1", "canceled"));
     }
 
     #[test]

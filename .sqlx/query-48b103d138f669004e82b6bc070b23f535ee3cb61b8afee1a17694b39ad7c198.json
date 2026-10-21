@@ -1,0 +1,108 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.org_id, o.slug, b.plan AS \"plan: Plan\", b.interval AS \"interval!: Interval\",\n                  b.amount_cents AS \"amount!\", b.current_period_end AS \"period_end!\"\n           FROM org_billing b JOIN organizations o ON o.id = b.org_id\n           WHERE b.status IN ('active', 'trialing', 'past_due') AND b.withdrawn_at IS NULL\n             AND NOT b.cancel_at_period_end AND b.subscription_id IS NOT NULL\n             AND b.interval IS NOT NULL AND b.amount_cents IS NOT NULL\n             AND b.current_period_end IS NOT NULL AND b.plan <> 'free'\n           ORDER BY o.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "plan: Plan",
+        "type_info": {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "plan"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "interval!: Interval",
+        "type_info": {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "interval"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "amount!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "amount_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "period_end!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "current_period_end"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "48b103d138f669004e82b6bc070b23f535ee3cb61b8afee1a17694b39ad7c198"
+}

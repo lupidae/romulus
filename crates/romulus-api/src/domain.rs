@@ -323,12 +323,16 @@ pub enum AuditAction {
     /// unused): romulus made another member an admin (`member` in the
     /// details, why in the reason).
     AdminAppointed,
+    /// A consumer withdrew from the paid plan within 14 days: the
+    /// subscription cancelled at once, the unused part refunded, the
+    /// organization on Free (`billing` in the details).
+    ContractWithdrawn,
 }
 
 impl AuditAction {
     /// Kept in the log, not shown in a database's activity: billing's, and
     /// another database's purge.
-    pub const NOT_IN_DATABASE_ACTIVITY: [Self; 8] = [
+    pub const NOT_IN_DATABASE_ACTIVITY: [Self; 9] = [
         Self::TermsAccepted,
         Self::SubscriptionChanged,
         Self::PaymentFailed,
@@ -337,6 +341,7 @@ impl AuditAction {
         Self::PlaygroundHoursUsedUp,
         Self::SubscriptionDuplicateCancelled,
         Self::DatabasePurged,
+        Self::ContractWithdrawn,
     ];
 }
 
@@ -374,6 +379,105 @@ pub enum Plan {
 pub enum Interval {
     Month,
     Year,
+}
+
+/// The language of a person's contract and billing emails (`locale`): the
+/// hosted service speaks English and French there (the `legal` module).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema,
+)]
+#[sqlx(type_name = "locale", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum Locale {
+    #[default]
+    En,
+    Fr,
+}
+
+impl Locale {
+    /// The HTML `lang`.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::Fr => "fr",
+        }
+    }
+
+    /// From an `Accept-Language` header: French when it comes before
+    /// English, English otherwise.
+    pub fn from_accept_language(header: Option<&str>) -> Self {
+        let Some(header) = header else {
+            return Self::En;
+        };
+        let mut best = (Self::En, -1.0_f32);
+        for (position, item) in header.split(',').enumerate() {
+            let mut parts = item.trim().split(';');
+            let tag = parts.next().unwrap_or_default().trim().to_ascii_lowercase();
+            let quality = parts
+                .find_map(|p| {
+                    p.trim()
+                        .strip_prefix("q=")
+                        .and_then(|q| q.parse::<f32>().ok())
+                })
+                .unwrap_or(1.0);
+            let locale = if tag == "fr" || tag.starts_with("fr-") {
+                Self::Fr
+            } else if tag == "en" || tag.starts_with("en-") {
+                Self::En
+            } else {
+                continue;
+            };
+            // Equal weights: the first listed wins.
+            #[allow(clippy::cast_precision_loss, reason = "a header has few items")]
+            let score = quality - position as f32 * 1e-4;
+            if score > best.1 {
+                best = (locale, score);
+            }
+        }
+        best.0
+    }
+}
+
+/// Who buys a plan (`buyer`): a business, or a consumer (who may withdraw
+/// for 14 days and is asked for more at checkout).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "buyer", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum Buyer {
+    Business,
+    Consumer,
+}
+
+/// What a legal acceptance was given at (`legal_acceptance_kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "legal_acceptance_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum AcceptanceKind {
+    /// The box at sign-in: the Free plan's contract, or a new version.
+    Terms,
+    /// The boxes before paying for a plan.
+    Checkout,
+}
+
+/// Which Terms are in force (`terms_edition`): the professional edition
+/// while romulus sells to businesses only (`ROMULUS_CONSUMER_SALES` off),
+/// the full one once consumers may buy too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "terms_edition", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum TermsEdition {
+    Professional,
+    Full,
+}
+
+/// One of the hosted service's legal documents (`legal_document`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "legal_document", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum LegalDocument {
+    Terms,
+    Privacy,
+    Dpa,
 }
 
 /// What a password sign-in event records (`auth_event_kind`): the security
@@ -673,5 +777,28 @@ mod tests {
         assert!(serde_json::from_str::<PgMajor>("\"17\"").is_err());
         assert_eq!(PgMajor::new(18).map(PgMajor::number), Some(18));
         assert_eq!(PgMajor::new(19), None);
+    }
+
+    #[test]
+    fn the_browser_language_picks_french_only_when_preferred() {
+        assert_eq!(Locale::from_accept_language(None), Locale::En);
+        assert_eq!(
+            Locale::from_accept_language(Some("fr-FR,fr;q=0.9,en;q=0.8")),
+            Locale::Fr
+        );
+        assert_eq!(
+            Locale::from_accept_language(Some("en-GB,fr;q=0.9")),
+            Locale::En
+        );
+        assert_eq!(
+            Locale::from_accept_language(Some("de-DE,fr;q=0.5")),
+            Locale::Fr
+        );
+        assert_eq!(Locale::from_accept_language(Some("de-DE")), Locale::En);
+        assert_eq!(
+            Locale::from_accept_language(Some("en;q=0.5, fr-CA;q=0.6")),
+            Locale::Fr
+        );
+        assert_eq!(Locale::from_accept_language(Some("fr, en")), Locale::Fr);
     }
 }
