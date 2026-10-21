@@ -23,11 +23,12 @@
 #   ROMULUS_E2E_K3S      the k3s image (default rancher/k3s:v1.36.4-k3s1)
 #   ROMULUS_E2E_KEEP=1   keep the cluster afterwards, to look around
 #
-# The images are published for amd64 only, and a node of another platform
-# (an Apple silicon Mac's) neither pulls nor runs them: there, each is
-# relabelled for the host's platform (the same layers, run by its amd64
-# emulation, e.g. OrbStack's Rosetta) into a tarball and imported into the
-# cluster, under the same name.
+# The images are published for amd64 and arm64 (multi-arch lists): a node
+# pulls its own. Tags published before arm64 builds existed are amd64 only:
+# on an arm64 host (an Apple silicon Mac's), each of those is relabelled for
+# the host's platform (the same layers, run by its amd64 emulation, e.g.
+# OrbStack's Rosetta) into a tarball and imported into the cluster, under
+# the same name.
 #
 # Needs docker, k3d 5, kubectl, helm (3.14 or later, or 4), curl, jq. The
 # kubeconfig is the script's own: the default one is never touched.
@@ -226,20 +227,29 @@ pass "cluster up: $(kubectl version -o json 2>/dev/null | jq -r .serverVersion.g
 case $(docker info --format '{{.Architecture}}') in
 x86_64 | amd64) ;;
 aarch64 | arm64)
-    mkdir -p "$work/relabel"
+    relabelled=""
     for image in "$registry/romulus-api:$tag" "$registry/romulus-sandbox:$tag" "$registry/romulus-sandbox:$tag-pg18"; do
+        docker buildx imagetools inspect --raw "$image" |
+            jq -e '[.manifests[]?.platform | select(.os == "linux" and .architecture == "arm64")] | length > 0' >/dev/null &&
+            continue
+        mkdir -p "$work/relabel"
         tarball=$work/relabel/$(basename "${image//:/-}").tar
         (cd "$work/relabel" && docker buildx build -q --platform linux/arm64 --provenance=false \
             --output "type=docker,dest=$tarball" -t "$image" - <<<"FROM --platform=linux/amd64 $image") >/dev/null
         k3d image import -c "$cluster" "$tarball" >/dev/null
         rm -f "$tarball"
+        relabelled="$relabelled ${image##*/}"
     done
-    # Rosetta maps more than the sandbox's 128 MB per-process cap allows
-    # before Postgres even starts: the emulated run raises it.
-    printf 'sandbox:\n  maxDataKb: 1048576\n' >"$work/emulated.yaml"
-    pass "relabelled for arm64 (amd64 layers, emulated) and imported: romulus-api, romulus-sandbox, -pg18"
+    if [ -n "$relabelled" ]; then
+        # Rosetta maps more than the sandbox's 128 MB per-process cap allows
+        # before Postgres even starts: the emulated run raises it.
+        printf 'sandbox:\n  maxDataKb: 1048576\n' >"$work/emulated.yaml"
+        pass "amd64 only, relabelled for arm64 (emulated) and imported:$relabelled"
+    else
+        pass "published for arm64: the cluster pulls them"
+    fi
     ;;
-*) fail "the images run on amd64, or emulated on arm64; not on $(docker info --format '{{.Architecture}}')" ;;
+*) fail "the images run on amd64 and arm64; not on $(docker info --format '{{.Architecture}}')" ;;
 esac
 values=(-f "$work/values.yaml")
 [ ! -f "$work/emulated.yaml" ] || values+=(-f "$work/emulated.yaml")

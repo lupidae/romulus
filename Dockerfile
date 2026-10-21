@@ -4,6 +4,8 @@
 # crates/romulus-api/src/web.rs) beside itself at /api. Target `play`:
 # ghcr.io/lupidae/romulus-play, the playground runner and service. Built and pushed by
 # CI (.github/workflows/images.yml), run by deploy/self-host/compose.yaml.
+# Built natively for linux/amd64 and linux/arm64: nothing here names an
+# architecture (base images are multi-arch; rustup and npm pick the host's).
 # Context: the repository root (.dockerignore keeps local state out).
 
 # --- the web app: Vite with base /app/ (web/vite.config.ts) -----------------

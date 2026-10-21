@@ -18,9 +18,9 @@ The other pages:
 
 ## Requirements
 
-- **Linux on x86-64.** The images are published for amd64; on arm64 they
-  run emulated, slowly. macOS (Docker Desktop) works for a trial, not for
-  production, and without playgrounds.
+- **Linux on x86-64 or arm64** (aarch64). Every image is published for
+  both under the same tags, and Docker pulls the host's own. macOS (Docker
+  Desktop) works for a trial, not for production, and without playgrounds.
 - **Docker Engine with the compose plugin, 2.20 or later.** The user who
   runs `install.sh` must be able to use Docker (root, or the `docker`
   group). See https://docs.docker.com/engine/install/.

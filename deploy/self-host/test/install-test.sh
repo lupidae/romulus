@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
 # The self-host bundle end to end: install.sh --non-interactive in a
 # temporary copy of deploy/self-host and a compose project of its own, then
-# install again (idempotent: same secrets), backup, restore, upgrade, status,
-# admin-link, the missing-.env guard, and uninstall --delete-data. Whatever
-# happens, it removes its containers, volumes and files.
+# install again (idempotent: same secrets), sign in, a database and a pushed
+# version (SQL compiled in the sandbox, PostGIS and pgvector included),
+# backup, restore, upgrade, status, admin-link, the missing-.env guard, and
+# uninstall --delete-data. Whatever happens, it removes its containers,
+# volumes and files.
 #
 #   ROMULUS_REGISTRY=local ROMULUS_VERSION=test deploy/self-host/test/install-test.sh
 #       with images built beforehand: local/romulus-api:test and
-#       local/romulus-sandbox:test (.github/workflows/self-host.yml)
+#       local/romulus-sandbox:test (.github/workflows/self-host.yml); any
+#       registry and version whose images are on this machine
+#   ROMULUS_TEST_PLAY_DIR=/var/lib/romulus-play (with the above)
+#       playgrounds on: the host set up as docs/self-host/playgrounds.md says
+#       (gVisor, this directory on XFS with prjquota) and romulus-play and
+#       romulus-playground on this machine too; a playground of the pushed
+#       version is built, queried, deleted. On a host with no other romulus
+#       install: install.sh finds playground containers by a scope every
+#       install shares
 #   ROMULUS_TEST_STUB=1 deploy/self-host/test/install-test.sh
 #       a cheap dry run of the scripts' logic: a stub API (test/stub: health
 #       and the CLI, no database) and postgres:17.11 as the sandbox; no build
 #
-# Needs Docker, docker compose 2.20 or later, curl. ROMULUS_TEST_SUBNET picks
-# the compose network's subnet (default: one in 172.30.100-249.0/24).
+# Needs Docker, docker compose 2.20 or later, curl, and jq but for the stub.
+# ROMULUS_TEST_SUBNET picks the compose network's subnet (default: one in
+# 172.30.100-249.0/24).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -29,6 +40,13 @@ fail() {
 stub=${ROMULUS_TEST_STUB:-}
 registry=${ROMULUS_REGISTRY:-local}
 version=${ROMULUS_VERSION:-test}
+play_dir=${ROMULUS_TEST_PLAY_DIR:-}
+images="romulus-api romulus-sandbox"
+if [ -n "$play_dir" ]; then
+    [ -z "$stub" ] || fail "ROMULUS_TEST_PLAY_DIR needs the real images, not the stub"
+    images="$images romulus-play romulus-playground"
+fi
+[ -n "$stub" ] || command -v jq >/dev/null 2>&1 || fail "jq is not installed"
 if [ -n "$stub" ]; then
     registry=local
     version=stub
@@ -37,7 +55,7 @@ if [ -n "$stub" ]; then
     docker image inspect postgres:17.11 >/dev/null 2>&1 || docker pull -q postgres:17.11 >/dev/null
     docker tag postgres:17.11 local/romulus-sandbox:stub
 fi
-for image in romulus-api romulus-sandbox; do
+for image in $images; do
     docker image inspect "$registry/$image:$version" >/dev/null 2>&1 ||
         fail "the image $registry/$image:$version is not on this machine: build it first"
 done
@@ -48,6 +66,10 @@ export ROMULUS_SUBNET=${ROMULUS_TEST_SUBNET:-172.30.$((RANDOM % 150 + 100)).0/24
 project=romulus-selftest-$$
 work=$(mktemp -d "${TMPDIR:-/tmp}/romulus-selftest.XXXXXX")
 cp "$bundle/compose.yaml" "$bundle/install.sh" "$bundle/backup.sh" "$bundle/Caddyfile" "$work/"
+
+play_options=(--no-playgrounds)
+[ -z "$play_dir" ] || play_options=(--playgrounds --play-dir "$play_dir")
+play_id=""
 
 port=""
 for candidate in $(seq 18080 18180); do
@@ -69,12 +91,15 @@ cleanup() {
         dc logs --tail 60 >&2 || true
     fi
     docker compose -p "$project" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    # The runner's own container for the playground this test made (named by
+    # its id; never another install's).
+    [ -z "$play_id" ] || docker rm -f "romulus-play-$play_id" >/dev/null 2>&1 || true
     docker ps -aq --filter "label=com.docker.compose.project=$project" | xargs docker rm -f >/dev/null 2>&1 || true
     docker volume ls -q --filter "label=com.docker.compose.project=$project" | xargs docker volume rm >/dev/null 2>&1 || true
     docker network ls -q --filter "label=com.docker.compose.project=$project" | xargs docker network rm >/dev/null 2>&1 || true
     rm -rf "$work"
     if [ "$status" -eq 0 ]; then
-        printf '\ninstall-test: all passed (%s)\n' "$registry/romulus-{api,sandbox}:$version"
+        printf '\ninstall-test: all passed (%s)\n' "$registry/{${images// /,}}:$version"
     fi
 }
 trap cleanup EXIT
@@ -83,7 +108,7 @@ run_install() {
     "$work/install.sh" install --non-interactive \
         --url "http://localhost:$port" --port "$port" \
         --admin-email admin@example.com --admin-name "Ada Admin" --org "Acme Test" \
-        --no-caddy --majors none --no-playgrounds \
+        --no-caddy --majors none "${play_options[@]}" \
         --registry "$registry" --version "$version" --project "$project" --no-pull </dev/null
 }
 
@@ -106,6 +131,12 @@ out=$(run_install 2>&1) || {
     fail "install.sh exited non-zero"
 }
 printf '%s\n' "$out"
+case $(uname -m) in
+x86_64 | amd64 | aarch64 | arm64)
+    [[ $out != *emulated* ]] || fail "install.sh says the images run emulated on $(uname -m): they are published for it"
+    pass "no emulation warning on $(uname -m)"
+    ;;
+esac
 link=$(link_in "$out")
 [ -n "$link" ] || fail "install printed no one-time link"
 pass "a one-time link: $link"
@@ -133,6 +164,11 @@ if [ -z "$stub" ]; then
     pass "/app/ serves the web app"
     [ "$(sql romulus 'SELECT count(*) FROM organizations')" = 1 ] || fail "setup made no organization"
     pass "setup made the organization"
+    if [ -n "$play_dir" ]; then
+        curl -fsS "$base/api/health" | grep -q '"playgrounds":"ok"' ||
+            fail "the playground host is not ok: $(curl -fsS "$base/api/health")"
+        pass "the playground host answers"
+    fi
 fi
 
 step "install again: idempotent"
@@ -173,6 +209,90 @@ if [ -z "$stub" ]; then
     pass "one organization only"
     [ "$(curl -s -o /dev/null -w '%{redirect_url}' "$base/")" = "$base/app/" ] || fail "/ does not lead to /app/"
     pass "/ leads to the app"
+
+    # api METHOD PATH [JSON]: as the signed-in admin; prints the status, the
+    # body is in $work/body.
+    api() {
+        local args=(-s -o "$work/body" -w '%{http_code}' -b "$jar" -c "$jar" -X "$1"
+            -H "Origin: http://localhost:$port" -H 'X-Romulus-Csrf: 1')
+        [ $# -lt 3 ] || args+=(-H 'Content-Type: application/json' --data "$3")
+        curl "${args[@]}" "$base$2"
+    }
+    body() { cat "$work/body"; }
+    # expect STATUS JQ_FILTER WHAT: the last call answered STATUS with a body
+    # satisfying the filter.
+    expect() {
+        if [ "$status" != "$1" ] || ! body | jq -e "$2" >/dev/null; then
+            fail "$3: $status $(body)"
+        fi
+    }
+
+    step "a database, a token, a pushed version"
+    status=$(api POST /api/orgs/acme-test/databases '{"name":"Shop","slug":"shop"}')
+    expect 201 '.slug == "shop"' "creating a database"
+    shop=$(body | jq -r .id)
+    status=$(api POST /api/orgs/acme-test/databases/shop/tokens '{"name":"ci","scope":"push"}')
+    expect 201 '.secret | startswith("rom_")' "a push token"
+    token=$(body | jq -r .secret)
+    # PostGIS and pgvector: the sandbox's extensions, built for this host.
+    schema='CREATE EXTENSION postgis;
+CREATE EXTENSION vector;
+CREATE TABLE customers (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email text NOT NULL UNIQUE
+);
+CREATE TABLE orders (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    customer_id bigint NOT NULL REFERENCES customers (id),
+    total numeric(12, 2) NOT NULL CHECK (total >= 0)
+);
+CREATE INDEX orders_customer_id_idx ON orders (customer_id);
+CREATE TABLE stores (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    location geometry(Point, 4326) NOT NULL,
+    embedding vector(3)
+);'
+    push() {
+        curl -s -o "$work/body" -w '%{http_code}' -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/sql' --data-binary "$schema" "$base/api/databases/$shop/versions?message=$1"
+    }
+    status=$(push first)
+    expect 201 '.status == "created" and .version.number == 1' "the push"
+    status=$(push again)
+    expect 200 '.status == "unchanged" and .version.number == 1' "the same push again"
+    status=$(api GET /api/orgs/acme-test/databases/shop/versions)
+    expect 200 '.versions | length == 1' "shop's versions"
+    pass "version 1, compiled in the sandbox (PostGIS, pgvector); the same push again changes nothing"
+
+    if [ -n "$play_dir" ]; then
+        step "a playground of version 1 (gVisor, $play_dir)"
+        status=$(api POST /api/orgs/acme-test/databases/shop/playgrounds '{"version":1,"seed":"5eed"}')
+        expect 201 '.status == "building"' "creating a playground"
+        play_id=$(body | jq -r .id)
+        for _ in $(seq 1 150); do
+            status=$(api GET "/api/orgs/acme-test/databases/shop/playgrounds/$play_id")
+            [ "$status" = 200 ] || fail "reading the playground answered $status: $(body)"
+            [ "$(body | jq -r .status)" = building ] || break
+            sleep 2
+        done
+        expect 200 '.status == "ready" and ([.tables[].rows] | add) > 0' "the playground's build"
+        pass "ready: $(body | jq -r '[.tables[] | "\(.table) \(.rows)"] | join(", ")') rows"
+        status=$(api POST "/api/orgs/acme-test/databases/shop/playgrounds/$play_id/query" \
+            '{"sql":"SELECT (SELECT count(*) FROM orders) AS orders, (SELECT bool_and(ST_IsValid(location)) FROM stores) AS valid, (SELECT count(embedding <-> '"'"'[1,2,3]'"'"') FROM stores) AS near"}')
+        expect 200 '.status == "ok" and (.statements[0].rows | length) == 1' "a query in the console"
+        pass "queried as play_read: $(body | jq -c '.statements[0].rows[0]')"
+        status=$(api POST "/api/orgs/acme-test/databases/shop/playgrounds/$play_id/query" '{"sql":"DELETE FROM orders"}')
+        expect 200 '.status == "error" and .statements[-1].error.sqlstate == "42501"' "a write in the console"
+        pass "a write in the console is refused: $(body | jq -r '.statements[-1].error.message')"
+        status=$(api DELETE "/api/orgs/acme-test/databases/shop/playgrounds/$play_id")
+        [ "$status" = 204 ] || fail "deleting the playground answered $status: $(body)"
+        for _ in $(seq 1 30); do
+            docker inspect "romulus-play-$play_id" >/dev/null 2>&1 || break
+            sleep 1
+        done
+        ! docker inspect "romulus-play-$play_id" >/dev/null 2>&1 || fail "the playground's container is still there"
+        pass "deleted, its container gone"
+    fi
 fi
 health_ok
 

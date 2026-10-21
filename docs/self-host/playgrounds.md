@@ -13,7 +13,8 @@ they are off.
 
 ## What they need
 
-- **Linux.** Not macOS: playgrounds run in gVisor.
+- **Linux on x86-64 or arm64.** Not macOS: playgrounds run in gVisor,
+  which runs on both (the commands below install the host's build).
 - **gVisor** (`runsc`), registered with Docker as two runtimes: `runsc` and
   `runsc-uds`. Each playground runs in its own gVisor sandbox: its own
   kernel, in user space, between Postgres and the host's.
