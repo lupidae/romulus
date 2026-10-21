@@ -24,6 +24,7 @@ export { CombineIcon } from "./combine";
 export { CompassIcon } from "./compass";
 export { ComputerIcon } from "./computer";
 export { CopyIcon } from "./copy";
+export { CreditCardIcon } from "./credit-card";
 export { CursorPointerIcon } from "./cursor-pointer";
 export { DataTransferBothIcon } from "./data-transfer-both";
 export { DatabaseIcon } from "./database";

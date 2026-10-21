@@ -11,7 +11,8 @@ hosted by lupidae and self-hostable for one organization (`deploy/self-host`,
 ## Repo map
 
 ```
-crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/
+crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/; `billing` (hosted
+                      plans, Stripe; off unless configured), `export` (ZIP of databases)
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API;
                       `rename`: renames between two models (known, detected and scored, chosen)
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
@@ -66,6 +67,7 @@ just site        # the homepage on $ROMULUS_SITE_PORT; `just site-check` = its C
 just site-hero   # rebuild the homepage's live hero (needs the wasm32 target, wasm-bindgen-cli, wasm-opt)
 just sandbox 15   # another Postgres major's sandbox (15, 16, 18, or all); `just up` runs 17 only
 just migrate | just down | just nuke   # nuke = down -v + rm .dev (fresh Zitadel too)
+just stripe-setup …   # hosted billing: Stripe products, prices, portal from the plan table (test key)
 just play        # only the playground runner and service (the API and web elsewhere)
 just playground-image   # the playground Postgres image (`just up` builds it too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
@@ -99,6 +101,7 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +9 | `ROMULUS_PLAY_PORT` | the playground service (`ROMULUS_PLAY_URL`; `just dev` or `just play` runs it) |
 | 40000 + 10·N + M − 10 | `ROMULUS_SANDBOX_PG15_PORT`, `…PG16…`, `…PG18…` | the other Postgres majors' sandboxes (`ROMULUS_SANDBOX_URL_PG15`…), on demand |
 | 40000 + 10·N + 1 | `ROMULUS_MAIL_SMTP_PORT` | Mailpit's SMTP: the API's mail (`ROMULUS_SMTP_*` in `.env`) |
+| 40000 + 10·N + 2 | `ROMULUS_E2E_BILLING_PORT` | the API Playwright's billing specs start (`e2e/billing/`: `ROMULUS_BILLING=fake`, serving the production build itself) |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
 the worktree path>`, computed by `scripts/dev-env --project-name` and passed
@@ -1128,6 +1131,55 @@ docs/MVP.md "The time machine" has the decisions.
   contrast), `e2e/perf/time-machine.perf.spec.ts` (`npm --prefix web run perf`). The era
   palette is validated with the dataviz skill's `validate_palette.js --pairs all` per theme:
   re-run it after changing a color.
+
+## Hosted billing (`billing`) and data export (`export`)
+
+docs/MVP.md "Billing" has the decisions.
+
+- **Off unless configured** (`ROMULUS_BILLING=stripe` with `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `ROMULUS_TERMS_URL`, `ROMULUS_TERMS_VERSION`, mail
+  required; `fake` for tests, loopback only). Off: `Billing::plan` is `None`,
+  every cap passes, billing routes answer 404, `GET /api/instance` says
+  `billing: false`. Refused with `ROMULUS_SINGLE_ORG`. Keys never in code,
+  logs or the repository; the seller's invoice mentions are configuration
+  (`ROMULUS_INVOICE_FOOTER`, `ROMULUS_INVOICE_FIELDS`).
+- **The plan table** is `billing::plans` (prices, lookup keys
+  `<plan>_monthly|yearly`, products `romulus_<plan>`, every cap): change a
+  number there only. The plan in force is `billing::state::Stored::effective`
+  (past due: the plan for 14 days from the due date, then Free).
+- **A new cap check** returns `billing::caps::refuse` (402 `plan_limit`,
+  `PlanLimitDetails`): what was refused, the cap, the usage, the plan that
+  lifts it. Creating a version from a request goes through
+  `versions::store::store_capped` (and `store_import_capped`,
+  `drafts::versions::create_version_capped`) with
+  `state.billing.version_limits(…)`; the uncapped `store` is for romulus
+  itself and tests. A new read of versions filters the history window
+  (`state.billing.history(…).cutoff` in SQL with `version_kept_visible`, or
+  `Billing::shown`/`shown_number` for one version: 402 when hidden).
+- **Stripe** is behind `billing::stripe::StripeApi` (`Http`, one pinned API
+  version, leniently parsed; `Fake` in memory: `Billing::with_stripe` in
+  tests, its checkout page at `/api/billing/fake/checkout/{id}`). Webhooks
+  (`billing::webhook`, exempt from CSRF: `csrf::WEBHOOK`) re-read the
+  subscription under `billing::lock_org` and store event ids; tests sign
+  bodies with `billing::webhook::sign`.
+- **Background tasks** (billing on): `hours::meter` (every minute, playground
+  time per organization and UTC month, 80 % email, stop at 100 % through
+  `Backend::stop` with a reason) and `notices::run` (hourly: renewal
+  reminders 40 days ahead, grace warnings, downgrades), each email once
+  (`billing_notices`).
+- **Export** (`GET …/databases/{db}/export` member, `GET /orgs/{org}/export`
+  admin): a ZIP streamed from its own task (`export::Archive`, one version in
+  memory at a time), hidden versions included, never capped, on with billing
+  off too.
+- **Web** (`features/billing`): the billing page `/$org/settings/billing`
+  (sidebar item when `instance.billing`), the checkout dialog (Terms, a
+  consumer's requests; wording in `copy.ts` for counsel), the plan picker,
+  the upgrade prompt shown wherever an action answers `plan_limit`
+  (`isPlanLimit`), export buttons in the database and organization settings.
+- **Tests**: `tests/api/billing.rs` (fake Stripe and host: every cap,
+  signatures, idempotency, order, downgrade, grace, reminders, hours, roles),
+  `tests/api/export.rs`, unit tests in each module, `e2e/billing/` (its own
+  API with `ROMULUS_BILLING=fake` on `ROMULUS_E2E_BILLING_PORT`).
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 

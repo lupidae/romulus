@@ -1,24 +1,23 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) AS \"count!\" FROM versions\n           WHERE database_id = $1 AND (removed_at IS NULL OR $2)",
+  "query": "SELECT count(*) AS \"n!\" FROM databases WHERE org_id = $1 AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "count!",
+        "name": "n!",
         "type_info": "Int8",
         "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Bool"
+        "Uuid"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "a0ba5cfbbb526fce9ecd23552ad3a94f9434adc59bb458091c5cb0ddf076e526"
+  "hash": "30e3f216211b89ebed493039462af8db3e45ce5c36f6431c48413acdcbedf1d0"
 }

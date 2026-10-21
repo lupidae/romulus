@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toaster";
+import { showUpgrade } from "@/features/billing/upgrade";
 import { Tooltip } from "@/components/ui/tooltip";
 import { meQuery } from "@/features/auth/queries";
 import { orgQuery } from "@/features/orgs/queries";
@@ -154,6 +155,8 @@ export function PlaygroundPage({ org, db, id }: { org: string; db: string; id: s
         { description: "The playground holds the migrated rows until someone resets them." },
       );
     } catch (error) {
+      // The month's playground hours used: the dialog says what lifts it.
+      showUpgrade(error);
       setMigration({
         live: null,
         report: null,
@@ -414,9 +417,11 @@ function PlaygroundBar({
               description: "The playground holds the generated rows again.",
             });
           } catch (error) {
-            toast.error("Could not reset the rows", {
-              description: error instanceof ApiError ? error.message : "Check your connection.",
-            });
+            if (!showUpgrade(error)) {
+              toast.error("Could not reset the rows", {
+                description: error instanceof ApiError ? error.message : "Check your connection.",
+              });
+            }
             throw error;
           }
         }}
@@ -533,10 +538,12 @@ function MigratedBar({
                 toast.success("Rows reset", {
                   description: "The playground holds the generated rows again.",
                 }),
-              onError: (error) =>
+              onError: (error) => {
+                if (showUpgrade(error)) return;
                 toast.error("Could not reset the rows", {
                   description: error instanceof ApiError ? error.message : "Check your connection.",
-                }),
+                });
+              },
             })
           }
         >

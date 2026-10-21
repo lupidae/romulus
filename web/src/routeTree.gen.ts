@@ -32,6 +32,7 @@ import { Route as OrgDbImportRouteImport } from './routes/$org/$db/import'
 import { Route as OrgDbSettingsRouteImport } from './routes/$org/$db/settings'
 import { Route as OrgDbTimeMachineRouteImport } from './routes/$org/$db/time-machine'
 import { Route as OrgSettingsIndexRouteImport } from './routes/$org/settings/index'
+import { Route as OrgSettingsBillingRouteImport } from './routes/$org/settings/billing'
 import { Route as OrgSettingsInvitationsRouteImport } from './routes/$org/settings/invitations'
 import { Route as OrgSettingsMembersRouteImport } from './routes/$org/settings/members'
 import { Route as DevShellIndexRouteImport } from './routes/dev/shell/index'
@@ -159,6 +160,11 @@ const OrgSettingsIndexRoute = OrgSettingsIndexRouteImport.update({
   path: '/settings/',
   getParentRoute: () => OrgRoute,
 } as any)
+const OrgSettingsBillingRoute = OrgSettingsBillingRouteImport.update({
+  id: '/settings/billing',
+  path: '/settings/billing',
+  getParentRoute: () => OrgRoute,
+} as any)
 const OrgSettingsInvitationsRoute = OrgSettingsInvitationsRouteImport.update({
   id: '/settings/invitations',
   path: '/settings/invitations',
@@ -238,6 +244,7 @@ export interface FileRoutesByFullPath {
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/$db/time-machine': typeof OrgDbTimeMachineRoute
+  '/$org/settings/billing': typeof OrgSettingsBillingRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
@@ -271,6 +278,7 @@ export interface FileRoutesByTo {
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/$db/time-machine': typeof OrgDbTimeMachineRoute
+  '/$org/settings/billing': typeof OrgSettingsBillingRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
@@ -308,6 +316,7 @@ export interface FileRoutesById {
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
   '/$org/$db/time-machine': typeof OrgDbTimeMachineRoute
+  '/$org/settings/billing': typeof OrgSettingsBillingRoute
   '/$org/settings/invitations': typeof OrgSettingsInvitationsRoute
   '/$org/settings/members': typeof OrgSettingsMembersRoute
   '/dev/shell/members': typeof DevShellMembersRoute
@@ -346,6 +355,7 @@ export interface FileRouteTypes {
     | '/$org/$db/import'
     | '/$org/$db/settings'
     | '/$org/$db/time-machine'
+    | '/$org/settings/billing'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
@@ -379,6 +389,7 @@ export interface FileRouteTypes {
     | '/$org/$db/import'
     | '/$org/$db/settings'
     | '/$org/$db/time-machine'
+    | '/$org/settings/billing'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
@@ -415,6 +426,7 @@ export interface FileRouteTypes {
     | '/$org/$db/import'
     | '/$org/$db/settings'
     | '/$org/$db/time-machine'
+    | '/$org/settings/billing'
     | '/$org/settings/invitations'
     | '/$org/settings/members'
     | '/dev/shell/members'
@@ -613,6 +625,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrgSettingsIndexRouteImport
       parentRoute: typeof OrgRoute
     }
+    '/$org/settings/billing': {
+      id: '/$org/settings/billing'
+      path: '/settings/billing'
+      fullPath: '/$org/settings/billing'
+      preLoaderRoute: typeof OrgSettingsBillingRouteImport
+      parentRoute: typeof OrgRoute
+    }
     '/$org/settings/invitations': {
       id: '/$org/settings/invitations'
       path: '/settings/invitations'
@@ -722,6 +741,7 @@ const OrgDbRouteWithChildren = OrgDbRoute._addFileChildren(OrgDbRouteChildren)
 interface OrgRouteChildren {
   OrgDbRoute: typeof OrgDbRouteWithChildren
   OrgIndexRoute: typeof OrgIndexRoute
+  OrgSettingsBillingRoute: typeof OrgSettingsBillingRoute
   OrgSettingsInvitationsRoute: typeof OrgSettingsInvitationsRoute
   OrgSettingsMembersRoute: typeof OrgSettingsMembersRoute
   OrgSettingsIndexRoute: typeof OrgSettingsIndexRoute
@@ -730,6 +750,7 @@ interface OrgRouteChildren {
 const OrgRouteChildren: OrgRouteChildren = {
   OrgDbRoute: OrgDbRouteWithChildren,
   OrgIndexRoute: OrgIndexRoute,
+  OrgSettingsBillingRoute: OrgSettingsBillingRoute,
   OrgSettingsInvitationsRoute: OrgSettingsInvitationsRoute,
   OrgSettingsMembersRoute: OrgSettingsMembersRoute,
   OrgSettingsIndexRoute: OrgSettingsIndexRoute,

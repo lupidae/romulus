@@ -31,7 +31,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::{
     VersionDetail, VersionSummary, checked_message, compiled_model, detail,
-    store::{NewVersion, Stored, store},
+    store::{NewVersion, Stored, store_capped},
 };
 use crate::{
     ApiError, ApiResult, AppState,
@@ -212,7 +212,11 @@ async fn push(
         renames: None,
     };
     let database_id = new.database_id;
-    Ok(match store(&state.db, new, true).await? {
+    let limits = state
+        .billing
+        .version_limits(&state.db, token.database_id)
+        .await?;
+    Ok(match store_capped(&state.db, new, true, limits).await? {
         Stored::Created(version) => {
             // Open drafts of the database learn their base moved.
             state.collab.version_created(database_id, version.number);
@@ -265,7 +269,25 @@ async fn read(
             ))
         })?),
     };
-    Ok(Json(detail(&state.db, token.database_id, number).await?))
+    let version = detail(&state.db, token.database_id, number).await?;
+    if state.billing.is_on() {
+        let org = sqlx::query_scalar!(
+            "SELECT org_id FROM databases WHERE id = $1",
+            token.database_id
+        )
+        .fetch_one(&state.db)
+        .await?;
+        state
+            .billing
+            .shown(
+                &state.db,
+                org,
+                token.database_id,
+                (version.id, version.number, version.created_at),
+            )
+            .await?;
+    }
+    Ok(Json(version))
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ import {
 import { Sheet, SheetClose, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
+import { showUpgrade } from "@/features/billing/upgrade";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError } from "@/api/client";
 import type { components } from "@/api/schema.gen";
@@ -128,10 +129,12 @@ export function MigrationTestButton({
           setTestId(test.id);
           setOpen(true);
         },
-        onError: (error) =>
+        onError: (error) => {
+          if (showUpgrade(error)) return;
           toast.error("The test could not start", {
             description: error instanceof ApiError ? error.message : "Check your connection.",
-          }),
+          });
+        },
       },
     );
   const describedBy = React.useId();

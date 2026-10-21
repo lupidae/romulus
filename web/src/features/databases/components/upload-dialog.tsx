@@ -20,6 +20,8 @@ import { Input } from "@/components/ui/input";
 import { KbdGroup } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toaster";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import type { Editor } from "@/features/schema/text/codemirror";
 import { CodeView } from "@/features/schema/text/code-view";
 import { modKey } from "@/lib/platform";
@@ -95,6 +97,8 @@ function UploadForm({
   onUploaded,
 }: UploadDialogProps) {
   const upload = useUploadVersion(org, db);
+  // A cap of the plan (versions, schema size) refused the last upload.
+  const refused = isPlanLimit(upload.error) ? upload.error : null;
   const compile = useCompileSql(org, db);
   const [loaded, setLoaded] = React.useState<{
     cm: Extensions;
@@ -218,6 +222,7 @@ function UploadForm({
           onUploaded(version);
         },
         onError: (error) => {
+          if (isPlanLimit(error)) return;
           if (error instanceof ApiError && error.code === "compile_failed") {
             setCheck({
               state: "done",
@@ -345,6 +350,7 @@ function UploadForm({
         </ul>
       )}
 
+      {refused && <PlanLimitNotice error={refused} org={org} className="mx-5 mt-4" />}
       <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
         <Input
           aria-label="Message"

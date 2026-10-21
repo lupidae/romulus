@@ -12,7 +12,7 @@ use crate::{
     domain::{PgMajor, Schema, SourceKind, VersionOrigin},
     versions::{
         layout::VersionLayout,
-        store::{NewVersion, StoreError, Stored, store},
+        store::{NewVersion, StoreError, Stored, store_capped},
     },
 };
 
@@ -115,7 +115,16 @@ pub struct Created {
 /// (409 `stale_base`), or the draft was deleted meanwhile (409
 /// `draft_not_open`).
 pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created> {
-    let stored = store(
+    create_version_capped(db, new, crate::billing::VersionLimits::NONE).await
+}
+
+/// [`create_version`] within the plan's caps (402 `plan_limit`).
+pub async fn create_version_capped(
+    db: &PgPool,
+    new: DraftVersion,
+    limits: crate::billing::VersionLimits,
+) -> ApiResult<Created> {
+    let stored = store_capped(
         db,
         NewVersion {
             database_id: new.database_id,
@@ -137,6 +146,7 @@ pub async fn create_version(db: &PgPool, new: DraftVersion) -> ApiResult<Created
             renames: new.renames,
         },
         false,
+        limits,
     )
     .await;
     match stored {

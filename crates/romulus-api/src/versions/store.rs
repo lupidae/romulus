@@ -13,6 +13,7 @@ use uuid::Uuid;
 use super::{VersionSummary, layout::VersionLayout, summary};
 use crate::{
     ApiError,
+    billing::VersionLimits,
     databases::no_such_database,
     domain::{PgMajor, SourceKind, VersionOrigin},
 };
@@ -179,10 +180,25 @@ pub enum Stored {
 /// it, under the lock. So two identical pushes at once still create one
 /// version, and the lock is held for milliseconds in the common case.
 /// A new version starts with the previous one's layout unless given one.
+///
+/// Without the plan's caps: what a request stores goes through
+/// [`store_capped`] with `state.billing.version_limits(…)`.
 pub async fn store(
     db: &PgPool,
     new: NewVersion,
     skip_unchanged: bool,
+) -> Result<Stored, StoreError> {
+    store_capped(db, new, skip_unchanged, VersionLimits::NONE).await
+}
+
+/// [`store`], checking the plan's caps (versions per database, schema
+/// size) under the same lock as the number: 402 `plan_limit`, nothing
+/// stored. `VersionLimits::NONE` with billing off.
+pub async fn store_capped(
+    db: &PgPool,
+    new: NewVersion,
+    skip_unchanged: bool,
+    limits: VersionLimits,
 ) -> Result<Stored, StoreError> {
     let new = Arc::new(new);
     let database_id = new.database_id;
@@ -228,6 +244,11 @@ pub async fn store(
     if let (true, Some((id, _))) = (compared.unchanged, base) {
         tx.rollback().await?;
         return Ok(Stored::Unchanged(summary(db, id).await?));
+    }
+
+    if limits != VersionLimits::NONE {
+        let live = live_versions(&mut tx, database_id).await?;
+        limits.check(live, 1, new.model.entities.len())?;
     }
 
     let number = last_number + 1;
@@ -281,6 +302,17 @@ pub async fn store(
     tx.commit().await?;
     tracing::info!(database = %database_id, number, origin = ?new.origin, "version created");
     Ok(Stored::Created(summary(db, id).await?))
+}
+
+/// How many versions a database keeps (removed ones not counted: removing
+/// old versions makes room under the plan's cap).
+async fn live_versions(tx: &mut sqlx::PgConnection, database_id: Uuid) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM versions WHERE database_id = $1 AND removed_at IS NULL"#,
+        database_id,
+    )
+    .fetch_one(tx)
+    .await
 }
 
 /// The latest live version of a database, whole.
@@ -405,8 +437,18 @@ pub struct NewImport {
 /// one was planned, and `has_versions` when versions that were not
 /// imported exist and `append` is false. Returns each version's (id,
 /// number).
-#[allow(clippy::too_many_lines)] // one transaction, query after query
 pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)>, StoreError> {
+    store_import_capped(db, new, VersionLimits::NONE).await
+}
+
+/// [`store_import`] within the plan's caps: every version fits (their
+/// number, each one's schema size), or none is stored (402 `plan_limit`).
+#[allow(clippy::too_many_lines)] // one transaction, query after query
+pub async fn store_import_capped(
+    db: &PgPool,
+    new: NewImport,
+    limits: VersionLimits,
+) -> Result<Vec<(Uuid, i32)>, StoreError> {
     let NewImport {
         database_id,
         format,
@@ -472,6 +514,18 @@ pub async fn store_import(db: &PgPool, new: NewImport) -> Result<Vec<(Uuid, i32)
             message: "A version of this database was created during the import. Import again: nothing was stored."
                 .into(),
         }));
+    }
+    if limits != VersionLimits::NONE {
+        let live = live_versions(&mut tx, database_id).await?;
+        let largest = sqlx::query_scalar!(
+            r#"SELECT coalesce(max(jsonb_array_length(model -> 'entities')), 0) AS "n!"
+               FROM import_staging WHERE import_id = $1"#,
+            staging,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let adding = i64::try_from(versions.len()).unwrap_or(i64::MAX);
+        limits.check(live, adding, usize::try_from(largest).unwrap_or(0))?;
     }
     let mut number = last_number;
 

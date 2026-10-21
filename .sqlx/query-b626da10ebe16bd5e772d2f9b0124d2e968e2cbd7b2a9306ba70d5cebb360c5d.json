@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_billing SET past_due_since = now() - interval '12 days' WHERE org_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b626da10ebe16bd5e772d2f9b0124d2e968e2cbd7b2a9306ba70d5cebb360c5d"
+}

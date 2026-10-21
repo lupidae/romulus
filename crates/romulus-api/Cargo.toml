@@ -30,6 +30,8 @@ dotenvy.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
+# Stripe's webhook signatures.
+hmac.workspace = true
 http-body-util.workspace = true
 ipnet.workspace = true
 lettre.workspace = true

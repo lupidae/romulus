@@ -302,6 +302,7 @@ fn checked_version(format: Format, version: &str) -> ApiResult<String> {
     responses(
         (status = 200, body = SchemaMigration),
         (status = 400, description = "`bad_request`: a number that is not one, an unknown format, `renames` that is not a JSON object of booleans", body = ErrorBody),
+        (status = 402, description = "`plan_limit`: a version past the plan's history window (hosted billing)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such database, or no such version", body = ErrorBody),
         (status = 422, description = "`validation`: a number below 1", body = ErrorBody),
     )
@@ -325,6 +326,17 @@ async fn version_migration(
     } else {
         detail(&state.db, database.id, Some(versions.to)).await?
     };
+    for version in [&from, &to] {
+        state
+            .billing
+            .shown(
+                &state.db,
+                member.org.id,
+                database.id,
+                (version.id, version.number, version.created_at),
+            )
+            .await?;
+    }
     let old = Schema::deserialize(&from.model).map_err(ApiError::internal)?;
     let new = Schema::deserialize(&to.model).map_err(ApiError::internal)?;
     let mut renames = stored_renames(&state.db, database.id, versions.from, versions.to).await?;

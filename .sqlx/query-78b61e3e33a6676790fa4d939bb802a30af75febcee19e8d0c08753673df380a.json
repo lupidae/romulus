@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout, renames)\n         VALUES ($1, $2, $3, $4, $5::text::version_source_kind,\n                 CASE WHEN $5 = 'remus_json' THEN 'push' ELSE 'upload' END::version_origin, '{}', $6)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "78b61e3e33a6676790fa4d939bb802a30af75febcee19e8d0c08753673df380a"
+}

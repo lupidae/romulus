@@ -31,6 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/toaster";
+import { showUpgrade } from "@/features/billing/upgrade";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatDate, fromNow } from "@/lib/time";
 
@@ -40,6 +41,7 @@ import { roleLabel } from "../roles";
 import { InviteLink } from "./invite-link";
 
 function failed(error: unknown) {
+  if (showUpgrade(error)) return;
   toast.error(error instanceof ApiError ? error.message : "Something went wrong. Try again.");
 }
 

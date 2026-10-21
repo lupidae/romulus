@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE playground_usage SET seconds = 5700 WHERE org_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53b9a648b6c9c71b75287c54144f8f74cf46223b637888bb3a21be78cadf7ad1"
+}

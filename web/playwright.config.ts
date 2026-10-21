@@ -10,6 +10,15 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 const previewPort = process.env.ROMULUS_PREVIEW_PORT ?? "41005";
 const e2eApiPort = process.env.ROMULUS_E2E_API_PORT ?? "41006";
 const origin = `http://localhost:${previewPort}`;
+// e2e/billing: hosted billing on, Stripe faked server-side (ROMULUS_BILLING=fake),
+// on an API of its own that serves the production build itself. Every other
+// spec runs with billing off (no caps), as self-hosted.
+const billingPort = process.env.ROMULUS_E2E_BILLING_PORT ?? "40002";
+const billingOrigin = `http://localhost:${billingPort}`;
+// Absolute globs: Playwright matches them against absolute paths, and a
+// relative "billing/**" would also match a checkout whose directory is
+// named billing.
+const specs = fileURLToPath(new URL("./e2e", import.meta.url));
 
 // The tests drive a production build (vite preview) on its own origin, served
 // by its own API whose public URL is that origin. The API's CSRF check (exact
@@ -36,6 +45,12 @@ const playgrounds =
   process.env.ROMULUS_E2E_PLAYGROUNDS !== undefined
     ? process.env.ROMULUS_E2E_PLAYGROUNDS === "1"
     : named.length === 0 || named.some((arg) => arg.includes("playground"));
+// The billing API: for a run that includes e2e/billing (or every spec).
+// ROMULUS_E2E_BILLING=1 or 0 decides instead.
+const billing =
+  process.env.ROMULUS_E2E_BILLING !== undefined
+    ? process.env.ROMULUS_E2E_BILLING === "1"
+    : named.length === 0 || named.some((arg) => arg.includes("billing"));
 
 export default defineConfig({
   testDir: "./e2e",
@@ -50,7 +65,18 @@ export default defineConfig({
     baseURL: `${origin}/app/`,
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      testIgnore: [`${specs}/dev/**`, `${specs}/perf/**`, `${specs}/billing/**`],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "billing",
+      testMatch: `${specs}/billing/**/*.spec.ts`,
+      use: { ...devices["Desktop Chrome"], baseURL: `${billingOrigin}/app/` },
+    },
+  ],
   webServer: [
     ...(playgrounds
       ? [
@@ -91,5 +117,32 @@ export default defineConfig({
       reuseExistingServer: true,
       timeout: 180_000,
     },
+    ...(billing
+      ? [
+          {
+            // After the preview server (webServers start in order): its command
+            // makes the production build (web/dist), served here with /api.
+            command:
+              "cargo build -q -p romulus-api && until [ -f web/dist/index.html ]; do sleep 1; done && exec target/debug/romulus-api",
+            cwd: "..",
+            env: env({
+              ROMULUS_API_ADDR: `127.0.0.1:${billingPort}`,
+              ROMULUS_PUBLIC_URL: billingOrigin,
+              ROMULUS_WEB_DIR: "web/dist",
+              ROMULUS_BILLING: "fake",
+              ROMULUS_DEV_SIGNIN: "true",
+              ROMULUS_SANDBOX_PREFIX: "romulus_e2e_billing",
+              // No playground host: hours and sizes are the API's, not the host's.
+              ROMULUS_PLAY_URL: "",
+              ROMULUS_PLAY_KEY: "",
+              RUST_LOG: process.env.RUST_LOG ?? "romulus_api=warn,tower_http=warn",
+            }),
+            url: `http://127.0.0.1:${billingPort}/api/health`,
+            reuseExistingServer: true,
+            timeout: 300_000,
+            stdout: "ignore" as const,
+          },
+        ]
+      : []),
   ],
 });

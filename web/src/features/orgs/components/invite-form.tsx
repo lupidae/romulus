@@ -4,6 +4,8 @@ import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import { cn } from "@/lib/utils";
 
 import { useInvite } from "../mutations";
@@ -35,6 +37,7 @@ export function InviteForm({
   const [email, setEmail] = React.useState("");
   const [role, setRole] = React.useState<Role>("developer");
   const [error, setError] = React.useState<string>();
+  const [refused, setRefused] = React.useState<unknown>(null);
   const emailRef = React.useRef<HTMLInputElement>(null);
 
   const trimmed = email.trim();
@@ -48,6 +51,7 @@ export function InviteForm({
       return;
     }
     setError(undefined);
+    setRefused(null);
     invite.mutate(
       { email: trimmed, role },
       {
@@ -56,6 +60,7 @@ export function InviteForm({
           onCreated(created);
         },
         onError: (err) => {
+          if (isPlanLimit(err)) return setRefused(err);
           setError(
             err instanceof ApiError ? (err.fields.email ?? err.message) : "Something went wrong.",
           );
@@ -97,6 +102,7 @@ export function InviteForm({
       <Field label="Role">
         <RoleSelect value={role} onValueChange={setRole} className="w-full" />
       </Field>
+      <PlanLimitNotice error={refused} org={slug} className={cn(inline && "sm:col-span-full")} />
       <div
         className={cn(
           "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",

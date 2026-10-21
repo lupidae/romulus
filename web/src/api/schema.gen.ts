@@ -233,6 +233,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/billing/webhook": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Stripe's events (see the module docs). Answers 400 `bad_signature` to
+     *     anything not signed with the endpoint's secret.
+     */
+    post: operations["billing_webhook"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/databases/{database_id}/imports": {
     parameters: {
       query?: never;
@@ -418,6 +438,87 @@ export interface paths {
      *     approvals publishing needs. Admins only.
      */
     patch: operations["update_org"];
+    trace?: never;
+  };
+  "/api/orgs/{org}/billing": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The organization's plan, subscription and usage against every cap. Any
+     *     member reads it; admins change it.
+     */
+    get: operations["get_billing"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/billing/checkout": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Starts paying for a plan: the Terms accepted (kept in the audit log, with
+     *     a consumer's requests), then a Stripe Checkout Session to send the
+     *     browser to. Admins only. An organization already subscribed changes plan
+     *     in the portal.
+     */
+    post: operations["start_checkout"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/billing/invoices": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The organization's invoices, newest first. Admins only. */
+    get: operations["list_invoices"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/billing/portal": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * A Customer Portal session: payment method, invoices, plan changes
+     *     (upgrades now, prorated; downgrades at the period's end) and
+     *     cancelling, straight on the cancel page with `{"flow": {"type":
+     *     "cancel"}}`. Admins only.
+     */
+    post: operations["open_billing_portal"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   "/api/orgs/{org}/databases": {
@@ -715,6 +816,27 @@ export interface paths {
     put?: never;
     /** Brings the latest version into the draft: see the module documentation. */
     post: operations["update_draft"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/export": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Every version of the database as SQL, the migrations between them,
+     *     their comments and a manifest, in a ZIP streamed as it is written. Any
+     *     member; on every plan, versions hidden by the plan's history included.
+     */
+    get: operations["export_database"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -1347,6 +1469,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/export": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Every live database of the organization, a folder each (as the database
+     *     export lays it out), and a manifest. Admins only.
+     */
+    get: operations["export_org"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/invitations": {
     parameters: {
       query?: never;
@@ -1587,7 +1729,14 @@ export interface components {
       | "playground_restarted"
       | "passing_test_required_changed"
       | "migration_test_acknowledged"
-      | "passing_test_overridden";
+      | "passing_test_overridden"
+      | "terms_accepted"
+      | "subscription_changed"
+      | "payment_failed"
+      | "payment_succeeded"
+      | "plan_downgraded"
+      | "playground_hours_used_up"
+      | "subscription_duplicate_cancelled";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1625,6 +1774,7 @@ export interface components {
       approved_by?: components["schemas"]["AuditApprover"][] | null;
       /** @description Whose they were, by name as it was (comments deleted). */
       authors?: string[] | null;
+      billing?: components["schemas"]["BillingAudit"] | null;
       /**
        * Format: int32
        * @description How many comments went (comments deleted).
@@ -1717,6 +1867,44 @@ export interface components {
           kind: "token";
           name: string;
         };
+    /** @description What a billing event records. */
+    BillingAudit: {
+      /** Format: int64 */
+      amount_cents?: number | null;
+      buyer?: string | null;
+      cancel_at_period_end?: boolean | null;
+      currency?: string | null;
+      event_type?: string | null;
+      from_plan?: components["schemas"]["Plan"] | null;
+      from_status?: string | null;
+      /** @description A consumer asked for the service to start at once… */
+      immediate_start?: boolean | null;
+      interval?: components["schemas"]["Interval"] | null;
+      invoice?: string | null;
+      /** @description The month whose playground hours ran out (`2026-10`). */
+      month?: string | null;
+      plan?: components["schemas"]["Plan"] | null;
+      /** @description Stripe's subscription status. */
+      status?: string | null;
+      /** @description The Stripe event applied (webhooks), and its type. */
+      stripe_event?: string | null;
+      /**
+       * @description The Stripe subscription it is about, when not the organization's own
+       *     (a duplicate cancelled).
+       */
+      subscription?: string | null;
+      /** @description The Terms accepted, and as whom (`business`, `consumer`). */
+      terms_version?: string | null;
+      /**
+       * @description …and acknowledged losing the right of withdrawal once it is fully
+       *     performed.
+       */
+      withdrawal_acknowledged?: boolean | null;
+    };
+    /** @description Where to send the browser. */
+    BillingRedirect: {
+      url: string;
+    };
     /** @description Where a build is (while `building`). */
     BuildProgress: {
       stage: components["schemas"]["PlaygroundStage"];
@@ -1725,6 +1913,25 @@ export interface components {
       tables_done: number;
       tables_total: number;
     };
+    /**
+     * @description Who buys: the checkout page asks a consumer for more.
+     * @enum {string}
+     */
+    Buyer: "business" | "consumer";
+    /**
+     * @description Which cap refused.
+     * @enum {string}
+     */
+    Cap:
+      | "members"
+      | "databases"
+      | "versions"
+      | "schema_size"
+      | "history"
+      | "playground_size"
+      | "playground_hours"
+      | "approvals"
+      | "approvals_override";
     /**
      * @description What [`Summary`] counts. Partitioned tables count as tables; an entity whose
      *     kind changed counts under its new kind.
@@ -2718,6 +2925,27 @@ export interface components {
       tables: components["schemas"]["TableHistory"][];
       types: components["schemas"]["TypeHistory"][];
     };
+    /** @description Playground time this calendar month (UTC). */
+    HoursMeter: {
+      /** @description All used: new playgrounds and tests are refused, running ones stop. */
+      exhausted: boolean;
+      /** Format: int64 */
+      limit_seconds: number;
+      /**
+       * Format: date
+       * @description The month counted (its first day).
+       */
+      month: string;
+      /**
+       * Format: date
+       * @description When the count starts again.
+       */
+      resets_on: string;
+      /** Format: int64 */
+      used_seconds: number;
+      /** @description 80 % used or more. */
+      warning: boolean;
+    };
     /**
      * @description `pg_attribute.attidentity`, as a word.
      * @enum {string}
@@ -2883,6 +3111,11 @@ export interface components {
       status: components["schemas"]["Status"];
     };
     Instance: {
+      /**
+       * @description Plans and billing (the hosted service, `ROMULUS_BILLING`): the app
+       *     shows the billing page and upgrade prompts.
+       */
+      billing: boolean;
       /** @description romulus sends email (invitations, sign-up and reset links). */
       mail: boolean;
       /** @description Playgrounds are set up on this server (`ROMULUS_PLAY_URL`). */
@@ -2893,6 +3126,11 @@ export interface components {
        */
       single_org: boolean;
     };
+    /**
+     * @description How often a subscription is billed (`billing_interval`).
+     * @enum {string}
+     */
+    Interval: "month" | "year";
     /** @description A pending invitation (its link is never shown again). */
     Invitation: {
       /** Format: date-time */
@@ -2934,6 +3172,21 @@ export interface components {
       | "already_member"
       | "expired"
       | "used";
+    /** @description One invoice, as Stripe keeps it. */
+    InvoiceSummary: {
+      /** Format: date-time */
+      created: string;
+      currency: string;
+      id: string;
+      number?: string | null;
+      pdf?: string | null;
+      /** @description `paid`, `open`, `void`, `uncollectible`, `draft`. */
+      status?: string | null;
+      /** Format: int64 */
+      total_cents: number;
+      /** @description Stripe's page for it (pay, download). */
+      url?: string | null;
+    };
     /**
      * @description One enum label. `changed` means moved: its order relative to the labels
      *     present on both sides changed, which matters because enums compare by
@@ -2943,6 +3196,45 @@ export interface components {
       label: string;
       position: components["schemas"]["Positions"];
       status: components["schemas"]["Status"];
+    };
+    /** @description What a plan costs and allows. `None` is unlimited. */
+    Limits: {
+      /**
+       * Format: int32
+       * @description The most approvals publishing a draft can be made to need (0: the
+       *     setting is off).
+       */
+      approvals: number;
+      /** @description Admins may publish without the approvals, saying why. */
+      approvals_override: boolean;
+      /** Format: int32 */
+      databases: number;
+      /**
+       * Format: int32
+       * @description Versions older than this are hidden (never deleted).
+       */
+      history_days?: number | null;
+      /** Format: int32 */
+      members?: number | null;
+      /**
+       * Format: int32
+       * @description Euro cents a month; a year costs [`YEARLY_MONTHS`] of them.
+       */
+      monthly_cents: number;
+      /**
+       * Format: int32
+       * @description Running playground time a calendar month (UTC), tests included.
+       */
+      playground_hours: number;
+      /** @description The largest playground (and migration test) it makes. */
+      playground_size: components["schemas"]["PlaygroundSize"];
+      /**
+       * Format: int32
+       * @description Tables and views (materialized and foreign ones too) in one version.
+       */
+      schema_objects: number;
+      /** Format: int32 */
+      versions_per_database?: number | null;
     };
     LinkToken: {
       /** @description From the link's fragment (`#token=…`). */
@@ -2982,6 +3274,21 @@ export interface components {
        *     its): the version's source, or its model as SQL.
        */
       sql?: string | null;
+    };
+    /** @description What a cap allows and what there is. */
+    Meter: {
+      /**
+       * @description The database the figure is about (the one with the most versions, or
+       *     the largest schema).
+       */
+      database?: string | null;
+      /**
+       * Format: int64
+       * @description `null`: unlimited.
+       */
+      limit?: number | null;
+      /** Format: int64 */
+      used: number;
     };
     /** @enum {string} */
     MigrationCheckStatus: "passed" | "warning" | "needs_acknowledgement" | "failed" | "skipped";
@@ -3561,6 +3868,9 @@ export interface components {
        */
       value: Record<string, never>;
     };
+    OpenPortal: {
+      flow?: components["schemas"]["PortalChoice"] | null;
+    };
     /** @description An organization, as one of its members sees it. */
     Org: {
       /**
@@ -3581,6 +3891,19 @@ export interface components {
       role: components["schemas"]["Role"];
       /** @description Its address: `/app/<slug>`. */
       slug: string;
+    };
+    /** @description An organization's billing page. */
+    OrgBilling: {
+      /** @description The caller may change billing (admins). */
+      can_manage: boolean;
+      /** @description The plan in force now: the caps are its. */
+      plan: components["schemas"]["Plan"];
+      plans: components["schemas"]["PlanOffer"][];
+      subscription?: components["schemas"]["SubscriptionInfo"] | null;
+      /** @description The Terms of Service checkout has people accept. */
+      terms_url: string;
+      terms_version: string;
+      usage: components["schemas"]["Usage"];
     };
     OrgMember: {
       email: string;
@@ -3720,6 +4043,42 @@ export interface components {
     PhaseDone: {
       phase: components["schemas"]["MigrationTestPhase"];
       status: components["schemas"]["MigrationCheckStatus"];
+    };
+    /**
+     * @description A hosted plan (`billing_plan`). What each allows is the plan table,
+     *     `billing::plans`.
+     * @enum {string}
+     */
+    Plan: "free" | "starter" | "team" | "business";
+    /** @description The `details` of a 402 `plan_limit`. */
+    PlanLimitDetails: {
+      cap: components["schemas"]["Cap"];
+      /**
+       * Format: int64
+       * @description What the plan allows (`null`: not a count, e.g. a playground size).
+       */
+      limit?: number | null;
+      /** @description The organization's plan now. */
+      plan: components["schemas"]["Plan"];
+      upgrade_to?: components["schemas"]["Plan"] | null;
+      /**
+       * Format: int64
+       * @description What there is now (or what was asked for).
+       */
+      usage?: number | null;
+    };
+    /** @description A plan as the picker shows it. */
+    PlanOffer: {
+      limits: components["schemas"]["Limits"];
+      /**
+       * Format: int32
+       * @description Euro cents; `null` for Free.
+       */
+      monthly_cents?: number | null;
+      name: string;
+      plan: components["schemas"]["Plan"];
+      /** Format: int32 */
+      yearly_cents?: number | null;
     };
     /** @description One migration of the files, in order. */
     PlannedMigration: {
@@ -3978,6 +4337,18 @@ export interface components {
       name: string;
       status: components["schemas"]["Status"];
     };
+    /** @description What the portal opens on. */
+    PortalChoice:
+      | {
+          /** @enum {string} */
+          type: "cancel";
+        }
+      | {
+          interval?: components["schemas"]["Interval"] | null;
+          plan?: components["schemas"]["Plan"] | null;
+          /** @enum {string} */
+          type: "change_plan";
+        };
     /**
      * @description A 1-based line and column. Columns count Unicode scalar values, which is
      *     what an editor's "Ln 3, Col 7" shows for text without combining marks.
@@ -4123,6 +4494,9 @@ export interface components {
        * @description The newest comment the person saw.
        */
       at: string;
+    };
+    Received: {
+      received: boolean;
     };
     /** @description A schema-qualified relation name, unquoted. */
     Relation: {
@@ -4292,6 +4666,13 @@ export interface components {
        */
       next_before?: string | null;
       runs: components["schemas"]["PlaygroundRun"][];
+    };
+    /** @description A change Stripe will make at the end of the period (a downgrade). */
+    ScheduledChange: {
+      /** Format: date-time */
+      at: string;
+      interval?: components["schemas"]["Interval"] | null;
+      plan: components["schemas"]["Plan"];
     };
     /**
      * @description Everything that differs between two schemas, matched by schema and name:
@@ -4587,6 +4968,24 @@ export interface components {
       /** @description `start` in UTF-16 code units: a JavaScript string index. */
       utf16_start: number;
     };
+    StartCheckout: {
+      /** @description The Terms of Service (`terms_url`, `terms_version`) are accepted. */
+      accept_terms: boolean;
+      buyer: components["schemas"]["Buyer"];
+      /**
+       * @description A consumer asks for the service to start before the withdrawal period
+       *     ends…
+       */
+      immediate_start?: boolean;
+      interval: components["schemas"]["Interval"];
+      /** @description A paid plan. */
+      plan: components["schemas"]["Plan"];
+      /**
+       * @description …and acknowledges losing the right of withdrawal once it is fully
+       *     performed.
+       */
+      withdrawal_acknowledged?: boolean;
+    };
     /**
      * @description Where an object, or a part of one, stands between the old and the new
      *     schema.
@@ -4632,6 +5031,32 @@ export interface components {
           [key: string]: components["schemas"]["Status"];
         };
       };
+    };
+    /** @description The subscription, as Stripe last said. */
+    SubscriptionInfo: {
+      /**
+       * Format: int64
+       * @description What a period costs, in cents.
+       */
+      amount_cents?: number | null;
+      cancel_at_period_end: boolean;
+      currency?: string | null;
+      /**
+       * Format: date-time
+       * @description The end of the period paid for: the renewal date (or the end, when
+       *     cancelled at the period's end).
+       */
+      current_period_end?: string | null;
+      /**
+       * Format: date-time
+       * @description While a payment is overdue: when the plan stops holding.
+       */
+      grace_until?: string | null;
+      interval?: components["schemas"]["Interval"] | null;
+      plan: components["schemas"]["Plan"];
+      scheduled?: components["schemas"]["ScheduledChange"] | null;
+      /** @description Stripe's status: `active`, `past_due`, `canceled`… */
+      status: string;
     };
     /** @description Counts per category, and the same as one sentence. */
     Summary: {
@@ -4882,6 +5307,31 @@ export interface components {
       /** @description The schema as SQL DDL, at most 1 MiB. */
       sql: string;
     };
+    /** @description Usage against every cap of the plan in force. */
+    Usage: {
+      /** @description The approvals publishing needs, and the most the plan allows. */
+      approvals: components["schemas"]["Meter"];
+      approvals_override: boolean;
+      databases: components["schemas"]["Meter"];
+      /**
+       * Format: int64
+       * @description Versions kept but hidden by the plan, every database together.
+       */
+      hidden_versions: number;
+      /**
+       * Format: int32
+       * @description Versions older than this are hidden; `null`: all are shown.
+       */
+      history_days?: number | null;
+      /** @description Members and pending invitations. */
+      members: components["schemas"]["Meter"];
+      playground_hours: components["schemas"]["HoursMeter"];
+      playground_size: components["schemas"]["PlaygroundSize"];
+      /** @description The largest schema (tables and views) among the latest versions. */
+      schema_size: components["schemas"]["Meter"];
+      /** @description The database with the most versions. */
+      versions: components["schemas"]["Meter"];
+    };
     /** @enum {string} */
     UserTypeKind: "enum" | "domain" | "composite";
     /** @description An approval of the draft a version was published from, as it was then. */
@@ -5007,6 +5457,13 @@ export interface components {
     VersionOrigin: "upload" | "push" | "draft" | "import";
     /** @description A page of versions, newest first. */
     VersionPage: {
+      /**
+       * Format: int64
+       * @description Older versions kept but not listed: past the plan's history window
+       *     (hosted billing). They come back with a plan that keeps them; an
+       *     export holds them all.
+       */
+      hidden: number;
       /**
        * Format: int32
        * @description Pass as `before` for the next page; `null` on the last one.
@@ -5648,6 +6105,57 @@ export interface operations {
       };
     };
   };
+  billing_webhook: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** @description A Stripe event, as Stripe signed it */
+    requestBody: {
+      content: {
+        "application/json": string;
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Received"];
+        };
+      };
+      /** @description `bad_signature` */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Billing is off on this server */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable`: Stripe could not be read; it retries */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   push_migrations: {
     parameters: {
       query?: {
@@ -6034,6 +6542,15 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
+      /** @description `plan_limit`: the organization's plan has no room for another member */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       /** @description `wrong_account` or `email_unverified` */
       403: {
         headers: {
@@ -6222,6 +6739,15 @@ export interface operations {
           "application/json": components["schemas"]["Org"];
         };
       };
+      /** @description `plan_limit`: more approvals than the plan allows (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       403: {
         headers: {
           [name: string]: unknown;
@@ -6240,6 +6766,213 @@ export interface operations {
         };
       };
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_billing: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OrgBilling"];
+        };
+      };
+      /** @description Billing is off on this server, or not a member */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  start_checkout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartCheckout"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BillingRedirect"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`: the Terms (or a consumer's requests) not accepted, or Free */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable`: Stripe did not answer */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_invoices: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["InvoiceSummary"][];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  open_billing_portal: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OpenPortal"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BillingRedirect"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `no_customer`: never subscribed; `no_subscription`: nothing to cancel or change */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable` */
+      503: {
         headers: {
           [name: string]: unknown;
         };
@@ -6302,6 +7035,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Database"];
+        };
+      };
+      /** @description `plan_limit`: the plan's databases are all used (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
       403: {
@@ -6604,6 +7346,15 @@ export interface operations {
       };
       /** @description `bad_request`: a number that is not one */
       400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `plan_limit`: a version past the plan's history window (hosted billing) */
+      402: {
         headers: {
           [name: string]: unknown;
         };
@@ -7563,6 +8314,48 @@ export interface operations {
       };
     };
   };
+  export_database: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description A ZIP: `<db>/manifest.json`, `versions/`, `migrations/`, `comments.json`, `drafts/` */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/zip": number[];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited`: too many exports for now */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   import_migrations: {
     parameters: {
       query?: {
@@ -7999,6 +8792,15 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
+      /** @description `plan_limit`: a version past the plan's history window (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       /** @description `not_found`: no such database, or no such version */
       404: {
         headers: {
@@ -8082,6 +8884,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["MigrationTest"];
+        };
+      };
+      /** @description `plan_limit`: a size or playground hours beyond the plan (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
       403: {
@@ -8319,6 +9130,15 @@ export interface operations {
           "application/json": components["schemas"]["Playground"];
         };
       };
+      /** @description `plan_limit`: a size or playground hours beyond the plan (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       403: {
         headers: {
           [name: string]: unknown;
@@ -8471,6 +9291,15 @@ export interface operations {
           "application/json": components["schemas"]["ConsoleEvent"];
         };
       };
+      /** @description `plan_limit`: the organization used its playground hours (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       /** @description Another origin */
       403: {
         headers: {
@@ -8532,6 +9361,15 @@ export interface operations {
         };
         content: {
           "application/x-ndjson": components["schemas"]["PlaygroundMigrationEvent"];
+        };
+      };
+      /** @description `plan_limit`: the organization used its playground hours (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
       403: {
@@ -8606,6 +9444,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Playground"];
+        };
+      };
+      /** @description `plan_limit`: the organization used its playground hours (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
       403: {
@@ -9191,6 +10038,15 @@ export interface operations {
           "application/json": components["schemas"]["VersionSummary"];
         };
       };
+      /** @description `plan_limit`: back over the plan's versions or schema size (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       /** @description Only admins restore versions */
       403: {
         headers: {
@@ -9725,6 +10581,54 @@ export interface operations {
       };
     };
   };
+  export_org: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description A ZIP: `manifest.json`, then a folder per database */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/zip": number[];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited`: too many exports for now */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   list_invitations: {
     parameters: {
       query?: never;
@@ -9777,6 +10681,15 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CreatedInvitation"];
+        };
+      };
+      /** @description `plan_limit`: the plan's members are all there (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
       403: {

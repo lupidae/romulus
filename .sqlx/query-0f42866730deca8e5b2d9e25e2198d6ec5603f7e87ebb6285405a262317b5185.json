@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\",\n                  v.server_version, v.pg_major, v.database_major,\n                  v.layout, v.removed_at, v.removal_reason\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE v.database_id = $1 AND (v.removed_at IS NULL OR $2)\n           ORDER BY v.number DESC LIMIT $3",
+  "query": "SELECT v.id, v.number, v.origin AS \"origin: VersionOrigin\",\n                  v.source_kind AS \"source_kind: SourceKind\", v.message, v.created_at,\n                  u.id AS \"user_id?\", u.name AS \"user_name?\", t.id AS \"token_id?\", t.name AS \"token_name?\",\n                  v.migration_sql IS NOT NULL AS \"written_migration!\",\n                  v.server_version, v.pg_major, v.database_major\n           FROM versions v\n           LEFT JOIN users u ON u.id = v.created_by\n           LEFT JOIN api_tokens t ON t.id = v.created_by_token\n           WHERE v.database_id = $1 AND v.removed_at IS NULL AND ($2::int IS NULL OR v.number < $2)\n             AND ($4::timestamptz IS NULL OR v.created_at >= $4 OR version_kept_visible(v.id, v.database_id))\n           ORDER BY v.number DESC LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -174,46 +174,14 @@
             "name": "database_major"
           }
         }
-      },
-      {
-        "ordinal": 14,
-        "name": "layout",
-        "type_info": "Jsonb",
-        "origin": {
-          "Table": {
-            "table": "versions",
-            "name": "layout"
-          }
-        }
-      },
-      {
-        "ordinal": 15,
-        "name": "removed_at",
-        "type_info": "Timestamptz",
-        "origin": {
-          "Table": {
-            "table": "versions",
-            "name": "removed_at"
-          }
-        }
-      },
-      {
-        "ordinal": 16,
-        "name": "removal_reason",
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "versions",
-            "name": "removal_reason"
-          }
-        }
       }
     ],
     "parameters": {
       "Left": [
         "Uuid",
-        "Bool",
-        "Int8"
+        "Int4",
+        "Int8",
+        "Timestamptz"
       ]
     },
     "nullable": [
@@ -230,11 +198,8 @@
       null,
       true,
       true,
-      false,
-      false,
-      true,
-      true
+      false
     ]
   },
-  "hash": "b62a4f5bb62c77f04afc613625286c3c2e5847aaa3867fec9ea64d3453fb8316"
+  "hash": "0f42866730deca8e5b2d9e25e2198d6ec5603f7e87ebb6285405a262317b5185"
 }

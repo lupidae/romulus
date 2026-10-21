@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM billing_events WHERE received_at < now() - interval '90 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "4a1a90140095209bce153416e81122baf71d1f644f2a5d6e2a60e7cc389aa0c0"
+}

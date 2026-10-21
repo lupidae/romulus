@@ -168,6 +168,14 @@ pub struct Fork {
     pub extensions: Vec<Extension>,
 }
 
+/// Why a playground is stopped, for the people in its console (the API
+/// stopping it at the end of an organization's playground hours). A stop
+/// without a body says it was stopped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Stop {
+    pub reason: String,
+}
+
 /// Run a migration on the generated rows: reset, then each statement in its
 /// own transaction, measured.
 #[derive(Debug, Clone, Serialize, Deserialize)]

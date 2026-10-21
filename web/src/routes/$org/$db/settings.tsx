@@ -13,6 +13,7 @@ import { Field } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
 import { toast } from "@/components/ui/toaster";
 import { Activity } from "@/features/databases/components/activity";
+import { DatabaseExportCard } from "@/features/databases/components/export-card";
 import { ApiTokens } from "@/features/databases/components/api-tokens";
 import { PostgresCard } from "@/features/databases/components/postgres-card";
 import { RemovedVersions } from "@/features/databases/components/removed-versions";
@@ -87,6 +88,7 @@ function Settings() {
       <ApiTokens org={org} database={database} />
       <RemovedVersions org={org} database={database} admin={canManageMembers(orgData.role)} />
       <Activity org={org} db={database.slug} />
+      <DatabaseExportCard org={org} db={database.slug} />
       <DeleteCard org={org} database={database} />
     </div>
   );

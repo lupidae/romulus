@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO playground_usage (org_id, month, seconds) VALUES ($1, $2, $3)\n         ON CONFLICT (org_id, month) DO UPDATE SET seconds = playground_usage.seconds + EXCLUDED.seconds",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9122223df700333e27b138a6839ed18f9ab3e547de5b7f5914c0655bd21ecd43"
+}

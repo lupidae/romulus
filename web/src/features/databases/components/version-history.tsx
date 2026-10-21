@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import * as React from "react";
 
@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { instanceQuery } from "@/features/auth/queries";
 import { cn } from "@/lib/utils";
 
 import { type Database, databaseKeys, neighbours, versionsQuery } from "../queries";
@@ -22,6 +23,7 @@ import { Byline, OriginBadge } from "./version-meta";
  */
 export function VersionHistory({ org, database }: { org: string; database: Database }) {
   const versions = useInfiniteQuery(versionsQuery(org, database.slug));
+  const billing = useQuery(instanceQuery).data?.billing === true;
   // At most two, in the order picked: a third replaces the first.
   const [picked, setPicked] = React.useState<number[]>([]);
   const toggle = (n: number, on: boolean) =>
@@ -57,6 +59,8 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
     );
   }
   const rows = versions.data.pages.flatMap((page) => page.versions);
+  // Past the plan's history window (hosted billing): kept, not listed.
+  const hidden = versions.data.pages[0]?.hidden ?? 0;
   const pair = picked.length === 2 ? ([Math.min(...picked), Math.max(...picked)] as const) : null;
   return (
     <Card>
@@ -201,6 +205,21 @@ export function VersionHistory({ org, database }: { org: string; database: Datab
             onClick={() => void versions.fetchNextPage()}
           >
             Show older versions
+          </Button>
+        </div>
+      )}
+      {!versions.hasNextPage && hidden > 0 && billing && (
+        <div className="flex flex-col gap-2 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-muted-foreground">
+            {hidden === 1
+              ? "1 older version is kept, hidden by your plan."
+              : `${hidden} older versions are kept, hidden by your plan.`}{" "}
+            An export holds them all.
+          </p>
+          <Button size="sm" asChild>
+            <Link to="/$org/settings/billing" params={{ org }}>
+              See plans
+            </Link>
           </Button>
         </div>
       )}

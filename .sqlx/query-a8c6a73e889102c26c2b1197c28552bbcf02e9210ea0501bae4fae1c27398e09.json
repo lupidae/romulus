@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT version_kept_visible($1, $2) AS \"kept!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kept!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a8c6a73e889102c26c2b1197c28552bbcf02e9210ea0501bae4fae1c27398e09"
+}

@@ -153,6 +153,7 @@ fn checked_email(email: &str) -> ApiResult<String> {
     request_body = CreateInvitation,
     responses(
         (status = 201, body = CreatedInvitation),
+        (status = 402, description = "`plan_limit`: the plan's members are all there (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 409, description = "`already_member`", body = ErrorBody),
         (status = 422, body = ErrorBody),
@@ -181,6 +182,21 @@ async fn create(
                 admin.org.name
             ),
         });
+    }
+    if let Some(plan) = state.billing.plan(&state.db, admin.org.id).await? {
+        // Members and other pending invitations (inviting an address again
+        // replaces its invitation).
+        let used = sqlx::query_scalar!(
+            r#"SELECT (SELECT count(*) FROM memberships WHERE org_id = $1)
+                    + (SELECT count(*) FROM invitations
+                       WHERE org_id = $1 AND accepted_at IS NULL AND expires_at > now()
+                         AND lower(email COLLATE pg_unicode_fast) <> lower($2 COLLATE pg_unicode_fast)) AS "n!""#,
+            admin.org.id,
+            email,
+        )
+        .fetch_one(&state.db)
+        .await?;
+        crate::billing::caps::members(plan, used)?;
     }
 
     let link = token::generate();
@@ -443,6 +459,7 @@ pub struct Accepted {
     responses(
         (status = 200, body = Accepted),
         (status = 401, body = ErrorBody),
+        (status = 402, description = "`plan_limit`: the organization's plan has no room for another member", body = ErrorBody),
         (status = 403, description = "`wrong_account` or `email_unverified`", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`invitation_expired` or `invitation_used`", body = ErrorBody),
@@ -518,8 +535,8 @@ async fn accept(
         }
         InvitationStatus::SignInRequired => return Err(ApiError::Unauthorized),
     }
-
     let mut tx = db::begin_read_committed(&state.db).await?;
+    room_for_a_member(&state.billing, &mut tx, found.org_id).await?;
     let role = claim(&mut tx, found.id, &link).await?.ok_or_else(used)?;
     sqlx::query!(
         "INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)
@@ -617,17 +634,42 @@ pub(crate) async fn org_name(db: &PgPool, id: Uuid) -> Result<Option<String>, sq
     .await
 }
 
+/// 402 `plan_limit` when the organization's plan has no room for another
+/// member, counted under its billing lock in `tx` (two acceptances at once
+/// cannot both pass). Nothing with billing off.
+pub(crate) async fn room_for_a_member(
+    billing: &crate::billing::Billing,
+    tx: &mut sqlx::PgConnection,
+    org: Uuid,
+) -> ApiResult<()> {
+    let Some(plan) = billing.plan(&mut *tx, org).await? else {
+        return Ok(());
+    };
+    crate::billing::lock_org(&mut *tx, org).await?;
+    let members = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM memberships WHERE org_id = $1"#,
+        org
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::billing::caps::members(plan, members)
+}
+
 /// Accepts invitation `id` for a password account just created with
 /// `email`: claims it (still live, still from an admin, for that address;
 /// by its link's token too when `link` is given) and adds the membership.
 /// `None` when it can no longer be accepted.
+///
+/// Within the organization's plan: 402 `plan_limit` past its members
+/// (counted in `tx`, under its billing lock), as accepting does.
 pub(crate) async fn claim_for(
+    billing: &crate::billing::Billing,
     tx: &mut sqlx::PgConnection,
     id: Uuid,
     link: Option<&str>,
     user_id: Uuid,
     email: &str,
-) -> Result<Option<Org>, sqlx::Error> {
+) -> ApiResult<Option<Org>> {
     let Some(claimed) = sqlx::query!(
         r#"UPDATE invitations i SET accepted_at = now()
            WHERE i.id = $1 AND ($2::bytea IS NULL OR i.token_hash = $2)
@@ -646,6 +688,7 @@ pub(crate) async fn claim_for(
     else {
         return Ok(None);
     };
+    room_for_a_member(billing, &mut *tx, claimed.org_id).await?;
     sqlx::query!(
         "INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)
          ON CONFLICT (org_id, user_id) DO NOTHING",

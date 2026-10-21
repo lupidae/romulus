@@ -6,6 +6,7 @@ use sqlx::PgPool;
 use crate::{
     Config,
     auth::{events::SessionEvents, oidc::Oidc, password},
+    billing::Billing,
     collab::Hub,
     compile::SqlCompiler,
     imports::Turns,
@@ -55,6 +56,8 @@ pub struct AppState {
     pub mailer: Mailer,
     /// Password sign-in's limits per client, address and person.
     pub passwords: Arc<password::throttle::Limits>,
+    /// Hosted billing (`ROMULUS_BILLING`), or off: no caps.
+    pub billing: Billing,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ impl AppState {
     pub fn new(db: PgPool, config: Config) -> Self {
         let config_playground = config.playground.clone();
         let mailer = Mailer::from_config(&config);
+        let billing = Billing::from_config(&config, db.clone());
         Self {
             collab: Hub::new(db.clone(), SqlCompiler::unavailable()),
             db,
@@ -81,7 +85,15 @@ impl AppState {
             migration_tests: MigrationTests::default(),
             mailer,
             passwords: Arc::new(password::throttle::Limits::default()),
+            billing,
         }
+    }
+
+    /// Billing of one's own (tests: on, with a fake Stripe).
+    #[must_use]
+    pub fn with_billing(mut self, billing: Billing) -> Self {
+        self.billing = billing;
+        self
     }
 
     /// A mailer of one's own (tests: `Mailer::memory`).

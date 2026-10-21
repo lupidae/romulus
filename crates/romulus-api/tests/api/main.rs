@@ -6,6 +6,7 @@
 
 mod approvals;
 mod auth;
+mod billing;
 mod collab;
 mod comment_attacks;
 mod comments;
@@ -14,6 +15,7 @@ mod databases;
 mod diff;
 mod draft_modes;
 mod drafts;
+mod export;
 mod harness;
 mod health;
 mod idp;

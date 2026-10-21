@@ -29,7 +29,8 @@ where that schema is kept, discussed and changed.
 
 - Fake data generation.
 - Index suggestions, hot path detection, performance-oriented design help.
-- Billing (the admin role exists, payment does not).
+- Billing (the admin role exists, payment does not). Since built for the hosted
+  service: see "Billing" below.
 - Review comments on a draft, approvals before publishing.
 
 ## Roles
@@ -43,7 +44,7 @@ Per organization, one role per member.
 | edit the draft, create versions, upload, API tokens | ✓ | ✓ | |
 | create / delete databases | ✓ | ✓ | |
 | invite, change roles, remove members | ✓ | | |
-| billing (later) | ✓ | | |
+| change billing (read: everyone) | ✓ | | |
 
 The collab server enforces read-only on the websocket, not only the UI: a
 reviewer's Yjs document updates are dropped server-side, while their awareness
@@ -993,6 +994,86 @@ email + password sign-in for self-hosters. This is what the build decided on top
 - Follow-ups: MFA (TOTP, WebAuthn), an online breached-password check (k-anonymity, opt-in), an
   admin page for accounts and the sign-in log, SSO configured from the app for self-hosters.
 
+## Billing (decided 2026-10-20, built: task BILL)
+
+Hosted only. Off unless `ROMULUS_BILLING` is set: then nothing is capped and
+the billing routes answer 404, so a self-hosted install is unchanged (the
+API refuses billing with `ROMULUS_SINGLE_ORG`). Stripe, test mode until the
+legal pages are online; the legal drafts await counsel and are not in the
+repository.
+
+- **The plan table** (`billing::plans`, the one place the numbers live;
+  enforcement, the billing page and `romulus-api stripe-setup` read it):
+
+  | | Free | Starter | Team | Business |
+  |---|---|---|---|---|
+  | € / month (a year: 10 months) | 0 | 19 | 49 | 149 |
+  | members | 1 | unlimited | unlimited | unlimited |
+  | databases | 1 | 3 | 10 | 50 |
+  | versions per database | 50 | 500 | unlimited | unlimited |
+  | tables + views per version | 50 | 200 | 1000 | 5000 |
+  | history shown | 90 days | 1 year | all | all |
+  | playgrounds: largest · hours a month | Small · 2 | Small · 20 | Medium · 80 | Medium · 300 |
+  | required approvals | none | 1 | up to 10 | up to 10 + admin override |
+
+- **Hard caps, never deletion.** Creating the next resource past a cap
+  answers 402 `plan_limit`, `details` = the cap, the plan, the limit, the
+  usage and the cheapest plan that lifts it (`billing::caps`); the message
+  says so in a sentence (CI pushes print it). Checked where things are
+  made: databases (under the organization's billing lock), versions and
+  schema size (`versions::store::store_capped`, under the database's lock;
+  unchanged pushes are never refused; imports all or none, counted before
+  the replay and again when stored), invitations and their acceptance,
+  raising the approvals setting (lowering always works), the override,
+  playground and migration test sizes. Removed versions do not count.
+  After a downgrade everything stays readable; only creating waits.
+- **History** is hidden, not deleted: versions older than the window are
+  left out of lists, the time machine and diffs, and opening one answers 402
+  (`billing::caps::visible`, SQL `version_kept_visible`): the latest version
+  and the base of an open draft always show. The history list says how many
+  are hidden; an upgrade shows them again; the export holds them.
+- **Playground hours**, the one metered resource (`billing::hours`): every
+  minute the host's running playgrounds (migration tests' included) are
+  counted to their organization's calendar month (UTC), a pause never
+  billed. 80 %: the admins are emailed. 100 %: running playgrounds stop with
+  the reason (their data stays until normal expiry; a test in progress
+  finishes), new playgrounds, tests, console runs, resets and migration
+  runs answer 402 until the month ends or the plan grows.
+- **Stripe**: Checkout (subscription mode, billing address required,
+  business name and VAT number collected, no Stripe Tax) after our own page
+  has an admin accept the Terms (`ROMULUS_TERMS_URL`, version
+  `ROMULUS_TERMS_VERSION`) and, for a consumer, ask for the service to start
+  at once and acknowledge the withdrawal terms: all audited
+  (`terms_accepted`). The customer is created first, carrying every
+  invoice's footer and custom fields (`ROMULUS_INVOICE_FOOTER`, `_FIELDS`:
+  the VAT mention and the seller, kept in configuration, not in code).
+  Changing plans and cancelling go through the Customer Portal configured by
+  `stripe-setup`: upgrades at once, prorated by Stripe; downgrades and
+  shorter intervals at the period's end (shown as "switches on"); cancel at
+  the period's end, no survey. The billing page's Cancel button opens the
+  portal's cancel flow directly.
+- **Webhooks** (`POST /api/billing/webhook`): verified on the raw body,
+  each event id stored with what it applied (idempotent), the subscription
+  always read again from Stripe under the organization's lock (order-proof;
+  an old subscription's late event never undoes the live one), every change
+  audited. A failed payment keeps the plan 14 days from the invoice's due
+  date (`billing::state`), with emails at the failure, three days before the
+  end and at the downgrade to Free (audited `plan_downgraded`).
+- **Renewal reminders** (`billing::notices`): 40 days before a yearly
+  renewal (more than one month, less than three: Article L215-1 of the
+  French Consumer Code), once a period, to every admin: the date, the
+  amount, how not to renew, a link to the Cancel button. The price-change
+  letter exists (`notices::price_change`) for whoever moves subscriptions
+  to a new price; nothing sends it on its own yet.
+- **Data export** (`export`, every plan, self-hosted too, never capped): a
+  database (any member) or the organization (admins) as a ZIP streamed as it
+  is written: each version's DDL, model and original source, the migration
+  between consecutive versions up and down with the renames chosen, the
+  comments, a manifest. Hidden versions included, removed ones listed.
+- Deviations from the data model: `org_billing`, `billing_events`,
+  `playground_usage`, `billing_notices`; audit actions for billing, kept
+  out of a database's activity.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).
@@ -1013,3 +1094,5 @@ email + password sign-in for self-hosters. This is what the build decided on top
 - Hosted service: the homepage on Cloudflare Pages; `/app` and `/api` proxied
   to the API by a Pages Function, keeping one origin. No Cloudflare Access:
   romulus's own sign-in protects it.
+- Hosted billing: Stripe, plans as hard caps that never delete, history hidden not
+  deleted, playground hours metered; off (and absent) on self-hosted installs.

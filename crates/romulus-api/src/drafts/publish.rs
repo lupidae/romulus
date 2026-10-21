@@ -162,7 +162,7 @@ pub(super) async fn preview(
     let latest = latest_number(&state.db, database.id).await?;
     let content = state.collab.content(id).await.map_err(hub_error)?;
     let sha256 = reviewed(&content);
-    let approvals = approvals::status(&state.db, member.org.id, member.role, &content).await?;
+    let approvals = approvals::status(&state, member.org.id, member.role, &content).await?;
     let number = crate::versions::next_number(&state.db, database.id).await?;
 
     let (model, diagnostics) = compiled(&state.collab, &content).await?;
@@ -411,7 +411,8 @@ async fn store(
     renames: Option<RenameChoices>,
 ) -> ApiResult<versions::Created> {
     let migration_sql = (content.mode == DraftMode::Migration).then(|| content.migration.clone());
-    let stored = versions::create_version(
+    let limits = state.billing.version_limits(&state.db, database.id).await?;
+    let stored = versions::create_version_capped(
         &state.db,
         versions::DraftVersion {
             database_id: database.id,
@@ -429,6 +430,7 @@ async fn store(
             discussion: content.discussion.clone(),
             renames,
         },
+        limits,
     )
     .await;
     match stored {

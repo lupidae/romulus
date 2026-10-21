@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_billing SET customer_id = $2, updated_at = now() WHERE org_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1e12d476a94c95277a3e57202ac46bfc81b3d96836565dabf76ba1d9c4e6eaa2"
+}

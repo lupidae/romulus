@@ -627,6 +627,7 @@ async fn list(
     request_body = CreatePlayground,
     responses(
         (status = 201, body = Playground),
+        (status = 402, description = "`plan_limit`: a size or playground hours beyond the plan (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`playground_exists` (`details.id`: open it), `playground_limit`", body = ErrorBody),

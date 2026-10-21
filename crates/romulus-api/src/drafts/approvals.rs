@@ -454,12 +454,19 @@ async fn approvers(db: &PgPool, org_id: Uuid, content: &Content) -> ApiResult<Ve
 
 /// What the publish dialog shows of the approvals of `content`.
 pub(super) async fn status(
-    db: &PgPool,
+    state: &AppState,
     org_id: Uuid,
     role: Role,
     content: &Content,
 ) -> ApiResult<PublishApprovals> {
+    let db = &state.db;
     let required = required(db, org_id).await?;
+    // Hosted, the override is a plan's (Business).
+    let plan_allows = state
+        .billing
+        .plan(db, org_id)
+        .await?
+        .is_none_or(|plan| plan.limits().approvals_override);
     Ok(PublishApprovals {
         required,
         approved_by: if required == 0 {
@@ -467,7 +474,7 @@ pub(super) async fn status(
         } else {
             approvers(db, org_id, content).await?
         },
-        can_override: role.can_manage_members(),
+        can_override: role.can_manage_members() && plan_allows,
     })
 }
 
@@ -521,6 +528,9 @@ pub(super) async fn gate(
                 code: "override_admins_only",
                 message: "Only admins can publish a draft without its approvals.".into(),
             });
+        }
+        if let Some(plan) = state.billing.plan(db, member.org.id).await? {
+            crate::billing::caps::approvals_override(plan)?;
         }
         if reason.chars().count() > 1000 {
             return Err(invalid(

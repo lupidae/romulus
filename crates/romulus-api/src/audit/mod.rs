@@ -14,8 +14,9 @@
 //! who approved it, or without the approvals it needed), `orgs` (the
 //! approvals required changed), `collab` (someone else's comments deleted
 //! in a draft, by its room's writer) and `playgrounds` (one created,
-//! deleted, reset, or a migration run on its rows). The actor's name is kept
-//! as it was.
+//! deleted, reset, or a migration run on its rows) and `billing` (the Terms
+//! accepted, subscriptions changed, payments, downgrades: org-level, kept
+//! out of a database's activity). The actor's name is kept as it was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -86,6 +87,59 @@ pub struct AuditDetails {
     /// (`failed at statement 4 of 7`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// Billing's events: the Terms accepted, a subscription changed, a
+    /// payment, the plan downgraded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billing: Option<BillingAudit>,
+}
+
+/// What a billing event records.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BillingAudit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<crate::domain::Plan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval: Option<crate::domain::Interval>,
+    /// Stripe's subscription status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The plan and status before a change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_plan: Option<crate::domain::Plan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_at_period_end: Option<bool>,
+    /// The Terms accepted, and as whom (`business`, `consumer`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buyer: Option<String>,
+    /// A consumer asked for the service to start at once…
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub immediate_start: Option<bool>,
+    /// …and acknowledged losing the right of withdrawal once it is fully
+    /// performed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdrawal_acknowledged: Option<bool>,
+    /// The Stripe event applied (webhooks), and its type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stripe_event: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount_cents: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// The month whose playground hours ran out (`2026-10`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub month: Option<String>,
+    /// The Stripe subscription it is about, when not the organization's own
+    /// (a duplicate cancelled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<String>,
 }
 
 /// One approval, as it was when the draft was published.
@@ -204,11 +258,13 @@ async fn activity(
            LEFT JOIN users u ON u.id = e.actor_id
            WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.org_id = $4))
              AND ($2::uuid IS NULL OR e.id < $2)
+             AND NOT (e.action = ANY($5))
            ORDER BY e.id DESC LIMIT $3"#,
         database.id,
         query.before,
         limit + 1,
         member.org.id,
+        &AuditAction::BILLING as &[AuditAction],
     )
     .fetch_all(&db)
     .await?;

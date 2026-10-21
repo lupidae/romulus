@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toaster";
+import { showUpgrade } from "@/features/billing/upgrade";
 
 import { useUpdateOrg } from "../mutations";
 import type { Org } from "../queries";
@@ -65,11 +66,13 @@ export function ApprovalsCard({ org, editable }: { org: Org; editable: boolean }
                         ? "Drafts no longer need approvals"
                         : `Drafts now need ${choiceLabel(next)} to publish`,
                     ),
-                  onError: (error) =>
+                  onError: (error) => {
+                    if (showUpgrade(error)) return;
                     toast.error("Could not save the setting", {
                       description:
                         error instanceof ApiError ? error.message : "Check your connection.",
-                    }),
+                    });
+                  },
                 },
               );
             }}

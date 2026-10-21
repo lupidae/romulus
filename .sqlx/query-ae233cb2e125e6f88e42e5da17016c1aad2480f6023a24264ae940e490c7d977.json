@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.name, coalesce(jsonb_array_length(l.model -> 'entities'), 0) AS \"objects!\"\n           FROM databases d\n           CROSS JOIN LATERAL (\n               SELECT model FROM versions\n               WHERE database_id = d.id AND removed_at IS NULL ORDER BY number DESC LIMIT 1\n           ) l\n           WHERE d.org_id = $1 AND d.deleted_at IS NULL\n           ORDER BY 2 DESC, d.name LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "objects!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "ae233cb2e125e6f88e42e5da17016c1aad2480f6023a24264ae940e490c7d977"
+}

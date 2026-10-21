@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(max(jsonb_array_length(model -> 'entities')), 0) AS \"n!\"\n               FROM import_staging WHERE import_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1faf1aedcd5cbc9de183613d15ec178977ebb5c7391ab8f31d60b554be1e511d"
+}

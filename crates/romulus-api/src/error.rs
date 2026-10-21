@@ -30,6 +30,10 @@ pub enum ApiError {
     /// 400: the request is malformed.
     #[error("{0}")]
     BadRequest(String),
+    /// 400 with a specific code (`bad_signature`: a webhook not signed by
+    /// its sender).
+    #[error("{message}")]
+    Rejected { code: &'static str, message: String },
     /// 422: well-formed but invalid input; `details` can carry per-field messages.
     #[error("{message}")]
     Validation {
@@ -78,6 +82,14 @@ pub enum ApiError {
     /// 409, with a specific code (`slug_taken`, `last_admin`, `stale_base`…).
     #[error("{message}")]
     Conflict { code: &'static str, message: String },
+    /// 402 `plan_limit`: the organization's plan does not allow it (hosted
+    /// billing). `details` is a `billing::PlanLimitDetails`: the cap, the
+    /// usage, the plan, the plan that lifts it. Nothing was changed.
+    #[error("{message}")]
+    PlanLimit {
+        message: String,
+        details: serde_json::Value,
+    },
     /// 413.
     #[error("request body too large")]
     PayloadTooLarge,
@@ -114,7 +126,7 @@ impl ApiError {
 
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::BadRequest(_) | Self::Rejected { .. } => StatusCode::BAD_REQUEST,
             Self::Validation { .. } | Self::Unprocessable { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
@@ -126,6 +138,7 @@ impl ApiError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::PlanLimit { .. } => StatusCode::PAYMENT_REQUIRED,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
@@ -149,9 +162,11 @@ impl ApiError {
             Self::NotFound(_) => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",
             Self::Denied { code, .. }
+            | Self::Rejected { code, .. }
             | Self::Conflict { code, .. }
             | Self::Unprocessable { code, .. }
             | Self::Down { code, .. } => code,
+            Self::PlanLimit { .. } => "plan_limit",
             Self::PayloadTooLarge => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::RateLimited { .. } => "rate_limited",
@@ -223,6 +238,7 @@ impl ApiError {
             Self::Validation { details, .. } | Self::Unprocessable { details, .. } => {
                 details.clone()
             }
+            Self::PlanLimit { details, .. } => Some(details.clone()),
             // Also in `Retry-After`, which a page's fetch wrapper may not read.
             Self::RateLimited { retry_after } => {
                 Some(serde_json::json!({ "retry_after": whole_seconds(*retry_after) }))

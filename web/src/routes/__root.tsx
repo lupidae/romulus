@@ -5,6 +5,7 @@ import { lazy, Suspense } from "react";
 import { ErrorPage, NotFoundPage } from "@/components/shell/status-page";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { UpgradeDialogHost } from "@/features/billing/components/upgrade-prompt";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -26,6 +27,8 @@ function Root() {
     <TooltipProvider>
       <HeadContent />
       <Outlet />
+      {/* A refusal by the organization's plan, from any screen (showUpgrade). */}
+      <UpgradeDialogHost />
       <Toaster />
       <Suspense>
         <Devtools />

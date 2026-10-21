@@ -39,13 +39,13 @@ use super::{
 
 /// What the fake host was asked.
 #[derive(Default)]
-struct Calls {
-    builds: Vec<(Uuid, Build, Caller)>,
+pub(super) struct Calls {
+    pub(super) builds: Vec<(Uuid, Build, Caller)>,
     migrations: Vec<(Uuid, Migrate, Caller)>,
     resets: Vec<Uuid>,
     destroyed: Vec<Uuid>,
     consoles: Vec<(Uuid, Access)>,
-    live: HashSet<Uuid>,
+    pub(super) live: HashSet<Uuid>,
     /// The host's free and total disk (100 and 200 GiB unless set).
     free_bytes: Option<u64>,
     total_bytes: Option<u64>,
@@ -53,6 +53,8 @@ struct Calls {
     space_unknown: bool,
     /// Resets and migration runs answer 409 `busy`.
     busy: bool,
+    /// Playgrounds stopped, and why (billing: hours used up).
+    pub(super) stops: Vec<(Uuid, String)>,
 }
 
 fn busy() -> HostError {
@@ -64,10 +66,10 @@ fn busy() -> HostError {
 }
 
 #[derive(Clone, Default)]
-struct FakeHost(Arc<Mutex<Calls>>);
+pub(super) struct FakeHost(Arc<Mutex<Calls>>);
 
 impl FakeHost {
-    fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
+    pub(super) fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -192,6 +194,11 @@ impl Backend for FakeHost {
                 ..Status::default()
             })
         })
+    }
+
+    fn stop(&self, id: Uuid, _: Caller, reason: String) -> BoxFuture<'_, Result<(), HostError>> {
+        self.calls().stops.push((id, reason));
+        Box::pin(async { Ok(()) })
     }
 
     fn destroy(&self, id: Uuid, _: Caller) -> BoxFuture<'_, Result<(), HostError>> {
@@ -327,7 +334,7 @@ impl Backend for FakeHost {
     }
 }
 
-const V1: &str = "CREATE TABLE public.customers (id bigint PRIMARY KEY);\n";
+pub(super) const V1: &str = "CREATE TABLE public.customers (id bigint PRIMARY KEY);\n";
 const GIB: u64 = 1024 * 1024 * 1024;
 
 /// An app with a fake host and the live collab (drafts compile), team
@@ -760,7 +767,7 @@ async fn deleting_destroys_it_on_the_host_and_is_audited(db: PgPool) {
     );
 }
 
-async fn console(
+pub(super) async fn console(
     addr: std::net::SocketAddr,
     url: &str,
     who: Option<&Session>,

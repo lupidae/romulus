@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 pub use self::host::{Config, Host, HostError};
 use crate::{
-    protocol::{Access, Build, ErrorBody, Fork, Health, Listing, Migrate, Status, Test, limits},
+    protocol::{
+        Access, Build, ErrorBody, Fork, Health, Listing, Migrate, Status, Stop, Test, limits,
+    },
     signing::{Claims, Op},
 };
 
@@ -376,10 +378,19 @@ async fn stop(
     State(host): State<Arc<Host>>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Result<Json<Status>, Failure> {
-    let claims = verify(&host, &headers, Op::Stop, Some(id), None)?;
+    let claims = verify(&host, &headers, Op::Stop, Some(id), Some(&body))?;
+    // With a body, the API says why (its sessions hear it).
+    let why = if body.is_empty() {
+        "the playground was stopped".to_owned()
+    } else {
+        let stop: Stop = serde_json::from_slice(&body)
+            .map_err(|err| Failure::new(StatusCode::BAD_REQUEST, "bad_request", err.to_string()))?;
+        stop.reason.chars().take(500).collect()
+    };
     let entry = host.entry(id, claims.org);
-    host.stop(&entry, "the playground was stopped").await?;
+    host.stop(&entry, &why).await?;
     Ok(Json(host.status(id).await?))
 }
 

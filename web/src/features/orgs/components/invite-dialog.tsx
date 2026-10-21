@@ -42,7 +42,7 @@ export function InviteDialog({ open, onOpenChange, slug, orgName, pending }: Inv
 
   return (
     <Dialog open={open} onOpenChange={change}>
-      <DialogContent>
+      <DialogContent fit>
         {created ? (
           <>
             <DialogHeader>

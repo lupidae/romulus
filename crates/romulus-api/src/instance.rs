@@ -13,6 +13,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[allow(clippy::struct_excessive_bools, reason = "what is on, one flag each")]
 pub struct Instance {
     /// One organization per install (`ROMULUS_SINGLE_ORG`): no way to create
     /// another.
@@ -21,6 +22,9 @@ pub struct Instance {
     pub mail: bool,
     /// Playgrounds are set up on this server (`ROMULUS_PLAY_URL`).
     pub playgrounds: bool,
+    /// Plans and billing (the hosted service, `ROMULUS_BILLING`): the app
+    /// shows the billing page and upgrade prompts.
+    pub billing: bool,
 }
 
 /// How this server is set up.
@@ -36,5 +40,6 @@ async fn instance(State(state): State<AppState>) -> Json<Instance> {
         single_org: state.config.single_org,
         mail: state.mailer.is_on(),
         playgrounds: state.config.playground.is_some(),
+        billing: state.billing.is_on(),
     })
 }

@@ -194,6 +194,7 @@ async fn remove(
         (status = 200, body = VersionSummary),
         (status = 403, description = "Only admins restore versions", body = ErrorBody),
         (status = 404, body = ErrorBody),
+        (status = 402, description = "`plan_limit`: back over the plan's versions or schema size (hosted billing)", body = ErrorBody),
         (status = 409, description = "`version_not_removed`, `restore_expired` (removed more than 30 days ago)", body = ErrorBody),
     )
 )]
@@ -203,8 +204,30 @@ async fn restore(
     Path((_, slug, number)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<VersionSummary>> {
     let database = databases::find(&state.db, member.org.id, &slug).await?;
+    let limits = state.billing.version_limits(&state.db, database.id).await?;
     let mut tx = state.db.begin().await?;
     lock(&mut tx, database.id).await?;
+    if limits != crate::billing::VersionLimits::NONE {
+        // Back among the versions the plan counts, under the lock new
+        // versions are numbered under: within the plan's caps, or 402.
+        let objects = sqlx::query_scalar!(
+            r#"SELECT coalesce(jsonb_array_length(model -> 'entities'), 0) AS "n!" FROM versions
+               WHERE database_id = $1 AND number = $2 AND removed_at IS NOT NULL"#,
+            database.id,
+            number,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(objects) = objects {
+            let live = sqlx::query_scalar!(
+                r#"SELECT count(*) AS "n!" FROM versions WHERE database_id = $1 AND removed_at IS NULL"#,
+                database.id,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            limits.check(live, 1, usize::try_from(objects).unwrap_or(0))?;
+        }
+    }
     let restored = sqlx::query!(
         "UPDATE versions SET removed_at = NULL, removed_by = NULL, removal_reason = NULL
          WHERE database_id = $1 AND number = $2 AND removed_at IS NOT NULL

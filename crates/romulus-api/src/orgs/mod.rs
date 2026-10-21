@@ -250,15 +250,18 @@ async fn get(member: Member) -> Json<Org> {
     request_body = UpdateOrg,
     responses(
         (status = 200, body = Org),
+        (status = 402, description = "`plan_limit`: more approvals than the plan allows (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 409, description = "`slug_taken`", body = ErrorBody),
         (status = 422, body = ErrorBody),
     )
 )]
+#[allow(clippy::too_many_lines, reason = "each setting, then its audit event")]
 async fn update(
     member: Member<min::Admin>,
     State(db): State<PgPool>,
     State(collab): State<crate::collab::Hub>,
+    State(billing): State<crate::billing::Billing>,
     Json(body): Json<UpdateOrg>,
 ) -> ApiResult<Json<Org>> {
     let name = body.name.as_deref().map(checked_name).transpose()?;
@@ -278,6 +281,14 @@ async fn update(
         })
         .transpose()?;
     let shown = slug.clone().unwrap_or_default();
+    // Raising the approvals publishing needs past what the plan allows is
+    // refused; lowering always works (after a downgrade, too).
+    if let Some(wanted) = approvals
+        && wanted > member.org.approvals_required
+        && let Some(plan) = billing.plan(&db, member.org.id).await?
+    {
+        crate::billing::caps::approvals(plan, wanted.into())?;
+    }
     let mut tx = db.begin().await?;
     let before = sqlx::query!(
         "SELECT approvals_required, require_passing_test FROM organizations

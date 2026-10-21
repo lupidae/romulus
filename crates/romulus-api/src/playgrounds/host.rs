@@ -13,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use romulus_playground::{
     protocol::{
         Access, Build, BuildEvent, ErrorBody, Fork, Health, Listing, Migrate, MigrationEvent,
-        Status, Test, TestEvent,
+        Status, Stop, Test, TestEvent,
     },
     signing::{Claims, Op},
 };
@@ -143,6 +143,17 @@ pub trait Backend: Send + Sync + 'static {
         Box::pin(async { Err(HostError::Off) })
     }
     fn reset(&self, id: Uuid, caller: Caller) -> BoxFuture<'_, Result<Status, HostError>>;
+    /// Stops it (its disk kept; the next use starts it), its console told
+    /// `reason`. A host without it is off.
+    fn stop(
+        &self,
+        id: Uuid,
+        caller: Caller,
+        reason: String,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
+        let _ = (id, caller, reason);
+        Box::pin(async { Err(HostError::Off) })
+    }
     fn destroy(&self, id: Uuid, caller: Caller) -> BoxFuture<'_, Result<(), HostError>>;
     fn status(&self, id: Uuid, caller: Caller) -> BoxFuture<'_, Result<Status, HostError>>;
     fn list(&self) -> BoxFuture<'_, Result<Listing, HostError>>;
@@ -407,6 +418,32 @@ impl Backend for Remote {
                 Duration::from_mins(5),
             )
             .await
+        })
+    }
+
+    fn stop(
+        &self,
+        id: Uuid,
+        caller: Caller,
+        reason: String,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            let body = serde_json::to_vec(&Stop { reason })
+                .map_err(|e| HostError::Unavailable(e.to_string()))?;
+            let response = self
+                .http
+                .post(self.url(&format!("playgrounds/{id}/stop")))
+                .header(
+                    "authorization",
+                    self.sign(Op::Stop, Some(id), &caller, Some(&body)),
+                )
+                .header("content-type", "application/json")
+                .body(body)
+                .timeout(Duration::from_mins(1))
+                .send()
+                .await
+                .map_err(|e| HostError::Unavailable(e.to_string()))?;
+            Self::answer::<serde_json::Value>(response).await.map(drop)
         })
     }
 
