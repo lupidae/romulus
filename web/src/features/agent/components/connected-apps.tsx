@@ -114,7 +114,7 @@ export function ConnectedApps() {
         open={leaving !== null}
         onOpenChange={(open) => !open && setLeaving(null)}
         title={`Disconnect ${name(leaving)}?`}
-        description="It loses access to romulus at once; to use it again, connect it again from your agent. What it already changed stays, with your name."
+        description="It loses access at once; connect it again from your agent to use it. What it changed stays."
         confirmLabel="Disconnect"
         destructive
         onConfirm={() => {

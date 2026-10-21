@@ -17,7 +17,7 @@ function ConnectedAppsPage() {
     <div className="grid w-full max-w-3xl gap-6">
       <PageHeader
         title="Connected apps"
-        description="AI agents you approved by signing in. Each works in romulus as you; disconnect one to cut it off."
+        description="AI agents you approved. Each acts as you until you disconnect it."
       />
       <ConnectedApps />
     </div>
