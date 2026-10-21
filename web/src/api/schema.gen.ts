@@ -3774,7 +3774,8 @@ export interface components {
       expires_at: string;
       /**
        * Format: int64
-       * @description Files received (one sent in parts counts once), and their size.
+       * @description Files received (one sent in parts counts once), and what they weigh
+       *     (paths and contents, in bytes).
        */
       files: number;
       /** Format: uuid */
@@ -10816,6 +10817,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
+      /** @description `review_required`: an agent's import into a database with versions, in an organization that reviews changes (write a draft instead); `forbidden` */
       403: {
         headers: {
           [name: string]: unknown;

@@ -284,6 +284,12 @@ fn explain(failure: &Failure) -> String {
             "Another import of this database is running (maybe this one, sent twice): wait for \
              it (get_import), then try again if it is still needed.",
         ),
+        "review_required" => Some(
+            "Nothing was imported. This organization reviews changes, so an agent's import \
+             only brings a history into a database without versions. Write the change as a \
+             draft instead: create_draft in migration mode with the new migration's SQL, then \
+             test_migration and request_review; publishing it makes the version once approved.",
+        ),
         "upload_expired" => {
             Some("Send every file again with a new import_migrations call (without `upload`).")
         }

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_uploads\n             SET status = 'checked', outcome = $2, progress = NULL, updated_at = now(),\n                 expires_at = least(now() + interval '1 hour', created_at + interval '24 hours')\n             WHERE id = $1 AND status = 'importing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "17b64fa1f1492e2ab5ed84afdfd69b89567be3b09650821744175a15a5652794"
+}

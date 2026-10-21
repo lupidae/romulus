@@ -1229,6 +1229,16 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
   same endpoints and options), paged at 50 KB of content, every page pinned by a cursor to
   the first one's version and the draft's reviewed text. Code tools (Rails, Django, Alembic)
   get `plain` SQL to wrap in a migration of theirs: romulus generates no Ruby or Python.
+  Review first: in an organization that requires approvals or a passing test, an agent's
+  import only brings a history into a database without live versions (onboarding); past
+  that it is refused (403 `review_required`) and the change goes through a draft in
+  migration mode, so the rules for publishing apply to agents too (`run::Gate`, decided on
+  the plan; storing refuses a history that moved since). Dry runs pass; the web's and CI's
+  imports are not gated. An upload lives a day at most, counts what it holds on its row
+  (files, parts, bytes with the paths'), takes 10 parts a file and paths of 512 bytes
+  (NFC, no format characters); its import starts in a task of its own and is kept alive by
+  a heartbeat. A file's markers carry a code drawn per answer and its length, so no
+  content (a comment, a name) can forge the end of one file or the start of another.
 
 ## Retention and deletion (decided 2026-10-21, built: task RETAIN)
 

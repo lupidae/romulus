@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM import_uploads WHERE status <> 'imported'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "2c536d7dcf927ee7e60f3972975a879b86d759b7c59a3417555ce1aded2b7982"
+}

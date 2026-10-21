@@ -18,16 +18,32 @@
 //!   (`part` 1, 2…), joined in order when imported.
 //! - `POST …/imports/uploads/{id}/import` [developer]: imports the files
 //!   (a JSON body: `format`, `append`, `dry_run`, as for an import). What the import
-//!   refuses before it runs is answered at once (409, 402, 422); otherwise
-//!   202 and the import runs on.
+//!   refuses before it runs is answered at once (409, 402, 422, 403); otherwise
+//!   202 and the import runs on. An agent's import (an access token, through
+//!   MCP) in an organization that reviews changes (approvals or a passing
+//!   test required) only gives a database without a live version its
+//!   history: past that, 403 `review_required`, and the change goes through
+//!   a draft ([`run::Gate`]). The web's and CI's imports are not gated.
 //! - `GET …/imports/uploads/{id}` [member]: where it stands.
 //!
 //! The files stay until an import stores them: after a refusal, a failure
 //! or a dry run, fix a file (send it again) and import again. An upload
 //! expires an hour after its last files or its last import ended (a day
-//! once imported); expired, it answers 409 `upload_expired` for a day, then
-//! is gone ([`sweep`]). A person has [`MAX_OPEN`] uploads in progress at
-//! most.
+//! once imported), and a day after it started whatever happens; expired,
+//! it answers 409 `upload_expired` for a day, then is gone ([`sweep`]). A
+//! person has [`MAX_OPEN`] uploads in progress at most (counted under a
+//! lock of theirs). What an upload holds is counted on its row as files
+//! arrive (files, parts, bytes with the paths'), never by reading them all
+//! again. Paths are NFC, 512 bytes at most, without control or format
+//! characters (bidi overrides, zero-width spaces).
+//!
+//! The import's start runs in a task of its own: a client leaving (or a
+//! timeout) mid-plan never leaves the upload `importing` with no import
+//! behind it. While it runs, [`record`] keeps the row alive (progress, or a
+//! heartbeat while it waits for its turn); one that stops showing life and
+//! is no longer running in this process was lost with it ([`sweep`]).
+
+use std::time::Duration;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -39,13 +55,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
 use tokio::sync::mpsc;
+use unicode_normalization::UnicodeNormalization;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use super::{
-    ImportEvent, ImportOptions, ImportPreview, ImportReport,
-    run::{self, Author, Target},
+    ImportEvent, ImportOptions, ImportPreview, ImportReport, Turns,
+    run::{self, Author, Gate, Target},
     upload,
 };
 use crate::{
@@ -61,12 +79,21 @@ use crate::{
 /// One request's body at most: files sent through MCP (4 MiB a message)
 /// arrive here re-encoded, with room to spare.
 const CHUNK_LIMIT: usize = 8 << 20;
-/// Parts of one file, at most.
-const MAX_PARTS: i32 = 100;
+/// Parts of one file, at most: a file's 8 MiB in messages of 4.
+const MAX_PARTS: i32 = 10;
+/// Rows (files and their parts) of one upload, at most: [`upload::MAX_FILES`]
+/// files of [`MAX_PARTS`] parts (a test keeps them in step).
+const MAX_ROWS: i64 = 50_000;
+/// A path's length in bytes, at most.
+const PATH_BYTES: usize = 512;
 /// A person's uploads in progress (not imported, not expired), at most.
 pub const MAX_OPEN: i64 = 3;
-/// An import silent this long (no progress) was lost with its process.
-const LOST_AFTER_MINUTES: i32 = 30;
+/// How often a running import shows it is alive while nothing happens
+/// (waiting for its turn, a long migration).
+const HEARTBEAT: Duration = Duration::from_mins(1);
+/// An import silent this long, and no longer running here, was lost with
+/// its process.
+const LOST_AFTER_MINUTES: i32 = 5;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -157,7 +184,8 @@ impl ImportProgress {
 pub struct ImportUpload {
     pub id: Uuid,
     pub status: ImportUploadStatus,
-    /// Files received (one sent in parts counts once), and their size.
+    /// Files received (one sent in parts counts once), and what they weigh
+    /// (paths and contents, in bytes).
     pub files: i64,
     pub bytes: i64,
     /// The last import asked was a dry run.
@@ -208,6 +236,14 @@ async fn start_upload(
     state.limits.import_uploads.check(member.user.id)?;
     let files = checked(body.files)?;
     let mut tx = state.db.begin().await?;
+    // The person's uploads counted under a lock of theirs: two starts at
+    // once cannot both see room for one more.
+    sqlx::query!(
+        r#"SELECT 1 AS "locked!" FROM pg_advisory_xact_lock(hashtextextended('import_uploads:' || $1::uuid::text, 0))"#,
+        member.user.id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
     let open = sqlx::query_scalar!(
         r#"SELECT count(*) AS "n!" FROM import_uploads
            WHERE created_by = $1 AND status <> 'imported' AND expires_at > now()"#,
@@ -219,7 +255,7 @@ async fn start_upload(
         return Err(ApiError::Conflict {
             code: "too_many_uploads",
             message: format!(
-                "You have {open} uploads of migrations in progress: import one (or let it expire, an hour after its last files) before starting another."
+                "You have {open} uploads of migrations in progress: import one (or let it expire, an hour after its last files, a day after it started) before starting another."
             ),
         });
     }
@@ -275,7 +311,7 @@ async fn add_files(
     sqlx::query!(
         "UPDATE import_uploads
          SET status = 'open', progress = NULL, outcome = NULL, updated_at = now(),
-             expires_at = now() + interval '1 hour'
+             expires_at = least(now() + interval '1 hour', created_at + interval '24 hours')
          WHERE id = $1",
         id,
     )
@@ -304,7 +340,7 @@ async fn add_files(
     responses(
         (status = 202, description = "The import runs: read the upload to follow it", body = ImportUpload),
         (status = 402, description = "`plan_limit`: the versions would pass the plan's cap; nothing stored", body = ErrorBody),
-        (status = 403, body = ErrorBody),
+        (status = 403, description = "`review_required`: an agent's import into a database with versions, in an organization that reviews changes (write a draft instead); `forbidden`", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`upload_expired`, `upload_busy`, `upload_closed`; the import's own: `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import`", body = ErrorBody),
         (status = 422, description = "`incomplete_upload` (a part missing), `invalid_migrations`, `import_failed` (a syntax error), `too_many_migrations`, `validation`", body = ErrorBody),
@@ -342,33 +378,81 @@ async fn import_upload(
         slug: database.slug,
         major: database.pg_major,
     };
-    let dry_run = options.dry_run;
+    // An agent brings a history in; it never adds to one past the review
+    // its organization asks of every change.
+    let reviews = member.org.approvals_required > 0 || member.org.require_passing_test;
+    let gate = if member.user.via.is_some() && reviews {
+        Gate::FirstHistoryOnly
+    } else {
+        Gate::Open
+    };
     let options = ImportOptions {
         format: options.format,
         append: options.append,
-        dry_run,
+        dry_run: options.dry_run,
         filename: None,
     };
-    let job = match run::prepare(
-        state.clone(),
+    // In a task of its own: once the upload says `importing`, the import
+    // is planned and started (or the upload marked failed) even if this
+    // request goes away meanwhile.
+    let start = Start {
+        state: state.clone(),
+        id,
         target,
-        Author::User(member.user.id),
+        author: Author::User(member.user.id),
         files,
         options,
-    )
-    .await
-    {
-        Ok(job) => job,
-        Err(err) => {
-            failed(&state.db, id, &err.body()).await;
-            return Err(err);
-        }
+        gate,
     };
-    let progress = ImportProgress::planned(job.preview());
-    save_progress(&state.db, id, &progress).await;
-    tokio::spawn(record(state.db.clone(), id, job.spawn(), progress, dry_run));
+    match tokio::spawn(start.run()).await {
+        Ok(started) => started?,
+        Err(panicked) => {
+            failed(&state.db, id, &lost("The import could not start")).await;
+            return Err(ApiError::internal(panicked));
+        }
+    }
     let upload = load(&state.db, database.id, id, member.user.id).await?;
     Ok((StatusCode::ACCEPTED, Json(upload)))
+}
+
+/// An upload's import, from its plan to its job running (see
+/// [`import_upload`]).
+struct Start {
+    state: AppState,
+    id: Uuid,
+    target: Target,
+    author: Author,
+    files: Vec<SourceFile>,
+    options: ImportOptions,
+    gate: Gate,
+}
+
+impl Start {
+    /// Plans the import: refused, the upload says why (`failed`, files
+    /// kept); otherwise its job runs and [`record`] follows it.
+    async fn run(self) -> ApiResult<()> {
+        let Self {
+            state,
+            id,
+            target,
+            author,
+            files,
+            options,
+            gate,
+        } = self;
+        let dry_run = options.dry_run;
+        let job = match run::prepare(state.clone(), target, author, files, options, gate).await {
+            Ok(job) => job,
+            Err(err) => {
+                failed(&state.db, id, &err.body()).await;
+                return Err(err);
+            }
+        };
+        let progress = ImportProgress::planned(job.preview());
+        save_progress(&state.db, id, &progress).await;
+        tokio::spawn(record(state.db.clone(), id, job.spawn(), progress, dry_run));
+        Ok(())
+    }
 }
 
 /// An upload: its files, and its import's progress or outcome. Its starter
@@ -463,6 +547,14 @@ fn checked(files: Vec<UploadedFile>) -> ApiResult<Vec<Checked>> {
                 &format!("{path}: `part` goes from 1 to {MAX_PARTS}."),
             ));
         }
+        // Rows are what an upload counts: an empty one may only be a whole
+        // (empty) file, never a part adding nothing.
+        if part > 1 && file.content.is_empty() {
+            return Err(invalid(
+                "content",
+                &format!("{path}: part {part} is empty; send only parts with content."),
+            ));
+        }
         if file.content.contains('\0') {
             return Err(ApiError::Unprocessable {
                 code: "invalid_file",
@@ -484,9 +576,11 @@ fn checked(files: Vec<UploadedFile>) -> ApiResult<Vec<Checked>> {
         .collect())
 }
 
-/// `path` relative, with `/` (`./a\b.sql` → `a/b.sql`), or 422: never
-/// absolute, never `..` (a path is kept with its version, and must say
-/// where the file is in the project, not on someone's disk).
+/// `path` relative, with `/` (`./a\b.sql` → `a/b.sql`), in NFC, or 422:
+/// never absolute, never `..`, no control or format characters (a bidi
+/// override or a zero-width space would make a path read as another), 512
+/// bytes at most (a path is kept with its version, and must say where the
+/// file is in the project, not on someone's disk).
 fn relative_path(path: &str) -> ApiResult<String> {
     let refuse = |why: &str| {
         Err(invalid(
@@ -496,7 +590,7 @@ fn relative_path(path: &str) -> ApiResult<String> {
             ),
         ))
     };
-    let mut path = path.trim().replace('\\', "/");
+    let mut path: String = path.trim().replace('\\', "/").nfc().collect();
     while let Some(rest) = path.strip_prefix("./") {
         path = rest.to_owned();
     }
@@ -505,6 +599,15 @@ fn relative_path(path: &str) -> ApiResult<String> {
     }
     if path.chars().any(char::is_control) {
         return refuse(&format!("{path:?} holds control characters"));
+    }
+    if path
+        .chars()
+        .any(|c| c.general_category() == GeneralCategory::Format)
+    {
+        return refuse(&format!(
+            "{} holds invisible formatting characters (bidi controls, zero-width spaces)",
+            path.escape_default()
+        ));
     }
     let drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes()[0].is_ascii_alphabetic();
     if path.starts_with('/') || path.starts_with('~') || drive {
@@ -516,53 +619,87 @@ fn relative_path(path: &str) -> ApiResult<String> {
     {
         return refuse(&format!("{path} is not a plain relative path"));
     }
-    if path.chars().count() > 1_000 {
-        return refuse("A path is longer than 1000 characters");
+    if path.len() > PATH_BYTES {
+        return refuse(&format!("A path is longer than {PATH_BYTES} bytes"));
     }
     Ok(path)
 }
 
-/// Stores `files` in the upload, then checks what it holds against what an
-/// import reads (the transaction is dropped otherwise).
+/// Stores `files` in the upload (its row locked by the caller: [`claim`],
+/// or just inserted), keeps its totals (files, parts, bytes) and checks
+/// them against what an import reads; only the rows of the paths sent are
+/// read (the transaction is dropped on a refusal).
 async fn add(tx: &mut Transaction<'_, Postgres>, id: Uuid, files: Vec<Checked>) -> ApiResult<()> {
-    if !files.is_empty() {
-        let (mut paths, mut parts, mut contents) = (Vec::new(), Vec::new(), Vec::new());
-        for file in files {
-            paths.push(file.path);
-            parts.push(file.part);
-            contents.push(file.content);
-        }
-        sqlx::query!(
-            "INSERT INTO import_upload_files (upload_id, path, part, content)
-             SELECT $1::uuid, * FROM unnest($2::text[], $3::int[], $4::text[])
-             ON CONFLICT (upload_id, path, part) DO UPDATE SET content = EXCLUDED.content",
-            id,
-            &paths,
-            &parts,
-            &contents,
-        )
-        .execute(&mut **tx)
-        .await?;
+    if files.is_empty() {
+        return Ok(());
     }
-    let held = sqlx::query!(
-        r#"SELECT count(DISTINCT path) AS "files!",
-                  coalesce(sum(octet_length(content)), 0)::bigint AS "bytes!",
-                  (SELECT path FROM import_upload_files WHERE upload_id = $1
-                   GROUP BY path HAVING sum(octet_length(content)) > $2 LIMIT 1) AS too_large
-           FROM import_upload_files WHERE upload_id = $1"#,
+    let (mut paths, mut parts, mut contents) = (Vec::new(), Vec::new(), Vec::new());
+    let mut incoming: i64 = 0;
+    for file in files {
+        incoming = incoming.saturating_add(
+            i64::try_from(file.path.len() + file.content.len()).unwrap_or(i64::MAX),
+        );
+        paths.push(file.path);
+        parts.push(file.part);
+        contents.push(file.content);
+    }
+    // `checked` sorts by path: equal paths are neighbours.
+    let mut distinct = paths.clone();
+    distinct.dedup();
+    // What the rows sent replace, and which of their paths are new: read
+    // before writing them, by the primary key.
+    let before = sqlx::query!(
+        r#"SELECT (SELECT count(*) FROM import_upload_files f
+                   JOIN unnest($2::text[], $3::int[]) AS s(path, part)
+                     ON f.path = s.path AND f.part = s.part
+                   WHERE f.upload_id = $1) AS "replaced!",
+                  (SELECT coalesce(sum(octet_length(f.path) + octet_length(f.content)), 0)
+                   FROM import_upload_files f
+                   JOIN unnest($2::text[], $3::int[]) AS s(path, part)
+                     ON f.path = s.path AND f.part = s.part
+                   WHERE f.upload_id = $1)::bigint AS "replaced_bytes!",
+                  (SELECT count(DISTINCT f.path) FROM import_upload_files f
+                   WHERE f.upload_id = $1 AND f.path = ANY($4)) AS "known!""#,
         id,
-        i64::try_from(upload::FILE_LIMIT).unwrap_or(i64::MAX),
+        &paths,
+        &parts,
+        &distinct,
     )
     .fetch_one(&mut **tx)
     .await?;
-    if usize::try_from(held.files).unwrap_or(usize::MAX) > upload::MAX_FILES {
+    sqlx::query!(
+        "INSERT INTO import_upload_files (upload_id, path, part, content)
+         SELECT $1::uuid, * FROM unnest($2::text[], $3::int[], $4::text[])
+         ON CONFLICT (upload_id, path, part) DO UPDATE SET content = EXCLUDED.content",
+        id,
+        &paths,
+        &parts,
+        &contents,
+    )
+    .execute(&mut **tx)
+    .await?;
+    let sent = i64::try_from(paths.len()).unwrap_or(i64::MAX);
+    let new_files = i64::try_from(distinct.len()).unwrap_or(i64::MAX) - before.known;
+    let totals = sqlx::query!(
+        r#"UPDATE import_uploads
+           SET files = files + $2::bigint::int, parts = parts + $3::bigint::int,
+               bytes = bytes + $4
+           WHERE id = $1
+           RETURNING files, parts::bigint AS "parts!", bytes"#,
+        id,
+        new_files,
+        sent - before.replaced,
+        incoming - before.replaced_bytes,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if usize::try_from(totals.files).unwrap_or(usize::MAX) > upload::MAX_FILES
+        || totals.parts > MAX_ROWS
+    {
         return Err(upload::too_many_files());
     }
-    if let Some(path) = held.too_large {
-        return Err(upload::file_too_large(&path, upload::FILE_LIMIT));
-    }
     // An upload's files together, at most: what one import request carries.
-    if held.bytes > i64::try_from(upload::BODY_LIMIT).unwrap_or(i64::MAX) {
+    if totals.bytes > i64::try_from(upload::BODY_LIMIT).unwrap_or(i64::MAX) {
         return Err(invalid(
             "files",
             &format!(
@@ -571,7 +708,31 @@ async fn add(tx: &mut Transaction<'_, Postgres>, id: Uuid, files: Vec<Checked>) 
             ),
         ));
     }
-    Ok(())
+    // The paths sent, whole: one file's size, and an empty first part only
+    // when it is the whole file.
+    let wrong = sqlx::query!(
+        r#"SELECT path, sum(octet_length(content)) > $3 AS "too_large!"
+           FROM import_upload_files WHERE upload_id = $1 AND path = ANY($2)
+           GROUP BY path
+           HAVING sum(octet_length(content)) > $3 OR (count(*) > 1 AND bool_or(content = ''))
+           LIMIT 1"#,
+        id,
+        &distinct,
+        i64::try_from(upload::FILE_LIMIT).unwrap_or(i64::MAX),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    match wrong {
+        Some(file) if file.too_large => Err(upload::file_too_large(&file.path, upload::FILE_LIMIT)),
+        Some(file) => Err(invalid(
+            "content",
+            &format!(
+                "{}: its part 1 is empty but other parts arrived; send part 1 with its content.",
+                file.path
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The upload's files, parts joined, or 422 when a part is missing or there
@@ -627,10 +788,7 @@ async fn load(db: &PgPool, database_id: Uuid, id: Uuid, user: Uuid) -> ApiResult
     let row = sqlx::query!(
         r#"SELECT u.id, u.status AS "status: ImportUploadStatus", u.dry_run, u.progress,
                   u.outcome, u.created_at, u.expires_at, u.expires_at <= now() AS "expired!",
-                  (SELECT count(DISTINCT path) FROM import_upload_files f
-                   WHERE f.upload_id = u.id) AS "files!",
-                  (SELECT coalesce(sum(octet_length(content)), 0) FROM import_upload_files f
-                   WHERE f.upload_id = u.id)::bigint AS "bytes!"
+                  u.files, u.bytes
            FROM import_uploads u
            WHERE u.id = $1 AND u.database_id = $2 AND u.created_by = $3"#,
         id,
@@ -649,7 +807,7 @@ async fn load(db: &PgPool, database_id: Uuid, id: Uuid, user: Uuid) -> ApiResult
     Ok(ImportUpload {
         id: row.id,
         status: row.status,
-        files: row.files,
+        files: row.files.into(),
         bytes: row.bytes,
         dry_run: row.dry_run,
         created_at: row.created_at,
@@ -684,7 +842,7 @@ async fn failed(db: &PgPool, id: Uuid, error: &ErrorBody) {
     let saved = sqlx::query!(
         "UPDATE import_uploads
          SET status = 'failed', outcome = $2, progress = NULL, updated_at = now(),
-             expires_at = now() + interval '1 hour'
+             expires_at = least(now() + interval '1 hour', created_at + interval '24 hours')
          WHERE id = $1 AND status = 'importing'",
         id,
         serde_json::to_value(error).unwrap_or_default(),
@@ -697,35 +855,42 @@ async fn failed(db: &PgPool, id: Uuid, error: &ErrorBody) {
 }
 
 /// The import ended: a dry run keeps the files (to import for real next),
-/// an import deletes them and keeps its report for a day.
+/// an import deletes them and keeps its report for a day. Only while the
+/// upload still says `importing`: an import given up for lost whose result
+/// comes late leaves the upload as it is now (files sent again since are
+/// kept).
 async fn done(db: &PgPool, id: Uuid, report: &ImportReport, dry_run: bool) -> sqlx::Result<()> {
     let report = serde_json::to_value(report).unwrap_or_default();
-    let mut tx = db.begin().await?;
     if dry_run {
         sqlx::query!(
             "UPDATE import_uploads
              SET status = 'checked', outcome = $2, progress = NULL, updated_at = now(),
-                 expires_at = now() + interval '1 hour'
+                 expires_at = least(now() + interval '1 hour', created_at + interval '24 hours')
              WHERE id = $1 AND status = 'importing'",
             id,
             report,
         )
-        .execute(&mut *tx)
+        .execute(db)
         .await?;
-    } else {
-        sqlx::query!(
-            "UPDATE import_uploads
-             SET status = 'imported', outcome = $2, progress = NULL, updated_at = now(),
-                 expires_at = now() + interval '1 day'
-             WHERE id = $1 AND status = 'importing'",
-            id,
-            report,
-        )
-        .execute(&mut *tx)
-        .await?;
+        return Ok(());
+    }
+    let mut tx = db.begin().await?;
+    let ended = sqlx::query!(
+        "UPDATE import_uploads
+         SET status = 'imported', outcome = $2, progress = NULL, updated_at = now(),
+             expires_at = least(now() + interval '1 day', created_at + interval '24 hours')
+         WHERE id = $1 AND status = 'importing'",
+        id,
+        report,
+    )
+    .execute(&mut *tx)
+    .await?;
+    if ended.rows_affected() == 1 {
         sqlx::query!("DELETE FROM import_upload_files WHERE upload_id = $1", id)
             .execute(&mut *tx)
             .await?;
+    } else {
+        tracing::info!(upload = %id, "an import given up for lost ended: its upload is left as it is");
     }
     tx.commit().await
 }
@@ -739,7 +904,16 @@ async fn record(
     mut progress: ImportProgress,
     dry_run: bool,
 ) {
-    while let Some(event) = events.recv().await {
+    loop {
+        // Nothing for a while (its turn is long to come, a migration long
+        // to replay): the upload shows it is alive all the same.
+        let Ok(event) = tokio::time::timeout(HEARTBEAT, events.recv()).await else {
+            alive(&db, id).await;
+            continue;
+        };
+        let Some(event) = event else {
+            break;
+        };
         match event {
             ImportEvent::Planned { .. } => continue,
             ImportEvent::Queued => progress.stage = ImportStage::Queued,
@@ -762,6 +936,19 @@ async fn record(
     failed(&db, id, &lost("The import stopped unexpectedly")).await;
 }
 
+/// A running import's heartbeat.
+async fn alive(db: &PgPool, id: Uuid) {
+    let touched = sqlx::query!(
+        "UPDATE import_uploads SET updated_at = now() WHERE id = $1 AND status = 'importing'",
+        id,
+    )
+    .execute(db)
+    .await;
+    if let Err(err) = touched {
+        tracing::warn!(error = %err, upload = %id, "an import's heartbeat was not saved");
+    }
+}
+
 /// Why an import that will never report ended so.
 fn lost(what: &str) -> ErrorBody {
     ErrorBody {
@@ -773,18 +960,20 @@ fn lost(what: &str) -> ErrorBody {
     }
 }
 
-/// Imports lost with their process (no progress for 30 minutes) marked
-/// failed; expired uploads' files deleted, and the uploads a day later.
-/// Returns how many rows changed.
-pub async fn sweep(db: &PgPool) -> Result<u64, sqlx::Error> {
+/// Imports lost with their process (silent for [`LOST_AFTER_MINUTES`]
+/// and not in flight here: `turns`) marked failed; expired uploads' files
+/// deleted, and the uploads a day later. Returns how many rows changed.
+pub async fn sweep(db: &PgPool, turns: &Turns) -> Result<u64, sqlx::Error> {
     let lost = sqlx::query!(
         "UPDATE import_uploads
          SET status = 'failed', outcome = $1, progress = NULL,
-             expires_at = now() + interval '1 hour'
-         WHERE status = 'importing' AND updated_at < now() - make_interval(mins => $2)",
+             expires_at = least(now() + interval '1 hour', created_at + interval '24 hours')
+         WHERE status = 'importing' AND updated_at < now() - make_interval(mins => $2)
+           AND database_id <> ALL($3)",
         serde_json::to_value(lost("romulus lost track of this import (it restarted)"))
             .unwrap_or_default(),
         LOST_AFTER_MINUTES,
+        &turns.databases_in_flight(),
     )
     .execute(db)
     .await?;
@@ -823,9 +1012,37 @@ mod tests {
             "db//V1__a.sql",
             "db/./V1__a.sql",
             "a\nb.sql",
+            // Reads as `V1__a.sql` (or as text reversed), is another path.
+            "V1__\u{202E}lqs.a",
+            "V1__a\u{200B}.sql",
+            "\u{FEFF}V1__a.sql",
+            "db/\u{2066}V1__a.sql\u{2069}",
         ] {
             assert!(relative_path(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn paths_are_nfc_and_measured_in_bytes() {
+        // `é` as e + a combining accent is the same path as the one letter.
+        assert_eq!(
+            relative_path("V1__cafe\u{301}.sql").unwrap(),
+            "V1__caf\u{e9}.sql"
+        );
+        let fits = format!("{}.sql", "é".repeat(254));
+        assert_eq!(fits.len(), PATH_BYTES);
+        assert!(relative_path(&fits).is_ok());
+        // 300 characters, 600 bytes.
+        let long = "é".repeat(300);
+        assert!(relative_path(&long).is_err());
+    }
+
+    #[test]
+    fn an_upload_holds_as_many_rows_as_files_of_every_part() {
+        assert_eq!(
+            MAX_ROWS,
+            i64::try_from(upload::MAX_FILES).unwrap() * i64::from(MAX_PARTS)
+        );
     }
 
     #[test]
@@ -856,9 +1073,12 @@ mod tests {
                 },
             ]
         );
-        assert!(checked(vec![file("a.sql", Some(0), "")]).is_err());
-        assert!(checked(vec![file("a.sql", Some(101), "")]).is_err());
+        assert!(checked(vec![file("a.sql", Some(0), "x")]).is_err());
+        assert!(checked(vec![file("a.sql", Some(11), "x")]).is_err());
         assert!(checked(vec![file("a.sql", None, "a\0b")]).is_err());
+        // An empty file is one empty first part; a later part adds content.
+        assert!(checked(vec![file("a.sql", None, "")]).is_ok());
+        assert!(checked(vec![file("a.sql", Some(2), "")]).is_err());
     }
 
     #[test]

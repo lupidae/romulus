@@ -651,12 +651,18 @@ skipped). docs/MVP.md "Next: migration files" has the decisions.
 - **Uploads** (`imports::uploads`, what MCP's `import_migrations` uses):
   files sent over several requests into `import_uploads`/`import_upload_files`
   (paths relative, parts joined in order, a path and part sent again
-  replaces it; the import's own limits), then `POST …/uploads/{id}/import`
-  runs `run::prepare` (every way in plans, refuses and caps there) and
-  answers 202; `record` follows the job into the row (progress, report or
-  error), `GET …/uploads/{id}` reads it. Its starter's alone; files kept
+  replaces it; the import's own limits, counted on the row: files, parts,
+  bytes with the paths'; paths NFC, 512 bytes, no format characters), then
+  `POST …/uploads/{id}/import` runs `run::prepare` (every way in plans,
+  refuses and caps there) in a task of its own and answers 202; `record`
+  follows the job into the row (progress, a heartbeat, report or error),
+  `GET …/uploads/{id}` reads it. An agent's import (`CurrentUser::via`) in
+  an organization that requires approvals or tests passes `Gate::FirstHistoryOnly`:
+  only a database without live versions (403 `review_required`). Its
+  starter's alone (3 open, counted under an advisory lock); files kept
   until an import stores them; an hour after the last files it expires
-  (`upload_expired`), swept by the staging sweeper.
+  (`upload_expired`), a day after it started at most, swept by the staging
+  sweeper (imports in flight here are never taken for lost).
 - **Tests**: `tests/sandbox/import.rs` (replay, hostile inputs),
   `tests/sandbox/fixtures.rs` (one history in every format, real Alembic,
   Django and Rails exports in `tests/migrations/`), `tests/api/imports.rs`
@@ -1323,7 +1329,8 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
   `import_migrations` stages files in an upload (REST `imports::uploads`; staging calls are
   private, `Ctx::nothing_to_audit`), imports them, waits 40 s, else answers the id for
   `get_import`; `get_migration_files` answers the web download's `files` as text pages
-  (`=== file i/n: path ===` … `=== end of file i/n ===`, 50 KB of content each), the next
+  (`=== file i/n [code]: path, N bytes ===` … `=== end of file i/n [code] ===`, the code
+  random per answer so no content forges a marker, 50 KB of content each), the next
   page by a cursor pinning the first page's version and the draft's `sha256`. The
   exporters of code migrations are resources (`romulus://export-migrations/<tool>.sh`).
 - **Tests**: `tests/api/mcp.rs` (`Mcp::new(&app, pat(..))`, `.rpc`, `.tool`, `.ok`, `.refused`;

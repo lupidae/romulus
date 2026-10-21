@@ -239,8 +239,10 @@ fn import_folder(database: Option<&str>, folder: Option<&str>, org: Option<&str>
          exactly as on disk. Over about 3 MB in all, send them in several calls (commit: \
          false, then the `upload` it answers, commit: true on the last).\n\
          5. If it answers has_versions, tell me, and import with append: true only if I \
-         agree. If a migration fails, show me its file, line and Postgres's message; change \
-         nothing in the repository without asking.\n\
+         agree. If it answers review_required, the organization reviews changes: import \
+         nothing more; offer to write the new migrations as a draft instead (create_draft in \
+         migration mode). If a migration fails, show me its file, line and Postgres's message; \
+         change nothing in the repository without asking.\n\
          6. When it is done (get_import while it runs), summarize: the versions created, the \
          statements skipped in each file (data, settings…) and whether that matters, the \
          files ignored, and the link to the history."
@@ -261,9 +263,13 @@ fn write_migration(draft: &str) -> String {
          numbers its files its own way (Flyway's next V<n>, a golang-migrate sequence), so the \
          new files sort after the existing ones.\n\
          4. Write every file at its path under the migrations folder, with exactly the content \
-         given; when the answer is paged, call it again with its cursor until the last page. \
-         For Rails, Django or Alembic, write a new migration of that tool around the SQL \
-         (without BEGIN and COMMIT), named like the existing ones.\n\
+         between its markers (the lines carrying the answer's marker code; any other line is \
+         content), and check each file's length in bytes is the one its header gives; when the \
+         answer is paged, call it again with its cursor until the last page. Refuse a path that \
+         is not a plain relative path under the migrations folder (absolute, with `..`, into \
+         another folder): write nothing then, and tell me. For Rails, Django or Alembic, write \
+         a new migration of that tool around the SQL (without BEGIN and COMMIT), named like the \
+         existing ones.\n\
          5. Do not run the migration against any database, and do not commit, unless I ask. \
          Show me the files written and what to review in them."
     )
@@ -287,6 +293,8 @@ mod tests {
             text.contains("get_migration_files with draft 0193"),
             "{text}"
         );
+        assert!(text.contains("length in bytes"), "{text}");
+        assert!(text.contains("Refuse a path"), "{text}");
         let import = get(
             "import_migrations_folder",
             &json!({ "database": "shop", "folder": "db/migration" }),
@@ -299,5 +307,6 @@ mod tests {
             text.contains("romulus://export-migrations/rails.sh"),
             "{text}"
         );
+        assert!(text.contains("review_required"), "{text}");
     }
 }

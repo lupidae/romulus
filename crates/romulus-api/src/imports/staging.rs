@@ -58,7 +58,7 @@ pub fn sweeper(db: PgPool, turns: Turns, every: Duration) -> tokio::task::JoinHa
                 Ok(rows) => tracing::info!(rows, "swept models imports left behind"),
                 Err(err) => tracing::warn!(error = %err, "sweeping staged models failed"),
             }
-            match super::uploads::sweep(&db).await {
+            match super::uploads::sweep(&db, &turns).await {
                 Ok(0) => {}
                 Ok(rows) => tracing::info!(rows, "swept expired uploads of migrations"),
                 Err(err) => tracing::warn!(error = %err, "sweeping uploads of migrations failed"),

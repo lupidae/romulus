@@ -159,7 +159,7 @@ token is offered only the others.
 | `create_database` | a new database in an organization | yes |
 | `push_schema` | a new database's first version from SQL (`pg_dump --schema-only`, remus's SQL); refused once it has one | yes |
 | `ci_setup` | how to push from CI with remus, filled in for a database, with the link to create its token | |
-| `import_migrations` | a repository's migration files as the database's history, one version per migration, as the web import does; the agent reads the files and sends them | yes |
+| `import_migrations` | a repository's migration files as the database's history, one version per migration, as the web import does; the agent reads the files and sends them. Where changes are reviewed, only into a database without versions | yes |
 | `get_import` | an import's progress, then the versions it created, the statements it skipped and the files it ignored, or where it stopped | |
 | `get_migration_files` | a draft's migration, or between two versions, as the files a migration tool expects, exactly as the web app downloads them, with where they go | |
 
@@ -199,11 +199,25 @@ needs `append` (the agent asks you first). Every rule and limit of an import
 applies: your role (developers and admins), your plan's version cap, one
 import of a database at a time.
 
+In an organization that reviews changes (approvals, or a passing migration
+test, required before publishing), an agent's import only gives a database
+without versions its history: that is how a repository is brought in. Once
+the database has versions, the import is refused (`review_required`) and the
+agent writes the change as a draft instead (`create_draft` in migration
+mode), so approvals and tests apply as they do to everyone. A dry run, which
+stores nothing, is always allowed, and your own import in the web app is not
+affected.
+
 - A message to the endpoint carries 4 MiB at most. Larger folders go over
   several calls: the first answers an upload id, the next add files to it,
-  the last imports them (`commit`). A file larger than a call goes in parts.
-  An upload is yours alone and expires an hour after its last files; sending
-  a file again replaces it, so a retried call changes nothing.
+  the last imports them (`commit`). A file larger than a call goes in parts
+  (10 at most). An upload is yours alone (3 in progress at most) and expires
+  an hour after its last files, and a day after it started whatever
+  happens; sending a file again replaces it, so a retried call changes
+  nothing. An upload holds what one import reads: 5,000 files, 8 MiB each,
+  32 MiB in all, paths included. Paths are relative, 512 bytes at most,
+  without invisible formatting characters (a bidi override or a zero-width
+  space would make a path read as another).
 - The import runs on after the call: `import_migrations` waits up to 40
   seconds, then answers the import's id for `get_import`. The answer lists
   the versions created, the statements skipped and the files ignored.
@@ -240,8 +254,13 @@ The agent passes `version` when the repository numbers its files its own way
 after the existing ones. For Rails, Django and Alembic it takes `plain` and
 writes a migration of that tool around the SQL. A long migration comes in
 pages, each naming its files as the first did; a draft edited between two
-pages makes the agent start again. Nothing is run against a database, and
-nothing is committed, unless you ask.
+pages makes the agent start again. Each file sits between two marker lines
+carrying a code drawn for that answer, and its header gives its length in
+bytes: a line inside a file (a table comment someone wrote, say) cannot pass
+for the end of it or the start of another, and the agent checks it wrote
+exactly that many bytes. It writes only to plain relative paths under the
+migrations folder, and stops to tell you otherwise. Nothing is run against
+a database, and nothing is committed, unless you ask.
 
 ## What an agent can do
 
@@ -376,5 +395,6 @@ authorization spec, OAuth 2.1); your sign-in itself stays the usual one.
 | 500, "could not check the access token" | romulus could not reach its database for a moment: try again; the token is fine |
 | a tool answers "forbidden" | your role in that organization does not allow it |
 | a tool answers "read_only_token" | the token is read-only: create one with write access |
-| a tool answers "upload_expired" | migration files sent more than an hour before they were imported: the agent sends them again |
+| a tool answers "upload_expired" | migration files sent more than an hour before they were imported (or an upload started more than a day ago): the agent sends them again |
+| a tool answers "review_required" | the organization reviews changes and the database has versions: the agent writes the change as a draft (`create_draft` in migration mode) for review, instead of importing it |
 | a tool answers "plan_limit" | the organization's plan does not allow more (databases, versions, playground hours…): the answer says which plan does; an admin changes it on the organization's Billing page |

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.status AS \"status: ImportUploadStatus\", u.dry_run, u.progress,\n                  u.outcome, u.created_at, u.expires_at, u.expires_at <= now() AS \"expired!\",\n                  (SELECT count(DISTINCT path) FROM import_upload_files f\n                   WHERE f.upload_id = u.id) AS \"files!\",\n                  (SELECT coalesce(sum(octet_length(content)), 0) FROM import_upload_files f\n                   WHERE f.upload_id = u.id)::bigint AS \"bytes!\"\n           FROM import_uploads u\n           WHERE u.id = $1 AND u.database_id = $2 AND u.created_by = $3",
+  "query": "SELECT u.id, u.status AS \"status: ImportUploadStatus\", u.dry_run, u.progress,\n                  u.outcome, u.created_at, u.expires_at, u.expires_at <= now() AS \"expired!\",\n                  u.files, u.bytes\n           FROM import_uploads u\n           WHERE u.id = $1 AND u.database_id = $2 AND u.created_by = $3",
   "describe": {
     "columns": [
       {
@@ -101,15 +101,25 @@
       },
       {
         "ordinal": 8,
-        "name": "files!",
-        "type_info": "Int8",
-        "origin": "Expression"
+        "name": "files",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "files"
+          }
+        }
       },
       {
         "ordinal": 9,
-        "name": "bytes!",
+        "name": "bytes",
         "type_info": "Int8",
-        "origin": "Expression"
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "bytes"
+          }
+        }
       }
     ],
     "parameters": {
@@ -128,9 +138,9 @@
       false,
       false,
       null,
-      null,
-      null
+      false,
+      false
     ]
   },
-  "hash": "c6e658f2feb1453eb032757111cb7b9a33a6a631bf51b059bd081f62f7e1a5a2"
+  "hash": "43d33018dc9321deb5fa2ceb11e5d9c0012f165544bf17b3887ee66ed03b296a"
 }

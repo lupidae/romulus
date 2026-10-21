@@ -47,7 +47,7 @@ fn zip(files: &[(&str, &str)]) -> Vec<u8> {
 }
 
 /// An org-scoped request from the web app, as `session`.
-async fn web(
+pub(super) async fn web(
     app: &TestApp,
     session: &Session,
     path: &str,

@@ -5791,6 +5791,7 @@
             }
           },
           "403": {
+            "description": "`review_required`: an agent's import into a database with versions, in an organization that reviews changes (write a draft instead); `forbidden`",
             "content": {
               "application/json": {
                 "schema": {
@@ -14316,7 +14317,7 @@
           "files": {
             "type": "integer",
             "format": "int64",
-            "description": "Files received (one sent in parts counts once), and their size."
+            "description": "Files received (one sent in parts counts once), and what they weigh\n(paths and contents, in bytes)."
           },
           "id": {
             "type": "string",

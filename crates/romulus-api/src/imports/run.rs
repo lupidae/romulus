@@ -129,6 +129,20 @@ pub struct Target {
     pub major: PgMajor,
 }
 
+/// Whether an import may add versions to a history the organization
+/// reviews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    /// The web's and CI's imports: the person (or their pipeline) decides.
+    Open,
+    /// An agent's (MCP's `import_migrations`) in an organization that
+    /// reviews changes (approvals or a passing migration test before
+    /// publishing): only a database without a live version takes its
+    /// versions (onboarding); after that, changes go through drafts. A dry
+    /// run, which stores nothing, is always allowed.
+    FirstHistoryOnly,
+}
+
 /// Silence after which the NDJSON stream sends a blank line.
 pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -142,7 +156,7 @@ pub async fn start(
     options: ImportOptions,
     stream: bool,
 ) -> ApiResult<Response> {
-    let job = prepare(state, target, author, files, options).await?;
+    let job = prepare(state, target, author, files, options, Gate::Open).await?;
     if stream {
         let body = ndjson(job.spawn(), KEEP_ALIVE);
         return Ok((
@@ -169,14 +183,15 @@ pub async fn start(
 }
 
 /// The import of `files`, planned, with what cannot be imported refused
-/// (an error to answer at once: 409, 402, 422): ready to run. Every way in
-/// (the web, CI, uploads) goes through here.
+/// (an error to answer at once: 409, 402, 422, 403 past the `gate`): ready
+/// to run. Every way in (the web, CI, uploads) goes through here.
 pub(super) async fn prepare(
     state: AppState,
     target: Target,
     author: Author,
     files: Vec<romulus_sandbox::import::SourceFile>,
     options: ImportOptions,
+    gate: Gate,
 ) -> ApiResult<Job> {
     let started = Instant::now();
     let mut planned = plan::plan(&state.db, target.database_id, files, &options).await?;
@@ -194,6 +209,16 @@ pub(super) async fn prepare(
         planned = plan::rematch(&state.db, target.database_id, planned).await?;
         Some(running)
     };
+    // Decided on the plan as matched last: storing refuses a history that
+    // moved since (`latest_id`), so a database that had no live version
+    // here has none when the versions are stored.
+    if gate == Gate::FirstHistoryOnly
+        && !options.dry_run
+        && !planned.new.is_empty()
+        && planned.latest_id().is_some()
+    {
+        return Err(review_required());
+    }
     if let Some(refusal) = plan::refusal(&planned, &options) {
         return Err(refusal);
     }
@@ -225,6 +250,14 @@ pub(super) async fn prepare(
         started,
         running,
     })
+}
+
+/// 403 `review_required`: an agent's import past the organization's review.
+fn review_required() -> ApiError {
+    ApiError::Denied {
+        code: "review_required",
+        message: "This organization reviews changes (approvals or a passing migration test before publishing) and this database has versions already: an agent's import cannot add to them. Create a draft (create_draft in migration mode) with the change, so approvals and tests apply.".into(),
+    }
 }
 
 /// The events as NDJSON lines, a blank line after `keep_alive` without
