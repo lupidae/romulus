@@ -1366,6 +1366,51 @@ to romulus as usual and approve it (MCP's authorization flow, OAuth 2.1). What w
   token of that app at once. A password reset or change disconnects them all, like tokens;
   deleting an account deletes its grants. The person is emailed when an app connects.
 
+## Operator notifications (decided 2026-10-21, built: task NOTIFY)
+
+The people running an install hear about what matters as it happens, and
+once a day; hosted or self-hosted alike (`ROMULUS_OPERATOR_EMAILS`, empty by
+default: off, nothing written). The API's `operator` module.
+
+- **Email only**, one short plain message per event, subject `[romulus] …`,
+  a line each fact: which organization, which plan, who (name and address, a
+  business's name and country: no more personal data than that), and a link
+  to Stripe's dashboard (the customer, the subscription or the invoice; test
+  or live as the key is) where there is something to look at. There is no
+  operator view in the app to link to yet.
+- **Events**: a new account (any way in: single sign-on's first sign-in, a
+  password sign-up, `setup`, the dev sign-in) and a new organization;
+  billing's (a subscription started, upgraded or downgraded or a change
+  scheduled, a cancellation scheduled, a subscription over with Stripe's
+  `cancellation_details`, a failed payment once per invoice, a grace period
+  over, a consumer's withdrawal, which only a consumer's checkout can make);
+  deletions done (`delete-user`, `delete-org`, inactive accounts; no
+  self-service request exists yet to report); a plan's cap reached, at most
+  once per organization and cap in 30 days.
+- **The mail outbox, not a send**: each event queues its emails
+  (`mail_outbox`, the contract letters' outbox, one per address) in its own
+  transaction, so a rolled-back action tells nothing and a mail server down
+  fails nobody's request; the CLI's deletions are sent by the running API.
+  The outbox marks a letter sent once the mail server took it and retries
+  for 3 days. Keys (the event, what it is about, the address) make a second
+  queue of one event a no-op. A plan's cap is the exception: the refusal
+  wrote nothing, so the 402's details ride in the response's extensions and
+  a layer (and the MCP adapter) records it afterwards, in its own
+  transaction (`operator_limit_notices`).
+- **The digest**, from `ROMULUS_OPERATOR_DIGEST_HOUR` (UTC, 7): the day before
+  and the 7 days to it. Accounts and organizations (new, in all, active: an
+  account used in 7 days and its organizations), with billing the paying
+  organizations by plan, the MRR from the stored subscriptions (monthly
+  amounts, yearly ones divided by 12) and its change since the last digest,
+  cancellations scheduled, failed payments in grace, the month's playground
+  hours; imports, migration tests, deletions. No error count: the API keeps
+  none that is cheap to read. One a day whatever the processes: the day's
+  `operator_digests` row is taken in the transaction that queues it, with the
+  MRR and playground time the next digest compares with.
+- `romulus-api operator-test` sends a test notification and today's digest
+  at once, waiting for the mail server; config refuses the variable without
+  mail.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).

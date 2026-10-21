@@ -328,7 +328,8 @@ async fn callback(
             return fail("sso_failed", &next);
         }
     };
-    let Some(user_id) = upsert_user(&state.db, &identity).await? else {
+    let Some(user_id) = upsert_user(&state.db, state.config.operator.as_ref(), &identity).await?
+    else {
         return fail("email_unverified", &next);
     };
 
@@ -339,8 +340,11 @@ async fn callback(
 /// The user an IdP identity is, created or refreshed from its claims, or
 /// `None` when the IdP does not vouch for an email address: romulus matches
 /// invitations by email, so an unverified one could claim someone else's.
+/// A new account is told to the operators (`operators`:
+/// `Config::operator`).
 pub async fn upsert_user(
     db: &PgPool,
+    operators: Option<&crate::config::OperatorConfig>,
     identity: &Identity,
 ) -> Result<Option<uuid::Uuid>, sqlx::Error> {
     let Some(email) = identity
@@ -356,18 +360,34 @@ pub async fn upsert_user(
         .name
         .clone()
         .unwrap_or_else(|| name_from_email(email));
-    sqlx::query_scalar!(
-        "INSERT INTO users (oidc_subject, email, email_verified, name) VALUES ($1, $2, true, $3)
-         ON CONFLICT (oidc_subject) DO UPDATE
-         SET email = EXCLUDED.email, email_verified = true, name = EXCLUDED.name
-         RETURNING id",
+    let mut tx = db.begin().await?;
+    // `xmax` is 0 on a row this statement inserted, not on one it updated.
+    let user = sqlx::query!(
+        r#"INSERT INTO users (oidc_subject, email, email_verified, name) VALUES ($1, $2, true, $3)
+           ON CONFLICT (oidc_subject) DO UPDATE
+           SET email = EXCLUDED.email, email_verified = true, name = EXCLUDED.name
+           RETURNING id, (xmax = 0) AS "created!""#,
         identity.subject,
         email,
         name,
     )
-    .fetch_one(db)
-    .await
-    .map(Some)
+    .fetch_one(&mut *tx)
+    .await?;
+    if user.created {
+        crate::operator::notify(
+            &mut tx,
+            operators,
+            &crate::operator::accounts::account_created(
+                user.id,
+                &name,
+                email,
+                crate::operator::accounts::Joined::SingleSignOn,
+            ),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Some(user.id))
 }
 
 /// A new session for `user_id`, replacing whichever one this browser had.
@@ -532,31 +552,43 @@ async fn dev_signin(
     )
     .fetch_optional(&state.db)
     .await?;
-    let user_id = match existing {
-        Some(id) => {
-            sqlx::query!(
-                "UPDATE users SET email_verified = coalesce($2, email_verified), name = coalesce($3, name)
-                 WHERE id = $1",
-                id,
-                query.verified,
-                query.name,
-            )
-            .execute(&state.db)
-            .await?;
-            id
-        }
-        None => {
-            sqlx::query_scalar!(
+    let user_id = if let Some(id) = existing {
+        sqlx::query!(
+            "UPDATE users SET email_verified = coalesce($2, email_verified), name = coalesce($3, name)
+             WHERE id = $1",
+            id,
+            query.verified,
+            query.name,
+        )
+        .execute(&state.db)
+        .await?;
+        id
+    } else {
+        let name = query.name.unwrap_or_else(|| name_from_email(email));
+        let mut tx = state.db.begin().await?;
+        let id = sqlx::query_scalar!(
             "INSERT INTO users (oidc_subject, email, email_verified, name) VALUES ($1, $2, $3, $4)
-                 RETURNING id",
+             RETURNING id",
             format!("dev|{}", email.to_lowercase()),
             email,
             query.verified.unwrap_or(true),
-            query.name.unwrap_or_else(|| name_from_email(email)),
+            name,
         )
-            .fetch_one(&state.db)
-            .await?
-        }
+        .fetch_one(&mut *tx)
+        .await?;
+        crate::operator::notify(
+            &mut tx,
+            state.config.operator.as_ref(),
+            &crate::operator::accounts::account_created(
+                id,
+                &name,
+                email,
+                crate::operator::accounts::Joined::Dev,
+            ),
+        )
+        .await?;
+        tx.commit().await?;
+        id
     };
     tracing::info!(%email, "dev sign-in");
     let jar = start_session(&state, jar, user_id).await?;

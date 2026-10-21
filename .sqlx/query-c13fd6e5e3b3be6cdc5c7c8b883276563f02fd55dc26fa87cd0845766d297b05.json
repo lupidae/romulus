@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT recipient, subject, text_body FROM mail_outbox\n         WHERE kind = 'operator_' || $1 ORDER BY recipient, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "recipient",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_outbox",
+            "name": "recipient"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_outbox",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "text_body",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_outbox",
+            "name": "text_body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c13fd6e5e3b3be6cdc5c7c8b883276563f02fd55dc26fa87cd0845766d297b05"
+}

@@ -33,6 +33,8 @@ password sign-in (ROMULUS_AUTH=password); links print on stdout, run on the serv
   auth-events [--email EMAIL] [--limit N]
                            the sign-in log, newest first, as JSON lines
   mail-test EMAIL          sends a test message through ROMULUS_SMTP_*
+  operator-test            sends a test notification and today's digest to
+                           ROMULUS_OPERATOR_EMAILS now (the day's digest still goes)
 
 deleting on request (both: --dry-run first says what would go; the address,
 or the admins, are emailed when it is done):
@@ -124,6 +126,7 @@ enum AdminCommand {
         limit: i64,
     },
     MailTest(String),
+    OperatorTest,
     DeleteUser {
         email: String,
         dry_run: bool,
@@ -208,6 +211,7 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
         Some("unlock") => Command::Admin(AdminCommand::Unlock(one()?)),
         Some("verify-email") => Command::Admin(AdminCommand::VerifyEmail(one()?)),
         Some("mail-test") => Command::Admin(AdminCommand::MailTest(one()?)),
+        Some("operator-test") if rest.is_empty() => Command::Admin(AdminCommand::OperatorTest),
         Some(command @ ("delete-user" | "delete-org")) => {
             let dry_run = rest.iter().any(|arg| arg == "--dry-run");
             let target = match rest
@@ -514,6 +518,10 @@ async fn run_admin(command: AdminCommand) -> Result<(), MainError> {
             let state = AppState::new(pool, config);
             price_change(&state, plan, from, dry_run, &mut stdout).await?;
         }
+        AdminCommand::OperatorTest => {
+            let state = AppState::new(pool, config);
+            operator_test(&state, &mut stdout).await?;
+        }
         AdminCommand::MailTest(_) => unreachable!("handled above"),
     }
     Ok(())
@@ -586,6 +594,37 @@ async fn price_change(
         );
     }
     Ok(())
+}
+
+/// `operator-test`: a test notification and the digest to every operator,
+/// one line each; fails (exit 1) when one was not sent.
+async fn operator_test(state: &AppState, stdout: &mut impl Write) -> Result<(), MainError> {
+    if state.config.operators().is_empty() {
+        return Err(AdminError::Invalid(
+            "operator notifications are off: set ROMULUS_OPERATOR_EMAILS".to_owned(),
+        )
+        .into());
+    }
+    let mut unsent = Vec::new();
+    for tested in romulus_api::operator::send_test(state).await? {
+        for (what, result) in [
+            ("the test notification", &tested.notice),
+            ("the digest", &tested.digest),
+        ] {
+            match result {
+                Ok(()) => writeln!(stdout, "{what}: sent to {}", tested.to)?,
+                Err(err) => {
+                    tracing::error!(error = %Chain(err), "operator-test: {what} was not sent to {}", tested.to);
+                    unsent.push(format!("{what} to {}", tested.to));
+                }
+            }
+        }
+    }
+    if unsent.is_empty() {
+        Ok(())
+    } else {
+        Err(AdminError::Invalid(format!("not sent: {}", unsent.join(", "))).into())
+    }
 }
 
 async fn serve() -> Result<(), MainError> {
@@ -661,7 +700,10 @@ async fn serve() -> Result<(), MainError> {
     // The Terms' records past their retention: now, and every day. Contract
     // and billing letters: sent once the mail server takes them.
     let legal_tasks = romulus_api::legal::tasks(&state);
-    let outbox = romulus_api::mail::outbox::tasks(&state.db, &state.mailer);
+    let mut outbox = romulus_api::mail::outbox::tasks(&state.db, &state.mailer);
+    // Operator notifications (ROMULUS_OPERATOR_EMAILS): their daily digest,
+    // queued once due (the outbox sends them all).
+    outbox.extend(romulus_api::operator::tasks(&state));
     // Versions removed more than 30 days ago: now, and every hour.
     let purger = romulus_api::versions::removal::purger(
         state.db.clone(),
@@ -767,6 +809,18 @@ mod tests {
                 "{wrong}"
             );
         }
+    }
+
+    #[test]
+    fn the_operator_test_takes_no_argument() {
+        assert!(matches!(
+            parse(&args("operator-test")),
+            Ok(Command::Admin(AdminCommand::OperatorTest))
+        ));
+        assert!(matches!(
+            parse(&args("operator-test ops@example.com")),
+            Err(MainError::Usage)
+        ));
     }
 
     #[test]

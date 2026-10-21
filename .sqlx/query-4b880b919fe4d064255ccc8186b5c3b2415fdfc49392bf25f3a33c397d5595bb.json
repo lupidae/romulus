@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT attempts AS \"n!\" FROM mail_outbox\n           WHERE starts_with(kind, 'operator_') AND sent_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_outbox",
+            "name": "attempts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4b880b919fe4d064255ccc8186b5c3b2415fdfc49392bf25f3a33c397d5595bb"
+}

@@ -169,6 +169,8 @@ ROMULUS_PLAY_SECRET=''
 # ROMULUS_SANDBOX_MEMORY='768m'
 # ROMULUS_PLAY_MAX_RUNNING='2'
 # ROMULUS_TRUSTED_PROXIES=''        # default: ROMULUS_PROXIES (Caddy's address, or the gateway for a proxy on this host)
+# ROMULUS_OPERATOR_EMAILS=''        # you, emailed on new accounts, deletions… and a daily digest (needs mail)
+# ROMULUS_OPERATOR_DIGEST_HOUR='7'  # the digest's hour, UTC
 # BACKUP_AT='03:00'
 # BACKUP_KEEP_DAYS='14'
 # RUST_LOG='romulus_api=info,tower_http=info,sqlx=warn'

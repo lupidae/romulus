@@ -477,6 +477,25 @@ pub(super) async fn withdraw(
         },
     )
     .await?;
+    crate::operator::billing::withdrawal(
+        &mut tx,
+        &state,
+        &crate::operator::billing::Withdrawal {
+            org,
+            name: &member.user.name,
+            email: &member.user.email,
+            plan: found.plan,
+            interval: found.interval,
+            started: found.started,
+            requested_at,
+            paid,
+            refund: refund.min(paid),
+            currency: &currency,
+            customer: now_stored.customer_id.as_deref(),
+            subscription: &found.subscription,
+        },
+    )
+    .await?;
     let ack = Acknowledged {
         org: member.org.name.clone(),
         slug: member.org.slug.clone(),

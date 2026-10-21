@@ -99,6 +99,72 @@ pub struct Config {
     /// module). `None` (unset): no Terms, the self-hosted default. Billing
     /// needs them.
     pub legal: Option<LegalConfig>,
+    /// `ROMULUS_OPERATOR_EMAILS` and `ROMULUS_OPERATOR_DIGEST_HOUR`: who
+    /// runs this install, emailed as things happen and once a day (the
+    /// `operator` module). `None` (unset or empty): nothing is written or
+    /// sent. Needs mail.
+    pub operator: Option<OperatorConfig>,
+}
+
+/// The operators' notifications (`crate::operator`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorConfig {
+    /// `ROMULUS_OPERATOR_EMAILS`: comma-separated addresses, each emailed
+    /// on its own (normalized, duplicates dropped).
+    pub emails: Vec<String>,
+    /// `ROMULUS_OPERATOR_DIGEST_HOUR`: the hour (UTC, 0 to 23) from which
+    /// the day's digest goes; 7 by default.
+    pub digest_hour: u32,
+    /// `ROMULUS_PUBLIC_URL`'s origin: which install an email is from.
+    pub origin: String,
+}
+
+impl OperatorConfig {
+    pub const DEFAULT_DIGEST_HOUR: u32 = 7;
+
+    fn from_lookup(
+        get: &impl Fn(&'static str) -> Option<String>,
+        origin: String,
+    ) -> Result<Option<Self>, ConfigError> {
+        let digest_hour = match get("ROMULUS_OPERATOR_DIGEST_HOUR") {
+            None => Self::DEFAULT_DIGEST_HOUR,
+            Some(hour) => hour
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|hour| *hour < 24)
+                .ok_or_else(|| ConfigError::Invalid {
+                    var: "ROMULUS_OPERATOR_DIGEST_HOUR",
+                    reason: format!("expected an hour from 0 to 23 (UTC), got {hour:?}"),
+                })?,
+        };
+        let mut emails: Vec<String> = Vec::new();
+        for item in get("ROMULUS_OPERATOR_EMAILS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            if item.parse::<lettre::Address>().is_err() {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_OPERATOR_EMAILS",
+                    reason: format!("{item:?} is not an email address"),
+                });
+            }
+            let email = crate::email::normalize(item);
+            if !emails
+                .iter()
+                .any(|known| crate::email::key(known) == crate::email::key(&email))
+            {
+                emails.push(email);
+            }
+        }
+        Ok((!emails.is_empty()).then_some(Self {
+            emails,
+            digest_hour,
+            origin,
+        }))
+    }
 }
 
 /// The hosted service's legal documents, as the homepage publishes them.
@@ -643,7 +709,15 @@ impl Config {
             zitadel_token: None,
             source_url: Url::parse(DEFAULT_SOURCE_URL).expect("a valid default source URL"),
             legal: None,
+            operator: None,
         }
+    }
+
+    /// Who operator notifications go to: none when they are off.
+    pub fn operators(&self) -> &[String] {
+        self.operator
+            .as_ref()
+            .map_or(&[], |operator| operator.emails.as_slice())
     }
 
     /// The browser origin, e.g. `http://localhost:41000`, as the `Origin`
@@ -841,6 +915,15 @@ impl Config {
                 reason: "an http(s) URL, e.g. https://github.com/<owner>/romulus".to_owned(),
             });
         }
+        let operator =
+            OperatorConfig::from_lookup(&get, public_url.origin().ascii_serialization())?;
+        // Notifications are emails: queued without mail, they would never go.
+        if operator.is_some() && mail.is_none() {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_OPERATOR_EMAILS",
+                reason: "operator notifications are emails: set ROMULUS_SMTP_HOST and ROMULUS_MAIL_FROM, or leave it empty".to_owned(),
+            });
+        }
         // Self-hosted installs are never capped.
         if billing.is_some() && single_org {
             return Err(ConfigError::Invalid {
@@ -873,6 +956,7 @@ impl Config {
             zitadel_token,
             source_url,
             legal,
+            operator,
         })
     }
 
@@ -1580,6 +1664,58 @@ mod tests {
         vars.push(("ROMULUS_SMTP_HOST", "smtp.example.com"));
         vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
         assert!(config(&vars).unwrap().delete_inactive_accounts);
+    }
+
+    #[test]
+    fn operator_notifications_are_off_when_empty_and_need_mail_when_on() {
+        assert_eq!(config(&BASE).unwrap().operator, None);
+        assert_eq!(Config::for_tests().operators(), &[] as &[String]);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_OPERATOR_EMAILS", " , "));
+        assert_eq!(config(&vars).unwrap().operator, None, "empty is off");
+        // An hour alone changes nothing.
+        vars.push(("ROMULUS_OPERATOR_DIGEST_HOUR", "9"));
+        assert_eq!(config(&vars).unwrap().operator, None);
+
+        let mut vars = BASE.to_vec();
+        vars.push((
+            "ROMULUS_OPERATOR_EMAILS",
+            "ops@example.com, Founder@Example.com,founder@example.com",
+        ));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_OPERATOR_EMAILS",
+                ..
+            })
+        ));
+        vars.push(("ROMULUS_SMTP_HOST", "smtp.example.com"));
+        vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
+        let on = config(&vars).unwrap();
+        assert_eq!(
+            on.operator,
+            Some(OperatorConfig {
+                emails: vec!["ops@example.com".into(), "Founder@Example.com".into()],
+                digest_hour: 7,
+                origin: "http://localhost:41000".into(),
+            })
+        );
+        assert_eq!(on.operators().len(), 2);
+
+        for (hour, ok) in [("0", true), ("23", true), ("24", false), ("7am", false)] {
+            let mut vars = vars.clone();
+            vars.push(("ROMULUS_OPERATOR_DIGEST_HOUR", hour));
+            assert_eq!(config(&vars).is_ok(), ok, "{hour}");
+        }
+        // Later values win in `config`'s map.
+        vars.push(("ROMULUS_OPERATOR_EMAILS", "ops@example.com, not an address"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_OPERATOR_EMAILS",
+                ..
+            })
+        ));
     }
 
     #[test]

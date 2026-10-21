@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mail_outbox SET next_attempt_at = now() WHERE starts_with(kind, 'operator_')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "188782cbb334fae8d19b04f26e6f5191b7adc50e5e8d33a0d0647c80a88f5c31"
+}

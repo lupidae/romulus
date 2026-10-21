@@ -33,6 +33,7 @@ mod migration;
 mod migration_tests;
 mod oauth;
 mod oidc;
+mod operator;
 mod orgs;
 mod passwords;
 mod playgrounds;

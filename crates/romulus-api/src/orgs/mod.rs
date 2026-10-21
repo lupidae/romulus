@@ -202,6 +202,12 @@ async fn create(
     )
     .execute(&mut *tx)
     .await?;
+    crate::operator::notify(
+        &mut tx,
+        config.operator.as_ref(),
+        &crate::operator::accounts::org_created(id, &name, &slug, Some((&user.name, &user.email))),
+    )
+    .await?;
     tx.commit().await?;
     tracing::info!(org = %slug, "organization created");
     Ok((

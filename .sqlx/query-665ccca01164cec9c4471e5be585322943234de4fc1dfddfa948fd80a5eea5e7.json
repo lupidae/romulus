@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, layout,\n                                   created_at)\n             VALUES ($1, $2, $3, 'CREATE TABLE users ();', 'migration', 'import', '{}', $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "665ccca01164cec9c4471e5be585322943234de4fc1dfddfa948fd80a5eea5e7"
+}

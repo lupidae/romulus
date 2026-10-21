@@ -399,7 +399,7 @@ impl Letter<'_> {
 }
 
 /// Text into HTML: the five characters that could start markup.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {

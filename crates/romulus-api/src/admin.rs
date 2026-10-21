@@ -22,6 +22,7 @@ use crate::{
     },
     domain::{AuthEventKind, LinkPurpose, Role},
     mail::{Letter, MailError, Mailer},
+    operator::{self, accounts::Joined},
     orgs::slug,
     retention::{
         deletion::{
@@ -163,6 +164,12 @@ pub async fn setup(db: &PgPool, config: &Config, input: Setup) -> Result<SetupOu
                 .details(json!({ "by": "setup" })),
         )
         .await?;
+        operator::notify(
+            &mut tx,
+            config.operator.as_ref(),
+            &operator::accounts::account_created(id, &name, &email, Joined::Setup),
+        )
+        .await?;
         id
     };
     let org = if let Some(slug) = administered {
@@ -182,6 +189,12 @@ pub async fn setup(db: &PgPool, config: &Config, input: Setup) -> Result<SetupOu
             Role::Admin as Role,
         )
         .execute(&mut *tx)
+        .await?;
+        operator::notify(
+            &mut tx,
+            config.operator.as_ref(),
+            &operator::accounts::org_created(org_id, &org_name, &org_slug, None),
+        )
         .await?;
         tracing::info!(org = %org_slug, "setup: organization created");
         org_slug

@@ -259,11 +259,22 @@ impl ApiError {
     }
 }
 
+/// A 402 `plan_limit`'s details (a `billing::PlanLimitDetails`), in the
+/// extensions of its response: the operators hear of it from there
+/// (`operator::limits`).
+#[derive(Debug, Clone)]
+pub struct PlanLimitReached(pub serde_json::Value);
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let body = self.body();
         let mut response = (status, Json(body)).into_response();
+        if let Self::PlanLimit { details, .. } = &self {
+            response
+                .extensions_mut()
+                .insert(PlanLimitReached(details.clone()));
+        }
         if let Self::RateLimited { retry_after } = &self {
             let seconds = whole_seconds(*retry_after);
             response

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO auth_events (kind, created_at) VALUES ($1::text::auth_event_kind, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56213888154c914de2b54120d23be78e3a0ab2016b2f9c8ddb09a4c8fd6918ce"
+}

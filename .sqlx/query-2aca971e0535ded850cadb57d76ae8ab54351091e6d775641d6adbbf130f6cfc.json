@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FILTER (WHERE created_at >= $1) AS \"yesterday!\",\n                  count(*) FILTER (WHERE created_at >= $1 AND status = 'passed') AS \"passed!\",\n                  count(*) FILTER (WHERE created_at >= $1 AND status = 'failed') AS \"failed!\",\n                  count(*) FILTER (WHERE created_at >= $1 AND status = 'error') AS \"errors!\",\n                  count(*) AS \"week!\"\n           FROM migration_tests WHERE created_at >= $2 AND created_at < $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "yesterday!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "passed!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "failed!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "errors!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "week!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "2aca971e0535ded850cadb57d76ae8ab54351091e6d775641d6adbbf130f6cfc"
+}

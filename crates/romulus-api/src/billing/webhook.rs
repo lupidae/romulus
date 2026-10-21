@@ -19,7 +19,8 @@
 //!   admins (`notices`, once each). A completed checkout notes the business
 //!   Stripe's page named on its record (`legal_acceptances.stripe_business_name`);
 //!   a subscription over for good ends the contract its record concluded
-//!   (`contract_ended_at`).
+//!   (`contract_ended_at`). The operators hear of what changed, in the
+//!   transaction that stores it (`operator::billing`).
 //!
 //! An event for an organization this server does not know (another
 //! environment sharing the Stripe account) is acknowledged and ignored.
@@ -488,6 +489,21 @@ pub async fn apply_subscription(
             event
                 .payments(&mut tx, &next, invoice.as_ref(), looked.failure_stands)
                 .await?;
+            crate::operator::billing::applied(
+                &mut tx,
+                state,
+                crate::operator::billing::Applied {
+                    org,
+                    event_id,
+                    before: &before,
+                    next: &next,
+                    read: read.as_ref(),
+                    failed: invoice
+                        .as_ref()
+                        .filter(|_| kind == "invoice.payment_failed" && looked.failure_stands),
+                },
+            )
+            .await?;
             failure = looked
                 .failure_stands
                 .then(|| invoice.as_ref().map(|i| (i.clone(), next.grace_until())))

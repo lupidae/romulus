@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE operator_digests SET mrr = $2, playground_month = $3, playground_seconds = $4\n         WHERE day = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Date",
+        "Jsonb",
+        "Date",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dd27dc2649446f99fc4fce11d5dfb10b558d01e3de243d092906560ac483c6e7"
+}

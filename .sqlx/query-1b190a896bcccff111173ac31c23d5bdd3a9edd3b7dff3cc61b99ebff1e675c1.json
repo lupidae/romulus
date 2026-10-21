@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO migration_tests (org_id, database_id, source, from_version_id,\n                                          to_version_id, up_sql, down, size, profile, seed, status,\n                                          created_at, finished_at)\n             VALUES ($1, $2, 'version', $3, $3, 'SELECT 1;', 'none', 'small', 'realistic', 0,\n                     $4::text::migration_test_status, $5, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b190a896bcccff111173ac31c23d5bdd3a9edd3b7dff3cc61b99ebff1e675c1"
+}

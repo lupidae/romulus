@@ -208,6 +208,20 @@ pub struct Subscription {
     pub latest_invoice: Option<String>,
     /// A change Stripe will make (a downgrade at the period's end).
     pub scheduled: Option<Scheduled>,
+    /// Why it was cancelled (`cancellation_details`), when Stripe says.
+    pub cancellation: Option<Cancellation>,
+}
+
+/// Why a subscription was cancelled, as Stripe keeps it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Cancellation {
+    /// `cancellation_requested`, `payment_failed` or `payment_disputed`.
+    pub reason: Option<String>,
+    /// What the customer picked in the portal (`too_expensive`,
+    /// `missing_features`, `switched_service`…).
+    pub feedback: Option<String>,
+    /// What the customer wrote.
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -615,6 +629,12 @@ pub fn parse_subscription(value: &Value) -> Result<Subscription, StripeError> {
         started: time(&value["start_date"]),
         latest_invoice: id_of(&value["latest_invoice"]),
         scheduled,
+        cancellation: Some(Cancellation {
+            reason: text(&value["cancellation_details"]["reason"]),
+            feedback: text(&value["cancellation_details"]["feedback"]),
+            comment: text(&value["cancellation_details"]["comment"]),
+        })
+        .filter(|said| *said != Cancellation::default()),
     })
 }
 
@@ -1114,6 +1134,7 @@ impl Fake {
             started: Some(Utc::now()),
             latest_invoice: None,
             scheduled: None,
+            cancellation: None,
         };
         let invoice_id = self.id("in");
         let subscription = Subscription {

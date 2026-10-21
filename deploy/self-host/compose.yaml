@@ -54,6 +54,10 @@ services:
       ROMULUS_SMTP_USERNAME: ${ROMULUS_SMTP_USERNAME:-}
       ROMULUS_SMTP_PASSWORD: ${ROMULUS_SMTP_PASSWORD:-}
       ROMULUS_MAIL_FROM: ${ROMULUS_MAIL_FROM:-}
+      # Who runs this install: emailed as things happen and once a day
+      # (needs mail). Empty: off.
+      ROMULUS_OPERATOR_EMAILS: ${ROMULUS_OPERATOR_EMAILS:-}
+      ROMULUS_OPERATOR_DIGEST_HOUR: ${ROMULUS_OPERATOR_DIGEST_HOUR:-}
       # Single sign-on with your own OpenID Connect provider (optional; add
       # `oidc` to ROMULUS_AUTH).
       ROMULUS_OIDC_ISSUER: ${ROMULUS_OIDC_ISSUER:-}

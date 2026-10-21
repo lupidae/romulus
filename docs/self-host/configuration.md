@@ -51,6 +51,8 @@ binary's; the bundle's own value is in the third column when it differs.
 | `ROMULUS_SINGLE_ORG` | unset | `true` | one organization per install, made by `setup`; creating another is refused and hidden in the app |
 | `ROMULUS_TRUSTED_PROXIES` | empty (none) | `ROMULUS_PROXIES` | IPs and CIDRs, comma-separated, whose `X-Forwarded-For` gives the client's address; `/0` is refused ([hardening.md](hardening.md#trusted-proxies)) |
 | `ROMULUS_SMTP_HOST`, `_PORT`, `_TLS`, `_USERNAME`, `_PASSWORD`, `ROMULUS_MAIL_FROM` | mail off | `.env` | [Mail](#mail-smtp) |
+| `ROMULUS_OPERATOR_EMAILS` | empty: off | `.env` | the people running this install, comma-separated: emailed as things happen and once a day ([Operator notifications](#operator-notifications)). Needs mail: the API refuses to start without it |
+| `ROMULUS_OPERATOR_DIGEST_HOUR` | `7` | `.env` | the hour (UTC, 0 to 23) from which the daily digest goes |
 | `ROMULUS_SANDBOX_URL` | unset | the `sandbox` container | an admin connection to Postgres 17's sandbox, where SQL compiles. Unset: uploads answer 503 and drafts do not compile |
 | `ROMULUS_SANDBOX_URL_PG15`, `_PG16`, `_PG18` | unset | when enabled | the other majors' sandboxes. A major without one answers 503 for its databases only |
 | `ROMULUS_SANDBOX_PREFIX` | `romulus_sandbox` | | names the compile pool's roles and databases in the sandboxes. One API per prefix and sandbox |
@@ -144,6 +146,44 @@ ROMULUS_MAIL_FROM='romulus <romulus@example.com>'
 **Any other provider** (Postmark, Mailgun, SendGrid, your company's
 server): its SMTP host, port and credentials, the same way.
 
+## Operator notifications
+
+Set `ROMULUS_OPERATOR_EMAILS` (one address or several, comma-separated) to
+hear about what matters on your install as it happens. Each event is one
+short email, its subject starting with `[romulus]`:
+
+- a new account (a first sign-in with single sign-on, a password sign-up,
+  `setup`) and a new organization;
+- an account or an organization deleted: on request (`delete-user`,
+  `delete-org`) or, with `ROMULUS_DELETE_INACTIVE_ACCOUNTS`, for
+  inactivity; what went with it, and the Zitadel user to delete by hand if
+  romulus could not;
+- with hosted billing on (`ROMULUS_BILLING`, which the self-host bundle
+  never sets): a subscription started (plan, interval, price, who bought it,
+  and a business's name and country), upgraded or downgraded (or a change
+  scheduled for the period's end), a cancellation scheduled, a subscription
+  over (with Stripe's reason when the customer gave one), a failed payment,
+  a grace period over (the organization moved to Free), a consumer's
+  withdrawal and its refund, and an organization reaching a cap of its plan
+  for the first time (at most once per organization and cap in 30 days).
+  These link to the customer or subscription in Stripe's dashboard, in test
+  or live mode as the key is.
+
+Every day from `ROMULUS_OPERATOR_DIGEST_HOUR` (UTC) a digest follows,
+about the day before and the 7 days to it: new and active accounts and
+organizations; with billing, paying organizations by plan, the monthly
+recurring revenue (yearly plans divided by 12) and its change since the last
+digest, cancellations scheduled, failed payments in their grace period and
+the month's playground hours; migration imports, migration tests and their
+outcomes, deletions.
+
+Notifications are queued in the database in the transaction of what they
+report (a failure never breaks anyone's action) and sent by the API's mail
+outbox within half a minute, retried for 3 days if your mail server refuses
+them. They hold names, addresses and business names; sent ones are deleted
+after 30 days. Check the setup with `operator-test` (below). On Kubernetes, set
+both variables with the chart's `api.extraEnv`.
+
 ## Admin commands
 
 The API image's binary runs these. From `deploy/self-host`:
@@ -159,6 +199,7 @@ docker compose exec api romulus-api <command>
 | `unlock EMAIL` | clears the sign-in lockout of that address |
 | `verify-email EMAIL` | marks the password account with that address verified (they always are; kept for repairs). Single sign-on accounts are left alone, with a warning: their provider verifies them |
 | `mail-test EMAIL` | sends a test message; non-zero with the server's error if it fails, exit 3 when mail is off |
+| `operator-test` | sends a test notification and today's digest to `ROMULUS_OPERATOR_EMAILS` now, one line per message; non-zero when one was not sent. The day's digest still goes at its hour |
 | `auth-events [--email EMAIL] [--limit N]` | recent sign-in events, as JSON lines |
 | `delete-user EMAIL [--dry-run]` | deletes every account with that address and what it alone holds ([below](#retention-and-deletion)); `--dry-run` says what would go. Exit 4 while it is the only admin of an organization others belong to |
 | `delete-org SLUG [--dry-run]` | deletes the organization and everything in it; `--dry-run` says what would go |
