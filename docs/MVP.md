@@ -1123,11 +1123,11 @@ Policy promise the same. All of it lives in the API's `retention` module.
   would go). Self-service deletion is for later: an endpoint calling the same
   `Deleter::delete_account` for the signed-in person.
 - **An account** goes with its sessions, password, devices, links,
-  personal access tokens, memberships, approvals and unread markers, and with
-  every organization it is the only member of. All of it under the account's
-  row lock, planned and checked again there: a sign-in or a token's use
-  meanwhile waits, and an inactive account used is kept. Its single sign-on
-  user is deleted at Zitadel under that lock, before the rows
+  personal access tokens, connected apps, memberships, approvals and unread
+  markers, and with every organization it is the only member of. All of it
+  under the account's row lock, planned and checked again there: a sign-in
+  or a token's use meanwhile waits, and an inactive account used is kept.
+  Its single sign-on user is deleted at Zitadel under that lock, before the rows
   (`ROMULUS_ZITADEL_TOKEN`, a machine user the provisioner makes with
   IAM_USER_MANAGER; without it the command prints the user to delete in the
   console, and the log warns with its id; rows failing after Zitadel's delete

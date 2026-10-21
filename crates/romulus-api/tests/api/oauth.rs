@@ -1276,6 +1276,60 @@ async fn refresh_tokens_rotate_and_a_replay_ends_the_connection(db: PgPool) {
     );
 }
 
+/// Whether `who`'s account was used within the minute, and whether it still
+/// carries an inactivity notice (`retention::activity`).
+async fn account_in_use(db: &PgPool, who: &Session) -> (bool, bool) {
+    let row = sqlx::query!(
+        r#"SELECT last_seen_at > now() - interval '1 minute' AS "recent!",
+                  inactivity_notice_at IS NOT NULL AS "noticed!"
+           FROM users WHERE id = $1"#,
+        who.user
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    (row.recent, row.noticed)
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_apps_calls_are_its_person_using_the_account(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = signed_in(&db, "Alice").await;
+    let tokens = connect(&app, &alice, "Claude", &allow()).await;
+    // Two years unused, and warned of it.
+    sqlx::query!(
+        "UPDATE users SET last_seen_at = now() - interval '2 years',
+                          inactivity_notice_at = now() - interval '1 day'
+         WHERE id = $1",
+        alice.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    // Getting tokens is not using the account.
+    let refreshed = refresh(&app, &tokens, &tokens.refresh).await;
+    assert_eq!(refreshed.status, StatusCode::OK, "{}", refreshed.json());
+    assert_eq!(account_in_use(&db, &alice).await, (false, true));
+
+    // Calling romulus with them is, right after the refresh too: the notice
+    // no longer holds.
+    let access = refreshed.json()["access_token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(ping(&app, &access).await, StatusCode::OK);
+    assert_eq!(account_in_use(&db, &alice).await, (true, false));
+    let used = sqlx::query_scalar!(
+        "SELECT last_used_at FROM oauth_grants WHERE client_id = $1",
+        Uuid::parse_str(&tokens.client_id).unwrap()
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(used.is_some());
+}
+
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn access_tokens_expire_and_belong_to_the_mcp_endpoint(db: PgPool) {
     let app = TestApp::new(db.clone());

@@ -1278,9 +1278,11 @@ docs/MVP.md "Retention and deletion" has the decisions.
   back-off), never stops the batch.
 - **What counts as use** is `retention::activity::account_used` (hourly at
   most, clears the notice and the back-off): `session::create` and a
-  session's touch, `access_tokens::Agent::touch`, `databases::tokens::Bearer`
-  (the token's maker). A new way in (OAuth tokens) calls it where its use is
-  recorded. `users.updated_at` moves with identity columns only.
+  session's touch, `access_tokens::Agent::touch` (personal tokens and
+  connected apps' OAuth tokens, through `oauth::apps::touch`; getting or
+  refreshing tokens is not a use), `databases::tokens::Bearer` (the token's
+  maker). A new way in calls it where its use is recorded. `users.updated_at`
+  moves with identity columns only.
 - **Source and commit**: `config::COMMIT` (`ROMULUS_COMMIT` at build time, the
   Dockerfile's build argument from images.yml), `Config::source_url`
   (`ROMULUS_SOURCE_URL`, the build's repository by default),

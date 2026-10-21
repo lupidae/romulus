@@ -513,7 +513,9 @@ async fn refresh(
 
 /// A new access token (of `scope`: the grant's, or narrower) and refresh
 /// token for `grant`, neither outliving it; the grant's idle expiry follows
-/// the refresh token's.
+/// the refresh token's. Not a use of the grant: that is its tokens' use at
+/// `/api/mcp` (`apps::touch`, which counts the person's account as used
+/// too), so the call after a refresh counts.
 async fn issue(
     tx: &mut PgConnection,
     grant: Uuid,
@@ -540,7 +542,7 @@ async fn issue(
              FROM oauth_grants WHERE id = $1
              RETURNING expires_at
          )
-         UPDATE oauth_grants SET idle_expires_at = issued.expires_at, last_used_at = now()
+         UPDATE oauth_grants SET idle_expires_at = issued.expires_at
          FROM issued WHERE oauth_grants.id = $1",
         grant,
         token::hash(&refresh),

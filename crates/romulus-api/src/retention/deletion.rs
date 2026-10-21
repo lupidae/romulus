@@ -10,7 +10,8 @@
 //!   cancel it in Stripe first (its invoices stay there, as the law
 //!   requires). Its admins are emailed.
 //! - **An account** goes with its sessions, password, devices, links,
-//!   personal access tokens, memberships, approvals and unread markers, and
+//!   personal access tokens, connected apps (their grants, codes and
+//!   tokens), memberships, approvals and unread markers, and
 //!   with every organization it is the only member of (refused, as above,
 //!   when one has a subscription). What it wrote in the organizations it leaves
 //!   is theirs and stays (versions, comments, approvals: by a deleted
