@@ -65,7 +65,7 @@ pub async fn read(ctx: &Ctx, uri: &str) -> Result<Option<Value>, ToolError> {
         return Ok(Some(contents(
             uri,
             "text/plain",
-            &super::tools::ci_guide(&command),
+            &super::tools::ci_guide(&command, None),
         )));
     }
     let Some((org, database, number)) = parse(uri) else {

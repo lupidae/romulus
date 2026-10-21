@@ -33,21 +33,33 @@ test("an agent gets a token on the Connect page, connects, and is cut off by rev
   await page.getByRole("link", { name: "Connect your agent" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Connect your agent" })).toBeVisible();
 
-  // The snippet waits for the token.
+  // Claude Code's command asks for the token; the configurations wait for it.
   await expect(page.getByLabel("Claude Code command", { exact: true })).toContainText(
-    "<your token>",
+    "read -rs ROMULUS_TOKEN",
   );
+  await expect(page.getByText("The token goes in place of")).toHaveCount(0);
+  await page.getByRole("tab", { name: "Cursor" }).click();
+  await expect(page.getByLabel("Cursor configuration", { exact: true })).toContainText(
+    "Bearer <your token>",
+  );
+  await expect(page.getByText("The token goes in place of <your token>.")).toBeVisible();
+  await page.getByRole("tab", { name: "Claude Code" }).click();
   await page.getByLabel("Name").fill("Claude Code e2e");
   await page.getByRole("button", { name: "Create token" }).click();
   const secret = await page.getByRole("textbox", { name: "Access token" }).inputValue();
   expect(secret).toMatch(/^rmls_pat_[A-Za-z0-9_-]{43}$/);
 
-  // Every snippet holds the endpoint and the token.
+  // Every snippet holds the endpoint; the configurations hold the token, and
+  // Claude Code's command asks for it (a command stays in shell history).
   await page.getByRole("button", { name: "Copy claude code command" }).click();
   const command = await page.evaluate(() => navigator.clipboard.readText());
   expect(command).toBe(
-    `claude mcp add --transport http romulus ${new URL(page.url()).origin}/api/mcp --header "Authorization: Bearer ${secret}"`,
+    [
+      "read -rs ROMULUS_TOKEN",
+      `claude mcp add --transport http romulus ${new URL(page.url()).origin}/api/mcp --header "Authorization: Bearer $ROMULUS_TOKEN"`,
+    ].join("\n"),
   );
+  expect(command).not.toContain(secret);
   await page.getByRole("tab", { name: "Cursor" }).click();
   const cursor = JSON.parse(
     (await page.getByLabel("Cursor configuration", { exact: true }).textContent()) ?? "{}",
@@ -56,7 +68,9 @@ test("an agent gets a token on the Connect page, connects, and is cut off by rev
 
   // The check from the browser, then the agent's own first request.
   await page.getByRole("button", { name: "Test connection" }).click();
-  await expect(page.getByText(/^Connected as /)).toBeVisible();
+  // The person the token acts as, by name (dev sign-in names them from the
+  // address: agent-… → "Agent …").
+  await expect(page.getByText(/^Connected as Agent /)).toBeVisible();
   expect((await initialize(page, secret, "e2e-agent")).status()).toBe(200);
   await expect(page.getByText(/Your agent connected .*\(e2e-agent 1\)/)).toBeVisible({
     timeout: 15_000,

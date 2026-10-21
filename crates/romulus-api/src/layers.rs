@@ -37,7 +37,7 @@ const IMPORT_TIMEOUT: Duration = Duration::from_mins(15);
 /// MCP tool calls may wait for a migration test or a playground (40 s at
 /// most), then answer: well within what a reverse proxy in front of the API
 /// usually allows before its first byte.
-const MCP_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const MCP_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn around(router: Router) -> Router {
     with_limits(router, BODY_LIMIT, REQUEST_TIMEOUT)

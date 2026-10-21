@@ -17,21 +17,25 @@ create, and acts as you.
 
 1. In romulus, open your account menu (top right), **Connect your agent**.
    Create a token there: a name (which agent, on which computer), its
-   access (read and write, or read only) and when it expires (30, 90 or 365
-   days, or never). The page fills the token into the configuration below;
-   it is shown once.
+   access (read and write, or read only) and when it expires (90 days unless
+   you choose 30, 365 or never). The page fills the token into the
+   configurations below; it is shown once, and romulus emails you that it
+   was created (when your romulus sends mail).
 2. Add romulus to your agent. With `https://romulus.example.com` standing for
    your romulus's address:
 
    **Claude Code**
 
    ```bash
+   read -rs ROMULUS_TOKEN
    claude mcp add --transport http romulus https://romulus.example.com/api/mcp \
-     --header "Authorization: Bearer rmls_pat_…"
+     --header "Authorization: Bearer $ROMULUS_TOKEN"
    ```
 
-   Add `--scope user` to have it in every project. `claude mcp list` shows
-   it connected.
+   The first line waits for you to paste the token and does not show it:
+   a token typed into a command would stay in your shell's history. Add
+   `--scope user` to have it in every project. `claude mcp list` shows it
+   connected.
 
    **Claude Desktop** (Settings, Developer, Edit config; it needs Node.js
    for the `mcp-remote` bridge):
@@ -100,9 +104,8 @@ token is offered only the others.
 | `playground_query` | read-only SQL on a playground, as the console runs it | |
 | `list_playgrounds` | a database's playgrounds | |
 | `create_database` | a new database in an organization | yes |
-| `push_schema` | the next version from SQL (`pg_dump --schema-only`, remus's SQL) | yes |
-| `create_push_token` | an API token for CI to push versions, shown once | yes |
-| `ci_setup` | how to push from CI with remus, filled in for a database | |
+| `push_schema` | a new database's first version from SQL (`pg_dump --schema-only`, remus's SQL); refused once it has one | yes |
+| `ci_setup` | how to push from CI with remus, filled in for a database, with the link to create its token | |
 
 Long work never holds a request open: `test_migration` and
 `create_playground` wait 40 seconds at most, then answer an id to poll
@@ -130,11 +133,18 @@ the CI guide, `romulus://guide/ci`.
   approvals and the migration test the organization requires; when one
   holds, it says what is missing. Edits through `update_draft` are your
   edits: approvals of the earlier text stop counting, and yours never
-  counts for that draft.
+  counts for that draft. `push_schema` only gives a database with no
+  version its first one: every later version comes from a draft.
+- **No CI secrets through the agent.** CI's API token is created by you in
+  the database's settings (`ci_setup` links to them); an agent never sees
+  it.
 - **Every write is in the Activity** of the database it touched (its
   settings page, for developers and admins), with your name and the token's.
 - **Revoking is immediate**: Access tokens, the trash button. An expired
-  token is refused with a message saying so.
+  token is refused with a message saying so. Resetting or changing your
+  password revokes all your tokens, as it signs you out everywhere else.
+- **You hear of every new token**: romulus emails you its name, access and
+  expiry, with the link to revoke it.
 - **Only a hash is stored.** The secret starts with `rmls_pat_`, so secret
   scanners can recognize it in a commit; revoke it if one does.
 - **Only at `/api/mcp`.** A personal token opens nothing else in the API,
@@ -159,7 +169,10 @@ not available when your install runs without them.
   the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers checked),
   and 2025-11-25, 2025-06-18 and 2025-03-26 after an `initialize`. Every
   request stands alone, so a restart of romulus never breaks a client.
-- Requests are limited per token (a burst of 60, then 2 a second).
+- Requests are limited per token (a burst of 60, then 2 a second) and per
+  person across their tokens (a burst of 120, then 4 a second). A client
+  sending tokens that are not valid is refused for a while after 20 of
+  them.
 - The endpoint is written in romulus itself (`crates/romulus-api/src/mcp`)
   rather than with an SDK: it needs no streams, sessions or server-initiated
   requests, and it has to sit inside the API's own authentication, error
@@ -175,10 +188,11 @@ metadata there and resolve them to the same identity personal tokens do.
 
 | what you see | why |
 |---|---|
-| 401, "not valid" | the token was revoked, mistyped, or is not a personal one (`rmls_pat_`) |
+| 401, "not valid" | the token was revoked (a password reset or change revokes them all), mistyped, or is not a personal one (`rmls_pat_`) |
 | 401, "expired" | create a new token |
 | 403 | the request came with another site's `Origin` |
-| 429 | too many requests with this token: wait the `Retry-After` seconds |
+| 429 | too many requests (with this token, with all your tokens, or with tokens that are not valid): wait the `Retry-After` seconds |
+| 500, "could not check the access token" | romulus could not reach its database for a moment: try again; the token is fine |
 | a tool answers "forbidden" | your role in that organization does not allow it |
 | a tool answers "read_only_token" | the token is read-only: create one with write access |
 | a tool answers "plan_limit" | the organization's plan does not allow more (databases, versions, playground hours…): the answer says which plan does; an admin changes it on the organization's Billing page |

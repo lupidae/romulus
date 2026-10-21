@@ -1,5 +1,7 @@
 // What a person pastes into their agent to connect it to romulus's MCP
-// endpoint (docs/mcp.md), with the endpoint and their token filled in.
+// endpoint (docs/mcp.md), with the endpoint and their token filled in. A
+// terminal command never holds the token itself (shell history keeps
+// commands): Claude Code's reads it first, unseen.
 
 /** Shown in place of a token not created yet. */
 export const TOKEN_PLACEHOLDER = "<your token>";
@@ -22,9 +24,13 @@ export function snippet(client: AgentClient, url: string, token: string): Snippe
   switch (client) {
     case "claude-code":
       return {
-        where: "Run it in a terminal; --scope user adds romulus to every project.",
+        where:
+          "Run both lines in a terminal and paste the token when the first waits: it asks without showing it, so the token never lands in your shell history. --scope user adds romulus to every project.",
         label: "Claude Code command",
-        code: `claude mcp add --transport http romulus ${url} --header "Authorization: Bearer ${token}"`,
+        code: [
+          "read -rs ROMULUS_TOKEN",
+          `claude mcp add --transport http romulus ${url} --header "Authorization: Bearer $ROMULUS_TOKEN"`,
+        ].join("\n"),
       };
     case "claude-desktop":
       return {

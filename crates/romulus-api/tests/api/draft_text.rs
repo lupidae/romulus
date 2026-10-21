@@ -2,6 +2,8 @@
 //! written as a person's edit (live, a rewrite for undo, an editor for
 //! approvals), and its rename decisions.
 
+use std::time::Duration;
+
 use axum::http::StatusCode;
 use romulus_api::collab::doc::RewriteNote;
 use serde_json::{Value, json};
@@ -13,6 +15,26 @@ use super::{
     harness::{Team, TestApp, database},
     live::{Client, live_app, quick, serve, version},
 };
+
+/// The draft's editors, once its room's writer stored them: it writes from
+/// its own task, after the answer, so a row read at once may not be there
+/// yet.
+pub(super) async fn stored_editors(db: &PgPool, draft: Uuid) -> Vec<Uuid> {
+    for _ in 0..250 {
+        let editors: Vec<Uuid> = sqlx::query_scalar!(
+            "SELECT user_id FROM draft_editors WHERE draft_id = $1",
+            draft
+        )
+        .fetch_all(db)
+        .await
+        .unwrap();
+        if !editors.is_empty() {
+            return editors;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Vec::new()
+}
 
 const V1: &str = "CREATE TABLE public.users (id bigint);\n";
 
@@ -99,12 +121,7 @@ async fn a_developer_writes_it_live_and_becomes_an_editor(db: PgPool) {
             reason: "agent".into()
         })
     );
-    let editors: Vec<Uuid> =
-        sqlx::query_scalar!("SELECT user_id FROM draft_editors WHERE draft_id = $1", id)
-            .fetch_all(&db)
-            .await
-            .unwrap();
-    assert_eq!(editors, [team.developer.user]);
+    assert_eq!(stored_editors(&db, id).await, [team.developer.user]);
 
     // The text read before is not the text now: refused, nothing overwritten.
     let stale = app
@@ -194,14 +211,11 @@ async fn rename_decisions_are_written_for_the_person(db: PgPool) {
         cleared["renames"],
         json!({ "table/public//users/people": false })
     );
-    let editors = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM draft_editors WHERE draft_id = $1"#,
-        id
-    )
-    .fetch_one(&db)
-    .await
-    .unwrap();
-    assert_eq!(editors, 1, "a decision is an edit");
+    assert_eq!(
+        stored_editors(&db, id).await,
+        [team.developer.user],
+        "a decision is an edit"
+    );
     let reviewer = app
         .as_user(&team.reviewer)
         .put(&format!("{path}/renames"), &json!({ "renames": {} }))

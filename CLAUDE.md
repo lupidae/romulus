@@ -1191,20 +1191,29 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
 
 - **Personal access tokens** (`auth::access_tokens`): `GET/POST /me/access-tokens`, `DELETE
   /me/access-tokens/{id}` (the person signed in; a token never manages tokens), table
-  `personal_access_tokens`, `rmls_pat_` + `token::generate()`, sha256 stored. `Agent` is the
-  extractor `/api/mcp` authenticates with (401 `invalid_token`; last use at most once a
-  minute; `note_client` keeps the client's name).
+  `personal_access_tokens`, `rmls_pat_` + `token::generate()`, sha256 stored, 90 days unless
+  said, the person emailed on creation; `revoke_all` on a password reset or change. `Agent`:
+  `bearer` (shape), `lookup` (401 `invalid_token` only for a token refused), `touch` (last use,
+  at most once a minute); `note_client` keeps the client's name.
 - **The endpoint** (`mcp`): `POST /api/mcp`, exempt from the CSRF guard (`mcp::PATH`), its own
-  60 s deadline (`layers`), a 4 MiB body; `protocol.rs` serves both eras statelessly (header
-  checks, version errors, `resultType`); 403 for a foreign `Origin`; `rate::Limits::access_tokens`.
+  60 s deadline (`layers::MCP_TIMEOUT`; `Api` holds it: each call at most
+  `api::DEFAULT_TIMEOUT`, waits through `Ctx::wait_budget`), a 4 MiB body; `protocol.rs` serves
+  both eras statelessly (header checks, version errors, `resultType`); 403 for a foreign
+  `Origin`; limits `access_token_failures` (per IP, before lookup), `access_tokens` (per
+  token hash, before lookup), `access_token_people` (per person), then `touch`; a lookup that
+  errors is a 500, never a 401.
 - **Tools are a thin adapter** (`mcp::tools`): never query or check permissions there beyond
   finding where an id lives (`draft_place`, `test_place`, `playground_place`, membership-
   filtered); call the REST API through `mcp::api::Api` (`get`, `post`, `put`, `patch`,
   `delete`; `post_reading` for a POST that only reads), which dispatches to the routes with
   `Delegated` (the person, `CurrentUser::via` = the token). A new capability is a REST
   endpoint first, then a tool. Write tools: `writes: true` and a description starting
-  "Changes shared state"; return `Output::audited(..)` (an `agent_action` event). Answers are
-  text, with ids and links (`Ctx::link`), never models or layouts.
+  "Changes shared state"; call `ctx.audit(..)` right after the write succeeds (an
+  `agent_action` event; ids from the write's answer or the `*_place` lookup, `Target::Slug`
+  otherwise); a write left undescribed (the tool failed after it) is audited by `tools::call`
+  from `Api`'s record of writes. Once something is created, answer its id even when what
+  follows fails (no retry makes a second one). Answers are text, with ids and links
+  (`Ctx::link`), never models or layouts (`whoami` alone adds `structuredContent`).
 - **Tests**: `tests/api/mcp.rs` (`Mcp::new(&app, pat(..))`, `.rpc`, `.tool`, `.ok`, `.refused`;
   every tool per role, reusing `migration_tests::setup` and `playgrounds::setup`),
   `tests/api/access_tokens.rs`, `tests/api/draft_text.rs`; web: `features/agent`

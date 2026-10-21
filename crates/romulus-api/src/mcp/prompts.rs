@@ -122,11 +122,12 @@ fn onboard(name: Option<&str>, source: Option<&str>) -> String {
          1. whoami: check my organizations and that my role there is developer or admin.\n\
          2. {source}\n\
          3. create_database (ask me which Postgres major it runs if you cannot tell), then \
-         push_schema with the schema's SQL. If it does not compile, fix only what is not \
-         schema (data, ownership, settings) and say what you removed.\n\
+         push_schema with the schema's SQL (its first version; later changes are drafts). If \
+         it does not compile, fix only what is not schema (data, ownership, settings) and say \
+         what you removed.\n\
          4. get_schema with format `summary`: tell me in a few lines what romulus now holds.\n\
-         5. Ask me before create_push_token: it makes a secret. Then ci_setup, and propose the \
-         CI change for this repository (the secret goes in the CI's secrets, never in a file)."
+         5. ci_setup, and propose the CI change for this repository: I create the token on the \
+         page it links and store it in the CI's secrets (never in a file)."
     )
 }
 

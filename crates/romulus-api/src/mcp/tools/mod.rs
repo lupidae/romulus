@@ -10,8 +10,11 @@
 //! does not exist.
 //!
 //! Write tools say so in their description (they change what others see),
-//! are hidden from read-only tokens, and each successful call is recorded in
-//! the Activity of the database it touched (`agent_action`, with the token).
+//! are hidden from read-only tokens, and what they change is recorded in the
+//! Activity of the database it touched (`agent_action`, with the token)
+//! right after the write succeeds ([`Ctx::audit`]), whatever the tool does
+//! next. A write a tool did not describe (it failed after it) is recorded
+//! anyway, from the API calls it made ([`call`]).
 
 mod drafts;
 mod onboarding;
@@ -19,7 +22,14 @@ mod playgrounds;
 mod read;
 mod testing;
 
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -88,9 +98,39 @@ pub struct Ctx {
     pub api: Api,
     /// Where romulus is: links the agent can hand its person.
     pub public_url: Url,
+    /// The tool called (its writes are audited under its name).
+    tool: OnceLock<&'static str>,
+    /// An audit was recorded for this call.
+    audited: AtomicBool,
 }
 
+/// What a wait leaves of the request's time for the answer.
+const ANSWER_MARGIN: Duration = Duration::from_secs(5);
+
 impl Ctx {
+    pub fn new(api: Api, public_url: Url) -> Self {
+        Self {
+            api,
+            public_url,
+            tool: OnceLock::new(),
+            audited: AtomicBool::new(false),
+        }
+    }
+
+    /// How long a tool may wait for something (a test, a build): what it
+    /// asked for, at most `max`, and never past the request's deadline
+    /// (less a margin to answer).
+    pub fn wait_budget(&self, asked: Duration, max: Duration) -> Duration {
+        budget(asked, max, self.api.time_left())
+    }
+
+    /// Records a write in the Activity, with the token, right after it
+    /// succeeded: what the tool does next cannot lose it.
+    pub async fn audit(&self, audit: Audit) {
+        self.audited.store(true, Ordering::Relaxed);
+        record(self, &audit).await;
+    }
+
     /// The page at `path` (under `/app`), as a link.
     pub fn link(&self, path: &str) -> String {
         self.public_url
@@ -123,36 +163,43 @@ impl Ctx {
     }
 }
 
-/// A tool's answer: text only. Clients hand a model `structuredContent`
-/// instead of the text when both are there (Claude Code does), and the text
-/// is the whole answer: ids, links, what to do next.
+/// The wait [`Ctx::wait_budget`] allows, `left` before the deadline.
+fn budget(asked: Duration, max: Duration, left: Duration) -> Duration {
+    asked.min(max).min(left.saturating_sub(ANSWER_MARGIN))
+}
+
+/// A tool's answer: text. Clients hand a model `structuredContent` instead
+/// of the text when both are there (Claude Code does), and the text is the
+/// whole answer: ids, links, what to do next. Only `whoami` adds structured
+/// facts, for programs checking a connection (the web app's Test
+/// connection).
 #[derive(Default)]
 pub struct Output {
     pub text: String,
-    /// What to record in the Activity (write tools).
-    pub audit: Option<Audit>,
+    pub structured: Option<Value>,
 }
 
 impl Output {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
-            ..Self::default()
+            structured: None,
         }
     }
+}
 
-    #[must_use]
-    pub fn audited(mut self, audit: Audit) -> Self {
-        self.audit = Some(audit);
-        self
-    }
+/// The database a write touched: its id when the answer gave it, else its
+/// slug in the organization.
+pub enum Target {
+    Id(Uuid),
+    Slug(String),
 }
 
 /// What a write did, for the Activity.
 pub struct Audit {
     /// The organization's slug.
     pub org: String,
-    pub database: Option<Uuid>,
+    pub database: Option<Target>,
     pub version: Option<i32>,
     /// In a few words: `created draft "Add invoices"`.
     pub outcome: String,
@@ -220,6 +267,10 @@ fn explain(failure: &Failure) -> String {
              web app (Update draft), then try again.",
         ),
         "draft_changed" => Some("Read the draft again (get_draft), then try again."),
+        "timeout" => Some(
+            "It may still finish: read the state again (get_draft, get_database, \
+             list_playgrounds) before trying again.",
+        ),
         _ => None,
     };
     if let Some(details) = &body.details {
@@ -260,49 +311,85 @@ pub async fn call(ctx: &Ctx, tool: &Tool, arguments: Value) -> Result<Output, To
             &crate::auth::access_tokens::read_only(),
         )));
     }
-    let output = match tool.name {
+    let _ = ctx.tool.set(tool.name);
+    let result = match tool.name {
         name if read::handles(name) => read::call(ctx, name, arguments).await,
         name if drafts::handles(name) => drafts::call(ctx, name, arguments).await,
         name if testing::handles(name) => testing::call(ctx, name, arguments).await,
         name if playgrounds::handles(name) => playgrounds::call(ctx, name, arguments).await,
         name => onboarding::call(ctx, name, arguments).await,
-    }?;
-    if let Some(audit) = &output.audit {
-        record(ctx, tool, audit).await;
+    };
+    // A write the tool did not get to describe (it failed after it): in the
+    // Activity all the same.
+    if !ctx.audited.load(Ordering::Relaxed)
+        && let Some(wrote) = ctx.api.first_write()
+    {
+        let Some(org) = wrote.org else {
+            tracing::warn!(
+                tool = tool.name,
+                "mcp: a write outside an organization, not audited"
+            );
+            return result;
+        };
+        let outcome = match &result {
+            Ok(_) => format!("used {}", tool.name),
+            Err(_) => format!("used {}, which then failed", tool.name),
+        };
+        ctx.audit(Audit {
+            org,
+            database: wrote.database.map(Target::Slug),
+            version: None,
+            outcome,
+            details: AuditDetails::default(),
+        })
+        .await;
     }
-    Ok(output)
+    result
 }
 
-/// Records a write in the Activity, with the token. Best effort: the write
-/// happened, and its own handler kept what the organization must account
-/// for.
-async fn record(ctx: &Ctx, tool: &Tool, audit: &Audit) {
+/// Records a write in the Activity, with the token. A failure is logged,
+/// not answered: the write happened, and its own handler kept what the
+/// organization must account for.
+async fn record(ctx: &Ctx, audit: &Audit) {
     let agent = ctx.api.agent();
+    let tool = ctx.tool.get().copied().unwrap_or("mcp");
     let db = &ctx.api.state().db;
-    let org = sqlx::query_scalar!(
-        "SELECT o.id FROM organizations o JOIN memberships m ON m.org_id = o.id
-         WHERE o.slug = $1 AND m.user_id = $2",
+    let place = sqlx::query!(
+        r#"SELECT o.id AS org_id,
+                  (SELECT d.id FROM databases d
+                   WHERE d.org_id = o.id AND d.slug = $3 AND d.deleted_at IS NULL) AS database_id
+           FROM organizations o JOIN memberships m ON m.org_id = o.id
+           WHERE o.slug = $1 AND m.user_id = $2"#,
         audit.org,
         agent.user.id,
+        match &audit.database {
+            Some(Target::Slug(slug)) => Some(slug.as_str()),
+            _ => None,
+        },
     )
     .fetch_optional(db)
     .await;
-    let Ok(Some(org_id)) = org else {
-        tracing::warn!(tool = tool.name, org = %audit.org, "mcp: cannot find the organization to audit");
+    let Ok(Some(place)) = place else {
+        tracing::warn!(tool, org = %audit.org, "mcp: cannot find the organization to audit");
         return;
+    };
+    let database_id = match &audit.database {
+        Some(Target::Id(id)) => Some(*id),
+        Some(Target::Slug(_)) => place.database_id,
+        None => None,
     };
     let details = AuditDetails {
         token_id: Some(agent.token.id),
         token_name: Some(agent.token.name.clone()),
-        tool: Some(tool.name.to_owned()),
+        tool: Some(tool.to_owned()),
         outcome: Some(audit.outcome.clone()),
         ..audit.details.clone()
     };
     let recorded = audit::record(
         db,
         &audit::Entry {
-            org_id,
-            database_id: audit.database,
+            org_id: place.org_id,
+            database_id,
             action: AuditAction::AgentAction,
             actor_id: Some(agent.user.id),
             actor_name: Some(agent.user.name.clone()),
@@ -313,7 +400,7 @@ async fn record(ctx: &Ctx, tool: &Tool, audit: &Audit) {
     )
     .await;
     if let Err(err) = recorded {
-        tracing::warn!(tool = tool.name, error = %err, "mcp: cannot audit an agent's write");
+        tracing::warn!(tool, error = %err, "mcp: cannot audit an agent's write");
     }
 }
 
@@ -323,12 +410,13 @@ async fn record(ctx: &Ctx, tool: &Tool, audit: &Audit) {
 pub struct Place {
     pub org: String,
     pub database: String,
+    pub database_id: Uuid,
 }
 
 pub async fn draft_place(ctx: &Ctx, draft: Uuid) -> Result<Place, ToolError> {
     sqlx::query_as!(
         Place,
-        r#"SELECT o.slug AS org, d.slug AS database
+        r#"SELECT o.slug AS org, d.slug AS database, d.id AS database_id
            FROM drafts dr
            JOIN databases d ON d.id = dr.database_id
            JOIN organizations o ON o.id = d.org_id
@@ -351,7 +439,7 @@ pub async fn draft_place(ctx: &Ctx, draft: Uuid) -> Result<Place, ToolError> {
 pub async fn test_place(ctx: &Ctx, test: Uuid) -> Result<Place, ToolError> {
     sqlx::query_as!(
         Place,
-        r#"SELECT o.slug AS org, d.slug AS database
+        r#"SELECT o.slug AS org, d.slug AS database, d.id AS database_id
            FROM migration_tests t
            JOIN databases d ON d.id = t.database_id
            JOIN organizations o ON o.id = d.org_id
@@ -369,7 +457,7 @@ pub async fn test_place(ctx: &Ctx, test: Uuid) -> Result<Place, ToolError> {
 pub async fn playground_place(ctx: &Ctx, playground: Uuid) -> Result<Place, ToolError> {
     sqlx::query_as!(
         Place,
-        r#"SELECT o.slug AS org, d.slug AS database
+        r#"SELECT o.slug AS org, d.slug AS database, d.id AS database_id
            FROM playgrounds p
            JOIN databases d ON d.id = p.database_id
            JOIN organizations o ON o.id = d.org_id
@@ -437,6 +525,17 @@ pub mod schema {
 #[cfg(test)]
 mod unit {
     use super::*;
+
+    #[test]
+    fn waits_end_before_the_request_does() {
+        let s = Duration::from_secs;
+        // What was asked, within the tool's own cap…
+        assert_eq!(budget(s(10), s(40), s(55)), s(10));
+        assert_eq!(budget(s(90), s(40), s(55)), s(40));
+        // …and never past the deadline, less the time to answer.
+        assert_eq!(budget(s(40), s(40), s(30)), s(25));
+        assert_eq!(budget(s(40), s(40), s(3)), s(0));
+    }
 
     #[test]
     fn tool_names_are_unique_and_well_formed() {

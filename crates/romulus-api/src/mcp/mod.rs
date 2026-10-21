@@ -13,9 +13,13 @@
 //! `Authorization: Bearer rmls_pat_…`), never the session cookie: nothing
 //! here is ambient, which is why the CSRF guard lets this path through. An
 //! `Origin` header, when sent, must be the public URL's (DNS rebinding: a
-//! page elsewhere cannot drive it from someone's browser). Requests are
-//! limited per token (`rate::Limits::access_tokens`), then each tool's calls
-//! as the web app limits its person.
+//! page elsewhere cannot drive it from someone's browser). Limits come
+//! before any lookup where they can: a client whose tokens keep failing is
+//! refused first (`access_token_failures`, by IP), then each token
+//! (`access_tokens`, by its hash), then each person across their tokens
+//! (`access_token_people`), and only then is the last use written; each
+//! tool's calls are limited on top, as the web app limits its person. A
+//! token refused is a 401; failing to check one is a 500, never a 401.
 //!
 //! **What.** [`tools`] are a thin adapter over the REST API: each calls the
 //! handlers the web app calls, as the token's person ([`api::Api`]), so
@@ -37,12 +41,12 @@ pub mod protocol;
 pub mod resources;
 pub mod tools;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use axum::{
     Extension,
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, State},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderValue, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
 };
@@ -56,7 +60,10 @@ use self::{
 };
 use crate::{
     ApiError, AppState,
-    auth::access_tokens::{self, Agent},
+    auth::{
+        access_tokens::{self, Agent},
+        password::throttle,
+    },
     error::ErrorBody,
 };
 
@@ -98,13 +105,14 @@ pub fn router() -> OpenApiRouter<AppState> {
         (status = 403, description = "An `Origin` other than romulus's", body = Object),
         (status = 404, description = "An unknown method (protocol 2026-07-28)", body = Object),
         (status = 413, body = ErrorBody),
-        (status = 429, description = "Too many requests with this token (`Retry-After`)", body = Object),
+        (status = 429, description = "Too many requests: with this token, with the person's tokens, or with tokens that are not valid from this client (`Retry-After`)", body = Object),
+        (status = 500, description = "The token could not be checked just now: retry", body = Object),
     )
 )]
 pub(crate) async fn message(
     State(state): State<AppState>,
     client: Option<Extension<ConnectInfo<SocketAddr>>>,
-    mut parts: Parts,
+    parts: Parts,
     body: Body,
 ) -> Response {
     let headers = parts.headers.clone();
@@ -121,29 +129,42 @@ pub(crate) async fn message(
             ),
         );
     }
-    let agent = match Agent::from_request_parts(&mut parts, &state).await {
+    // The request's deadline, less a moment to answer before the
+    // endpoint's own timeout (`layers`) cuts it.
+    let deadline = tokio::time::Instant::now()
+        + crate::layers::MCP_TIMEOUT.saturating_sub(Duration::from_secs(2));
+    let limits = &state.limits;
+    let ip = throttle::client_key(client.as_ref().map(|Extension(info)| info.0.ip()));
+    if let Some(wait) = limits.access_token_failures.waiting(&ip) {
+        return too_many("Too many requests with tokens that are not valid", wait);
+    }
+    let agent = match Agent::bearer(&parts) {
+        Ok(secret) => {
+            let hash = crate::token::hash(secret);
+            if let Err(ApiError::RateLimited { retry_after }) = limits.access_tokens.check(hash) {
+                return too_many("Too many requests with this token", retry_after);
+            }
+            Agent::lookup(&state, secret).await
+        }
+        Err(err) => Err(err),
+    };
+    let agent = match agent {
         Ok(agent) => agent,
-        Err(err) => return unauthorized(&err),
+        Err(ApiError::InvalidToken(message)) => {
+            // Counted once refused; past the burst the client is refused
+            // before anything is looked up.
+            let _ = limits.access_token_failures.check(ip);
+            return unauthorized(&message);
+        }
+        Err(err) => return cannot_check(&err),
     };
     if let Err(ApiError::RateLimited { retry_after }) =
-        state.limits.access_tokens.check(agent.token.id)
+        limits.access_token_people.check(agent.user.id)
     {
-        let mut response = rpc_error(
-            None,
-            &RpcError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                code::REFUSED,
-                format!(
-                    "Too many requests with this token: wait {} s.",
-                    retry_after.as_secs().max(1)
-                ),
-            ),
-        );
-        response.headers_mut().insert(
-            header::RETRY_AFTER,
-            HeaderValue::from(retry_after.as_secs().max(1)),
-        );
-        return response;
+        return too_many("Too many requests with your access tokens", retry_after);
+    }
+    if let Err(err) = agent.touch(&state.db).await {
+        return cannot_check(&err.into());
     }
     let bytes = match crate::extract::read_body(&headers, body, BODY_LIMIT).await {
         Ok(bytes) => bytes,
@@ -165,10 +186,11 @@ pub(crate) async fn message(
     if let Some(client) = protocol::client_info(&method, Some(&params)) {
         access_tokens::note_client(&state.db, agent.token.id, &client).await;
     }
-    let ctx = Ctx {
-        public_url: state.config.public_url.clone(),
-        api: Api::new(state, agent, client.map(|Extension(info)| info)),
-    };
+    let public_url = state.config.public_url.clone();
+    let ctx = Ctx::new(
+        Api::new(state, agent, client.map(|Extension(info)| info), deadline),
+        public_url,
+    );
     match handle(&ctx, &era, &method, &params).await {
         Ok(result) => {
             let mut body = protocol::finish(&era, &method, result);
@@ -317,10 +339,16 @@ async fn handle(ctx: &Ctx, era: &Era, method: &str, params: &Value) -> Result<Va
 /// (`isError`).
 fn tool_result(result: Result<tools::Output, ToolError>) -> Value {
     match result {
-        Ok(output) => json!({
-            "content": [{ "type": "text", "text": output.text }],
-            "isError": false,
-        }),
+        Ok(output) => {
+            let mut result = json!({
+                "content": [{ "type": "text", "text": output.text }],
+                "isError": false,
+            });
+            if let Some(structured) = output.structured {
+                result["structuredContent"] = structured;
+            }
+            result
+        }
         Err(err) => json!({
             "content": [{ "type": "text", "text": err.text() }],
             "isError": true,
@@ -359,21 +387,44 @@ fn rpc_error(id: Option<&Value>, err: &RpcError) -> Response {
     json_response(err.status, &err.body(id))
 }
 
-/// 401 with the challenge MCP clients read first. An OAuth authorization
-/// server would add `resource_metadata` here (the protected resource
-/// metadata's URL), which is what sends a client through its flow.
-fn unauthorized(err: &ApiError) -> Response {
-    let message = match err {
-        ApiError::InvalidToken(message) => message.clone(),
-        other => other.to_string(),
-    };
+/// 429, with `Retry-After`.
+fn too_many(what: &str, retry_after: Duration) -> Response {
+    let seconds = retry_after.as_secs().max(1);
     let mut response = rpc_error(
         None,
         &RpcError::new(
-            StatusCode::UNAUTHORIZED,
-            code::UNAUTHORIZED,
-            message.clone(),
+            StatusCode::TOO_MANY_REQUESTS,
+            code::REFUSED,
+            format!("{what}: wait {seconds} s."),
         ),
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+    response
+}
+
+/// The token could not be checked (the database did not answer): a 500 the
+/// client retries, never a 401 that would make it drop a good token.
+fn cannot_check(err: &ApiError) -> Response {
+    tracing::error!(error = %err, "mcp: cannot check an access token");
+    rpc_error(
+        None,
+        &RpcError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            code::INTERNAL_ERROR,
+            "romulus could not check the access token just now: try again in a moment.",
+        ),
+    )
+}
+
+/// 401 with the challenge MCP clients read first. An OAuth authorization
+/// server would add `resource_metadata` here (the protected resource
+/// metadata's URL), which is what sends a client through its flow.
+fn unauthorized(message: &str) -> Response {
+    let mut response = rpc_error(
+        None,
+        &RpcError::new(StatusCode::UNAUTHORIZED, code::UNAUTHORIZED, message),
     );
     // A header value: visible ASCII only (`…` becomes `...`), no quotes.
     let description: String = message

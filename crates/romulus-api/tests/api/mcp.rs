@@ -20,7 +20,7 @@ use super::{
 };
 
 /// A personal access token of `who`, as the API would create it.
-async fn pat(db: &PgPool, who: &Session, scope: AccessTokenScope) -> String {
+pub(super) async fn pat(db: &PgPool, who: &Session, scope: AccessTokenScope) -> String {
     let secret = format!("rmls_pat_{}", token::generate());
     sqlx::query!(
         "INSERT INTO personal_access_tokens (user_id, name, token_hash, scope)
@@ -205,11 +205,12 @@ async fn the_handshake_is_stateless_and_both_eras_are_answered(db: PgPool) {
         "list_playgrounds",
         "create_database",
         "push_schema",
-        "create_push_token",
         "ci_setup",
     ] {
         assert!(names.contains(&expected), "{expected} in {names:?}");
     }
+    // CI secrets are made by people, in the web app.
+    assert!(!names.contains(&"create_push_token"), "{names:?}");
     assert!(tools["result"].get("resultType").is_none());
     let create = tools["result"]["tools"]
         .as_array()
@@ -476,6 +477,86 @@ async fn requests_are_limited_per_token(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_person_s_tokens_share_a_budget_and_failing_clients_are_cut_off(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = super::harness::signed_in(&db, "Alice").await;
+    let ping = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+    // Each token has its own budget, and the person one across them all.
+    for _ in 0..2 {
+        let token = Mcp::new(&app, pat(&db, &alice, AccessTokenScope::Read).await);
+        for _ in 0..60 {
+            assert_eq!(token.post(&ping, &[]).await.status, StatusCode::OK);
+        }
+    }
+    // Its own budget is untouched; the person's (refilling meanwhile) runs
+    // out first.
+    let third = Mcp::new(&app, pat(&db, &alice, AccessTokenScope::Read).await);
+    let mut limited = None;
+    for _ in 0..60 {
+        let answered = third.post(&ping, &[]).await;
+        if answered.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = Some(answered);
+            break;
+        }
+    }
+    let limited = limited.expect("the person's budget ends before the token's");
+    assert!(
+        limited.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("your access tokens"),
+        "{}",
+        limited.json()
+    );
+    assert!(limited.headers.contains_key(header::RETRY_AFTER));
+
+    // A client sending tokens that are not valid is refused after 20, before
+    // anything is looked up: a good token from it waits too.
+    let bad = Mcp::new(&app, format!("rmls_pat_{}", token::generate()));
+    let mut refused = 0;
+    let cut_off = loop {
+        let answered = bad.post(&ping, &[]).await;
+        if answered.status != StatusCode::UNAUTHORIZED {
+            break answered;
+        }
+        refused += 1;
+        assert!(refused <= 40, "a client failing without end is cut off");
+    };
+    assert!(refused >= 20, "20 tries first, then {refused}");
+    assert_eq!(cut_off.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(cut_off.headers.contains_key(header::RETRY_AFTER));
+    let bob = super::harness::signed_in(&db, "Bob").await;
+    let good = Mcp::new(&app, pat(&db, &bob, AccessTokenScope::Read).await);
+    assert_eq!(
+        good.post(&ping, &[]).await.status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_token_that_cannot_be_checked_is_a_server_error_not_a_401(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let alice = super::harness::signed_in(&db, "Alice").await;
+    let mcp = Mcp::new(&app, pat(&db, &alice, AccessTokenScope::Read).await);
+    // The database goes away: the token is not wrong, so no 401 tells the
+    // client to drop it.
+    db.close().await;
+    let answered = mcp
+        .post(&json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }), &[])
+        .await;
+    assert_eq!(answered.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!answered.headers.contains_key(header::WWW_AUTHENTICATE));
+    assert!(
+        answered.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("try again"),
+        "{}",
+        answered.json()
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn whoami_names_the_person_their_token_and_roles(db: PgPool) {
     let app = TestApp::new(db.clone());
     let team = Team::new(&db, "acme").await;
@@ -496,6 +577,14 @@ async fn whoami_names_the_person_their_token_and_roles(db: PgPool) {
     assert!(text.contains("read-only"), "{text}");
     assert!(text.contains("- acme: acme, developer"), "{text}");
     assert!(text.contains("- globex: globex, reviewer"), "{text}");
+    // The same facts, structured, for a program checking its connection.
+    let answer = mcp
+        .rpc("tools/call", json!({ "name": "whoami", "arguments": {} }))
+        .await;
+    let facts = &answer["result"]["structuredContent"];
+    assert_eq!(facts["user"]["name"], "Developer-acme", "{answer}");
+    assert_eq!(facts["token"]["access"], "read-only");
+    assert_eq!(facts["organizations"][1]["role"], "reviewer", "{facts}");
     // Several organizations: tools ask which.
     let ambiguous = mcp.refused("list_databases", json!({})).await;
     assert!(
@@ -596,7 +685,6 @@ async fn a_read_only_token_never_writes(db: PgPool) {
             "push_schema",
             json!({ "database": "shop", "sql": "CREATE TABLE public.y (id bigint);" }),
         ),
-        ("create_push_token", json!({ "database": "shop" })),
     ] {
         let refused = mcp.refused(name, arguments).await;
         assert!(refused.contains("(read_only_token)"), "{name}: {refused}");
@@ -618,7 +706,7 @@ async fn a_read_only_token_never_writes(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn onboarding_creates_a_database_its_first_version_and_a_ci_token(db: PgPool) {
+async fn onboarding_creates_a_database_and_only_its_first_version_from_sql(db: PgPool) {
     let (app, team, _host) = migration_tests::setup(&db).await;
     let mcp = Mcp::new(
         &app,
@@ -688,50 +776,47 @@ async fn onboarding_creates_a_database_its_first_version_and_a_ci_token(db: PgPo
         "{versions}"
     );
 
-    let token = mcp
-        .ok(
-            "create_push_token",
-            json!({ "database": "billing-service", "name": "GitHub Actions" }),
+    // Only the first version comes from SQL: later ones are drafts, so
+    // reviews and tests apply.
+    let again = mcp
+        .refused(
+            "push_schema",
+            json!({ "database": "billing-service", "sql": "CREATE TABLE public.refunds (id bigint);" }),
         )
         .await;
-    let secret = token
-        .split_whitespace()
-        .find(|word| word.starts_with("rom_"))
-        .expect("the secret, once")
-        .to_owned();
+    assert!(
+        again.contains("already has a version")
+            && again.contains("create a draft and publish it, so reviews and tests apply"),
+        "{again}"
+    );
+    let numbers: Vec<i32> = sqlx::query_scalar!(
+        "SELECT v.number FROM versions v JOIN databases d ON d.id = v.database_id
+         WHERE d.slug = 'billing-service'"
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(numbers, [1], "no second version");
+
+    // CI's token: its person makes it, on the page the guide links.
     let id: Uuid = sqlx::query_scalar!("SELECT id FROM databases WHERE slug = 'billing-service'")
         .fetch_one(&db)
         .await
         .unwrap();
-    assert!(
-        token.contains(&format!("/api/databases/{id}/versions")),
-        "{token}"
-    );
-    let pushed = app
-        .push(
-            id,
-            &secret,
-            Some("application/sql"),
-            "CREATE TABLE public.invoices (id bigint);\nCREATE TABLE public.refunds (id bigint);\n",
-        )
-        .await;
-    assert!(pushed.status.is_success(), "{}", pushed.json());
-
     let guide = mcp
         .ok("ci_setup", json!({ "database": "billing-service" }))
         .await;
     assert!(
-        guide.contains(&id.to_string()) && guide.contains("secrets.ROMULUS_TOKEN"),
+        guide.contains(&format!("/api/databases/{id}/versions"))
+            && guide.contains("secrets.ROMULUS_TOKEN")
+            && guide.contains("/app/acme/billing-service/settings#tokens"),
         "{guide}"
     );
 
     // Every write is in the Activity, with the token.
     let events = audited(&db).await;
     let tools: Vec<&str> = events.iter().map(|e| e["tool"].as_str().unwrap()).collect();
-    assert_eq!(
-        tools,
-        ["create_database", "push_schema", "create_push_token"]
-    );
+    assert_eq!(tools, ["create_database", "push_schema"]);
     let token_id: Uuid = sqlx::query_scalar!("SELECT id FROM personal_access_tokens")
         .fetch_one(&db)
         .await
@@ -876,15 +961,8 @@ async fn a_draft_changes_live_for_people_in_it_and_publishes_by_the_rules(db: Pg
         .await;
     assert!(wrong.contains("(edit_not_found)"), "{wrong}");
     // The agent's person is an editor now: their approval would not count.
-    let editors = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM draft_editors WHERE draft_id = $1 AND user_id = $2"#,
-        draft,
-        team.developer.user,
-    )
-    .fetch_one(&db)
-    .await
-    .unwrap();
-    assert_eq!(editors, 1);
+    let editors = super::draft_text::stored_editors(&db, draft).await;
+    assert!(editors.contains(&team.developer.user), "{editors:?}");
 
     // The organization requires an approval: publishing says what is missing.
     sqlx::query!("UPDATE organizations SET approvals_required = 1")
@@ -950,6 +1028,43 @@ async fn a_draft_changes_live_for_people_in_it_and_publishes_by_the_rules(db: Pg
             "publish_draft"
         ]
     );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_draft_made_but_not_written_is_audited_and_named_for_the_agent(db: PgPool) {
+    let (app, team, _host) = migration_tests::setup(&db).await;
+    let mcp = Mcp::new(
+        &app,
+        pat(&db, &team.developer, AccessTokenScope::Write).await,
+    );
+    let failed = mcp
+        .refused(
+            "create_draft",
+            json!({
+                "database": "shop",
+                "name": "Add refunds",
+                "edits": [{ "old": "no such text", "new": "x" }],
+            }),
+        )
+        .await;
+    // The draft exists: the agent is told which, and not to make another.
+    assert!(failed.contains("(edit_not_found)"), "{failed}");
+    assert!(
+        failed.contains("do not call create_draft again"),
+        "{failed}"
+    );
+    let draft = id_after(&failed, "The draft ");
+    let drafts: Vec<Uuid> = sqlx::query_scalar!("SELECT id FROM drafts")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(drafts, [draft]);
+    // And it is in the Activity, though the tool failed after making it.
+    let events = audited(&db).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["tool"], "create_draft");
+    assert_eq!(events[0]["draft_id"], json!(draft));
+    assert_eq!(events[0]["outcome"], "created draft \"Add refunds\"");
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -1046,14 +1161,27 @@ async fn a_migration_test_runs_and_answers_its_verdict(db: PgPool) {
         )
         .await;
     assert!(refused.contains("(forbidden)"), "{refused}");
-    // Not waiting answers the handle at once.
+    // Not waiting answers the handle at once, and how to follow it.
     let started = developer
         .ok(
             "test_migration",
             json!({ "database": "shop", "from": 1, "to": 2, "wait_seconds": 0 }),
         )
         .await;
-    assert!(started.contains("Migration test "), "{started}");
+    let handle = id_after(&started, "Migration test ");
+    assert!(
+        started.contains("PASSED")
+            || started.contains(&format!("call get_migration_test with test={handle}")),
+        "{started}"
+    );
+    // Each test started is in the Activity at once, with its id.
+    let tests: Vec<Value> = audited(&db)
+        .await
+        .into_iter()
+        .filter(|e| e["tool"] == "test_migration")
+        .collect();
+    assert_eq!(tests.len(), 2);
+    assert_eq!(tests[1]["test_id"], json!(handle));
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

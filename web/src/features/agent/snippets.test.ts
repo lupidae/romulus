@@ -9,10 +9,15 @@ describe("connection snippets", () => {
     expect(url).toBe("https://romulus.example/api/mcp");
   });
 
-  it("give Claude Code its command with the token as a header", () => {
-    expect(snippet("claude-code", url, "rmls_pat_x").code).toBe(
-      'claude mcp add --transport http romulus https://romulus.example/api/mcp --header "Authorization: Bearer rmls_pat_x"',
+  it("give Claude Code a command that reads the token, never holding it", () => {
+    const code = snippet("claude-code", url, "rmls_pat_x").code;
+    expect(code).toBe(
+      [
+        "read -rs ROMULUS_TOKEN",
+        'claude mcp add --transport http romulus https://romulus.example/api/mcp --header "Authorization: Bearer $ROMULUS_TOKEN"',
+      ].join("\n"),
     );
+    expect(code).not.toContain("rmls_pat_x");
   });
 
   it("give JSON clients valid JSON holding the URL and the token", () => {

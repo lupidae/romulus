@@ -1,8 +1,10 @@
 //! Testing a migration on rows (Test migration): start one, wait a while for
 //! its verdict, and poll it after. A test takes from seconds to minutes (its
 //! turn, a playground built, the migration up and down): the call waits at
-//! most [`MAX_WAIT`], well under what a proxy in front allows, then hands
-//! back the test's id to poll with `get_migration_test`.
+//! most [`MAX_WAIT`], and never past the request's deadline
+//! ([`Ctx::wait_budget`]), then hands back the test's id to poll with
+//! `get_migration_test`: once a test is started, the answer always carries
+//! its id, so a retry never starts a second one.
 
 use std::{collections::BTreeMap, fmt::Write as _, time::Duration};
 
@@ -12,8 +14,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    Audit, Ctx, Output, Tool, ToolError, args, draft_place, read::one_line, schema, test_place,
-    uuid,
+    Audit, Ctx, Output, Target, Tool, ToolError, args, draft_place, read::one_line, schema,
+    test_place, uuid,
 };
 use crate::{
     audit::AuditDetails,
@@ -110,6 +112,7 @@ struct Created {
 
 async fn test_migration(ctx: &Ctx, a: TestArgs) -> Result<Output, ToolError> {
     let mut body = json!({ "concurrently": a.concurrently });
+    let mut target = None;
     let (org, database) = match (&a.draft, &a.database, a.from, a.to, a.version) {
         (Some(draft), None, None, None, None) => {
             let id = uuid(draft, "draft")?;
@@ -137,6 +140,7 @@ async fn test_migration(ctx: &Ctx, a: TestArgs) -> Result<Output, ToolError> {
             }
             body["draft_id"] = json!(id);
             body["sha256"] = json!(text.reviewed_sha256);
+            target = Some(Target::Id(place.database_id));
             (place.org, place.database)
         }
         (None, Some(database), Some(from), Some(to), None) => {
@@ -176,26 +180,32 @@ async fn test_migration(ctx: &Ctx, a: TestArgs) -> Result<Output, ToolError> {
         "migration-tests",
     ];
     let created: Created = ctx.api.post(&tests, &body).await?;
-    let wait = Duration::from_secs(a.wait_seconds.unwrap_or(40)).min(MAX_WAIT);
-    let test = wait_for(ctx, &org, &database, created.id, wait).await?;
-    let db: crate::databases::Database = ctx
-        .api
-        .get(&["orgs", &org, "databases", &database], &[])
-        .await?;
-    Ok(
-        Output::text(test_text(ctx, &org, &database, &test)).audited(Audit {
-            org,
-            database: Some(db.id),
-            version: None,
-            outcome: "started a migration test".into(),
-            details: AuditDetails {
-                test_id: Some(created.id),
-                draft_id: test.draft.as_ref().map(|d| d.id),
-                draft_name: test.draft.as_ref().map(|d| d.name.clone()),
-                ..AuditDetails::default()
-            },
-        }),
-    )
+    ctx.audit(Audit {
+        org: org.clone(),
+        database: Some(target.unwrap_or_else(|| Target::Slug(database.clone()))),
+        version: None,
+        outcome: "started a migration test".into(),
+        details: AuditDetails {
+            test_id: Some(created.id),
+            draft_id: a.draft.as_deref().and_then(|d| uuid(d, "draft").ok()),
+            ..AuditDetails::default()
+        },
+    })
+    .await;
+    let wait = ctx.wait_budget(Duration::from_secs(a.wait_seconds.unwrap_or(40)), MAX_WAIT);
+    match wait_for(ctx, &org, &database, created.id, wait).await {
+        Ok(test) => Ok(Output::text(test_text(ctx, &org, &database, &test))),
+        // Started, and still running as far as this call can tell: its id,
+        // never an error a client would retry.
+        Err(err) => Ok(Output::text(format!(
+            "Migration test {id} of {org}/{database} started and is still running (reading \
+             it back failed: {}). Call get_migration_test with test={id} to follow it; do \
+             not start another.\nPage: {}\n",
+            one_line(&err.text(), 300),
+            ctx.link(&format!("{org}/{database}/tests/{}", created.id)),
+            id = created.id,
+        ))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -229,7 +239,7 @@ static GET_MIGRATION_TEST: Tool = Tool {
 async fn get_migration_test(ctx: &Ctx, a: GetArgs) -> Result<Output, ToolError> {
     let id = uuid(&a.test, "test")?;
     let place = test_place(ctx, id).await?;
-    let wait = Duration::from_secs(a.wait_seconds.unwrap_or(0)).min(MAX_WAIT);
+    let wait = ctx.wait_budget(Duration::from_secs(a.wait_seconds.unwrap_or(0)), MAX_WAIT);
     let test = wait_for(ctx, &place.org, &place.database, id, wait).await?;
     Ok(Output::text(test_text(
         ctx,
@@ -259,7 +269,6 @@ struct TestView {
 
 #[derive(Deserialize)]
 struct TestDraft {
-    id: Uuid,
     name: String,
 }
 
@@ -313,8 +322,8 @@ fn test_text(ctx: &Ctx, org: &str, database: &str, test: &TestView) -> String {
         }
         let _ = writeln!(
             out,
-            "Not finished yet: call get_migration_test with test={} (wait_seconds up to 40) in \
-             a moment.\nPage: {link}",
+            "Still running: call get_migration_test with test={} (wait_seconds up to 40) in a \
+             moment; do not start another.\nPage: {link}",
             test.id
         );
         return out;

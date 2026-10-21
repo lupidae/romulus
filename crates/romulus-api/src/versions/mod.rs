@@ -287,6 +287,11 @@ pub struct UploadSql {
     pub sql: String,
     /// What changed, in a line (at most 1000 characters).
     pub message: Option<String>,
+    /// Only as the database's first version: refused (409 `has_versions`)
+    /// once it has, or ever had, one. Agents onboard a database this way;
+    /// later changes go through a draft, so reviews and tests apply.
+    #[serde(default)]
+    pub first: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -625,6 +630,7 @@ pub(crate) async fn hidden_versions(
         (status = 201, body = VersionSummary),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
+        (status = 409, description = "`has_versions`, or `stale_base` (a version came first): with `first`, the database has a version", body = ErrorBody),
         (status = 422, description = "`compile_failed` (`details.diagnostics`: `Diagnostic[]`), or `validation`", body = ErrorBody),
         (status = 429, description = "`rate_limited`", body = ErrorBody),
         (status = 503, description = "`unavailable`: the compiler is down; nothing was stored", body = ErrorBody),
@@ -644,6 +650,22 @@ async fn upload(
         ));
     }
     let database = databases::find(&state.db, member.org.id, &slug).await?;
+    if body.first {
+        let numbered = sqlx::query_scalar!(
+            "SELECT last_version_number FROM databases WHERE id = $1",
+            database.id
+        )
+        .fetch_one(&state.db)
+        .await?;
+        if numbered > 0 {
+            return Err(ApiError::Conflict {
+                code: "has_versions",
+                message: "This database already has versions: change its schema with a draft, \
+                          so reviews and tests apply."
+                    .into(),
+            });
+        }
+    }
     state.limits.compile.check(member.user.id)?;
     state.limits.database_compiles.check(database.id)?;
     let model = compiled_model(
@@ -663,7 +685,8 @@ async fn upload(
         created_by: Some(member.user.id),
         created_by_token: None,
         layout: None,
-        expected_base: None,
+        // First only: refused if a version came in meanwhile.
+        expected_base: body.first.then_some(None),
         publishes_draft: None,
         approvals: None,
         test_override: None,

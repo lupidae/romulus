@@ -11,13 +11,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    Audit, Ctx, Output, Tool, ToolError, args, draft_place,
+    Audit, Ctx, Output, Target, Tool, ToolError, args, draft_place,
     read::{diagnostics, draft_line, one_line},
     schema, uuid,
 };
 use crate::{
     audit::AuditDetails,
     drafts::{Draft, text::DraftText},
+    mcp::api::Failure,
     versions::VersionTexts,
 };
 
@@ -147,43 +148,47 @@ async fn create_draft(ctx: &Ctx, a: CreateArgs) -> Result<Output, ToolError> {
         .await?;
     let id = draft.id.to_string();
     let path = [&base[..], &["drafts", id.as_str()]].concat();
-    if let Some(name) = a.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        draft = ctx.api.patch(&path, &json!({ "name": name })).await?;
-    }
-    let mut text = None;
-    if let Some(number) = a.from_version {
-        let n = number.to_string();
-        let texts: VersionTexts = ctx
+    // Named before it is audited, so the Activity says which it is; a name
+    // refused leaves the default one.
+    let named = match a.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => ctx
             .api
-            .get(
-                &[&base[..], &["versions", n.as_str(), "texts"]].concat(),
-                &[],
-            )
-            .await?;
-        text = Some(texts.sql);
-    }
-    let mut body = json!({ "wait": true });
-    match (a.sql, a.edits, text) {
-        (Some(sql), _, _) => body["text"] = json!(sql),
-        (None, Some(edits), Some(start)) => {
-            // The older version's SQL first, then the edits on it.
-            let _: DraftText = ctx
-                .api
-                .put(&[&path[..], &["text"]].concat(), &json!({ "text": start }))
-                .await?;
-            body["edits"] = json!(edits);
-        }
-        (None, Some(edits), None) => body["edits"] = json!(edits),
-        (None, None, Some(start)) => body["text"] = json!(start),
-        (None, None, None) => {}
-    }
-    let written: DraftText = if body.get("text").is_some() || body.get("edits").is_some() {
-        ctx.api.put(&[&path[..], &["text"]].concat(), &body).await?
-    } else {
-        ctx.api
-            .get(&[&path[..], &["text"]].concat(), &[("wait", "true".into())])
-            .await?
+            .patch::<Draft>(&path, &json!({ "name": name }))
+            .await
+            .map(|renamed| draft = renamed),
+        None => Ok(()),
     };
+    ctx.audit(Audit {
+        org: org.clone(),
+        database: Some(Target::Id(draft.database.id)),
+        version: None,
+        outcome: format!("created draft \"{}\"", draft.name),
+        details: AuditDetails {
+            draft_id: Some(draft.id),
+            draft_name: Some(draft.name.clone()),
+            ..AuditDetails::default()
+        },
+    })
+    .await;
+    // From here the draft exists: a failure says so, and how to go on with
+    // it (a new create_draft would make a second one).
+    let half_made = |err: ToolError| {
+        ToolError::Say(format!(
+            "The draft {} \"{}\" was created in {org}/{}, but its text was not written: {}\n\
+             Go on with this draft (update_draft with draft {}), or have it deleted in the web \
+             app ({}); do not call create_draft again.",
+            draft.id,
+            draft.name,
+            a.database,
+            err.text(),
+            draft.id,
+            draft_link(ctx, &org, &a.database, &draft),
+        ))
+    };
+    named.map_err(|err| half_made(err.into()))?;
+    let written = first_text(ctx, &base, &path, a.from_version, a.sql, a.edits)
+        .await
+        .map_err(|err| half_made(err.into()))?;
     let mut out = format!(
         "Created draft {} \"{}\" in {org}/{} ({}, {}).\n",
         draft.id,
@@ -203,17 +208,44 @@ async fn create_draft(ctx: &Ctx, a: CreateArgs) -> Result<Output, ToolError> {
         written.sha256,
         draft_link(ctx, &org, &a.database, &draft)
     );
-    Ok(Output::text(out).audited(Audit {
-        org,
-        database: Some(draft.database.id),
-        version: None,
-        outcome: format!("created draft \"{}\"", draft.name),
-        details: AuditDetails {
-            draft_id: Some(draft.id),
-            draft_name: Some(draft.name.clone()),
-            ..AuditDetails::default()
-        },
-    }))
+    Ok(Output::text(out))
+}
+
+/// A new draft's text, written: `sql`, or `edits` (on `from_version`'s SQL
+/// when given), or that version's SQL, or as it was created.
+async fn first_text(
+    ctx: &Ctx,
+    base: &[&str],
+    path: &[&str],
+    from_version: Option<i32>,
+    sql: Option<String>,
+    edits: Option<Vec<TextEdit>>,
+) -> Result<DraftText, Failure> {
+    let text_path = [path, &["text"]].concat();
+    let mut text = None;
+    if let Some(number) = from_version {
+        let n = number.to_string();
+        let texts: VersionTexts = ctx
+            .api
+            .get(&[base, &["versions", n.as_str(), "texts"]].concat(), &[])
+            .await?;
+        text = Some(texts.sql);
+    }
+    let mut body = json!({ "wait": true });
+    match (sql, edits, text) {
+        (Some(sql), _, _) => body["text"] = json!(sql),
+        (None, Some(edits), Some(start)) => {
+            // The older version's SQL first, then the edits on it.
+            let _: DraftText = ctx.api.put(&text_path, &json!({ "text": start })).await?;
+            body["edits"] = json!(edits);
+        }
+        (None, Some(edits), None) => body["edits"] = json!(edits),
+        (None, None, Some(start)) => body["text"] = json!(start),
+        (None, None, None) => {
+            return ctx.api.get(&text_path, &[("wait", "true".into())]).await;
+        }
+    }
+    ctx.api.put(&text_path, &body).await
 }
 
 fn draft_link(ctx: &Ctx, org: &str, database: &str, draft: &Draft) -> String {
@@ -308,6 +340,17 @@ async fn update_draft(ctx: &Ctx, a: UpdateArgs) -> Result<Output, ToolError> {
         id.as_str(),
     ];
     let written: DraftText = ctx.api.put(&[&path[..], &["text"]].concat(), &body).await?;
+    ctx.audit(Audit {
+        org: place.org.clone(),
+        database: Some(Target::Id(place.database_id)),
+        version: None,
+        outcome: "edited a draft's text".into(),
+        details: AuditDetails {
+            draft_id: uuid(&id, "draft").ok(),
+            ..AuditDetails::default()
+        },
+    })
+    .await;
     let mut out = format!("Updated draft {id}. ");
     out.push_str(&compile_text(&written));
     let _ = writeln!(
@@ -316,20 +359,7 @@ async fn update_draft(ctx: &Ctx, a: UpdateArgs) -> Result<Output, ToolError> {
         written.sha256,
         ctx.link(&format!("{}/{}/drafts/{id}", place.org, place.database))
     );
-    let database: crate::databases::Database = ctx
-        .api
-        .get(&["orgs", &place.org, "databases", &place.database], &[])
-        .await?;
-    Ok(Output::text(out).audited(Audit {
-        org: place.org,
-        database: Some(database.id),
-        version: None,
-        outcome: "edited a draft's text".into(),
-        details: AuditDetails {
-            draft_id: uuid(&id, "draft").ok(),
-            ..AuditDetails::default()
-        },
-    }))
+    Ok(Output::text(out))
 }
 
 #[derive(Deserialize)]
@@ -677,6 +707,17 @@ async fn confirm_renames(ctx: &Ctx, a: RenamesArgs) -> Result<Output, ToolError>
             &json!({ "renames": a.renames }),
         )
         .await?;
+    ctx.audit(Audit {
+        org: place.org.clone(),
+        database: Some(Target::Id(place.database_id)),
+        version: None,
+        outcome: "chose a draft's renames".into(),
+        details: AuditDetails {
+            draft_id: uuid(&id, "draft").ok(),
+            ..AuditDetails::default()
+        },
+    })
+    .await;
     let mut out = format!(
         "The draft {id} now decides {} rename(s) itself",
         decisions.renames.len()
@@ -694,20 +735,7 @@ async fn confirm_renames(ctx: &Ctx, a: RenamesArgs) -> Result<Output, ToolError>
         }
     }
     out.push_str("generate_migration or get_draft shows the migration with them.\n");
-    let database: crate::databases::Database = ctx
-        .api
-        .get(&["orgs", &place.org, "databases", &place.database], &[])
-        .await?;
-    Ok(Output::text(out).audited(Audit {
-        org: place.org,
-        database: Some(database.id),
-        version: None,
-        outcome: "chose a draft's renames".into(),
-        details: AuditDetails {
-            draft_id: uuid(&id, "draft").ok(),
-            ..AuditDetails::default()
-        },
-    }))
+    Ok(Output::text(out))
 }
 
 #[derive(Deserialize)]
@@ -753,6 +781,21 @@ async fn request_review(ctx: &Ctx, a: ReviewArgs) -> Result<Output, ToolError> {
     } else {
         let _: Value = ctx.api.post(&path, &json!({})).await?;
     }
+    ctx.audit(Audit {
+        org: place.org.clone(),
+        database: Some(Target::Id(place.database_id)),
+        version: None,
+        outcome: if a.cancel {
+            "withdrew a review request".into()
+        } else {
+            "requested a review".into()
+        },
+        details: AuditDetails {
+            draft_id: uuid(&id, "draft").ok(),
+            ..AuditDetails::default()
+        },
+    })
+    .await;
     let draft: Draft = ctx.api.get(&path[..6], &[]).await?;
     let mut out = if a.cancel {
         format!("Review request withdrawn for draft {id}.\n")
@@ -774,21 +817,7 @@ async fn request_review(ctx: &Ctx, a: ReviewArgs) -> Result<Output, ToolError> {
         "Page: {}",
         ctx.link(&format!("{}/{}/drafts/{id}", place.org, place.database))
     );
-    Ok(Output::text(out).audited(Audit {
-        org: place.org,
-        database: Some(draft.database.id),
-        version: None,
-        outcome: if a.cancel {
-            "withdrew a review request".into()
-        } else {
-            "requested a review".into()
-        },
-        details: AuditDetails {
-            draft_id: Some(draft.id),
-            draft_name: Some(draft.name),
-            ..AuditDetails::default()
-        },
-    }))
+    Ok(Output::text(out))
 }
 
 #[derive(Deserialize)]
@@ -938,10 +967,17 @@ async fn publish_draft(ctx: &Ctx, a: PublishArgs) -> Result<Output, ToolError> {
             }),
         )
         .await?;
-    let database: crate::databases::Database = ctx
-        .api
-        .get(&["orgs", &place.org, "databases", &place.database], &[])
-        .await?;
+    ctx.audit(Audit {
+        org: place.org.clone(),
+        database: Some(Target::Id(place.database_id)),
+        version: Some(published.number),
+        outcome: format!("published v{}", published.number),
+        details: AuditDetails {
+            draft_id: uuid(&id, "draft").ok(),
+            ..AuditDetails::default()
+        },
+    })
+    .await;
     let summary = preview
         .diff
         .as_ref()
@@ -957,14 +993,5 @@ async fn publish_draft(ctx: &Ctx, a: PublishArgs) -> Result<Output, ToolError> {
             place.org, place.database, published.number
         ))
     );
-    Ok(Output::text(out).audited(Audit {
-        org: place.org,
-        database: Some(database.id),
-        version: Some(published.number),
-        outcome: format!("published v{}", published.number),
-        details: AuditDetails {
-            draft_id: uuid(&id, "draft").ok(),
-            ..AuditDetails::default()
-        },
-    }))
+    Ok(Output::text(out))
 }

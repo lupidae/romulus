@@ -8,7 +8,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    Audit, Ctx, Output, Tool, ToolError, args, playground_place, read::one_line, schema, uuid,
+    Audit, Ctx, Output, Target, Tool, ToolError, args, playground_place, read::one_line, schema,
+    uuid,
 };
 use crate::{
     audit::AuditDetails,
@@ -98,33 +99,40 @@ async fn create_playground(ctx: &Ctx, a: CreateArgs) -> Result<Output, ToolError
         "playgrounds",
     ];
     let mut playground: Playground = ctx.api.post(&base, &body).await?;
-    let id = playground.id.to_string();
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_secs(a.wait_seconds.unwrap_or(40)).min(MAX_WAIT);
-    while playground.status == PlaygroundStatus::Building
-        && tokio::time::Instant::now() + POLL <= deadline
-    {
-        tokio::time::sleep(POLL).await;
-        playground = ctx
-            .api
-            .get(&[&base[..], &[id.as_str()]].concat(), &[])
-            .await?;
-    }
-    let database: crate::databases::Database = ctx
-        .api
-        .get(&["orgs", &org, "databases", &a.database], &[])
-        .await?;
-    let text = playground_text(ctx, &org, &a.database, &playground);
-    Ok(Output::text(text).audited(Audit {
-        org,
-        database: Some(database.id),
+    ctx.audit(Audit {
+        org: org.clone(),
+        database: Some(Target::Slug(a.database.clone())),
         version: Some(playground.version),
         outcome: "created a playground".into(),
         details: AuditDetails {
             playground_id: Some(playground.id),
             ..AuditDetails::default()
         },
-    }))
+    })
+    .await;
+    let id = playground.id.to_string();
+    let wait = ctx.wait_budget(Duration::from_secs(a.wait_seconds.unwrap_or(40)), MAX_WAIT);
+    let deadline = tokio::time::Instant::now() + wait;
+    while playground.status == PlaygroundStatus::Building
+        && tokio::time::Instant::now() + POLL <= deadline
+    {
+        tokio::time::sleep(POLL).await;
+        // Created: a failed read answers what it was (its id), not an error.
+        match ctx
+            .api
+            .get(&[&base[..], &[id.as_str()]].concat(), &[])
+            .await
+        {
+            Ok(now) => playground = now,
+            Err(_) => break,
+        }
+    }
+    Ok(Output::text(playground_text(
+        ctx,
+        &org,
+        &a.database,
+        &playground,
+    )))
 }
 
 fn playground_text(ctx: &Ctx, org: &str, database: &str, p: &Playground) -> String {

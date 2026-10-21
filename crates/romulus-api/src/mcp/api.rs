@@ -10,7 +10,11 @@
 //! though it posts (a playground query: [`Api::post_reading`]); the lent
 //! identity refuses any other write on its own.
 
-use std::{net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex, OnceLock, PoisonError},
+    time::Duration,
+};
 
 use axum::{
     Router,
@@ -19,6 +23,7 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use serde::{Serialize, de::DeserializeOwned};
+use tokio::time::Instant;
 use tower::ServiceExt;
 use url::Url;
 
@@ -34,7 +39,9 @@ static ROUTES: OnceLock<Router<AppState>> = OnceLock::new();
 /// The largest answer a tool reads (a big schema's diff, both models).
 const ANSWER_LIMIT: usize = 64 * 1024 * 1024;
 
-/// What a call may take, unless the tool says otherwise.
+/// What one call may take at most (less when the request's deadline is
+/// nearer): a handler that takes longer is dropped, as the API's own
+/// timeout would.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// A call the API refused, or could not answer: its status and its error.
@@ -50,6 +57,17 @@ impl Failure {
         &self.body.code
     }
 
+    fn timeout() -> Self {
+        Self {
+            status: StatusCode::GATEWAY_TIMEOUT,
+            body: Box::new(ErrorBody {
+                code: "timeout".into(),
+                message: "romulus did not answer this call in time.".into(),
+                details: None,
+            }),
+        }
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -62,21 +80,54 @@ impl Failure {
     }
 }
 
-/// The REST API, as the token's person.
+/// A write that succeeded: where (from its path), for the audit of a tool
+/// that failed after it.
+#[derive(Debug, Clone)]
+pub struct Wrote {
+    /// The organization's slug.
+    pub org: Option<String>,
+    /// The database's slug.
+    pub database: Option<String>,
+}
+
+/// The REST API, as the token's person, until `deadline`.
 #[derive(Clone)]
 pub struct Api {
     state: AppState,
     agent: Agent,
     client: Option<ConnectInfo<SocketAddr>>,
+    deadline: Instant,
+    writes: Arc<Mutex<Vec<Wrote>>>,
 }
 
 impl Api {
-    pub fn new(state: AppState, agent: Agent, client: Option<ConnectInfo<SocketAddr>>) -> Self {
+    pub fn new(
+        state: AppState,
+        agent: Agent,
+        client: Option<ConnectInfo<SocketAddr>>,
+        deadline: Instant,
+    ) -> Self {
         Self {
             state,
             agent,
             client,
+            deadline,
+            writes: Arc::default(),
         }
+    }
+
+    /// What is left until the request's deadline.
+    pub fn time_left(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
+    }
+
+    /// The first write that succeeded, if any.
+    pub fn first_write(&self) -> Option<Wrote> {
+        self.writes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .first()
+            .cloned()
     }
 
     pub fn agent(&self) -> &Agent {
@@ -164,7 +215,8 @@ impl Api {
         body: Option<Vec<u8>>,
         reading: bool,
     ) -> Result<axum::body::Bytes, Failure> {
-        if !self.agent.token.can_write() && method != Method::GET && !reading {
+        let writes = method != Method::GET && !reading;
+        if !self.agent.token.can_write() && writes {
             return Err(failure_of(&read_only()));
         }
         // Dot segments would move the path (`url` drops them): nothing names
@@ -198,11 +250,28 @@ impl Api {
             .get_or_init(|| crate::router_and_spec().0)
             .clone()
             .with_state(self.state.clone());
-        let response = match routes.oneshot(request).await {
-            Ok(response) => response,
-            Err(never) => match never {},
+        let limit = DEFAULT_TIMEOUT.min(self.time_left());
+        let response = match tokio::time::timeout(limit, routes.oneshot(request)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(never)) => match never {},
+            Err(_) => {
+                tracing::warn!(?path, "mcp: a call ran out of time");
+                return Err(Failure::timeout());
+            }
         };
         let status = response.status();
+        if writes && status.is_success() {
+            let segment = |i: usize| path.get(i).map(|s| (*s).to_owned());
+            let under_org = path.first() == Some(&"orgs");
+            let wrote = Wrote {
+                org: segment(1).filter(|_| under_org),
+                database: segment(3).filter(|_| under_org && path.get(2) == Some(&"databases")),
+            };
+            self.writes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(wrote);
+        }
         let bytes = to_bytes(response.into_body(), ANSWER_LIMIT)
             .await
             .map_err(|err| Failure::internal(err.to_string()))?;

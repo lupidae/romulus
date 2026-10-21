@@ -2,11 +2,14 @@
 //! signed in, shown once, stored hashed, revoked, expired, and accepted at
 //! the MCP endpoint only.
 
+use std::time::Duration;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use romulus_api::token;
+use chrono::{DateTime, Utc};
+use romulus_api::{AppState, config::Config, mail::Mailer, token};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -39,6 +42,67 @@ pub async fn initialize(app: &TestApp, token: &str) -> TestResponse {
 
 async fn create(app: &TestApp, who: &Session, body: &Value) -> TestResponse {
     app.as_user(who).post(TOKENS, body).await
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_token_lasts_90_days_unless_said_and_its_person_is_told(db: PgPool) {
+    let (mailer, outbox) = Mailer::memory();
+    let app =
+        TestApp::with_state(AppState::new(db.clone(), Config::for_tests()).with_mailer(mailer));
+    let alice = signed_in(&db, "Alice").await;
+    let email: String = sqlx::query_scalar!("SELECT email FROM users WHERE id = $1", alice.user)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let unsaid = create(
+        &app,
+        &alice,
+        &json!({ "name": "Claude Code", "scope": "read" }),
+    )
+    .await;
+    assert_eq!(unsaid.status, StatusCode::CREATED, "{}", unsaid.json());
+    let expires: DateTime<Utc> = unsaid.json()["token"]["expires_at"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        (89..=90).contains(&(expires - Utc::now()).num_days()),
+        "{expires}"
+    );
+    // Never, when asked for.
+    let never = create(
+        &app,
+        &alice,
+        &json!({ "name": "Build box", "scope": "write", "expires_in_days": null }),
+    )
+    .await;
+    assert!(never.json()["token"]["expires_at"].is_null());
+
+    // Each one is mailed to its person: which, what it may do, until when,
+    // and where to revoke it.
+    let mut sent = Vec::new();
+    for _ in 0..200 {
+        sent = outbox.to(&email);
+        if sent.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent.iter().all(|m| m.kind == "access_token_created"));
+    let first = &sent[0].text;
+    assert!(
+        first.contains("\"Claude Code\"") && first.contains("read only"),
+        "{first}"
+    );
+    assert!(first.contains("It expires on "), "{first}");
+    assert!(first.contains("/app/settings/tokens"), "{first}");
+    assert!(
+        sent[1].text.contains("It never expires"),
+        "{}",
+        sent[1].text
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -91,7 +155,10 @@ async fn a_revoked_token_stops_working_at_once(db: PgPool) {
         .json();
     let secret = body["secret"].as_str().unwrap().to_owned();
     let id = body["token"]["id"].as_str().unwrap().to_owned();
-    assert!(body["token"]["expires_at"].is_null(), "no expiry asked");
+    assert!(
+        body["token"]["expires_at"].is_string(),
+        "90 days unless said"
+    );
     assert_eq!(initialize(&app, &secret).await.status, StatusCode::OK);
 
     // Not someone else's to revoke.

@@ -90,16 +90,28 @@ pub fn reset(to: &str, link: &str, ttl: Duration) -> Email {
 }
 
 /// The password of an account changed (a reset or a change).
-pub fn password_changed(to: &str, public_url: &Url) -> Email {
+/// The password changed (or was reset); `tokens` access tokens were revoked
+/// with the sessions.
+pub fn password_changed(to: &str, public_url: &Url, tokens: u64) -> Email {
     let sign_in = sign_in_url(public_url);
+    let mut paragraphs = vec![
+        "The password of your romulus account just changed, and every other session was signed out.".to_owned(),
+    ];
+    if tokens > 0 {
+        paragraphs.push(format!(
+            "Your {tokens} access token{} for AI agents {} revoked too: create new ones (account menu, Access tokens) for the agents you still use.",
+            if tokens == 1 { "" } else { "s" },
+            if tokens == 1 { "was" } else { "were" },
+        ));
+    }
+    paragraphs.push(
+        "If you did not do this, reset your password now (\"Forgot password?\" on the sign-in page) and tell whoever runs your romulus server.".to_owned(),
+    );
     Letter {
         kind: "password_changed",
         to,
         subject: "Your romulus password changed".to_owned(),
-        paragraphs: vec![
-            "The password of your romulus account just changed, and every other session was signed out.".to_owned(),
-            "If you did not do this, reset your password now (\"Forgot password?\" on the sign-in page) and tell whoever runs your romulus server.".to_owned(),
-        ],
+        paragraphs,
         action: Some(("Open romulus", &sign_in)),
         footer: format!("Sent to {to} because its romulus account changed."),
     }

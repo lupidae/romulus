@@ -2516,7 +2516,7 @@ export interface components {
     CreateAccessToken: {
       /**
        * Format: int32
-       * @description 30, 90 or 365; `null` or absent: it never expires.
+       * @description 30, 90 or 365; absent: 90; `null`: it never expires.
        */
       expires_in_days?: number | null;
       /** @description 1 to 100 characters. */
@@ -5653,6 +5653,12 @@ export interface components {
       diagnostics?: components["schemas"]["Diagnostic"][];
     };
     UploadSql: {
+      /**
+       * @description Only as the database's first version: refused (409 `has_versions`)
+       *     once it has, or ever had, one. Agents onboard a database this way;
+       *     later changes go through a draft, so reviews and tests apply.
+       */
+      first?: boolean;
       /** @description What changed, in a line (at most 1000 characters). */
       message?: string | null;
       /** @description The schema as SQL DDL, at most 1 MiB. */
@@ -7004,8 +7010,17 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description Too many requests with this token (`Retry-After`) */
+      /** @description Too many requests: with this token, with the person's tokens, or with tokens that are not valid from this client (`Retry-After`) */
       429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description The token could not be checked just now: retry */
+      500: {
         headers: {
           [name: string]: unknown;
         };
@@ -10622,6 +10637,15 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `has_versions`, or `stale_base` (a version came first): with `first`, the database has a version */
+      409: {
         headers: {
           [name: string]: unknown;
         };

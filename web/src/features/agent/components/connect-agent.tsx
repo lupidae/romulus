@@ -49,8 +49,8 @@ export function ConnectAgent() {
             <div className="grid gap-3">
               <p className="text-sm text-muted-foreground">
                 <span className="font-medium text-foreground">{created.token.name}</span>,{" "}
-                {scopeLabel[created.token.scope].toLowerCase()}. Shown only here: it is already in
-                the configuration below.
+                {scopeLabel[created.token.scope].toLowerCase()}. Shown only here: copy it now. The
+                configurations below hold it; Claude Code&rsquo;s command asks for it.
               </p>
               <CopyField value={created.secret} label="Access token" />
             </div>
@@ -90,7 +90,7 @@ export function ConnectAgent() {
               );
             })}
           </Tabs>
-          {!created && (
+          {!created && snippet(client, url, token).code.includes(TOKEN_PLACEHOLDER) && (
             <p className="text-sm text-muted-foreground">
               The token goes in place of {TOKEN_PLACEHOLDER}.
             </p>

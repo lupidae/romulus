@@ -86,7 +86,18 @@ async fn whoami(ctx: &Ctx) -> Result<Output, ToolError> {
             );
         }
     }
-    Ok(Output::text(text))
+    // The same facts, for a program checking a connection.
+    let structured = json!({
+        "user": { "name": me.name, "email": me.email },
+        "token": { "name": token.name, "access": access },
+        "organizations": orgs.iter().map(|org| json!({
+            "slug": org.slug, "name": org.name, "role": role(org),
+        })).collect::<Vec<_>>(),
+    });
+    Ok(Output {
+        text,
+        structured: Some(structured),
+    })
 }
 
 fn role(org: &Org) -> String {

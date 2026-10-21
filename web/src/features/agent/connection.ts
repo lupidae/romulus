@@ -16,6 +16,17 @@ interface RpcAnswer {
   error?: { message?: string };
 }
 
+/** What `whoami` answers besides its text. */
+interface Whoami {
+  user?: { name?: string };
+}
+
+interface ToolAnswer {
+  isError?: boolean;
+  content?: { type?: string; text?: string }[];
+  structuredContent?: Whoami;
+}
+
 async function rpc(
   url: string,
   token: string,
@@ -47,9 +58,14 @@ export async function checkConnection(url: string, token: string): Promise<Conne
     });
     const listed = await rpc(url, token, 2, "tools/list", {});
     const tools = Array.isArray(listed.result?.tools) ? listed.result.tools.length : 0;
-    const who = await rpc(url, token, 3, "tools/call", { name: "whoami", arguments: {} });
-    const user = (who.result?.structuredContent as { user?: { name?: string } } | undefined)?.user;
-    return { ok: true, name: user?.name ?? "you", tools };
+    const who = (await rpc(url, token, 3, "tools/call", { name: "whoami", arguments: {} }))
+      .result as ToolAnswer | undefined;
+    if (who?.isError) {
+      throw new Error(who.content?.[0]?.text ?? "romulus could not say who the token is.");
+    }
+    const name = who?.structuredContent?.user?.name;
+    if (!name) throw new Error("romulus answered, but not who the token is.");
+    return { ok: true, name, tools };
   } catch (error) {
     return {
       ok: false,

@@ -1336,7 +1336,17 @@
             }
           },
           "429": {
-            "description": "Too many requests with this token (`Retry-After`)",
+            "description": "Too many requests: with this token, with the person's tokens, or with tokens that are not valid from this client (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The token could not be checked just now: retry",
             "content": {
               "application/json": {
                 "schema": {
@@ -6676,6 +6686,16 @@
               }
             }
           },
+          "409": {
+            "description": "`has_versions`, or `stale_base` (a version came first): with `first`, the database has a version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "422": {
             "description": "`compile_failed` (`details.diagnostics`: `Diagnostic[]`), or `validation`",
             "content": {
@@ -10750,7 +10770,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "30, 90 or 365; `null` or absent: it never expires.",
+            "description": "30, 90 or 365; absent: 90; `null`: it never expires.",
             "minimum": 0
           },
           "name": {
@@ -18755,6 +18775,10 @@
           "sql"
         ],
         "properties": {
+          "first": {
+            "type": "boolean",
+            "description": "Only as the database's first version: refused (409 `has_versions`)\nonce it has, or ever had, one. Agents onboard a database this way;\nlater changes go through a draft, so reviews and tests apply."
+          },
           "message": {
             "type": [
               "string",
