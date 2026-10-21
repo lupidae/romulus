@@ -207,6 +207,24 @@ async fn portal(
             "features[subscription_cancel][cancellation_reason][enabled]",
             "false",
         )
+        // Stripe requires the reasons even when the survey is off (a create
+        // without them is refused); they are never shown.
+        .set(
+            "features[subscription_cancel][cancellation_reason][options][0]",
+            "too_expensive",
+        )
+        .set(
+            "features[subscription_cancel][cancellation_reason][options][1]",
+            "missing_features",
+        )
+        .set(
+            "features[subscription_cancel][cancellation_reason][options][2]",
+            "unused",
+        )
+        .set(
+            "features[subscription_cancel][cancellation_reason][options][3]",
+            "other",
+        )
         .set("features[subscription_update][enabled]", "true")
         .set(
             "features[subscription_update][default_allowed_updates][0]",
