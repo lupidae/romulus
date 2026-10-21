@@ -10,6 +10,7 @@ import {
   DatabaseScriptIcon,
   EyeClosedIcon,
   FlaskIcon,
+  GroupIcon,
   RefreshDoubleIcon,
   SettingsIcon,
   ShieldCheckIcon,
@@ -136,6 +137,9 @@ const icons = {
   plan_downgraded: WarningTriangleIcon,
   playground_hours_used_up: ClockIcon,
   subscription_duplicate_cancelled: CreditCardIcon,
+  // Kept out of a database's activity by the API: another database's purge.
+  database_purged: TrashIcon,
+  admin_appointed: GroupIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -204,6 +208,10 @@ function sentence(event: AuditEvent): string {
       return "The organization used its playground hours for the month";
     case "subscription_duplicate_cancelled":
       return "A second subscription was cancelled and refunded";
+    case "database_purged":
+      return `The database “${details.database_name ?? details.database_slug ?? "?"}” was deleted for good, 30 days after its deletion`;
+    case "admin_appointed":
+      return `${details.member?.name ?? "A member"} was made an admin of the organization`;
   }
 }
 

@@ -130,7 +130,13 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-          build-args: ${{ matrix.build-args }}
+          # The API compiles in the commit and the repository it was built
+          # from: it links that source (AGPL-3.0, section 13). The other
+          # images ignore them.
+          build-args: |
+            ${{ matrix.build-args }}
+            ROMULUS_COMMIT=${{ steps.tags.outputs.sha }}
+            ROMULUS_SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
           # The source label links the package to this repository, so it
           # inherits the repository's access (deploy pulls with a read:packages PAT).
           labels: |

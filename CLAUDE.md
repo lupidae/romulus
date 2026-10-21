@@ -12,7 +12,8 @@ hosted by lupidae and self-hostable for one organization (`deploy/self-host`,
 
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/; `billing` (hosted
-                      plans, Stripe; off unless configured), `export` (ZIP of databases)
+                      plans, Stripe; off unless configured), `export` (ZIP of databases), `retention`
+                      (deleting accounts and organizations, purges, inactive accounts)
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API;
                       `rename`: renames between two models (known, detected and scored, chosen)
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
@@ -42,7 +43,8 @@ deploy/helm/          the Kubernetes chart (romulus/: the same images and settin
 ee/                   the future separately licensed (commercial) features: empty, ee/LICENSE a placeholder
 Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
 RELEASING.md          cutting a release: bump the chart, tag vX.Y.Z; the images and the chart publish from the tag
-scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
+scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works;
+                      scripts/check-zitadel-mail  proves Zitadel's email and the account-deletion token
 scripts/export-migrations/  alembic.sh, django.sh, rails.sh: run in a user's project, print the SQL to import
 docker-compose.yml    postgres (app), sandbox-postgres, zitadel + zitadel-db, provisioner, mail (Mailpit)
 .superset/            workspace setup/teardown (Superset worktrees boot configured)
@@ -71,6 +73,7 @@ just stripe-setup …   # hosted billing: Stripe products, prices, portal from t
 just play        # only the playground runner and service (the API and web elsewhere)
 just playground-image   # the playground Postgres image (`just up` builds it too)
 scripts/check-oidc   # discovery, client secret, full PKCE login as alice
+scripts/check-zitadel-mail   # Zitadel mails a password reset to the catcher; the romulus-api token deletes users
 ```
 
 Test users (Zitadel, `.dev/zitadel/users.json`): `alice@romulus.test`,
@@ -1218,6 +1221,48 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
   every tool per role, reusing `migration_tests::setup` and `playgrounds::setup`),
   `tests/api/access_tokens.rs`, `tests/api/draft_text.rs`; web: `features/agent`
   (`snippets.test.ts`), `e2e/agent.spec.ts`.
+
+## Retention and deletion (`retention`)
+
+docs/MVP.md "Retention and deletion" has the decisions.
+
+- **Deleting** goes through `retention::deletion::Deleter` (`delete_account(user,
+  By::Request | By::Inactivity)`, `delete_org`): plan first (`AccountPlan`,
+  `OrgPlan`: what goes, `Fate` per membership), the Zitadel user next
+  (`retention::idp`, `ROMULUS_ZITADEL_TOKEN`; `Manual` without it), then one
+  READ COMMITTED transaction that plans again under the row lock, deletes
+  (cascades: never delete children by hand, the history triggers allow a
+  cascade only), logs `account_deleted`/`organization_deleted` in
+  `auth_events` and queues `retention::live::Notice`s; mail after commit.
+  Refusals are `DeletionError`s (`LastAdmin`, `Paying`): the admin commands
+  answer them with exit 4, a later endpoint with 409s. Keep the CLI
+  (`admin::delete_user`/`delete_org`, `--dry-run`) a thin layer over it.
+- **Anything that ends memberships or databases outside a request** (the
+  CLI, a sweeper) notifies with `live::notify` in its transaction;
+  `live::listen` (started by `serve`) closes the drafts and publishes the
+  membership changes. In process, the endpoints keep calling the Hub and
+  `MembershipEvents` directly.
+- **Sweeps** (`retention::sweeper`, hourly): `purge::databases` (deleted 30
+  days ago; `database_purged` at the org's level, in
+  `AuditAction::NOT_IN_DATABASE_ACTIVITY`), `purge::invitations` (pending,
+  expired 30 days ago), and with `ROMULUS_DELETE_INACTIVE_ACCOUNTS` (off by
+  default, needs mail) `inactive::send_notices` / `delete_due`.
+- **`users.last_seen_at`**: `auth::session` sets it at every sign-in
+  (`session::create`) and at most every `ACCOUNT_TOUCH_EVERY` on use, as
+  `access_tokens::Agent::touch` does for an agent's token, clearing
+  `inactivity_notice_at`; `users.updated_at` moves with identity columns only.
+- **Source and commit**: `config::COMMIT` (`ROMULUS_COMMIT` at build time, the
+  Dockerfile's build argument from images.yml), `Config::source_url`
+  (`ROMULUS_SOURCE_URL`, the build's repository by default),
+  `source_at_commit()`; `/api/health` `commit`, `/api/instance` `source`; the
+  user menu's "Source code" (`ShellSource`).
+- **Zitadel**: the provisioner configures its SMTP from `ROMULUS_SMTP_*` and
+  `ROMULUS_MAIL_FROM` (compose passes the mail catcher's in-network
+  address), and makes the `romulus-api` machine user (IAM_USER_MANAGER) whose
+  token it writes to `oidc.env` as `ROMULUS_ZITADEL_TOKEN`.
+- **Tests**: `tests/api/retention.rs` (the commands with dry runs, refusals,
+  the fake IdP's `DELETE /v2/users/{id}`, purges, `last_seen_at`, inactive
+  accounts on and off, the listener), `user-menu.test.tsx`.
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH touched AS (\n                 UPDATE sessions\n                 SET last_seen_at = now(),\n                     expires_at = least(now() + make_interval(secs => $2), created_at + make_interval(secs => $3))\n                 WHERE id_hash = $1\n                 RETURNING user_id\n             )\n             UPDATE users SET last_seen_at = now(), inactivity_notice_at = NULL\n             WHERE id = (SELECT user_id FROM touched)\n               AND (last_seen_at < now() - make_interval(secs => $4) OR inactivity_notice_at IS NOT NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Float8",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a8f1500c793aae68e06c77f30fd6c3811eab9520cb211671c39630f95aeab58a"
+}

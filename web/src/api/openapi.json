@@ -8883,7 +8883,9 @@
           "plan_downgraded",
           "playground_hours_used_up",
           "subscription_duplicate_cancelled",
-          "agent_action"
+          "agent_action",
+          "database_purged",
+          "admin_appointed"
         ]
       },
       "AuditActor": {
@@ -8982,6 +8984,19 @@
             "format": "int32",
             "description": "How many comments went (comments deleted)."
           },
+          "database_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The database purged, by name and slug as they were."
+          },
+          "database_slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "draft_id": {
             "type": [
               "string",
@@ -9010,6 +9025,17 @@
             ],
             "format": "int32",
             "description": "The approvals required before and after a change."
+          },
+          "member": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AuditActor",
+                "description": "The member an event is about (made an admin)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "message": {
             "type": [
@@ -12371,6 +12397,13 @@
           "version"
         ],
         "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit it was built from (`null` when the build did not say: a\nlocal build), whose source `GET /api/instance`'s `source` links."
+          },
           "database": {
             "type": "string",
             "description": "`ok` when a query round-trips."
@@ -12965,7 +12998,8 @@
           "single_org",
           "mail",
           "playgrounds",
-          "billing"
+          "billing",
+          "source"
         ],
         "properties": {
           "billing": {
@@ -12983,6 +13017,35 @@
           "single_org": {
             "type": "boolean",
             "description": "One organization per install (`ROMULUS_SINGLE_ORG`): no way to create\nanother."
+          },
+          "source": {
+            "$ref": "#/components/schemas/InstanceSource",
+            "description": "The version running and where its source is (AGPL-3.0, section 13)."
+          }
+        }
+      },
+      "InstanceSource": {
+        "type": "object",
+        "description": "Which romulus runs here, and where to read its source.",
+        "required": [
+          "version",
+          "url"
+        ],
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit it was built from; `null` when the build did not say."
+          },
+          "url": {
+            "type": "string",
+            "description": "The source of that commit (`<repository>/tree/<commit>`), or the\nrepository when the commit is unknown (`ROMULUS_SOURCE_URL`)."
+          },
+          "version": {
+            "type": "string",
+            "description": "The API's crate version."
           }
         }
       },

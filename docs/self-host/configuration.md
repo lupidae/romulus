@@ -56,6 +56,9 @@ binary's; the bundle's own value is in the third column when it differs.
 | `ROMULUS_SANDBOX_PREFIX` | `romulus_sandbox` | | names the compile pool's roles and databases in the sandboxes. One API per prefix and sandbox |
 | `ROMULUS_PLAY_URL`, `ROMULUS_PLAY_KEY` | unset | when playgrounds are on | the playground service and the key the API signs its calls with (32 characters or more). Both or neither; neither: playgrounds are off |
 | `ROMULUS_OIDC_ISSUER`, `ROMULUS_OIDC_CLIENT_ID`, `ROMULUS_OIDC_CLIENT_SECRET` | unset | `.env` | an OpenID Connect client: all three, or none |
+| `ROMULUS_ZITADEL_TOKEN` | unset | unset | with a Zitadel OIDC client: a personal access token of a machine user allowed to delete users (Zitadel's IAM_USER_MANAGER). `delete-user` then deletes the person's Zitadel user too; without it, it prints the user to delete in Zitadel's console |
+| `ROMULUS_DELETE_INACTIVE_ACCOUNTS` | `false` | `false` | `true`: accounts nobody used for 3 years are deleted, after an email 30 days before ([below](#retention-and-deletion)). Needs mail. Off, no account is ever deleted on its own |
+| `ROMULUS_SOURCE_URL` | the repository the image was built from (`https://github.com/lupidae/romulus` for the official images) | | where the app's "Source code" link points, at the commit that runs (AGPL-3.0, section 13). Set it when you run a modified romulus: to your own repository |
 | `ROMULUS_SESSION_COOKIE` | `romulus_session` | | the session cookie's name |
 | `ROMULUS_LOG_FORMAT` | text | `json` (the image) | `json`: one JSON object per line |
 | `RUST_LOG` | `romulus_api=debug,…` | `romulus_api=info,tower_http=info,sqlx=warn` | log levels, as `tracing`'s `EnvFilter` reads them |
@@ -157,12 +160,59 @@ docker compose exec api romulus-api <command>
 | `verify-email EMAIL` | marks the password account with that address verified (they always are; kept for repairs). Single sign-on accounts are left alone, with a warning: their provider verifies them |
 | `mail-test EMAIL` | sends a test message; non-zero with the server's error if it fails, exit 3 when mail is off |
 | `auth-events [--email EMAIL] [--limit N]` | recent sign-in events, as JSON lines |
+| `delete-user EMAIL [--dry-run]` | deletes every account with that address and what it alone holds ([below](#retention-and-deletion)); `--dry-run` says what would go. Exit 4 while it is the only admin of an organization others belong to |
+| `delete-org SLUG [--dry-run]` | deletes the organization and everything in it; `--dry-run` says what would go |
 | `migrate` | applies pending migrations and exits (`serve` does it too) |
 | `serve` | runs the API (the default) |
 | `openapi` | prints the API's OpenAPI document |
 
 Each reads the container's environment, so it uses the same database and
 URL as the running API.
+
+## Retention and deletion
+
+What romulus deletes on its own, whatever the configuration:
+
+- a **deleted database**, 30 days after its deletion, with its versions,
+  drafts and comments (until then it is hidden, not gone);
+- a **removed version**, 30 days after its removal (or once no open draft
+  is based on it);
+- an **invitation** nobody accepted, 30 days after it expired (a revoked one
+  at once);
+- the **sign-in log**, after 90 days; **playgrounds**, 7 days after their
+  last use.
+
+On request, an admin of the install deletes an account or an organization:
+
+```bash
+docker compose exec api romulus-api delete-user ada@example.com --dry-run   # what would go
+docker compose exec api romulus-api delete-user ada@example.com
+docker compose exec api romulus-api delete-org acme --dry-run
+```
+
+- `delete-user` deletes the account (sessions, password, access tokens,
+  memberships, approvals) and every organization it is the **only member**
+  of. What the
+  person wrote in organizations they shared stays there, shown as by a
+  deleted account, and the audit log keeps the name it recorded: that is the
+  organization's. It refuses while the person is the **only admin** of an
+  organization others belong to: make another member an admin first, or
+  delete the organization too.
+- `delete-org` deletes the organization with its databases, versions,
+  drafts, comments, members, invitations and audit log. Its members keep
+  their accounts.
+- With mail, the address (or the organization's admins) is told it is done.
+- Run it while the API runs: open drafts close and the people removed are
+  disconnected at once.
+- Backups still hold what was deleted until they expire (`backup.md`).
+
+`ROMULUS_DELETE_INACTIVE_ACCOUNTS=true` also deletes accounts nobody signed
+in to for 3 years: the address is emailed 30 days before, and signing in
+once keeps the account. Where such an account is an organization's only
+admin, its most recently active developer (else reviewer) becomes admin
+(written to the audit log, and emailed); an account alone in an
+organization takes the organization with it. Leave it off unless your
+policy says otherwise: off, romulus never deletes an account on its own.
 
 ## Playgrounds (the runner and the service)
 

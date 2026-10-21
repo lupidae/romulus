@@ -29,6 +29,10 @@ pub const ABSOLUTE: Duration = Duration::from_hours(30 * 24);
 /// `last_seen_at` (and the sliding expiry) is written at most this often, so
 /// a busy page does not turn every read into a write.
 const TOUCH_EVERY: Duration = Duration::from_mins(5);
+/// The account's own `users.last_seen_at` (what inactivity is counted from,
+/// `retention::inactive`) moves at most this often on session use; every
+/// sign-in sets it.
+pub const ACCOUNT_TOUCH_EVERY: Duration = Duration::from_hours(1);
 
 /// The signed-in user, from the session cookie. Every endpoint that needs a
 /// person takes it (or [`super::Member`], which includes it).
@@ -144,14 +148,22 @@ async fn lookup(db: &PgPool, token: &str) -> Result<Option<CurrentUser>, ApiErro
         return Ok(None);
     };
     if is_stale(row.last_seen_at, Utc::now()) {
+        // The account was used: an inactivity notice no longer holds.
         sqlx::query!(
-            "UPDATE sessions
-             SET last_seen_at = now(),
-                 expires_at = least(now() + make_interval(secs => $2), created_at + make_interval(secs => $3))
-             WHERE id_hash = $1",
+            "WITH touched AS (
+                 UPDATE sessions
+                 SET last_seen_at = now(),
+                     expires_at = least(now() + make_interval(secs => $2), created_at + make_interval(secs => $3))
+                 WHERE id_hash = $1
+                 RETURNING user_id
+             )
+             UPDATE users SET last_seen_at = now(), inactivity_notice_at = NULL
+             WHERE id = (SELECT user_id FROM touched)
+               AND (last_seen_at < now() - make_interval(secs => $4) OR inactivity_notice_at IS NOT NULL)",
             id_hash,
             IDLE.as_secs_f64(),
             ABSOLUTE.as_secs_f64(),
+            ACCOUNT_TOUCH_EVERY.as_secs_f64(),
         )
         .execute(db)
         .await?;
@@ -172,8 +184,9 @@ fn is_stale(last_seen_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
         .is_ok_and(|age| age >= TOUCH_EVERY)
 }
 
-/// Starts a session for `user_id` and returns its token (for the cookie).
-/// Also sweeps sessions that already expired, so the table does not grow.
+/// Starts a session for `user_id` and returns its token (for the cookie):
+/// a sign-in, so the account counts as used now. Also sweeps sessions that
+/// already expired, so the table does not grow.
 pub async fn create(db: &PgPool, user_id: Uuid) -> Result<String, sqlx::Error> {
     let token = token::generate();
     sqlx::query!(
@@ -182,6 +195,12 @@ pub async fn create(db: &PgPool, user_id: Uuid) -> Result<String, sqlx::Error> {
         token::hash(&token),
         user_id,
         IDLE.as_secs_f64(),
+    )
+    .execute(db)
+    .await?;
+    sqlx::query!(
+        "UPDATE users SET last_seen_at = now(), inactivity_notice_at = NULL WHERE id = $1",
+        user_id,
     )
     .execute(db)
     .await?;

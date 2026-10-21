@@ -17,9 +17,13 @@ use crate::domain::{Interval, Plan};
 /// Days a past-due subscription keeps its plan, from the invoice's due date.
 pub const GRACE_DAYS: i64 = 14;
 
+/// The Stripe subscription statuses that pay for their plan (or did,
+/// recently): [`is_live`], for SQL.
+pub const LIVE_STATUSES: [&str; 4] = ["active", "trialing", "past_due", "unpaid"];
+
 /// A Stripe subscription status that pays for its plan (or did, recently).
 pub fn is_live(status: &str) -> bool {
-    matches!(status, "active" | "trialing" | "past_due" | "unpaid")
+    LIVE_STATUSES.contains(&status)
 }
 
 fn is_past_due(status: &str) -> bool {

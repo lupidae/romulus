@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Makes a Zitadel instance usable by romulus, with no clicking:
 #   project "romulus" → OIDC web app "romulus-web" → users, the hosted login
-#   branded as romulus (logo, colors, font, texts), and its emails (sign-up
-#   codes) sent to an SMTP server when there is one.
+#   branded as romulus (logo, colors, font, texts), its emails (sign-up
+#   codes, password resets) sent through romulus's own SMTP server when it
+#   has one (ROMULUS_SMTP_*, ROMULUS_MAIL_FROM), and the machine user the API
+#   deletes accounts' Zitadel users with.
 # Then writes the contract other tools read:
-#   $OUT/oidc.env      ROMULUS_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET
+#   $OUT/oidc.env      ROMULUS_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET, and
+#                      ROMULUS_ZITADEL_TOKEN (that machine user's token)
 #   $OUT/users.json    [{email, password, name}]: the test users (dev)
 #   $OUT/accounts.txt  "email password" of each account it created
 #                      ($ACCOUNTS, add-account: deployments), mode 600
@@ -35,7 +38,19 @@ PAT_FILE=${PAT_FILE:-/bootstrap/admin.pat}
 OWNER=${OWNER:-}
 DEV_PASSWORD=${DEV_PASSWORD:-RomulusDev1!}
 ASSETS=${ASSETS:-/assets}       # deploy/zitadel/assets: logos, font, brand.json
-MAIL_HOST=${MAIL_HOST:-}        # host:port of an SMTP server without auth; empty: no email
+# The API's mail settings (crates/romulus-api/src/config.rs, the same names and
+# defaults), as Zitadel reaches the server: empty host, no email.
+SMTP_HOST=${ROMULUS_SMTP_HOST:-}
+SMTP_TLS=${ROMULUS_SMTP_TLS:-starttls}
+SMTP_USERNAME=${ROMULUS_SMTP_USERNAME:-}
+SMTP_PASSWORD=${ROMULUS_SMTP_PASSWORD:-}
+MAIL_FROM=${ROMULUS_MAIL_FROM:-}
+case "$SMTP_TLS" in
+starttls) SMTP_PORT=${ROMULUS_SMTP_PORT:-587} ;;
+implicit) SMTP_PORT=${ROMULUS_SMTP_PORT:-465} ;;
+none) SMTP_PORT=${ROMULUS_SMTP_PORT:-25} ;;
+*) echo "zitadel-provision: ROMULUS_SMTP_TLS: starttls, implicit or none, not $SMTP_TLS" >&2; exit 2 ;;
+esac
 
 issuer=$ISSUER
 # Every browser origin of the stack: dev has two (the dev server and the
@@ -337,25 +352,83 @@ api PUT /admin/v1/text/message/init/en "$(jq -cn '{
 }')" >/dev/null
 log "login branded as romulus"
 
-# Sign-up and password-reset codes go by email. In dev the stack's mail
-# catcher receives them (its web UI: http://localhost:$ROMULUS_MAIL_PORT).
-if [ -n "$MAIL_HOST" ]; then
+# Sign-up codes and password resets go by email, through the server romulus
+# sends its own mail with. In dev the stack's mail catcher receives them (its
+# web UI: http://localhost:$ROMULUS_MAIL_PORT). The provider is found by its
+# description and its settings put again on every run.
+if [ -n "$SMTP_HOST" ]; then
+    [ -n "$MAIL_FROM" ] || { log "ROMULUS_SMTP_HOST needs ROMULUS_MAIL_FROM"; exit 1; }
+    # "romulus <romulus@example.com>" or a bare address.
+    if [[ $MAIL_FROM =~ ^(.*)\<([^\<\>]+)\>[[:space:]]*$ ]]; then
+        sender_address=${BASH_REMATCH[2]}
+        sender_name=$(sed -e 's/^[[:space:]"]*//' -e 's/[[:space:]"]*$//' <<<"${BASH_REMATCH[1]}")
+    else
+        sender_address=$MAIL_FROM
+        sender_name=
+    fi
+    # Zitadel's tls: TLS from the first byte, falling back to STARTTLS.
+    smtp=$(jq -cn --arg host "$SMTP_HOST:$SMTP_PORT" --argjson tls "$([ "$SMTP_TLS" = none ] && echo false || echo true)" \
+        --arg address "$sender_address" --arg name "${sender_name:-romulus}" --arg user "$SMTP_USERNAME" '{
+        description: "romulus", host: $host, tls: $tls, user: $user,
+        senderAddress: $address, senderName: $name
+    }')
     smtp_id=$(api POST /admin/v1/email/_search '{}' \
-        | jq -r '.result[]? | select(.description == "romulus dev mail") | .id' | head -1)
+        | jq -r '.result[]? | select(.description == "romulus" or .description == "romulus dev mail") | .id' | head -1)
     if [ -z "$smtp_id" ]; then
-        smtp_id=$(api POST /admin/v1/email/smtp "$(jq -cn --arg host "$MAIL_HOST" '{
-            description: "romulus dev mail", host: $host, tls: false,
-            senderAddress: "no-reply@romulus.localhost", senderName: "romulus"
-        }')" | jq -r .id)
-        log "added SMTP $MAIL_HOST ($smtp_id)"
+        smtp_id=$(api POST /admin/v1/email/smtp "$(jq -c --arg password "$SMTP_PASSWORD" '. + {password: $password}' <<<"$smtp")" \
+            | jq -r .id)
+        log "added SMTP $SMTP_HOST:$SMTP_PORT ($smtp_id)"
+    else
+        # COMMAND-1m88i is "No changes".
+        TOLERATE=COMMAND-1m88i api PUT "/admin/v1/email/smtp/$smtp_id" "$smtp" >/dev/null
+        if [ -n "$SMTP_PASSWORD" ]; then
+            TOLERATE=COMMAND-1m88i api PUT "/admin/v1/email/smtp/$smtp_id/password" \
+                "$(jq -cn --arg p "$SMTP_PASSWORD" '{password: $p}')" >/dev/null
+        fi
     fi
     # COMMAND-vUHBSmBzaw is "already active": nothing to do.
     TOLERATE=COMMAND-vUHBSmBzaw api POST "/admin/v1/email/$smtp_id/_activate" '{}' >/dev/null
+    log "email through $SMTP_HOST:$SMTP_PORT ($SMTP_TLS) as $sender_address"
+fi
+
+# The machine user the API deletes a deleted account's Zitadel user with
+# (`romulus-api delete-user`, inactive accounts): an instance-wide user
+# manager, nothing more. Its token is kept while it still works, else a new
+# one replaces every other.
+api_user=$(api POST /v2/users '{"queries":[{"userNameQuery":{"userName":"romulus-api","method":"TEXT_QUERY_METHOD_EQUALS"}}]}' \
+    | jq -r '.result[0].userId // empty')
+if [ -z "$api_user" ]; then
+    api_user=$(api POST /management/v1/users/machine '{
+        "userName": "romulus-api", "name": "romulus API",
+        "description": "Deletes the Zitadel user of an account deleted in romulus",
+        "accessTokenType": "ACCESS_TOKEN_TYPE_BEARER"
+    }' | jq -r .userId)
+    log "created machine user romulus-api ($api_user)"
+fi
+# AlreadyExists: a member already, its roles put again below.
+TOLERATE=AlreadyExists api POST /admin/v1/members \
+    "$(jq -cn --arg u "$api_user" '{userId: $u, roles: ["IAM_USER_MANAGER"]}')" >/dev/null
+TOLERATE=COMMAND-1m88i api PUT "/admin/v1/members/$api_user" '{"roles": ["IAM_USER_MANAGER"]}' >/dev/null
+zitadel_token=
+if [ -f "$OUT/oidc.env" ]; then
+    zitadel_token=$(sed -n 's/^ROMULUS_ZITADEL_TOKEN=//p' "$OUT/oidc.env")
+fi
+if [ -n "$zitadel_token" ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' "$ZITADEL_URL/auth/v1/users/me" \
+        -H "Host: $ZITADEL_HOST" -H "Authorization: Bearer $zitadel_token")" != 200 ]; then
+    zitadel_token=
+fi
+if [ -z "$zitadel_token" ]; then
+    for old in $(api POST "/management/v1/users/$api_user/pats/_search" '{}' | jq -r '.result[]?.id'); do
+        api DELETE "/management/v1/users/$api_user/pats/$old" >/dev/null
+    done
+    zitadel_token=$(api POST "/management/v1/users/$api_user/pats" '{"expirationDate": "2099-01-01T00:00:00Z"}' \
+        | jq -r .token)
+    log "issued a token for romulus-api ($api_user)"
 fi
 
 # Readers must never see half a file: write beside, then rename.
-printf 'ROMULUS_OIDC_ISSUER=%s\nROMULUS_OIDC_CLIENT_ID=%s\nROMULUS_OIDC_CLIENT_SECRET=%s\n' \
-    "$issuer" "$client_id" "$client_secret" > "$OUT/.oidc.env.tmp"
+printf 'ROMULUS_OIDC_ISSUER=%s\nROMULUS_OIDC_CLIENT_ID=%s\nROMULUS_OIDC_CLIENT_SECRET=%s\nROMULUS_ZITADEL_TOKEN=%s\n' \
+    "$issuer" "$client_id" "$client_secret" "$zitadel_token" > "$OUT/.oidc.env.tmp"
 jq . <<<"$users" > "$OUT/.users.json.tmp"
 if [ -n "$OWNER" ]; then
     chown "$OWNER" "$OUT" "$OUT/.oidc.env.tmp" "$OUT/.users.json.tmp"

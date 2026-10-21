@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET inactivity_notice_at = now() - interval '31 days' WHERE inactivity_notice_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "273e13c71ad03304397163649aa866dce42395c4f137b94e180d4a0df83cd111"
+}

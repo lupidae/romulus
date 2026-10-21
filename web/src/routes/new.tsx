@@ -46,7 +46,8 @@ function NewOrganization() {
   const { org: createdSlug } = Route.useSearch();
   const { data: me } = useSuspenseQuery(meQuery);
   const orgs = useQuery(orgsQuery).data ?? [];
-  const singleOrg = useQuery(instanceQuery).data?.single_org === true;
+  const instance = useQuery(instanceQuery);
+  const singleOrg = instance.data?.single_org === true;
   const [changingPassword, setChangingPassword] = React.useState(false);
   const navigate = useNavigate();
   const created = orgs.find((o) => o.slug === createdSlug);
@@ -67,6 +68,7 @@ function NewOrganization() {
             void signOut().catch(() => toast.error("Could not sign out. Try again."))
           }
           onChangePassword={me.password_account ? () => setChangingPassword(true) : undefined}
+          source={instance.data?.source}
         />
         {me.password_account && (
           <ChangePasswordDialog

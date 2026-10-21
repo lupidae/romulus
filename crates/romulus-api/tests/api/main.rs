@@ -36,6 +36,7 @@ mod playgrounds;
 mod push;
 mod removal;
 mod renames;
+mod retention;
 mod schema;
 mod tidy;
 mod timeline;

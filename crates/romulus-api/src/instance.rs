@@ -25,6 +25,20 @@ pub struct Instance {
     /// Plans and billing (the hosted service, `ROMULUS_BILLING`): the app
     /// shows the billing page and upgrade prompts.
     pub billing: bool,
+    /// The version running and where its source is (AGPL-3.0, section 13).
+    pub source: InstanceSource,
+}
+
+/// Which romulus runs here, and where to read its source.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct InstanceSource {
+    /// The API's crate version.
+    pub version: String,
+    /// The commit it was built from; `null` when the build did not say.
+    pub commit: Option<String>,
+    /// The source of that commit (`<repository>/tree/<commit>`), or the
+    /// repository when the commit is unknown (`ROMULUS_SOURCE_URL`).
+    pub url: String,
 }
 
 /// How this server is set up.
@@ -41,5 +55,10 @@ async fn instance(State(state): State<AppState>) -> Json<Instance> {
         mail: state.mailer.is_on(),
         playgrounds: state.config.playground.is_some(),
         billing: state.billing.is_on(),
+        source: InstanceSource {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            commit: crate::config::COMMIT.map(str::to_owned),
+            url: state.config.source_at_commit(),
+        },
     })
 }

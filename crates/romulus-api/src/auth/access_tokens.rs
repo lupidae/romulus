@@ -449,12 +449,21 @@ impl Agent {
     }
 
     /// Records the token's use, at most once a minute: an agent calling in
-    /// a loop writes no faster.
+    /// a loop writes no faster. Its person's account counts as used too
+    /// (`users.last_seen_at`, at most once an hour, as a session's use):
+    /// an agent working with the token is its person using romulus.
     pub async fn touch(&self, db: &PgPool) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            "UPDATE personal_access_tokens SET last_used_at = now()
-             WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
-            self.token.id
+            "WITH used AS (
+                 UPDATE personal_access_tokens SET last_used_at = now()
+                 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
+                 RETURNING user_id
+             )
+             UPDATE users SET last_seen_at = now(), inactivity_notice_at = NULL
+             WHERE id = (SELECT user_id FROM used)
+               AND (last_seen_at < now() - make_interval(secs => $2) OR inactivity_notice_at IS NOT NULL)",
+            self.token.id,
+            super::session::ACCOUNT_TOUCH_EVERY.as_secs_f64(),
         )
         .execute(db)
         .await

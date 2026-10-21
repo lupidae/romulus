@@ -45,7 +45,9 @@
                 "plan_downgraded",
                 "playground_hours_used_up",
                 "subscription_duplicate_cancelled",
-                "agent_action"
+                "agent_action",
+                "database_purged",
+                "admin_appointed"
               ]
             }
           }
@@ -157,7 +159,9 @@
                       "plan_downgraded",
                       "playground_hours_used_up",
                       "subscription_duplicate_cancelled",
-                      "agent_action"
+                      "agent_action",
+                      "database_purged",
+                      "admin_appointed"
                     ]
                   }
                 }

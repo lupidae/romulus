@@ -1895,7 +1895,9 @@ export interface components {
       | "plan_downgraded"
       | "playground_hours_used_up"
       | "subscription_duplicate_cancelled"
-      | "agent_action";
+      | "agent_action"
+      | "database_purged"
+      | "admin_appointed";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1939,6 +1941,9 @@ export interface components {
        * @description How many comments went (comments deleted).
        */
       comments?: number | null;
+      /** @description The database purged, by name and slug as they were. */
+      database_name?: string | null;
+      database_slug?: string | null;
       /**
        * Format: uuid
        * @description The draft published (approvals overridden), or whose discussion
@@ -1953,6 +1958,7 @@ export interface components {
        * @description The approvals required before and after a change.
        */
       from?: number | null;
+      member?: components["schemas"]["AuditActor"] | null;
       /** @description The version's message (versions removed, restored, purged). */
       message?: string | null;
       /**
@@ -3143,6 +3149,11 @@ export interface components {
      */
     Generated: "stored" | "virtual";
     Health: {
+      /**
+       * @description The commit it was built from (`null` when the build did not say: a
+       *     local build), whose source `GET /api/instance`'s `source` links.
+       */
+      commit?: string | null;
       /** @description `ok` when a query round-trips. */
       database: string;
       /**
@@ -3377,6 +3388,20 @@ export interface components {
        *     another.
        */
       single_org: boolean;
+      /** @description The version running and where its source is (AGPL-3.0, section 13). */
+      source: components["schemas"]["InstanceSource"];
+    };
+    /** @description Which romulus runs here, and where to read its source. */
+    InstanceSource: {
+      /** @description The commit it was built from; `null` when the build did not say. */
+      commit?: string | null;
+      /**
+       * @description The source of that commit (`<repository>/tree/<commit>`), or the
+       *     repository when the commit is unknown (`ROMULUS_SOURCE_URL`).
+       */
+      url: string;
+      /** @description The API's crate version. */
+      version: string;
     };
     /**
      * @description How often a subscription is billed (`billing_interval`).

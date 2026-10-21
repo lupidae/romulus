@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_threads (version_id, draft_thread, frozen, anchor, created_by)\n           VALUES ($1, gen_random_uuid(), false, '{\"kind\": \"table\"}', $2) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "355dc144ff583a2178ee5adc8d89bc7860ab9d9c40f22112c7616166a9fc43dd"
+}

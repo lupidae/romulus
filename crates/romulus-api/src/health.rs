@@ -1,5 +1,5 @@
-//! `GET /api/health`: the API is up and can reach its database, and whether
-//! the SQL compiler can run.
+//! `GET /api/health`: the API is up and can reach its database, whether the
+//! SQL compiler can run, and which version (and commit) runs.
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -39,6 +39,9 @@ pub struct Health {
     pub playgrounds: String,
     /// The API's crate version.
     pub version: String,
+    /// The commit it was built from (`null` when the build did not say: a
+    /// local build), whose source `GET /api/instance`'s `source` links.
+    pub commit: Option<String>,
 }
 
 /// Liveness and database reachability, for compose healthchecks and CI.
@@ -68,6 +71,7 @@ async fn health(State(state): State<AppState>) -> ApiResult<Json<Health>> {
                 sandboxes,
                 playgrounds: playground_status(&state).await.to_owned(),
                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                commit: crate::config::COMMIT.map(str::to_owned),
             }))
         }
         Ok(Err(err)) => {

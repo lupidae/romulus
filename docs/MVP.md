@@ -1113,6 +1113,65 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
 - **Tool answers are text only**: clients hand a model `structuredContent` instead of the
   text when both are present, and the text carries the ids, links and next steps.
 
+## Retention and deletion (decided 2026-10-21, built: task RETAIN)
+
+What romulus keeps, and for how long; the hosted service's Terms and Privacy
+Policy promise the same. All of it lives in the API's `retention` module.
+
+- **Deleting on request**: an operator runs `romulus-api delete-user EMAIL` or
+  `delete-org SLUG` (the request arrives by email; `--dry-run` says first what
+  would go). Self-service deletion is for later: an endpoint calling the same
+  `Deleter::delete_account` for the signed-in person.
+- **An account** goes with its sessions, password, devices, links,
+  personal access tokens, memberships, approvals and unread markers, and with
+  every organization it is the only member of. Its single sign-on user is deleted at Zitadel first
+  (`ROMULUS_ZITADEL_TOKEN`, a machine user the provisioner makes with
+  IAM_USER_MANAGER; without it the command prints the user to delete in the
+  console). What the person wrote in organizations they shared is the
+  organization's and stays (versions, comments, frozen approvals: by a
+  deleted account); the audit log keeps the name it recorded, as for someone
+  who left. Requests about those go to the organization, the controller.
+- **An organization** goes in one statement with everything it holds
+  (`ON DELETE CASCADE`; the history triggers allow it once the parent row is
+  gone). Refused while a Stripe subscription is live: cancel it first (its
+  invoices stay in Stripe). Its members keep their accounts.
+- **An organization whose admins all left**: it cannot happen, the invariant
+  `organization_needs_an_admin` holds. Deleting on request the only admin of
+  an organization others belong to is refused (appoint another admin, or ask
+  for the organization to be deleted too); an organization left with no
+  member at all is deleted with that last account; an inactive admin's
+  deletion makes the most recently active developer (else reviewer) an admin,
+  audited `admin_appointed` and emailed.
+- **Confirmed by email** (mail on): the deleted address, or the
+  organization's admins. Logged in the sign-in log (`account_deleted`,
+  `organization_deleted`, kept its 90 days).
+- **Purges**, hourly by one sweeper: deleted databases 30 days after their
+  deletion (audited `database_purged` at the organization's level, kept out
+  of the other databases' activity), invitations nobody accepted 30 days
+  after they expired (revoked ones are deleted at once; accepted ones are the
+  membership's record). Removed versions already purge after 30 days.
+- **Inactive accounts** (`ROMULUS_DELETE_INACTIVE_ACCOUNTS`, off by default so
+  a self-hosted install never loses an account; the hosted service turns it
+  on; needs mail): `users.last_seen_at` moves at every sign-in and at most
+  hourly with a session's use or an agent's (a personal access token). At 3 years less 30 days the address is emailed
+  the date; the account is deleted 30 days later at the earliest, if unused
+  since (using it clears the notice). An account alone in an organization
+  that still pays is left alone.
+- **The running API is told** what a deletion ended wherever it ran (the CLI
+  is another process): `pg_notify` per database and membership in the
+  deletion's transaction, a listener closing those drafts and sockets.
+- **Source** (AGPL-3.0, section 13): `/api/health` and `/api/instance` say
+  the commit built (`ROMULUS_COMMIT`, a build argument images.yml passes);
+  the user menu links "Source code" to `ROMULUS_SOURCE_URL` at that commit
+  (by default the repository the image was built from, so a fork points to
+  itself).
+- **Zitadel's mail**: the provisioner gives Zitadel the API's own SMTP
+  settings (`ROMULUS_SMTP_*`, `ROMULUS_MAIL_FROM`), so sign-up codes and
+  password resets arrive.
+- Deviations from the data model: `users.last_seen_at`,
+  `users.inactivity_notice_at`; `users.updated_at` moves with identity
+  columns only.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).

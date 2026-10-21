@@ -1,7 +1,9 @@
 //! A fake OIDC provider on a random local port: discovery, keys, and a
 //! token endpoint that checks the client secret and the PKCE verifier and
 //! answers an ID token signed with a key generated for this test run. Lets
-//! the sign-in tests run the API's real relying party end to end.
+//! the sign-in tests run the API's real relying party end to end. Also
+//! Zitadel's `DELETE /v2/users/{id}` (with [`ADMIN_TOKEN`]), for deleting
+//! accounts.
 
 use std::{
     collections::HashMap,
@@ -13,7 +15,7 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use base64::{
     Engine,
@@ -39,6 +41,8 @@ use url::Url;
 
 pub const CLIENT_ID: &str = "romulus-test";
 pub const CLIENT_SECRET: &str = "test-secret";
+/// The personal access token Zitadel's user API takes here.
+pub const ADMIN_TOKEN: &str = "test-zitadel-pat";
 
 /// What the IdP says about whoever signs in with a code.
 #[derive(Debug, Clone)]
@@ -74,6 +78,8 @@ struct Idp {
     grants: Arc<Mutex<HashMap<String, Grant>>>,
     /// Tests can make the IdP misbehave.
     tamper: Arc<Mutex<Tamper>>,
+    /// Users `DELETE /v2/users/{id}` deleted, in order.
+    deleted: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -82,6 +88,8 @@ pub struct Tamper {
     pub wrong_nonce: bool,
     /// Issue the ID token for another client.
     pub wrong_audience: bool,
+    /// Answer 500 to user deletions.
+    pub refuse_deletions: bool,
 }
 
 pub struct FakeIdp {
@@ -111,11 +119,13 @@ impl FakeIdp {
             issuer: issuer.clone(),
             grants: Arc::default(),
             tamper: Arc::default(),
+            deleted: Arc::default(),
         };
         let router = Router::new()
             .route("/.well-known/openid-configuration", get(discovery))
             .route("/keys", get(keys))
             .route("/token", post(token))
+            .route("/v2/users/{id}", delete(delete_user))
             .with_state(idp.clone());
         tokio::spawn(async move { axum::serve(listener, router).await });
         Self { issuer, idp }
@@ -160,6 +170,41 @@ impl FakeIdp {
     pub fn tamper(&self, tamper: Tamper) {
         *self.idp.tamper.lock().unwrap() = tamper;
     }
+
+    /// [`Self::config`] with Zitadel's user API on (`ROMULUS_ZITADEL_TOKEN`).
+    pub fn config_with_user_api(&self) -> Config {
+        let mut config = self.config();
+        config.zitadel_token = Some(Secret::new(ADMIN_TOKEN));
+        config
+    }
+
+    /// The users deleted through the user API, in order.
+    pub fn deleted_users(&self) -> Vec<String> {
+        self.idp.deleted.lock().unwrap().clone()
+    }
+}
+
+/// Zitadel's `DELETE /v2/users/{id}`: ids starting with `gone-` are 404s.
+async fn delete_user(
+    State(idp): State<Idp>,
+    headers: HeaderMap,
+    romulus_api::extract::Path(id): romulus_api::extract::Path<String>,
+) -> Response {
+    if headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        != Some(&format!("Bearer {ADMIN_TOKEN}"))
+    {
+        return axum_json(StatusCode::UNAUTHORIZED, &json!({ "code": 16 }));
+    }
+    if idp.tamper.lock().unwrap().refuse_deletions {
+        return axum_json(StatusCode::INTERNAL_SERVER_ERROR, &json!({ "code": 13 }));
+    }
+    if id.starts_with("gone-") {
+        return axum_json(StatusCode::NOT_FOUND, &json!({ "code": 5 }));
+    }
+    idp.deleted.lock().unwrap().push(id);
+    axum_json(StatusCode::OK, &json!({ "details": {} }))
 }
 
 async fn discovery(State(idp): State<Idp>) -> Response {

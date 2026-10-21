@@ -46,6 +46,11 @@ function ShellPreview() {
       onSwitchOrg={(o) => toast(`Switched to ${o.name}`, { description: "Preview only." })}
       onCreateOrg={() => toast("Create organization", { description: "Preview only." })}
       onSignOut={() => toast("Signed out", { description: "Preview only." })}
+      source={{
+        url: "https://github.com/lupidae/romulus",
+        commit: "1f1ded1c0ffee5e5a1d2b3c4d5e6f708192a3b4c",
+        version: "0.1.0",
+      }}
     >
       <PageBody>
         <Outlet />

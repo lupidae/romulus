@@ -1,8 +1,9 @@
 //! What an operator runs from the API's binary (`romulus-api <command>`,
 //! `docker compose exec api romulus-api <command>` in the self-host bundle):
 //! the first admin, one-time password links, unlocking an address, the
-//! sign-in log, a test email. Each writes its auth event (no client address:
-//! it ran on the server).
+//! sign-in log, a test email, deleting an account or an organization on
+//! request (`retention::deletion`). Each writes its auth event (no client
+//! address: it ran on the server).
 //!
 //! These commands print links that sign someone in: run them on the server,
 //! and hand the link over only to its owner.
@@ -22,6 +23,13 @@ use crate::{
     domain::{AuthEventKind, LinkPurpose, Role},
     mail::{Letter, MailError, Mailer},
     orgs::slug,
+    retention::{
+        deletion::{
+            self, AccountDeleted, AccountPlan, By, Deleter, DeletionError, Fate, OrgDeleted,
+            OrgPlan,
+        },
+        idp::{IdpOutcome, SignIn},
+    },
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +43,42 @@ pub enum AdminError {
     Database(#[from] sqlx::Error),
     #[error("sending the test message")]
     Mail(#[from] MailError),
+    /// Exit 4: something must be done first (another admin appointed, a
+    /// subscription cancelled).
+    #[error("{0}")]
+    Refused(String),
+    #[error("deleting the user at the identity provider")]
+    Idp(#[from] crate::retention::idp::IdpError),
+}
+
+impl From<DeletionError> for AdminError {
+    fn from(err: DeletionError) -> Self {
+        match err {
+            DeletionError::LastAdmin(orgs) => Self::Refused(format!(
+                "the only admin of {}: make another member an admin first, or delete the organization too ({})",
+                orgs.iter()
+                    .map(|o| o.slug.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                orgs.iter()
+                    .map(|o| format!("romulus-api delete-org {}", o.slug))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )),
+            DeletionError::Paying(orgs) => Self::Refused(format!(
+                "{} still has a live subscription: cancel it in Stripe first (at once, refunding what is owed), then run this again",
+                orgs.iter()
+                    .map(|o| o.slug.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )),
+            DeletionError::NotFound | DeletionError::NoLongerDue => {
+                Self::Invalid("it is gone already".to_owned())
+            }
+            DeletionError::Idp(err) => Self::Idp(err),
+            DeletionError::Database(err) => Self::Database(err),
+        }
+    }
 }
 
 /// `romulus-api setup`'s input.
@@ -340,6 +384,232 @@ pub async fn mail_test(config: &Config, to: &str) -> Result<(), AdminError> {
     }
     .email();
     Ok(mailer.send_now(&email).await?)
+}
+
+/// What `delete-user` did, or would do (`--dry-run`).
+pub enum UserDeletion {
+    Planned {
+        plans: Vec<AccountPlan>,
+        /// `ROMULUS_ZITADEL_TOKEN` is set: single sign-on users go too.
+        zitadel: bool,
+    },
+    Deleted(Vec<AccountDeleted>),
+}
+
+/// What `delete-org` did, or would do.
+pub enum OrgDeletion {
+    Planned(OrgPlan),
+    Deleted(OrgDeleted),
+}
+
+/// Deletes every account with the address `email`, with what each alone
+/// holds (`retention::deletion`), or with `dry_run` says what it would.
+/// Refused, before anything goes, when one is the only admin of an
+/// organization others belong to, or would take a paying organization.
+pub async fn delete_user(
+    db: &PgPool,
+    config: &Config,
+    mailer: Mailer,
+    email: &str,
+    dry_run: bool,
+) -> Result<UserDeletion, AdminError> {
+    let deleter = Deleter::new(db.clone(), config, mailer);
+    let email = crate::email::normalize(email);
+    let ids = deleter.accounts_with_email(&email).await?;
+    if ids.is_empty() {
+        return Err(AdminError::Invalid(format!(
+            "no account has the address {email}"
+        )));
+    }
+    let mut plans = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(plan) = deleter.plan_account(id).await? {
+            plans.push(plan);
+        }
+    }
+    // All or none: every refusal is said before one account goes.
+    for plan in &plans {
+        deletion::refuse(plan, By::Request)?;
+    }
+    if dry_run {
+        return Ok(UserDeletion::Planned {
+            plans,
+            zitadel: deleter.zitadel.is_some(),
+        });
+    }
+    let mut done = Vec::with_capacity(plans.len());
+    for plan in plans {
+        done.push(deleter.delete_account(plan.user_id, By::Request).await?);
+    }
+    Ok(UserDeletion::Deleted(done))
+}
+
+/// Deletes the organization `slug` with everything it holds, or with
+/// `dry_run` says what that is. Refused while its subscription is live.
+pub async fn delete_org(
+    db: &PgPool,
+    config: &Config,
+    mailer: Mailer,
+    slug: &str,
+    dry_run: bool,
+) -> Result<OrgDeletion, AdminError> {
+    let deleter = Deleter::new(db.clone(), config, mailer);
+    let id = deleter
+        .org_by_slug(slug)
+        .await?
+        .ok_or_else(|| AdminError::Invalid(format!("no organization has the slug {slug}")))?;
+    let plan = deleter
+        .plan_org(id)
+        .await?
+        .ok_or_else(|| AdminError::Invalid(format!("no organization has the slug {slug}")))?;
+    if plan.subscription.is_some() {
+        return Err(DeletionError::Paying(vec![plan.org]).into());
+    }
+    if dry_run {
+        return Ok(OrgDeletion::Planned(plan));
+    }
+    Ok(OrgDeletion::Deleted(deleter.delete_org(id).await?))
+}
+
+impl UserDeletion {
+    /// What to print, a line each.
+    pub fn report(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        match self {
+            Self::Planned { plans, zitadel } => {
+                lines.push(format!(
+                    "dry run, nothing deleted: {} would go",
+                    plural(plans.len(), "account")
+                ));
+                for plan in plans {
+                    account_lines(&mut lines, plan, None, *zitadel);
+                }
+            }
+            Self::Deleted(deleted) => {
+                for done in deleted {
+                    account_lines(&mut lines, &done.plan, Some(done), true);
+                }
+            }
+        }
+        lines.push(
+            "kept: what it wrote in organizations it leaves (theirs, by a deleted account), their audit logs, the sign-in log (90 days)"
+                .to_owned(),
+        );
+        lines
+    }
+}
+
+fn account_lines(
+    lines: &mut Vec<String>,
+    plan: &AccountPlan,
+    done: Option<&AccountDeleted>,
+    zitadel: bool,
+) {
+    let verb = if done.is_some() {
+        "deleted"
+    } else {
+        "would delete"
+    };
+    let how = match &plan.sign_in {
+        SignIn::Password => "password".to_owned(),
+        SignIn::Dev => "dev sign-in".to_owned(),
+        SignIn::SingleSignOn(id) => format!("single sign-on, Zitadel user {id}"),
+    };
+    lines.push(format!(
+        "{verb} {} <{}> ({how}), {}",
+        plan.name, plan.email, plan.user_id
+    ));
+    for membership in &plan.memberships {
+        let role = format!("{:?}", membership.role).to_lowercase();
+        match &membership.fate {
+            Fate::Leaves | Fate::LastAdmin { .. } => {
+                lines.push(format!("  leaves {} ({role})", membership.org.slug));
+            }
+            Fate::DeletedWith(org) => {
+                lines.push(format!(
+                    "  {verb} {}, its only member: {}",
+                    org.org.slug,
+                    org_counts(org)
+                ));
+            }
+        }
+    }
+    match done.map(|done| &done.idp) {
+        None if matches!(plan.sign_in, SignIn::SingleSignOn(_)) => lines.push(if zitadel {
+            "  and its Zitadel user".to_owned()
+        } else {
+            "  its Zitadel user is yours to delete in Zitadel's console (no ROMULUS_ZITADEL_TOKEN)"
+                .to_owned()
+        }),
+        Some(IdpOutcome::Deleted) => lines.push("  deleted in Zitadel too".to_owned()),
+        Some(IdpOutcome::AlreadyGone) => lines.push("  Zitadel had no such user any more".to_owned()),
+        Some(IdpOutcome::Manual { user_id }) => lines.push(format!(
+            "  TO DO: delete the user {user_id} in Zitadel's console (Users, the user, Delete): ROMULUS_ZITADEL_TOKEN is not set"
+        )),
+        _ => {}
+    }
+    if let Some(done) = done {
+        lines.push(if done.emailed {
+            format!("  {} was emailed that it is done", plan.email)
+        } else {
+            format!("  mail is off: confirm to {} yourself", plan.email)
+        });
+    }
+}
+
+fn org_counts(plan: &OrgPlan) -> String {
+    let count = |n: i64, what| plural(usize::try_from(n).unwrap_or_default(), what);
+    format!(
+        "{} ({} deleted, not yet purged), {}, {}, {}, {}, {}",
+        count(plan.databases, "database"),
+        plan.deleted_databases,
+        count(plan.versions, "version"),
+        count(plan.drafts, "draft"),
+        count(plan.members, "member"),
+        count(plan.invitations, "pending invitation"),
+        count(plan.playgrounds, "playground"),
+    )
+}
+
+/// "1 version", "2 versions".
+fn plural(n: usize, what: &str) -> String {
+    if n == 1 {
+        format!("1 {what}")
+    } else {
+        format!("{n} {what}s")
+    }
+}
+
+impl OrgDeletion {
+    /// What to print, a line each.
+    pub fn report(&self) -> Vec<String> {
+        match self {
+            Self::Planned(plan) => vec![
+                format!(
+                    "dry run, nothing deleted: would delete {} ({}), {}",
+                    plan.org.slug,
+                    plan.org.name,
+                    org_counts(plan)
+                ),
+                "its members keep their accounts; invoices stay in Stripe".to_owned(),
+            ],
+            Self::Deleted(done) => {
+                let mut lines = vec![format!(
+                    "deleted {} ({}), {}",
+                    done.plan.org.slug,
+                    done.plan.org.name,
+                    org_counts(&done.plan)
+                )];
+                lines.push(if done.emailed.is_empty() {
+                    "mail is off (or no admin was reachable): confirm to its admins yourself"
+                        .to_owned()
+                } else {
+                    format!("emailed its admins: {}", done.emailed.join(", "))
+                });
+                lines
+            }
+        }
+    }
 }
 
 /// "Acme Labs, Inc." → "acme-labs-inc": a slug from a name (ASCII letters

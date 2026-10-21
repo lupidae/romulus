@@ -1,6 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 
 import {
+  CodeIcon,
   ComputerIcon,
   HalfMoonIcon,
   KeyIcon,
@@ -23,17 +24,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { type ThemePreference, useTheme } from "@/lib/theme";
 
-import type { ShellUser } from "./types";
+import type { ShellSource, ShellUser } from "./types";
 
 export function UserMenu({
   user,
   onSignOut,
   onChangePassword,
+  source,
 }: {
   user: ShellUser;
   onSignOut: () => void;
   /** Password accounts only: opens "Change password". */
   onChangePassword?: () => void;
+  /** The running version's source, linked last (once the server said). */
+  source?: ShellSource;
 }) {
   const { preference, setPreference } = useTheme();
   const navigate = useNavigate();
@@ -92,6 +96,20 @@ export function UserMenu({
           <LogOutIcon />
           Sign out
         </MenuItem>
+        {source && (
+          <>
+            <MenuSeparator />
+            <MenuItem asChild>
+              <a href={source.url} target="_blank" rel="noreferrer">
+                <CodeIcon />
+                Source code
+                <span className="ml-auto font-mono text-xs text-muted-foreground">
+                  {source.commit ? source.commit.slice(0, 7) : `v${source.version}`}
+                </span>
+              </a>
+            </MenuItem>
+          </>
+        )}
       </MenuContent>
     </Menu>
   );

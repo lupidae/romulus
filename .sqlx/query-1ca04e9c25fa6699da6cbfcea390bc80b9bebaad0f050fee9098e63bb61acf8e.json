@@ -1,0 +1,97 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.slug, o.name,\n                  (SELECT count(*) FROM databases d WHERE d.org_id = o.id) AS \"databases!\",\n                  (SELECT count(*) FROM databases d WHERE d.org_id = o.id AND d.deleted_at IS NOT NULL) AS \"deleted_databases!\",\n                  (SELECT count(*) FROM versions v JOIN databases d ON d.id = v.database_id WHERE d.org_id = o.id) AS \"versions!\",\n                  (SELECT count(*) FROM drafts r JOIN databases d ON d.id = r.database_id WHERE d.org_id = o.id) AS \"drafts!\",\n                  (SELECT count(*) FROM memberships m WHERE m.org_id = o.id) AS \"members!\",\n                  (SELECT count(*) FROM invitations i WHERE i.org_id = o.id AND i.accepted_at IS NULL) AS \"invitations!\",\n                  (SELECT count(*) FROM playgrounds p WHERE p.org_id = o.id) AS \"playgrounds!\",\n                  (SELECT b.status FROM org_billing b\n                   WHERE b.org_id = o.id AND b.subscription_id IS NOT NULL AND b.status = ANY($2)) AS subscription\n           FROM organizations o WHERE o.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "databases!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "deleted_databases!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "versions!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "drafts!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "members!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "invitations!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "playgrounds!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "subscription",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "1ca04e9c25fa6699da6cbfcea390bc80b9bebaad0f050fee9098e63bb61acf8e"
+}

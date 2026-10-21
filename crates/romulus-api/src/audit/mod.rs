@@ -16,8 +16,10 @@
 //! in a draft, by its room's writer), `playgrounds` (one created,
 //! deleted, reset, or a migration run on its rows), `billing` (the Terms
 //! accepted, subscriptions changed, payments, downgrades: org-level, kept
-//! out of a database's activity) and `mcp` (what an agent changed with its
-//! person's access token). The actor's name is kept as it was.
+//! out of a database's activity), `mcp` (what an agent changed with its
+//! person's access token) and `retention` (a deleted database purged, kept
+//! out of the others' activity too; an admin appointed when the only one's
+//! account was deleted). The actor's name is kept as it was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -102,6 +104,14 @@ pub struct AuditDetails {
     /// payment, the plan downgraded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub billing: Option<BillingAudit>,
+    /// The database purged, by name and slug as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_slug: Option<String>,
+    /// The member an event is about (made an admin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<AuditActor>,
 }
 
 /// What a billing event records.
@@ -164,7 +174,7 @@ pub struct AuditApprover {
 
 /// Who did something: their name now, or as it was once their account is
 /// gone.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct AuditActor {
     /// `null` once their account is gone.
     pub id: Option<Uuid>,
@@ -275,7 +285,7 @@ async fn activity(
         query.before,
         limit + 1,
         member.org.id,
-        &AuditAction::BILLING as &[AuditAction],
+        &AuditAction::NOT_IN_DATABASE_ACTIVITY as &[AuditAction],
     )
     .fetch_all(&db)
     .await?;
