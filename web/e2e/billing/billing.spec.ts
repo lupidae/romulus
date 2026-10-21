@@ -151,7 +151,7 @@ test("export downloads a ZIP of the database, from the history", async ({ page }
   await page.goto(`./${slug}/shop/history`);
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.getByRole("link", { name: "Export (ZIP)" }).click(),
+    page.getByRole("button", { name: "Export (ZIP)" }).click(),
   ]);
   expect(download.suggestedFilename()).toMatch(/shop.*\.zip$/);
   const file = await readFile(await download.path());

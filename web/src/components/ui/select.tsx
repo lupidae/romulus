@@ -1,5 +1,5 @@
 import { Select as SelectPrimitive } from "radix-ui";
-import type * as React from "react";
+import * as React from "react";
 
 import { CheckIcon, NavArrowDownIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -7,7 +7,35 @@ import { cn } from "@/lib/utils";
 import { controlClasses } from "./input";
 import { usePortalContainer } from "./portal";
 
-export const Select = SelectPrimitive.Root;
+/** What a `Field` hands its one control. */
+type FieldAttributes = Pick<
+  React.ComponentProps<"button">,
+  "id" | "aria-describedby" | "aria-invalid"
+>;
+
+const FieldOfTrigger = React.createContext<FieldAttributes>({});
+
+/**
+ * The root, which renders no element: inside a `Field`, the field's id and
+ * aria attributes go on to the trigger, so the label names it.
+ */
+export function Select({
+  id,
+  "aria-describedby": describedBy,
+  "aria-invalid": invalid,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root> & FieldAttributes) {
+  const field = React.useMemo(
+    () => ({ id, "aria-describedby": describedBy, "aria-invalid": invalid }),
+    [id, describedBy, invalid],
+  );
+  return (
+    <FieldOfTrigger.Provider value={field}>
+      <SelectPrimitive.Root {...props} />
+    </FieldOfTrigger.Provider>
+  );
+}
+
 export const SelectGroup = SelectPrimitive.Group;
 export const SelectValue = SelectPrimitive.Value;
 
@@ -16,9 +44,13 @@ export function SelectTrigger({
   children,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+  const field = React.useContext(FieldOfTrigger);
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
+      id={field.id}
+      aria-describedby={field["aria-describedby"]}
+      aria-invalid={field["aria-invalid"]}
       className={cn(
         controlClasses,
         "flex h-9 cursor-pointer items-center justify-between gap-2 px-2.5 text-left sm:h-8",

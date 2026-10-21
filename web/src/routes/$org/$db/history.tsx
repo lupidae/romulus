@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DraftsSlot } from "@/features/databases/components/drafts-slot";
-import { ExportLink } from "@/features/databases/components/export-card";
+import { ExportButton } from "@/features/databases/components/export-card";
 import { OtherMajorAlert } from "@/features/databases/components/postgres";
 import { VersionHistory } from "@/features/databases/components/version-history";
 import { databaseExportUrl } from "@/features/databases/export";
@@ -61,7 +61,7 @@ function History() {
             )}
             {/* Every member may take everything with them (the settings are developers'). */}
             {database.latest && (
-              <ExportLink size="sm" href={databaseExportUrl(org, db)} label="Export (ZIP)" />
+              <ExportButton size="sm" href={databaseExportUrl(org, db)} label="Export (ZIP)" />
             )}
             {importLink}
           </div>
