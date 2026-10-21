@@ -421,40 +421,62 @@ impl Socket {
         ms: u64,
         error: Option<&str>,
     ) {
-        let recorded = runs::record_console(
-            &self.state.db,
-            NewRun {
-                playground: self.playground,
-                user: (self.person.id, &self.person.name),
-                kind: if run.explain {
-                    PlaygroundRunKind::Explain
-                } else {
-                    PlaygroundRunKind::Query
-                },
-                sql: Some(&run.sql),
-                duration_ms: ms,
-                status: match status {
-                    RunStatus::Ok => PlaygroundRunStatus::Ok,
-                    RunStatus::Error => PlaygroundRunStatus::Error,
-                    RunStatus::Cancelled => PlaygroundRunStatus::Cancelled,
-                },
-                rows,
-                error,
-                report: None,
-                migration_input_sha256: None,
-            },
+        record_run(
+            &self.state,
+            self.playground,
+            &self.person,
+            &run.sql,
+            run.explain,
+            (status, rows, ms, error),
         )
         .await;
-        match recorded {
-            Ok(run) => {
-                let _ = touch(&self.state.db, self.playground).await;
-                self.state
-                    .playgrounds
-                    .tell(self.playground, ConsoleNotice::History { run });
-            }
-            Err(err) => {
-                tracing::warn!(playground = %self.playground, error = %err, "cannot record a console run");
-            }
+    }
+}
+
+/// Records a console run that ran a statement in the shared history, and
+/// tells everyone in the playground (the console's runs, and a query's:
+/// `super::query`).
+pub(super) async fn record_run(
+    state: &AppState,
+    playground: Uuid,
+    person: &Person,
+    sql: &str,
+    explain: bool,
+    (status, rows, ms, error): (RunStatus, Option<u64>, u64, Option<&str>),
+) {
+    let recorded = runs::record_console(
+        &state.db,
+        NewRun {
+            playground,
+            user: (person.id, &person.name),
+            kind: if explain {
+                PlaygroundRunKind::Explain
+            } else {
+                PlaygroundRunKind::Query
+            },
+            sql: Some(sql),
+            duration_ms: ms,
+            status: match status {
+                RunStatus::Ok => PlaygroundRunStatus::Ok,
+                RunStatus::Error => PlaygroundRunStatus::Error,
+                RunStatus::Cancelled => PlaygroundRunStatus::Cancelled,
+            },
+            rows,
+            error,
+            report: None,
+            migration_input_sha256: None,
+        },
+    )
+    .await;
+    match recorded {
+        Ok(run) => {
+            let _ = touch(&state.db, playground).await;
+            state
+                .playgrounds
+                .tell(playground, ConsoleNotice::History { run });
+        }
+        Err(err) => {
+            tracing::warn!(%playground, error = %err, "cannot record a console run");
         }
     }
 }

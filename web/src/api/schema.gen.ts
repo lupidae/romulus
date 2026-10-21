@@ -384,6 +384,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/mcp": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * One MCP message: a JSON-RPC request (answered), or a notification or a
+     *     client's response (accepted, 202).
+     */
+    post: operations["mcp_message"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/me": {
     parameters: {
       query?: never;
@@ -396,6 +416,41 @@ export interface paths {
     put?: never;
     post?: never;
     delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/me/access-tokens": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's tokens not revoked, newest first. */
+    get: operations["list_access_tokens"];
+    put?: never;
+    /** Creates a token and answers its secret, once. */
+    post: operations["create_access_token"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/me/access-tokens/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revokes a token: it stops working at once. */
+    delete: operations["revoke_access_token"];
     options?: never;
     head?: never;
     patch?: never;
@@ -770,6 +825,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/renames": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Turns renames of the draft's migration on or off. */
+    put: operations["set_draft_renames"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request": {
     parameters: {
       query?: never;
@@ -783,6 +855,24 @@ export interface paths {
     post: operations["request_review"];
     /** The draft no longer waits for a review. */
     delete: operations["cancel_review_request"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/drafts/{id}/text": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The draft's source and its compile. */
+    get: operations["get_draft_text"];
+    /** Writes the draft's source: the whole text, or edits of it. */
+    put: operations["edit_draft_text"];
+    post?: never;
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -1114,6 +1204,23 @@ export interface paths {
      *     `failed`. Developers and admins.
      */
     post: operations["run_playground_migration"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/playgrounds/{id}/query": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Runs SQL on the playground, read-only, and answers its results. */
+    post: operations["query_playground"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1570,6 +1677,23 @@ export interface paths {
     patch: operations["change_member_role"];
     trace?: never;
   };
+  "/api/orgs/{org}/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Tables, columns and enums of the organization's databases matching `q`. */
+    get: operations["search_schemas"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/postgres-majors": {
     parameters: {
       query?: never;
@@ -1599,6 +1723,40 @@ export interface components {
       already_member: boolean;
       org: components["schemas"]["Org"];
     };
+    /** @description A personal access token, without its secret. */
+    AccessToken: {
+      /** Format: date-time */
+      created_at: string;
+      /** @description Past `expires_at`: refused, kept in the list until revoked. */
+      expired: boolean;
+      /**
+       * Format: date-time
+       * @description `null`: it never expires (until revoked).
+       */
+      expires_at?: string | null;
+      /** Format: uuid */
+      id: string;
+      /**
+       * @description The MCP client that last said who it is with it (`claude-code
+       *     2.1.4`), as it said it.
+       */
+      last_client?: string | null;
+      /**
+       * Format: date-time
+       * @description The last request it authenticated (written at most once a minute);
+       *     `null` if never used.
+       */
+      last_used_at?: string | null;
+      /** @description Where it is used: "Claude Code on my laptop". */
+      name: string;
+      scope: components["schemas"]["AccessTokenScope"];
+    };
+    /**
+     * @description What a personal access token may do (`access_token_scope`): an agent's
+     *     token acts as its person, within this.
+     * @enum {string}
+     */
+    AccessTokenScope: "read" | "write";
     /** @description A developer's acknowledgement of a test's undeclared data loss. */
     Acknowledged: {
       /** Format: date-time */
@@ -1736,7 +1894,8 @@ export interface components {
       | "payment_succeeded"
       | "plan_downgraded"
       | "playground_hours_used_up"
-      | "subscription_duplicate_cancelled";
+      | "subscription_duplicate_cancelled"
+      | "agent_action";
     /**
      * @description Who did something: their name now, or as it was once their account is
      *     gone.
@@ -1798,7 +1957,8 @@ export interface components {
       message?: string | null;
       /**
        * @description A migration run's outcome: `passed`, or the statement it failed at
-       *     (`failed at statement 4 of 7`).
+       *     (`failed at statement 4 of 7`); what an agent did, in a few words
+       *     (`created draft "Add invoices"`).
        */
       outcome?: string | null;
       /**
@@ -1820,6 +1980,15 @@ export interface components {
       thread_id?: string | null;
       /** Format: int32 */
       to?: number | null;
+      /**
+       * Format: uuid
+       * @description The personal access token an agent acted with (`agent_action`).
+       */
+      token_id?: string | null;
+      /** @description Its name then. */
+      token_name?: string | null;
+      /** @description The MCP tool it called (`create_draft`). */
+      tool?: string | null;
     };
     /** @description One event of the log. */
     AuditEvent: {
@@ -2344,6 +2513,16 @@ export interface components {
       changed: number;
       removed: number;
     };
+    CreateAccessToken: {
+      /**
+       * Format: int32
+       * @description 30, 90 or 365; absent: 90; `null`: it never expires.
+       */
+      expires_in_days?: number | null;
+      /** @description 1 to 100 characters. */
+      name: string;
+      scope: components["schemas"]["AccessTokenScope"];
+    };
     CreateDatabase: {
       /** @description At most 1000 characters. */
       description?: string;
@@ -2450,6 +2629,12 @@ export interface components {
       name: string;
       scope: components["schemas"]["TokenScope"];
     };
+    /** @description A token just created: the only time its secret is shown. */
+    CreatedAccessToken: {
+      /** @description `rmls_pat_…`, for `Authorization: Bearer`. Not stored: copy it now. */
+      secret: string;
+      token: components["schemas"]["AccessToken"];
+    };
     CreatedInvitation: {
       /** @description romulus emailed the link to the invitee too (the server sends mail). */
       emailed: boolean;
@@ -2471,6 +2656,11 @@ export interface components {
      *     with a cookie whose session is gone, and 401 `unauthorized` for any
      *     request with `Authorization: Bearer`: API tokens are not people, and a
      *     bearer request never falls back to the cookie (see `crate::csrf`).
+     *
+     *     The one other way to be someone: a request the MCP endpoint makes for a
+     *     personal access token's person (`access_tokens::Delegated`, a request
+     *     extension only server code sets). Then `via` is the token, and a `read`
+     *     token's identity refuses every unsafe method (403 `read_only_token`).
      */
     CurrentUser: {
       email: string;
@@ -2654,6 +2844,21 @@ export interface components {
        */
       updated_at: string;
     };
+    /** @description Where the source's compile stands. */
+    DraftCompile: {
+      /**
+       * @description The result is of `text` as it is; otherwise a newer compile is due
+       *     and `state` is the previous text's.
+       */
+      current: boolean;
+      /** @description Errors (when `failed`), then notes, located in `text`. */
+      diagnostics: components["schemas"]["Diagnostic"][];
+      /**
+       * @description `ok`, `failed` (errors in `diagnostics`), `unavailable` (the
+       *     compiler is away), or `pending` (not compiled yet).
+       */
+      state: string;
+    };
     DraftDatabase: {
       /** Format: uuid */
       id: string;
@@ -2688,6 +2893,53 @@ export interface components {
      * @enum {string}
      */
     DraftStatus: "open" | "published" | "deleted";
+    /** @description A draft's source, and where its compile stands. */
+    DraftText: {
+      /**
+       * Format: int32
+       * @description The version the draft is based on; `null` when the database had
+       *     none.
+       */
+      base_version?: number | null;
+      compile: components["schemas"]["DraftCompile"];
+      /**
+       * @description Which text is the source: the schema SQL, or a migration from the
+       *     base version.
+       */
+      mode: components["schemas"]["DraftMode"];
+      /**
+       * @description What is reviewed (`publish::reviewed`): the `sha256` the draft's
+       *     migration, a migration test, an approval and publishing take.
+       */
+      reviewed_sha256: string;
+      /**
+       * @description In migration mode, the schema the migration makes, as SQL (from the
+       *     last compile that succeeded); `null` in schema mode.
+       */
+      schema_sql?: string | null;
+      /**
+       * @description Hex SHA-256 of `text`: send it back with an edit so that one made by
+       *     someone else meanwhile is never overwritten.
+       */
+      sha256: string;
+      /** @description The source as it is now. */
+      text: string;
+    };
+    EditDraftText: {
+      /** @description edits, applied in order to the source as it is. */
+      edits?: components["schemas"]["TextEdit"][] | null;
+      mode?: components["schemas"]["DraftMode"] | null;
+      /**
+       * @description Hex SHA-256 of the source the caller read (`DraftText.sha256`): 409
+       *     `draft_changed` if it is another now. Absent: applied to the source
+       *     as it is (edits are, again, if someone typed meanwhile).
+       */
+      sha256?: string | null;
+      /** @description The whole new source. Or: */
+      text?: string | null;
+      /** @description Wait (a few seconds at most) for the compile of the new text. */
+      wait?: boolean;
+    };
     /**
      * @description A change to an entity's own attributes.
      *
@@ -4215,6 +4467,17 @@ export interface components {
      * @enum {string}
      */
     PlaygroundProfile: "realistic" | "edge_cases";
+    PlaygroundQuery: {
+      /** @description The plan of `sql` (one statement), analyzed: `EXPLAIN (ANALYZE…)`. */
+      explain?: boolean;
+      /** @description Rows kept per statement: 100 unless given, at most 1000. */
+      max_rows?: number | null;
+      /**
+       * @description One or more statements, run in order in one transaction (rolled
+       *     back), stopping at the first error. At most 256 KiB.
+       */
+      sql: string;
+    };
     /** @description One entry of the history. */
     PlaygroundRun: {
       /** @description Who: their name as it was (`id` is `null` once their account is gone). */
@@ -4488,6 +4751,42 @@ export interface components {
     };
     /** @enum {string} */
     PushStatus: "created" | "unchanged";
+    /** @description How a run went. */
+    QueryResult: {
+      /** @description Why the run stopped, when it did not finish. */
+      error?: string | null;
+      /** Format: int64 */
+      ms: number;
+      /** @description The statements that ran, in order. */
+      statements: components["schemas"]["QueryStatement"][];
+      /**
+       * @description `ok`, `error` (a statement failed: its `error`) or `cancelled` (it
+       *     took longer than this allows).
+       */
+      status: components["schemas"]["ConsoleRunStatus"];
+    };
+    /** @description One statement of a run. */
+    QueryStatement: {
+      columns: components["schemas"]["ConsoleColumn"][];
+      error?: components["schemas"]["PlaygroundSqlError"] | null;
+      index: number;
+      /** Format: int64 */
+      ms?: number | null;
+      notices: string[];
+      /** @description The plan, with `explain`. */
+      plan?: string | null;
+      /**
+       * Format: int64
+       * @description How many rows it returned or touched.
+       */
+      row_count: number;
+      /** @description Values as Postgres prints them, NULL as null; the first `max_rows`. */
+      rows: (string | null)[][];
+      /** @description Postgres's command tag (`SELECT 212`). */
+      tag?: string | null;
+      /** @description More rows than `rows` holds. */
+      truncated: boolean;
+    };
     ReadUpTo: {
       /**
        * Format: date-time
@@ -4577,6 +4876,12 @@ export interface components {
      * @enum {string}
      */
     RenameConfidence: "certain" | "high" | "medium";
+    /** @description A draft's rename decisions, as the doc holds them. */
+    RenameDecisions: {
+      renames: {
+        [key: string]: boolean;
+      };
+    };
     RenameDraft: {
       /** @description 1 to 200 characters. */
       name: string;
@@ -4697,6 +5002,30 @@ export interface components {
       status: components["schemas"]["StatusMap"];
       summary: components["schemas"]["Summary"];
     };
+    /** @description What matched, where. */
+    SchemaHit: {
+      /** @description The column, for a column. */
+      column?: string | null;
+      comment?: string | null;
+      /** @description The database's slug, and its name. */
+      database: string;
+      database_name: string;
+      /**
+       * @description `table`, `view`, `materialized_view`, `foreign_table`, `column` or
+       *     `enum`.
+       */
+      kind: string;
+      /** @description The table (or view…) the hit is or is in; the enum's name. */
+      name: string;
+      schema: string;
+      /** @description A column's type; an enum's labels, comma-separated. */
+      type?: string | null;
+      /**
+       * Format: int32
+       * @description The version searched: the database's latest.
+       */
+      version: number;
+    };
     /** @description A migration, as statements and as the files of one tool. */
     SchemaMigration: {
       /** @description What the files download as together: `<version>_<name>.zip`. */
@@ -4732,6 +5061,11 @@ export interface components {
        *     possible rename, a type recreated…).
        */
       warnings: components["schemas"]["MigrationWarning"][];
+    };
+    SearchResults: {
+      hits: components["schemas"]["SchemaHit"][];
+      /** @description More matched than `limit`. */
+      truncated: boolean;
     };
     /** @description A message only the server sends (tag 100 on the websocket), as JSON. */
     ServerEvent:
@@ -4877,6 +5211,15 @@ export interface components {
           /** Format: int32 */
           version: number;
         };
+    SetRenames: {
+      /**
+       * @description Rename keys (`SchemaMigration.renames[].key`) to `true` (apply it),
+       *     `false` (do not), or `null` (romulus's own choice again).
+       */
+      renames: {
+        [key: string]: boolean | null;
+      };
+    };
     /** @enum {string} */
     Severity: "error" | "info";
     /**
@@ -5190,6 +5533,14 @@ export interface components {
       up_statements: number;
       verdict: components["schemas"]["MigrationTestVerdict"];
     };
+    /**
+     * @description One edit: `old`, exactly as it is in the source and found once,
+     *     replaced by `new`; or, with `old` empty, `new` appended at the end.
+     */
+    TextEdit: {
+      new: string;
+      old?: string;
+    };
     /** @description Up to when the caller read a thread. */
     ThreadRead: {
       /** Format: date-time */
@@ -5302,6 +5653,12 @@ export interface components {
       diagnostics?: components["schemas"]["Diagnostic"][];
     };
     UploadSql: {
+      /**
+       * @description Only as the database's first version: refused (409 `has_versions`)
+       *     once it has, or ever had, one. Agents onboard a database this way;
+       *     later changes go through a draft, so reviews and tests apply.
+       */
+      first?: boolean;
       /** @description What changed, in a line (at most 1000 characters). */
       message?: string | null;
       /** @description The schema as SQL DDL, at most 1 MiB. */
@@ -6579,6 +6936,100 @@ export interface operations {
       };
     };
   };
+  mcp_message: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** @description One JSON-RPC 2.0 message (MCP, streamable HTTP) */
+    requestBody: {
+      content: {
+        "application/json": Record<string, never>;
+      };
+    };
+    responses: {
+      /** @description The JSON-RPC response (`result`, or `error`) */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description A notification or a response, accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description A JSON-RPC error: malformed, a batch, headers that do not match the body, an unsupported protocol version */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description No live personal access token (`WWW-Authenticate: Bearer`) */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description An `Origin` other than romulus's */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description An unknown method (protocol 2026-07-28) */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Too many requests: with this token, with the person's tokens, or with tokens that are not valid from this client (`Retry-After`) */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description The token could not be checked just now: retry */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+    };
+  };
   me: {
     parameters: {
       query?: never;
@@ -6598,6 +7049,119 @@ export interface operations {
       };
       /** @description `unauthorized`, or `session_expired` when the cookie's session is gone */
       401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_access_tokens: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AccessToken"][];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  create_access_token: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateAccessToken"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreatedAccessToken"];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `too_many_tokens`: revoke one first */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  revoke_access_token: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The token's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such live token of the caller's */
+      404: {
         headers: {
           [name: string]: unknown;
         };
@@ -8085,6 +8649,67 @@ export interface operations {
       };
     };
   };
+  set_draft_renames: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SetRenames"];
+      };
+    };
+    responses: {
+      /** @description The draft's decisions after */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RenameDecisions"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_published`, `draft_busy` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   request_review: {
     parameters: {
       query?: never;
@@ -8164,6 +8789,135 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_draft_text: {
+    parameters: {
+      query?: {
+        /** @description Wait (a few seconds at most) for the compile of the text as it is. */
+        wait?: boolean;
+      };
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DraftText"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_published`: its version keeps it */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  edit_draft_text: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EditDraftText"];
+      };
+    };
+    responses: {
+      /** @description The source after the edit */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DraftText"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `draft_changed` (not the text read: read it again), `draft_mode_changed`, `draft_published`, `draft_busy` (being published or updated) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation`: neither or both of `text` and `edits`; `edit_not_found` / `edit_ambiguous`: an edit's `old` is not in the source, or more than once (`details.edit`, from 0) */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      503: {
         headers: {
           [name: string]: unknown;
         };
@@ -9425,6 +10179,85 @@ export interface operations {
       };
     };
   };
+  query_playground: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        org: string;
+        db: string;
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PlaygroundQuery"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["QueryResult"];
+        };
+      };
+      /** @description `plan_limit`: the organization used its playground hours (hosted billing) */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `playground_not_ready`, `playground_expired` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited`: too many runs, or too many in flight */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `host_unavailable`, `playground_unavailable` */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   reset_playground: {
     parameters: {
       query?: never;
@@ -9804,6 +10637,15 @@ export interface operations {
         };
       };
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `has_versions`, or `stale_base` (a version came first): with `first`, the database has a version */
+      409: {
         headers: {
           [name: string]: unknown;
         };
@@ -10883,6 +11725,49 @@ export interface operations {
       };
       /** @description `last_admin` */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search_schemas: {
+    parameters: {
+      query: {
+        /** @description What to look for: part of a name or of a comment. */
+        q: string;
+        /** @description 1 to 200 hits; 50 by default. */
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SearchResults"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      422: {
         headers: {
           [name: string]: unknown;
         };

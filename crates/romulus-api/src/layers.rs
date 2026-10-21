@@ -34,6 +34,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// in the sandbox before they answer.
 const IMPORT_TIMEOUT: Duration = Duration::from_mins(15);
 
+/// MCP tool calls may wait for a migration test or a playground (40 s at
+/// most), then answer: well within what a reverse proxy in front of the API
+/// usually allows before its first byte.
+pub(crate) const MCP_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub fn around(router: Router) -> Router {
     with_limits(router, BODY_LIMIT, REQUEST_TIMEOUT)
 }
@@ -60,7 +65,7 @@ pub(crate) fn with_limits(router: Router, body_limit: usize, timeout: Duration) 
 }
 
 /// The request timeout: a 503 `timeout` past it. Imports get
-/// [`IMPORT_TIMEOUT`].
+/// [`IMPORT_TIMEOUT`], the MCP endpoint [`MCP_TIMEOUT`].
 async fn deadline(
     State(timeout): State<Duration>,
     request: Request<axum::body::Body>,
@@ -69,6 +74,8 @@ async fn deadline(
     let import = request.method() == Method::POST && request.uri().path().ends_with("/imports");
     let limit = if import {
         timeout.max(IMPORT_TIMEOUT)
+    } else if request.uri().path() == crate::mcp::PATH {
+        timeout.max(MCP_TIMEOUT)
     } else {
         timeout
     };

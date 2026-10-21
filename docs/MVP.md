@@ -1074,6 +1074,45 @@ repository.
   `playground_usage`, `billing_notices`; audit actions for billing, kept
   out of a database's activity.
 
+## Agents over MCP (decided 2026-10-20, built: task MCP)
+
+People work in romulus from their AI agent (Claude Code, Claude Desktop, Cursor, any MCP
+client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
+([docs/mcp.md](mcp.md)). What the build decided:
+
+- **Personal access tokens, not OAuth (yet).** A person creates a token in their account
+  (`rmls_pat_`, read or write, 90 days by default, or 30, 365 or none), shown once, stored as
+  its sha256, revocable, its last use and client shown; its person is emailed on creation, and
+  a password reset or change revokes them all. It is accepted at `/api/mcp` only; the endpoint
+  never accepts the session cookie, and an `Origin` other than romulus's is refused. Limits run
+  before any lookup where they can (per client for tokens that fail, per token, per person).
+  MCP's OAuth flow (connecting by signing in) is left for later: the 401 challenge is the seam.
+- **One code path for permissions.** Every tool calls the REST handlers the web app calls,
+  through the API's own router, as the token's person (a request extension only the server
+  sets, which `CurrentUser` and `Member` resolve). Roles, validation, rate limits, plan limits
+  and audit events are therefore the web app's. A read-only token is offered the reading
+  tools only, and the identity it lends refuses every unsafe method (a playground query, a
+  read by nature, is marked as one).
+- **Governance holds.** No tool approves, and none overrides approvals or the passing-test
+  gate; publishing takes the hash of the text the agent reviewed. An agent's edit of a draft
+  is its person's edit (they become an editor: their approval of it never counts), applied by
+  the collab room as a rewrite, so everyone in the draft sees it live. Every write is an
+  `agent_action` audit event with the token, recorded as soon as it succeeded (a tool failing
+  after it still leaves one). An agent creates a database's first version from SQL
+  (`push_schema`, refused once one exists): every later version comes from a draft. It never
+  handles CI secrets: CI's API token is made by its person in the web app.
+- **New REST endpoints the tools needed**, usable by the web app too: a draft's text with its
+  compile (`GET/PUT …/drafts/{id}/text`), its rename decisions (`PUT …/drafts/{id}/renames`), a
+  one-shot playground query (`POST …/playgrounds/{id}/query`), schema search
+  (`GET /orgs/{org}/search`).
+- **The transport is hand-written, small and stateless**: one JSON-RPC message per POST, one
+  JSON answer, no session, no stream; both protocol eras (`initialize`-based 2025 versions and
+  2026-07-28). Long tools wait 40 s at most, then hand back an id to poll, well within what a
+  proxy in front allows. The official Rust SDK was not used: the endpoint needs none of its
+  streams or sessions, and has to sit inside the API's auth, errors and limits.
+- **Tool answers are text only**: clients hand a model `structuredContent` instead of the
+  text when both are present, and the text carries the ids, links and next steps.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).

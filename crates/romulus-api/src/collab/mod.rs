@@ -308,6 +308,55 @@ impl Hub {
         wait.await.map_err(|_| HubError::Unavailable)
     }
 
+    /// Replaces the draft's source (the SQL, or the migration: `mode`, the
+    /// draft's) by `changes` from the text whose SHA-256 is `from`, for
+    /// `user_id` (their agent's edit): a rewrite for everyone in the draft,
+    /// and an edit of theirs for approvals. On [`RewriteError::Changed`],
+    /// read the content again and recompute; on [`RewriteError::Mode`], the
+    /// draft switched modes meanwhile.
+    pub async fn edit(
+        &self,
+        draft: Uuid,
+        user_id: Uuid,
+        mode: DraftMode,
+        from: String,
+        changes: Vec<patch::Change>,
+    ) -> Result<Result<bool, RewriteError>, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::Edit {
+                user_id,
+                mode,
+                from,
+                changes,
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
+    /// Turns renames of the draft's migration on or off (`Some`), or back
+    /// to romulus's own choice (`None`), for `user_id` (their agent): an
+    /// edit of theirs for approvals. Answers the decisions after.
+    pub async fn set_renames(
+        &self,
+        draft: Uuid,
+        user_id: Uuid,
+        decisions: BTreeMap<String, Option<bool>>,
+    ) -> Result<Result<BTreeMap<String, bool>, RewriteError>, HubError> {
+        let (reply, wait) = oneshot::channel();
+        self.0.send(
+            draft,
+            Command::SetRenames {
+                user_id,
+                decisions,
+                reply,
+            },
+        )?;
+        wait.await.map_err(|_| HubError::Unavailable)
+    }
+
     /// [`Hub::rewrite`] by the update holding `ticket`, while the draft is
     /// frozen for it ([`Hub::freeze_to_update`]); the doc notes, in the same
     /// transaction, that it merged `version`.

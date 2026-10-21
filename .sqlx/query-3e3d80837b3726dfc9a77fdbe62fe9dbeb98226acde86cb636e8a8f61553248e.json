@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO personal_access_tokens (user_id, name, token_hash, scope)\n             VALUES ($1, $2, $3, 'read')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3e3d80837b3726dfc9a77fdbe62fe9dbeb98226acde86cb636e8a8f61553248e"
+}

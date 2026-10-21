@@ -339,7 +339,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 
 /// An app with a fake host and the live collab (drafts compile), team
 /// `acme`, database `shop` at v1.
-async fn setup(db: &PgPool) -> (TestApp, Team, FakeHost) {
+pub(super) async fn setup(db: &PgPool) -> (TestApp, Team, FakeHost) {
     setup_with(db, Limits::default()).await
 }
 
@@ -371,7 +371,7 @@ async fn create(
 }
 
 /// Creates a playground of v1 as the developer and waits until it is ready.
-async fn ready(app: &TestApp, team: &Team, body: Value) -> Uuid {
+pub(super) async fn ready(app: &TestApp, team: &Team, body: Value) -> Uuid {
     let created = create(app, team, &team.developer, body).await;
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.json());
     let id: Uuid = created.json()["id"].as_str().unwrap().parse().unwrap();
@@ -1527,4 +1527,53 @@ async fn a_draft_run_takes_the_renames_on_screen(db: PgPool) {
         "{sql:?}"
     );
     assert!(!sql.iter().any(|s| s.contains("RENAME")), "{sql:?}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_query_over_rest_runs_as_the_console_does_and_is_kept_in_the_history(db: PgPool) {
+    let (app, team, host) = setup(&db).await;
+    let id = ready(&app, &team, json!({})).await;
+    let query = path(&team, &format!("/{id}/query"));
+    let ran = app
+        .as_user(&team.reviewer)
+        .post(&query, &json!({ "sql": "SELECT 1" }))
+        .await;
+    assert_eq!(ran.status, StatusCode::OK, "{}", ran.json());
+    let body = ran.json();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["statements"][0]["rows"], json!([["1"]]));
+    // The console's session: the reviewer's access, read-only.
+    assert_eq!(
+        host.calls().consoles.last().map(|(_, access)| *access),
+        Some(Access::Read)
+    );
+    let history = app
+        .as_user(&team.developer)
+        .get(&path(&team, &format!("/{id}/runs")))
+        .await
+        .json();
+    assert_eq!(history["runs"][0]["sql"], "SELECT 1", "{history}");
+
+    // A syntax error ran nothing: answered, not kept.
+    let error = app
+        .as_user(&team.reviewer)
+        .post(&query, &json!({ "sql": "syntax error" }))
+        .await
+        .json();
+    assert_eq!(error["status"], "error");
+    for (body, status) in [
+        (json!({ "sql": "  " }), StatusCode::UNPROCESSABLE_ENTITY),
+        (
+            json!({ "sql": "x".repeat(300 * 1024) }),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+    ] {
+        let refused = app.as_user(&team.reviewer).post(&query, &body).await;
+        assert_eq!(refused.status, status);
+    }
+    let outsider = app
+        .as_user(&team.outsider)
+        .post(&query, &json!({ "sql": "SELECT 1" }))
+        .await;
+    assert_eq!(outsider.status, StatusCode::NOT_FOUND);
 }

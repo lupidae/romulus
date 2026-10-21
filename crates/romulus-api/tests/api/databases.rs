@@ -325,3 +325,41 @@ async fn saving_nothing_new_changes_nothing(db: PgPool) {
         .json();
     assert_ne!(renamed["updated_at"], created["updated_at"]);
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn members_search_their_organizations_schemas(db: PgPool) {
+    let app = TestApp::new(db.clone());
+    let team = Team::new(&db, "acme").await;
+    let shop = database(&db, team.org, "shop").await;
+    crate::live::version(
+        &db,
+        shop,
+        1,
+        "CREATE TABLE public.orders (id bigint);\nCREATE TABLE public.order_lines (id bigint);\n",
+        json!({}),
+    )
+    .await;
+    let search = |q: &str| team.path(&format!("/search?q={q}"));
+    let found = app.as_user(&team.reviewer).get(&search("ORDER")).await;
+    assert_eq!(found.status, StatusCode::OK, "{}", found.json());
+    let hits = found.json()["hits"].as_array().unwrap().clone();
+    let names: Vec<&str> = hits.iter().map(|h| h["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        ["order_lines", "orders"],
+        "starts-with before contains, by name"
+    );
+    assert_eq!(hits[0]["database"], "shop");
+    assert_eq!(hits[0]["version"], 1);
+    let exact = app
+        .as_user(&team.reviewer)
+        .get(&search("orders"))
+        .await
+        .json();
+    assert_eq!(exact["hits"][0]["name"], "orders");
+
+    let empty = app.as_user(&team.reviewer).get(&search("%20")).await;
+    assert_eq!(empty.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let outsider = app.as_user(&team.outsider).get(&search("orders")).await;
+    assert_eq!(outsider.status, StatusCode::NOT_FOUND);
+}

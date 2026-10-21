@@ -58,7 +58,7 @@ struct Calls {
 }
 
 #[derive(Clone, Default)]
-struct TestHost {
+pub(super) struct TestHost {
     calls: Arc<Mutex<Calls>>,
     release: Arc<Notify>,
 }
@@ -327,7 +327,7 @@ const V1: &str = "CREATE TABLE public.customers (id bigint PRIMARY KEY);\n";
 const V2: &str = "CREATE TABLE public.customers (id bigint PRIMARY KEY);\nCREATE TABLE public.orders (id bigint PRIMARY KEY);\n";
 
 /// An app with the fake host, team `acme`, database `shop` at v1 and v2.
-async fn setup(db: &PgPool) -> (TestApp, Team, TestHost) {
+pub(super) async fn setup(db: &PgPool) -> (TestApp, Team, TestHost) {
     let live = live_app(db.clone(), quick());
     let host = TestHost::default();
     let mut state = live.state.clone().with_playgrounds(Host::new(host.clone()));

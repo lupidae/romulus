@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE organizations SET approvals_required = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "fd3dd668cfe7ba68ba52b41f8fd48bbce5ea372e9a002933e1a64fa0cd909ed1"
+}

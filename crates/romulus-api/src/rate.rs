@@ -1,5 +1,6 @@
 //! Rate limits for endpoints that cost real work: pushes (per API token), SQL
-//! compiles (per person, and per database). A token bucket per key: a burst, then one more
+//! compiles (per person, and per database), MCP requests (per personal access
+//! token). A token bucket per key: a burst, then one more
 //! request per refill period. In memory, like everything per-instance in the
 //! MVP (one API instance); a restart forgets the counts, which only ever
 //! errs on the generous side.
@@ -51,6 +52,21 @@ impl<K: Hash + Eq> Limiter<K> {
     /// long until the next one is allowed.
     pub fn check(&self, key: K) -> Result<(), ApiError> {
         self.check_at(key, Instant::now())
+    }
+
+    /// How long until `key` may make a request, when it may not now;
+    /// nothing is counted (a gate before work whose failures are counted
+    /// apart).
+    pub fn waiting(&self, key: &K) -> Option<Duration> {
+        let now = Instant::now();
+        let burst = f64::from(self.burst);
+        let refill = self.refill.as_secs_f64();
+        let buckets = self.buckets.lock().unwrap_or_else(PoisonError::into_inner);
+        let bucket = buckets.get(key)?;
+        let level = (bucket.tokens
+            + now.saturating_duration_since(bucket.at).as_secs_f64() / refill)
+            .min(burst);
+        (level < 1.0).then(|| self.refill.mul_f64(1.0 - level))
     }
 
     fn check_at(&self, key: K, now: Instant) -> Result<(), ApiError> {
@@ -169,6 +185,16 @@ pub struct Limits {
     pub org_exports: Limiter<Uuid>,
     /// Exports streaming at once, per organization and in all.
     pub export_slots: Slots,
+    /// MCP requests per personal access token (keyed by the secret's
+    /// hash, counted before it is looked up): an agent working through a
+    /// task fits, a loop does not. What each tool calls is limited on top,
+    /// as for the person in the web app.
+    pub access_tokens: Limiter<Vec<u8>>,
+    /// MCP requests per person, all their tokens together.
+    pub access_token_people: Limiter<Uuid>,
+    /// MCP requests refused for their token, per client (IPv4 address or
+    /// IPv6 /48): past the burst, the client is refused before any lookup.
+    pub access_token_failures: Limiter<std::net::IpAddr>,
 }
 
 impl Default for Limits {
@@ -186,6 +212,9 @@ impl Default for Limits {
             exports: Limiter::new(5, Duration::from_secs(30)),
             org_exports: Limiter::new(10, Duration::from_secs(15)),
             export_slots: Slots::new(2, 6),
+            access_tokens: Limiter::new(60, Duration::from_millis(500)),
+            access_token_people: Limiter::new(120, Duration::from_millis(250)),
+            access_token_failures: Limiter::new(20, Duration::from_secs(3)),
         }
     }
 }
@@ -207,6 +236,21 @@ mod tests {
         assert_eq!(retry_after, Duration::from_secs(2));
         assert!(limiter.check_at(1, start + Duration::from_secs(1)).is_err());
         assert!(limiter.check_at(1, start + Duration::from_secs(2)).is_ok());
+    }
+
+    #[test]
+    fn waiting_says_when_a_key_is_refused_without_counting() {
+        let limiter = Limiter::new(2, Duration::from_mins(1));
+        assert_eq!(limiter.waiting(&1), None, "unknown: allowed");
+        limiter.check(1).unwrap();
+        assert_eq!(limiter.waiting(&1), None);
+        assert_eq!(limiter.waiting(&1), None, "looking counts nothing");
+        limiter.check(1).unwrap();
+        assert!(
+            limiter
+                .waiting(&1)
+                .is_some_and(|wait| wait > Duration::ZERO)
+        );
     }
 
     #[test]

@@ -1,4 +1,14 @@
-import { ComputerIcon, HalfMoonIcon, KeyIcon, LogOutIcon, SunLightIcon } from "@/components/icons";
+import { useNavigate } from "@tanstack/react-router";
+
+import {
+  ComputerIcon,
+  HalfMoonIcon,
+  KeyIcon,
+  LockIcon,
+  LogOutIcon,
+  SparksIcon,
+  SunLightIcon,
+} from "@/components/icons";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +36,7 @@ export function UserMenu({
   onChangePassword?: () => void;
 }) {
   const { preference, setPreference } = useTheme();
+  const navigate = useNavigate();
   return (
     <Menu>
       <MenuTrigger asChild>
@@ -63,9 +74,17 @@ export function UserMenu({
           </MenuRadioItem>
         </MenuRadioGroup>
         <MenuSeparator />
+        <MenuItem onSelect={() => void navigate({ to: "/settings/agent" })}>
+          <SparksIcon />
+          Connect your agent
+        </MenuItem>
+        <MenuItem onSelect={() => void navigate({ to: "/settings/tokens" })}>
+          <KeyIcon />
+          Access tokens
+        </MenuItem>
         {onChangePassword && (
           <MenuItem onSelect={onChangePassword}>
-            <KeyIcon />
+            <LockIcon />
             Change password…
           </MenuItem>
         )}

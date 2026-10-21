@@ -15,6 +15,7 @@ mod export;
 mod files;
 mod lexer;
 mod plpgsql;
+mod schema_only;
 pub mod statements;
 mod temporary;
 
@@ -22,4 +23,5 @@ pub use files::{
     Format, IgnoreReason, Ignored, Migration, Plan, PlanError, ReadOnly, SourceFile, Tool,
     description, detect, is_litter, normalize, plan,
 };
+pub use schema_only::{SchemaOnly, schema_only};
 pub use statements::{Analysis, SkipReason, Skipped, analyze};

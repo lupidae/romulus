@@ -195,7 +195,7 @@ pub fn analyze(sql: &str) -> Analysis {
 
 /// Just past the `;` that ends a statement ending at `end` (`end` itself
 /// when none follows).
-fn semicolon_after(text: &str, end: usize) -> usize {
+pub(super) fn semicolon_after(text: &str, end: usize) -> usize {
     let after = &text[end..];
     after
         .find(|c: char| !c.is_whitespace())
@@ -203,7 +203,7 @@ fn semicolon_after(text: &str, end: usize) -> usize {
         .map_or(end, |k| end + k + 1)
 }
 
-fn first_line(text: &str) -> String {
+pub(super) fn first_line(text: &str) -> String {
     let line = text
         .lines()
         .map(str::trim)

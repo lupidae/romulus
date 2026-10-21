@@ -357,6 +357,22 @@ pub struct Content {
     pub discussion: Vec<comments::DocThread>,
     /// The renames people turned on or off in the migration (`doc::RENAMES`).
     pub renames: BTreeMap<String, bool>,
+    /// The last compile's outcome; `None` before the first.
+    pub compile: Option<LastCompiled>,
+}
+
+/// The last compile of a draft, as `Content` tells it.
+#[derive(Debug, Clone)]
+pub struct LastCompiled {
+    pub state: CompileState,
+    /// Of exactly the source (and base) the content holds: otherwise a
+    /// newer compile is due.
+    pub current: bool,
+    /// `romulus_sandbox::Diagnostic`s as JSON: errors (when `failed`), then
+    /// notes.
+    pub diagnostics: Value,
+    /// In migration mode, the schema the last good model is, as SQL.
+    pub schema_sql: Option<Arc<str>>,
 }
 
 impl Content {
@@ -508,6 +524,28 @@ pub enum Command {
         /// The version an update merges: noted in the same transaction.
         merged: Option<i32>,
         reply: oneshot::Sender<Result<bool, RewriteError>>,
+    },
+    /// A person's edit of the source made by the server for them (their
+    /// agent, at the MCP endpoint): `changes` computed against the source
+    /// whose SHA-256 is `from`, in `mode`. Applied like a rewrite (clients
+    /// drop their undo history, `meta.rewrite` reason `agent`), but the
+    /// person is an editor from then on, as if they had typed it: whether
+    /// anything changed.
+    Edit {
+        user_id: Uuid,
+        mode: DraftMode,
+        from: String,
+        changes: Vec<patch::Change>,
+        reply: oneshot::Sender<Result<bool, RewriteError>>,
+    },
+    /// A person's rename decisions made by the server for them (their
+    /// agent): each key turned on or off, or back to romulus's own choice
+    /// (`None`), in the doc's `renames`. Like a toggle in the migration
+    /// view, it makes them an editor. Answers the decisions after.
+    SetRenames {
+        user_id: Uuid,
+        decisions: BTreeMap<String, Option<bool>>,
+        reply: oneshot::Sender<Result<BTreeMap<String, bool>, RewriteError>>,
     },
     /// The draft was updated to a newer version (its base moved): `base` is
     /// that version and its SQL (what a migration applies to now).
@@ -1125,6 +1163,7 @@ impl Room {
         );
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per command")]
     fn handle(&mut self, command: Command) {
         match command {
             Command::Join {
@@ -1222,6 +1261,22 @@ impl Room {
                 reply,
             } => {
                 let _ = reply.send(self.rewrite(&from, &changes, reason, ticket, merged));
+            }
+            Command::Edit {
+                user_id,
+                mode,
+                from,
+                changes,
+                reply,
+            } => {
+                let _ = reply.send(self.edit_source(user_id, mode, &from, &changes));
+            }
+            Command::SetRenames {
+                user_id,
+                decisions,
+                reply,
+            } => {
+                let _ = reply.send(self.set_renames(user_id, &decisions));
             }
             // Handled by `Room::command`.
             Command::Shutdown | Command::MergeLayout { .. } | Command::SwitchMode { .. } => {}
@@ -1989,6 +2044,59 @@ impl Room {
         Ok(edited)
     }
 
+    /// Applies a person's edit of the source made through the server (see
+    /// [`Command::Edit`]) if the source is still the one it was computed
+    /// against.
+    fn edit_source(
+        &mut self,
+        user_id: Uuid,
+        mode: DraftMode,
+        from: &str,
+        changes: &[patch::Change],
+    ) -> Result<bool, RewriteError> {
+        if self.status != LiveStatus::Open {
+            return Err(RewriteError::NotOpen(self.status));
+        }
+        if self.mode != mode {
+            return Err(RewriteError::Mode(self.mode));
+        }
+        let current = self.roots.source(&self.doc.transact(), mode);
+        if sha256_hex(&current) != from {
+            return Err(RewriteError::Changed);
+        }
+        let mut edited = false;
+        self.server_edit(|roots, txn| {
+            edited = patch::apply(roots.source_text(mode), txn, &current, changes);
+            if edited {
+                roots.note_rewrite(txn, "agent");
+            }
+            edited
+        });
+        if self.source_may_have_changed() {
+            self.edited_by(user_id);
+        }
+        Ok(edited)
+    }
+
+    /// Writes a person's rename decisions (see [`Command::SetRenames`]).
+    fn set_renames(
+        &mut self,
+        user_id: Uuid,
+        decisions: &BTreeMap<String, Option<bool>>,
+    ) -> Result<BTreeMap<String, bool>, RewriteError> {
+        if self.status != LiveStatus::Open {
+            return Err(RewriteError::NotOpen(self.status));
+        }
+        self.server_edit(|roots, txn| {
+            roots.set_rename_decisions(txn, decisions);
+            !decisions.is_empty()
+        });
+        if self.renames_may_have_changed() {
+            self.edited_by(user_id);
+        }
+        Ok(self.renames.clone())
+    }
+
     /// A client's update changed the text that is not the source (a tab
     /// that had not seen the switch yet): undone for everyone, and that
     /// client told.
@@ -2096,7 +2204,17 @@ impl Room {
             last.state == CompileState::Ok && last.input.as_deref() == Some(&input)
         });
         let renames = self.roots.rename_decisions(&txn);
+        let compile = self.last_compile.as_ref().map(|last| LastCompiled {
+            state: last.state.clone(),
+            current: last.input.as_deref() == Some(&input),
+            diagnostics: last.diagnostics.clone(),
+            schema_sql: self
+                .schema_sql
+                .clone()
+                .filter(|_| self.mode == DraftMode::Migration),
+        });
         Content {
+            compile,
             mode: self.mode,
             layout: self.roots.layout(&txn),
             model: compiled_now.then(|| self.good_model.clone()).flatten(),

@@ -13,10 +13,11 @@
 //! removed, restored, purged), `drafts::approvals` (a draft published, with
 //! who approved it, or without the approvals it needed), `orgs` (the
 //! approvals required changed), `collab` (someone else's comments deleted
-//! in a draft, by its room's writer) and `playgrounds` (one created,
-//! deleted, reset, or a migration run on its rows) and `billing` (the Terms
+//! in a draft, by its room's writer), `playgrounds` (one created,
+//! deleted, reset, or a migration run on its rows), `billing` (the Terms
 //! accepted, subscriptions changed, payments, downgrades: org-level, kept
-//! out of a database's activity). The actor's name is kept as it was.
+//! out of a database's activity) and `mcp` (what an agent changed with its
+//! person's access token). The actor's name is kept as it was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -84,9 +85,19 @@ pub struct AuditDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playground_id: Option<Uuid>,
     /// A migration run's outcome: `passed`, or the statement it failed at
-    /// (`failed at statement 4 of 7`).
+    /// (`failed at statement 4 of 7`); what an agent did, in a few words
+    /// (`created draft "Add invoices"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// The personal access token an agent acted with (`agent_action`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<Uuid>,
+    /// Its name then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_name: Option<String>,
+    /// The MCP tool it called (`create_draft`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
     /// Billing's events: the Terms accepted, a subscription changed, a
     /// payment, the plan downgraded.
     #[serde(default, skip_serializing_if = "Option::is_none")]

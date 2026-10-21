@@ -312,6 +312,9 @@ pub enum AuditAction {
     /// A second subscription started while one was running (two checkouts
     /// at once): romulus cancelled it at once and refunded what it charged.
     SubscriptionDuplicateCancelled,
+    /// Someone's AI agent changed something with their personal access
+    /// token (`token_id`, `token_name`, `tool` in the details).
+    AgentAction,
 }
 
 impl AuditAction {
@@ -581,6 +584,18 @@ pub enum TokenScope {
     /// Push remus JSON versions, nothing else (CI).
     Push,
     Full,
+}
+
+/// What a personal access token may do (`access_token_scope`): an agent's
+/// token acts as its person, within this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "access_token_scope", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum AccessTokenScope {
+    /// Reading tools only: never a write, whatever the person's roles.
+    Read,
+    /// Everything the person's roles allow.
+    Write,
 }
 
 #[cfg(test)]

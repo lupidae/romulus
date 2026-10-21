@@ -192,6 +192,25 @@ impl Roots {
     /// booleans only, keys of a sane length. All of them: a migration looks
     /// up its candidates' keys, so extras cost nothing but their bytes (the
     /// doc's own limit), and none decides another's fate.
+    /// Turns each rename on or off (`Some`), or back to romulus's own
+    /// choice (`None`): a person's decisions, written by the server for them.
+    pub fn set_rename_decisions(
+        &self,
+        txn: &mut TransactionMut,
+        decisions: &BTreeMap<String, Option<bool>>,
+    ) {
+        for (key, on) in decisions {
+            match on {
+                Some(on) => {
+                    self.renames.insert(txn, key.as_str(), *on);
+                }
+                None => {
+                    self.renames.remove(txn, key);
+                }
+            }
+        }
+    }
+
     pub fn rename_decisions<T: ReadTxn>(&self, txn: &T) -> BTreeMap<String, bool> {
         read_map::<bool, _>(&self.renames, txn)
             .into_iter()

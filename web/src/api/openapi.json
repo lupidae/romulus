@@ -1254,6 +1254,110 @@
         }
       }
     },
+    "/api/mcp": {
+      "post": {
+        "tags": [
+          "mcp"
+        ],
+        "summary": "One MCP message: a JSON-RPC request (answered), or a notification or a\nclient's response (accepted, 202).",
+        "operationId": "mcp_message",
+        "requestBody": {
+          "description": "One JSON-RPC 2.0 message (MCP, streamable HTTP)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The JSON-RPC response (`result`, or `error`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "A notification or a response, accepted"
+          },
+          "400": {
+            "description": "A JSON-RPC error: malformed, a batch, headers that do not match the body, an unsupported protocol version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live personal access token (`WWW-Authenticate: Bearer`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An `Origin` other than romulus's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "An unknown method (protocol 2026-07-28)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests: with this token, with the person's tokens, or with tokens that are not valid from this client (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The token could not be checked just now: retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/me": {
       "get": {
         "tags": [
@@ -1273,6 +1377,139 @@
           },
           "401": {
             "description": "`unauthorized`, or `session_expired` when the cookie's session is gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/access-tokens": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The caller's tokens not revoked, newest first.",
+        "operationId": "list_access_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessToken"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Creates a token and answers its secret, once.",
+        "operationId": "create_access_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccessToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedAccessToken"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`too_many_tokens`: revoke one first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/access-tokens/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revokes a token: it stops working at once.",
+        "operationId": "revoke_access_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The token's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such live token of the caller's",
             "content": {
               "application/json": {
                 "schema": {
@@ -3427,6 +3664,101 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/renames": {
+      "put": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Turns renames of the draft's migration on or off.",
+        "operationId": "set_draft_renames",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRenames"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The draft's decisions after",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameDecisions"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_published`, `draft_busy`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/drafts/{id}/review-request": {
       "post": {
         "tags": [
@@ -3555,6 +3887,202 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/drafts/{id}/text": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "The draft's source and its compile.",
+        "operationId": "get_draft_text",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "Wait (a few seconds at most) for the compile of the text as it is.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftText"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_published`: its version keeps it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Writes the draft's source: the whole text, or edits of it.",
+        "operationId": "edit_draft_text",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditDraftText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The source after the edit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftText"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`draft_changed` (not the text read: read it again), `draft_mode_changed`, `draft_published`, `draft_busy` (being published or updated)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: neither or both of `text` and `edits`; `edit_not_found` / `edit_ambiguous`: an edit's `old` is not in the source, or more than once (`details.edit`, from 0)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
             "content": {
               "application/json": {
                 "schema": {
@@ -5443,6 +5971,121 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/playgrounds/{id}/query": {
+      "post": {
+        "tags": [
+          "playgrounds"
+        ],
+        "summary": "Runs SQL on the playground, read-only, and answers its results.",
+        "operationId": "query_playground",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaygroundQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryResult"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: the organization used its playground hours (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`playground_not_ready`, `playground_expired`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many runs, or too many in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`host_unavailable`, `playground_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/playgrounds/{id}/reset": {
       "post": {
         "tags": [
@@ -6035,6 +6678,16 @@
             }
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`has_versions`, or `stale_base` (a version came first): with `first`, the database has a version",
             "content": {
               "application/json": {
                 "schema": {
@@ -7714,6 +8367,74 @@
         }
       }
     },
+    "/api/orgs/{org}/search": {
+      "get": {
+        "tags": [
+          "databases"
+        ],
+        "summary": "Tables, columns and enums of the organization's databases matching `q`.",
+        "operationId": "search_schemas",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "What to look for: part of a name or of a comment.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 200 hits; 50 by default.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResults"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/postgres-majors": {
       "get": {
         "tags": [
@@ -7764,6 +8485,69 @@
             "$ref": "#/components/schemas/Org"
           }
         }
+      },
+      "AccessToken": {
+        "type": "object",
+        "description": "A personal access token, without its secret.",
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "created_at",
+          "expired"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expired": {
+            "type": "boolean",
+            "description": "Past `expires_at`: refused, kept in the list until revoked."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`null`: it never expires (until revoked)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The MCP client that last said who it is with it (`claude-code\n2.1.4`), as it said it."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last request it authenticated (written at most once a minute);\n`null` if never used."
+          },
+          "name": {
+            "type": "string",
+            "description": "Where it is used: \"Claude Code on my laptop\"."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AccessTokenScope"
+          }
+        }
+      },
+      "AccessTokenScope": {
+        "type": "string",
+        "description": "What a personal access token may do (`access_token_scope`): an agent's\ntoken acts as its person, within this.",
+        "enum": [
+          "read",
+          "write"
+        ]
       },
       "Acknowledged": {
         "type": "object",
@@ -8098,7 +8882,8 @@
           "payment_succeeded",
           "plan_downgraded",
           "playground_hours_used_up",
-          "subscription_duplicate_cancelled"
+          "subscription_duplicate_cancelled",
+          "agent_action"
         ]
       },
       "AuditActor": {
@@ -8238,7 +9023,7 @@
               "string",
               "null"
             ],
-            "description": "A migration run's outcome: `passed`, or the statement it failed at\n(`failed at statement 4 of 7`)."
+            "description": "A migration run's outcome: `passed`, or the statement it failed at\n(`failed at statement 4 of 7`); what an agent did, in a few words\n(`created draft \"Add invoices\"`)."
           },
           "playground_id": {
             "type": [
@@ -8277,6 +9062,28 @@
               "null"
             ],
             "format": "int32"
+          },
+          "token_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The personal access token an agent acted with (`agent_action`)."
+          },
+          "token_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name then."
+          },
+          "tool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The MCP tool it called (`create_draft`)."
           }
         }
       },
@@ -9950,6 +10757,31 @@
           }
         }
       },
+      "CreateAccessToken": {
+        "type": "object",
+        "required": [
+          "name",
+          "scope"
+        ],
+        "properties": {
+          "expires_in_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "30, 90 or 365; absent: 90; `null`: it never expires.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "1 to 100 characters."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AccessTokenScope"
+          }
+        }
+      },
       "CreateDatabase": {
         "type": "object",
         "required": [
@@ -10175,6 +11007,23 @@
           }
         }
       },
+      "CreatedAccessToken": {
+        "type": "object",
+        "description": "A token just created: the only time its secret is shown.",
+        "required": [
+          "token",
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string",
+            "description": "`rmls_pat_…`, for `Authorization: Bearer`. Not stored: copy it now."
+          },
+          "token": {
+            "$ref": "#/components/schemas/AccessToken"
+          }
+        }
+      },
       "CreatedInvitation": {
         "type": "object",
         "required": [
@@ -10215,7 +11064,7 @@
       },
       "CurrentUser": {
         "type": "object",
-        "description": "The signed-in user, from the session cookie. Every endpoint that needs a\nperson takes it (or [`super::Member`], which includes it).\n\nRejects with 401 `unauthorized` without a cookie, 401 `session_expired`\nwith a cookie whose session is gone, and 401 `unauthorized` for any\nrequest with `Authorization: Bearer`: API tokens are not people, and a\nbearer request never falls back to the cookie (see `crate::csrf`).",
+        "description": "The signed-in user, from the session cookie. Every endpoint that needs a\nperson takes it (or [`super::Member`], which includes it).\n\nRejects with 401 `unauthorized` without a cookie, 401 `session_expired`\nwith a cookie whose session is gone, and 401 `unauthorized` for any\nrequest with `Authorization: Bearer`: API tokens are not people, and a\nbearer request never falls back to the cookie (see `crate::csrf`).\n\nThe one other way to be someone: a request the MCP endpoint makes for a\npersonal access token's person (`access_tokens::Delegated`, a request\nextension only server code sets). Then `via` is the token, and a `read`\ntoken's identity refuses every unsafe method (403 `read_only_token`).",
         "required": [
           "id",
           "email",
@@ -10701,6 +11550,32 @@
           }
         }
       },
+      "DraftCompile": {
+        "type": "object",
+        "description": "Where the source's compile stands.",
+        "required": [
+          "state",
+          "current",
+          "diagnostics"
+        ],
+        "properties": {
+          "current": {
+            "type": "boolean",
+            "description": "The result is of `text` as it is; otherwise a newer compile is due\nand `state` is the previous text's."
+          },
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "description": "Errors (when `failed`), then notes, located in `text`."
+          },
+          "state": {
+            "type": "string",
+            "description": "`ok`, `failed` (errors in `diagnostics`), `unavailable` (the\ncompiler is away), or `pending` (not compiled yet)."
+          }
+        }
+      },
       "DraftDatabase": {
         "type": "object",
         "required": [
@@ -10773,6 +11648,97 @@
           "published",
           "deleted"
         ]
+      },
+      "DraftText": {
+        "type": "object",
+        "description": "A draft's source, and where its compile stands.",
+        "required": [
+          "mode",
+          "text",
+          "sha256",
+          "reviewed_sha256",
+          "compile"
+        ],
+        "properties": {
+          "base_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version the draft is based on; `null` when the database had\nnone."
+          },
+          "compile": {
+            "$ref": "#/components/schemas/DraftCompile"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DraftMode",
+            "description": "Which text is the source: the schema SQL, or a migration from the\nbase version."
+          },
+          "reviewed_sha256": {
+            "type": "string",
+            "description": "What is reviewed (`publish::reviewed`): the `sha256` the draft's\nmigration, a migration test, an approval and publishing take."
+          },
+          "schema_sql": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "In migration mode, the schema the migration makes, as SQL (from the\nlast compile that succeeded); `null` in schema mode."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of `text`: send it back with an edit so that one made by\nsomeone else meanwhile is never overwritten."
+          },
+          "text": {
+            "type": "string",
+            "description": "The source as it is now."
+          }
+        }
+      },
+      "EditDraftText": {
+        "type": "object",
+        "properties": {
+          "edits": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TextEdit"
+            },
+            "description": "edits, applied in order to the source as it is."
+          },
+          "mode": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DraftMode",
+                "description": "The mode the text is for: 409 `draft_mode_changed` if the draft is in\nthe other one. Absent: whichever it is in."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hex SHA-256 of the source the caller read (`DraftText.sha256`): 409\n`draft_changed` if it is another now. Absent: applied to the source\nas it is (edits are, again, if someone typed meanwhile)."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The whole new source. Or:"
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Wait (a few seconds at most) for the compile of the new text."
+          }
+        }
       },
       "EntityChange": {
         "oneOf": [
@@ -14775,6 +15741,30 @@
           "edge_cases"
         ]
       },
+      "PlaygroundQuery": {
+        "type": "object",
+        "required": [
+          "sql"
+        ],
+        "properties": {
+          "explain": {
+            "type": "boolean",
+            "description": "The plan of `sql` (one statement), analyzed: `EXPLAIN (ANALYZE…)`."
+          },
+          "max_rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Rows kept per statement: 100 unless given, at most 1000.",
+            "minimum": 0
+          },
+          "sql": {
+            "type": "string",
+            "description": "One or more statements, run in order in one transaction (rolled\nback), stopping at the first error. At most 256 KiB."
+          }
+        }
+      },
       "PlaygroundRun": {
         "type": "object",
         "description": "One entry of the history.",
@@ -15520,6 +16510,125 @@
           "unchanged"
         ]
       },
+      "QueryResult": {
+        "type": "object",
+        "description": "How a run went.",
+        "required": [
+          "status",
+          "ms",
+          "statements"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the run stopped, when it did not finish."
+          },
+          "ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueryStatement"
+            },
+            "description": "The statements that ran, in order."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConsoleRunStatus",
+            "description": "`ok`, `error` (a statement failed: its `error`) or `cancelled` (it\ntook longer than this allows)."
+          }
+        }
+      },
+      "QueryStatement": {
+        "type": "object",
+        "description": "One statement of a run.",
+        "required": [
+          "index",
+          "columns",
+          "rows",
+          "row_count",
+          "truncated",
+          "notices"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsoleColumn"
+            }
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundSqlError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The plan, with `explain`."
+          },
+          "row_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many rows it returned or touched.",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "description": "Values as Postgres prints them, NULL as null; the first `max_rows`."
+          },
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Postgres's command tag (`SELECT 212`)."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More rows than `rows` holds."
+          }
+        }
+      },
       "ReadUpTo": {
         "type": "object",
         "required": [
@@ -15713,6 +16822,24 @@
           "high",
           "medium"
         ]
+      },
+      "RenameDecisions": {
+        "type": "object",
+        "description": "A draft's rename decisions, as the doc holds them.",
+        "required": [
+          "renames"
+        ],
+        "properties": {
+          "renames": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       },
       "RenameDraft": {
         "type": "object",
@@ -15989,6 +17116,63 @@
           }
         }
       },
+      "SchemaHit": {
+        "type": "object",
+        "description": "What matched, where.",
+        "required": [
+          "kind",
+          "database",
+          "database_name",
+          "version",
+          "schema",
+          "name"
+        ],
+        "properties": {
+          "column": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The column, for a column."
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "database": {
+            "type": "string",
+            "description": "The database's slug, and its name."
+          },
+          "database_name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`table`, `view`, `materialized_view`, `foreign_table`, `column` or\n`enum`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The table (or view…) the hit is or is in; the enum's name."
+          },
+          "schema": {
+            "type": "string"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A column's type; an enum's labels, comma-separated."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version searched: the database's latest."
+          }
+        }
+      },
       "SchemaMigration": {
         "type": "object",
         "description": "A migration, as statements and as the files of one tool.",
@@ -16060,6 +17244,25 @@
               "$ref": "#/components/schemas/MigrationWarning"
             },
             "description": "What to know before running it (a column that ends up elsewhere, a\npossible rename, a type recreated…)."
+          }
+        }
+      },
+      "SearchResults": {
+        "type": "object",
+        "required": [
+          "hits",
+          "truncated"
+        ],
+        "properties": {
+          "hits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaHit"
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More matched than `limit`."
           }
         }
       },
@@ -16473,6 +17676,27 @@
           }
         ],
         "description": "A message only the server sends (tag 100 on the websocket), as JSON."
+      },
+      "SetRenames": {
+        "type": "object",
+        "required": [
+          "renames"
+        ],
+        "properties": {
+          "renames": {
+            "type": "object",
+            "description": "Rename keys (`SchemaMigration.renames[].key`) to `true` (apply it),\n`false` (do not), or `null` (romulus's own choice again).",
+            "additionalProperties": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       },
       "Severity": {
         "type": "string",
@@ -17266,6 +18490,21 @@
           }
         }
       },
+      "TextEdit": {
+        "type": "object",
+        "description": "One edit: `old`, exactly as it is in the source and found once,\nreplaced by `new`; or, with `old` empty, `new` appended at the end.",
+        "required": [
+          "new"
+        ],
+        "properties": {
+          "new": {
+            "type": "string"
+          },
+          "old": {
+            "type": "string"
+          }
+        }
+      },
       "ThreadRead": {
         "type": "object",
         "description": "Up to when the caller read a thread.",
@@ -17536,6 +18775,10 @@
           "sql"
         ],
         "properties": {
+          "first": {
+            "type": "boolean",
+            "description": "Only as the database's first version: refused (409 `has_versions`)\nonce it has, or ever had, one. Agents onboard a database this way;\nlater changes go through a draft, so reviews and tests apply."
+          },
           "message": {
             "type": [
               "string",

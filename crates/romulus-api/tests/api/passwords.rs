@@ -14,7 +14,7 @@ use romulus_api::{
     auth::password::{self, hash, throttle},
     config::{MailConfig, SignUpPolicy, SmtpTls},
     csrf,
-    domain::Role,
+    domain::{AccessTokenScope, Role},
     mail::{Mailer, Outbox},
     rate::Limiter,
     token,
@@ -23,8 +23,9 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::harness::{
-    ORIGIN, Session, TestApp, TestResponse, member, org, session, signed_in, user,
+use crate::{
+    access_tokens::initialize,
+    harness::{ORIGIN, Session, TestApp, TestResponse, member, org, session, signed_in, user},
 };
 
 const PASSWORD: &str = "violet tractor mango";
@@ -984,7 +985,9 @@ async fn without_mail_the_invitation_vouches_and_the_account_is_made_at_once(db:
 async fn a_reset_link_sets_a_new_password_once_and_ends_every_session(db: PgPool) {
     let id = account(&db, "alice@acme.io", "Alice").await;
     let elsewhere = session(&db, id).await;
+    let agent = super::mcp::pat(&db, &elsewhere, AccessTokenScope::Write).await;
     let (app, outbox) = app_with(db.clone(), true, SignUpPolicy::Invite);
+    assert_eq!(initialize(&app, &agent).await.status, StatusCode::OK);
 
     // Unknown and known addresses: the same answer; only the account gets mail.
     let forgot = async |email: &str| {
@@ -1035,6 +1038,11 @@ async fn a_reset_link_sets_a_new_password_once_and_ends_every_session(db: PgPool
         app.as_user(&elsewhere).get("/api/me").await.code(),
         "session_expired"
     );
+    // Signed out everywhere: agents too.
+    assert_eq!(
+        initialize(&app, &agent).await.status,
+        StatusCode::UNAUTHORIZED
+    );
     assert_eq!(
         sign_in(&app, "alice@acme.io", PASSWORD).await.code(),
         "invalid_credentials"
@@ -1045,9 +1053,14 @@ async fn a_reset_link_sets_a_new_password_once_and_ends_every_session(db: PgPool
             .status,
         StatusCode::NO_CONTENT
     );
-    assert_eq!(
-        outbox.to("alice@acme.io").last().unwrap().kind,
-        "password_changed"
+    let notice = outbox.to("alice@acme.io").last().unwrap().clone();
+    assert_eq!(notice.kind, "password_changed");
+    assert!(
+        notice
+            .text
+            .contains("Your 1 access token for AI agents was revoked too"),
+        "{}",
+        notice.text
     );
     assert_eq!(events(&db, "password_reset").await, 1);
 }
@@ -1156,6 +1169,7 @@ async fn changing_a_password_keeps_this_browser_and_signs_out_the_others(db: PgP
     let (app, outbox) = app_with(db.clone(), true, SignUpPolicy::Invite);
     let here = session(&db, id).await;
     let elsewhere = session(&db, id).await;
+    let agent = super::mcp::pat(&db, &here, AccessTokenScope::Read).await;
     let change = async |current: &str, new: &str| {
         app.as_user(&here)
             .post(
@@ -1190,10 +1204,14 @@ async fn changing_a_password_keeps_this_browser_and_signs_out_the_others(db: PgP
         app.as_user(&elsewhere).get("/api/me").await.code(),
         "session_expired"
     );
+    // Every other place is signed out, agents included.
     assert_eq!(
-        outbox.to("alice@acme.io").last().unwrap().kind,
-        "password_changed"
+        initialize(&app, &agent).await.status,
+        StatusCode::UNAUTHORIZED
     );
+    let notice = outbox.to("alice@acme.io").last().unwrap().clone();
+    assert_eq!(notice.kind, "password_changed");
+    assert!(notice.text.contains("revoked too"), "{}", notice.text);
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

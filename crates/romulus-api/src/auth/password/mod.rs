@@ -63,7 +63,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
 
 use self::{events::Event, links::NewLink};
-use super::CurrentUser;
+use super::{CurrentUser, access_tokens};
 use crate::{
     ApiError, ApiResult, AppState,
     config::SignUpPolicy,
@@ -1064,8 +1064,9 @@ async fn reset(
     .await?;
     let ended = end_sessions(&mut tx, user_id, None).await?;
     // Whoever had a device of this account (and maybe the old password)
-    // starts from nothing too.
+    // starts from nothing too, and so do the agents its tokens let in.
     forget_devices(&mut tx, user_id, None).await?;
+    let tokens = access_tokens::revoke_all(&mut tx, user_id).await?;
     throttle::clear(&mut *tx, &link.email).await?;
     events::record(
         &mut *tx,
@@ -1073,7 +1074,11 @@ async fn reset(
             .user(Some(user_id))
             .email(&link.email)
             .ip(ip)
-            .details(json!({ "first": link.first_password, "sessions_ended": ended.len() })),
+            .details(json!({
+                "first": link.first_password,
+                "sessions_ended": ended.len(),
+                "access_tokens_revoked": tokens,
+            })),
     )
     .await?;
     tx.commit().await?;
@@ -1084,6 +1089,7 @@ async fn reset(
         state.mailer.send(letters::password_changed(
             &link.email,
             &state.config.public_url,
+            tokens,
         ));
     }
     let jar = super::start_session(&state, jar, user_id).await?;
@@ -1184,13 +1190,15 @@ async fn change(
     let mut ended = end_sessions(&mut tx, user.id, current.as_deref()).await?;
     let device = device_hash(&state.config, &jar);
     forget_devices(&mut tx, user.id, device.as_deref()).await?;
+    // Signed out everywhere else: agents too.
+    let tokens = access_tokens::revoke_all(&mut tx, user.id).await?;
     events::record(
         &mut *tx,
         Event::new(AuthEventKind::PasswordChanged)
             .user(Some(user.id))
             .email(&account.email)
             .ip(ip)
-            .details(json!({ "sessions_ended": ended.len() })),
+            .details(json!({ "sessions_ended": ended.len(), "access_tokens_revoked": tokens })),
     )
     .await?;
     tx.commit().await?;
@@ -1202,6 +1210,7 @@ async fn change(
     state.mailer.send(letters::password_changed(
         &account.email,
         &state.config.public_url,
+        tokens,
     ));
     let jar = super::start_session(&state, jar, user.id).await?;
     let jar = remember_device(&state, jar, user.id).await?;
