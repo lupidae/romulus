@@ -3,8 +3,8 @@
 //! role, the person's access signed by the API, reviewers' shorter
 //! deadline), for one run: its statements' columns and first rows, then the
 //! session ends (its transaction rolled back). Limited and recorded like a
-//! console run (the person's rate and runs in flight; the shared history),
-//! so it is a read, as the console is. The MCP endpoint's
+//! console run (the person's rate and runs in flight, the organization's
+//! playground hours; the shared history), so it is a read, as the console is. The MCP endpoint's
 //! `playground_query` goes through here.
 
 use std::time::Duration;
@@ -91,6 +91,7 @@ pub struct QueryStatement {
     request_body = PlaygroundQuery,
     responses(
         (status = 200, body = QueryResult),
+        (status = 402, description = "`plan_limit`: the organization used its playground hours (hosted billing)", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`playground_not_ready`, `playground_expired`", body = ErrorBody),
         (status = 413, body = ErrorBody),
@@ -114,6 +115,9 @@ pub(super) async fn query(
     let row = find(&state.db, &database, id).await?;
     ready(&row)?;
     let backend = state.playgrounds.host.backend()?;
+    // A run starts a stopped playground: not past the organization's
+    // playground hours, as in the console.
+    crate::billing::hours::check(&state, member.org.id).await?;
     state.limits.playground_console.check(member.user.id)?;
     let Some(_counted) = state.playgrounds.start_run(member.user.id) else {
         return Err(ApiError::Conflict {

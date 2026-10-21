@@ -206,8 +206,9 @@ fn explain(failure: &Failure) -> String {
              get_database its drafts.",
         ),
         "plan_limit" => Some(
-            "The organization's plan does not allow more of this. An admin can change the \
-             plan in the organization's settings; tell your person.",
+            "Nothing was changed: the organization's plan does not allow more of this. An \
+             admin can change the plan on the organization's Billing page (Settings, then \
+             Billing); tell your person rather than retrying.",
         ),
         "rate_limited" => Some("Wait the time it says, then try again."),
         "playground_limit" | "playground_host_full" | "too_many_tokens" => {

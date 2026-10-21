@@ -6,12 +6,14 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
-use romulus_api::{domain::AccessTokenScope, token};
+use chrono::Utc;
+use romulus_api::{billing::hours, domain::AccessTokenScope, token};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
+    billing,
     harness::{ORIGIN, Session, Team, TestApp, TestResponse, database, member, org, user},
     live::{Client, serve, version},
     migration_tests, playgrounds,
@@ -741,6 +743,60 @@ async fn onboarding_creates_a_database_its_first_version_and_a_ci_token(db: PgPo
         .await
         .json();
     assert_eq!(shown["events"][0]["action"], "agent_action");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn plan_limits_are_tool_errors_saying_what_lifts_them(db: PgPool) {
+    // Hosted billing on, acme on the Free plan: one database.
+    let billed = billing::billed(&db).await;
+    let mcp = Mcp::new(
+        &billed.app,
+        pat(&db, &billed.team.developer, AccessTokenScope::Write).await,
+    );
+    mcp.ok("create_database", json!({ "org": "acme", "name": "First" }))
+        .await;
+    let refused = mcp
+        .refused(
+            "create_database",
+            json!({ "org": "acme", "name": "Second" }),
+        )
+        .await;
+    assert!(refused.contains("(plan_limit)"), "{refused}");
+    assert!(refused.contains("Starter keeps 3 databases"), "{refused}");
+    assert!(refused.contains("Billing page"), "{refused}");
+    let listed = mcp.ok("list_databases", json!({ "org": "acme" })).await;
+    assert!(
+        listed.contains("First") && !listed.contains("Second"),
+        "{listed}"
+    );
+
+    // The month's playground hours used up: a query would start the
+    // playground, so it is refused, as in the console.
+    let shop = database(&db, billed.team.org, "shop").await;
+    version(&db, shop, 1, playgrounds::V1, json!({})).await;
+    let built = mcp
+        .ok(
+            "create_playground",
+            json!({ "org": "acme", "database": "shop" }),
+        )
+        .await;
+    let playground = id_after(&built, "Playground ");
+    let query = json!({ "playground": playground.to_string(), "sql": "SELECT 1" });
+    mcp.ok("playground_query", query.clone()).await;
+    let now = Utc::now();
+    let minute = now - chrono::Duration::seconds(60);
+    hours::look(&billed.app.state, minute, now).await.unwrap();
+    sqlx::query!(
+        "UPDATE playground_usage SET seconds = 7190 WHERE org_id = $1",
+        billed.team.org
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    hours::look(&billed.app.state, minute, now).await.unwrap();
+    let refused = mcp.refused("playground_query", query).await;
+    assert!(refused.contains("(plan_limit)"), "{refused}");
+    assert!(refused.contains("hours of playgrounds"), "{refused}");
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

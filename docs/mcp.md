@@ -181,3 +181,4 @@ metadata there and resolve them to the same identity personal tokens do.
 | 429 | too many requests with this token: wait the `Retry-After` seconds |
 | a tool answers "forbidden" | your role in that organization does not allow it |
 | a tool answers "read_only_token" | the token is read-only: create one with write access |
+| a tool answers "plan_limit" | the organization's plan does not allow more (databases, versions, playground hours…): the answer says which plan does; an admin changes it on the organization's Billing page |
