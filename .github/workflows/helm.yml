@@ -9,6 +9,8 @@ name: Helm
 #   e2e      by hand (workflow_dispatch, e2e: true): a k3d cluster, install,
 #            upgrade, restore, uninstall (deploy/helm/test/e2e.sh), on the
 #            images the Images workflow published for the dispatched commit.
+#            On amd64 only: the arm64 images are proven by the Self-host
+#            workflow's arm64 job (the same images, under compose).
 #   publish  a release tag vX.Y.Z (RELEASING.md): Chart.yaml must say X.Y.Z
 #            (version and appVersion); it waits for the Images workflow to
 #            publish X.Y.Z from this commit, then pushes the chart to
@@ -129,18 +131,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # A chart whose images do not exist would install nothing: wait until
-      # the Images workflow (the same tag) has pushed X.Y.Z of each, built
-      # from this commit (its revision label), or stop when that run fails.
+      # the Images workflow (the same tag) has pushed X.Y.Z of each as a
+      # multi-arch list, linux/amd64 and linux/arm64 both built from this
+      # commit (their revision labels), or stop when that run fails.
       - name: Wait for the release's images
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           REGISTRY: ${{ steps.meta.outputs.registry }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          revision() {
+          # "amd64=<sha> arm64=<sha>" for a multi-arch list; less for anything else.
+          revisions() {
             docker buildx imagetools inspect "$REGISTRY/$1" --format '{{json .Image}}' 2>/dev/null |
-              jq -r 'if has("linux/amd64") then .["linux/amd64"] else . end
-                     | .config.Labels["org.opencontainers.image.revision"] // empty'
+              jq -r '[to_entries[] | select(.key | test("^linux/(amd64|arm64)"))
+                      | "\(.key | split("/")[1])=\(.value.config.Labels["org.opencontainers.image.revision"] // "")"]
+                     | sort | join(" ")' 2>/dev/null || true
           }
           images="romulus-api:$VERSION romulus-sandbox:$VERSION romulus-sandbox:$VERSION-pg15
                   romulus-sandbox:$VERSION-pg16 romulus-sandbox:$VERSION-pg18"
@@ -149,7 +154,7 @@ jobs:
           while :; do
             missing=""
             for image in $images; do
-              [ "$(revision "$image")" = "$GITHUB_SHA" ] || missing="$missing $image"
+              [ "$(revisions "$image")" = "amd64=$GITHUB_SHA arm64=$GITHUB_SHA" ] || missing="$missing $image"
             done
             if [ -z "$missing" ]; then
               echo "all published from $GITHUB_SHA"

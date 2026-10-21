@@ -11,8 +11,9 @@ Playgrounds are not supported on Kubernetes yet ([why](#playgrounds)).
 
 ## Requirements
 
-- **Kubernetes 1.30 or later**, nodes on **x86-64** (the images are
-  published for amd64 only).
+- **Kubernetes 1.30 or later**, nodes on **x86-64 or arm64** (every image
+  is published for both under the same tags; a node pulls its own, so a
+  mixed cluster works too).
 - **Helm 3.14 or later**, or Helm 4.
 - **A default StorageClass** (or name one): the database and the dumps
   live on PersistentVolumeClaims, ReadWriteOnce.

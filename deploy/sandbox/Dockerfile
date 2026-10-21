@@ -1,7 +1,9 @@
 # The sandbox Postgres that compiles draft SQL (crates/romulus-sandbox), one
 # image per supported major: `--build-arg PG_MAJOR=15` (15, 16, 17, 18; 17
 # by default). A database compiles on its own major's sandbox
-# (docs/MVP.md, "Several Postgres majors").
+# (docs/MVP.md, "Several Postgres majors"). Built for linux/amd64 and
+# linux/arm64 (images.yml): the bases are multi-arch, PGDG builds the
+# packages below for both.
 #
 # The parser is one for every major: the `pg_query` crate (6.2.1 → libpg_query
 # from PostgreSQL 17.7). Older majors' grammar is a subset of it (the server

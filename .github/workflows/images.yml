@@ -11,6 +11,12 @@ name: Images
 #                       under `<tag>-pg<major>`
 #   romulus-play        Dockerfile, target play: the playground runner and service
 #   romulus-playground  deploy/playground: a playground's Postgres (17)
+# Each is built for linux/amd64 and linux/arm64, natively on a runner of
+# that architecture (no emulation: Rust under QEMU is far too slow), and
+# pushed by digest; then one manifest list per image gets every tag, so
+# `docker pull` on either architecture picks its own. An image whose build
+# failed on either architecture gets no tag at all, never a tag for one
+# architecture only.
 # Each is tagged with the full sha of the commit it was built from, and
 # `main` on main. A pull request from this repository pushes its head's sha
 # as well, so a branch can be deployed before it merges; `main` only ever
@@ -40,15 +46,64 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  image:
-    name: ${{ matrix.name }}${{ matrix.suffix }}
+  # The commit and its tags, once for every image (a tag that is not a
+  # release's stops everything before anything builds).
+  meta:
+    name: commit and tags
     # A fork's pull request gets a read-only token: it could not push.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.tags.outputs.sha }}
+      tags: ${{ steps.tags.outputs.tags }}
+    steps:
+      # A pull request's own head, not the merge commit GitHub makes: the tag
+      # must name a commit that exists on the branch.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # The tags, without the image or a major's suffix: the manifest job
+      # adds both.
+      - name: Tags
+        id: tags
+        run: |
+          sha=$(git rev-parse HEAD)
+          tags=$sha
+          case $GITHUB_REF in
+          refs/heads/main) tags="$tags main" ;;
+          refs/tags/v*)
+            version=${GITHUB_REF_NAME#v}
+            if [[ $version =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+              line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+              tags="$tags $version"
+              # The newest X.Y.Z among the release tags matching $1.
+              git fetch --quiet --force --tags origin
+              newest() { git tag -l "$1" | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' | sort -V | tail -n 1; }
+              if [ "$(newest "v$line.*")" = "$version" ]; then tags="$tags $line"; fi
+              if [ "$(newest 'v*')" = "$version" ]; then tags="$tags latest"; fi
+            elif [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+              tags="$tags $version"
+            else
+              echo "::error::$GITHUB_REF_NAME is not a release tag (vX.Y.Z, or vX.Y.Z-rc.1)"
+              exit 1
+            fi
+            ;;
+          esac
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  # One image on one architecture, pushed by digest only (no tag yet).
+  image:
+    name: ${{ matrix.image.name }}${{ matrix.image.suffix }} (${{ matrix.arch }})
+    needs: meta
+    # GitHub's arm64 runners (free for public repositories) build arm64.
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
+        arch: [amd64, arm64]
+        image:
           - name: romulus-api
             context: .
             file: Dockerfile
@@ -79,41 +134,9 @@ jobs:
             context: deploy/playground
             file: deploy/playground/Dockerfile
     steps:
-      # A pull request's own head, not the merge commit GitHub makes: the tag
-      # must name a commit that exists on the branch.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Tags
-        id: tags
-        run: |
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.name }}"
-          suffix="${{ matrix.suffix }}"
-          sha=$(git rev-parse HEAD)
-          tags="$image:$sha$suffix"
-          case $GITHUB_REF in
-          refs/heads/main) tags="$tags,$image:main$suffix" ;;
-          refs/tags/v*)
-            version=${GITHUB_REF_NAME#v}
-            if [[ $version =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
-              line="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-              tags="$tags,$image:$version$suffix"
-              # The newest X.Y.Z among the release tags matching $1.
-              git fetch --quiet --force --tags origin
-              newest() { git tag -l "$1" | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' | sort -V | tail -n 1; }
-              if [ "$(newest "v$line.*")" = "$version" ]; then tags="$tags,$image:$line$suffix"; fi
-              if [ "$(newest 'v*')" = "$version" ]; then tags="$tags,$image:latest$suffix"; fi
-            elif [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
-              tags="$tags,$image:$version$suffix"
-            else
-              echo "::error::$GITHUB_REF_NAME is not a release tag (vX.Y.Z, or vX.Y.Z-rc.1)"
-              exit 1
-            fi
-            ;;
-          esac
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          ref: ${{ needs.meta.outputs.sha }}
 
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -122,28 +145,120 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Repository
+        id: repository
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image.name }}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v7
+        id: build
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          target: ${{ matrix.target }}
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.file }}
+          target: ${{ matrix.image.target }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ steps.repository.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           # The API compiles in the commit and the repository it was built
           # from: it links that source (AGPL-3.0, section 13). The other
           # images ignore them.
           build-args: |
-            ${{ matrix.build-args }}
-            ROMULUS_COMMIT=${{ steps.tags.outputs.sha }}
+            ${{ matrix.image.build-args }}
+            ROMULUS_COMMIT=${{ needs.meta.outputs.sha }}
             ROMULUS_SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
           # The source label links the package to this repository, so it
           # inherits the repository's access (deploy pulls with a read:packages PAT).
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.tags.outputs.sha }}
-          cache-from: type=gha,scope=${{ matrix.name }}${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}${{ matrix.suffix }}
+            org.opencontainers.image.revision=${{ needs.meta.outputs.sha }}
+          # A cache per image and architecture: neither evicts the other's layers.
+          cache-from: type=gha,scope=${{ matrix.image.name }}${{ matrix.image.suffix }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}${{ matrix.image.suffix }}-${{ matrix.arch }}
 
-      - name: Summary
-        run: echo "Pushed \`${{ steps.tags.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"
+      # The manifest job finds it as digest_<image><suffix>_<arch>/<arch>.
+      - name: Keep the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest: '$DIGEST'"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/digest"
+          echo "$DIGEST" > "$RUNNER_TEMP/digest/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest_${{ matrix.image.name }}${{ matrix.image.suffix }}_${{ matrix.arch }}
+          path: ${{ runner.temp }}/digest/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # Every tag of one image, on a manifest list of both architectures.
+  manifest:
+    name: tag ${{ matrix.name }}${{ matrix.suffix }}
+    needs: [meta, image]
+    # Each image on its own: one whose build failed elsewhere still gets
+    # its tags; this one's two digests are checked below.
+    if: ${{ !cancelled() && needs.meta.result == 'success' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One per image of the `image` job's matrix.
+        include:
+          - name: romulus-api
+          - name: romulus-sandbox
+          - name: romulus-sandbox
+            suffix: -pg15
+          - name: romulus-sandbox
+            suffix: -pg16
+          - name: romulus-sandbox
+            suffix: -pg18
+          - name: romulus-play
+          - name: romulus-playground
+    steps:
+      # `_` ends the name: romulus-sandbox_* is not romulus-sandbox-pg15_*.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest_${{ matrix.name }}${{ matrix.suffix }}_*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag both architectures
+        env:
+          NAME: ${{ matrix.name }}
+          SUFFIX: ${{ matrix.suffix }}
+          SHA: ${{ needs.meta.outputs.sha }}
+          TAGS: ${{ needs.meta.outputs.tags }}
+          SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$NAME"
+          sources=()
+          for arch in amd64 arm64; do
+            file=$RUNNER_TEMP/digests/$arch
+            if [ ! -s "$file" ]; then
+              echo "::error::$NAME$SUFFIX has no $arch build: no tag for it"
+              exit 1
+            fi
+            sources+=("$image@$(cat "$file")")
+          done
+          tags=()
+          for tag in $TAGS; do tags+=(-t "$image:$tag$SUFFIX"); done
+          # The labels are each image's; GitHub's package page reads the
+          # list's annotations.
+          docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:org.opencontainers.image.source=$SOURCE" \
+            --annotation "index:org.opencontainers.image.revision=$SHA" \
+            "${sources[@]}"
+          platforms=$(docker buildx imagetools inspect --raw "$image:$SHA$SUFFIX" |
+            jq -r '[.manifests[].platform | select(.os == "linux") | .architecture] | unique | join(" ")')
+          if [ "$platforms" != "amd64 arm64" ]; then
+            echo "::error::$image:$SHA$SUFFIX lists linux/{$platforms}, not amd64 and arm64"
+            exit 1
+          fi
+          {
+            echo "Pushed (linux/amd64, linux/arm64):"
+            for tag in $TAGS; do echo "- \`$image:$tag$SUFFIX\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -36,7 +36,9 @@ version names both: the chart's version is the release's.
 
 - **Images** (`.github/workflows/images.yml`), to `ghcr.io/lupidae`:
   `romulus-api`, `romulus-sandbox` (and its `-pg15`, `-pg16`, `-pg18`
-  variants), `romulus-play`, `romulus-playground`, each as:
+  variants), `romulus-play`, `romulus-playground`, each built for
+  linux/amd64 and linux/arm64 (natively, one runner per architecture) and
+  tagged as one multi-arch list, as:
   - `X.Y.Z`;
   - `X.Y`, when `X.Y.Z` is the newest release of `X.Y`;
   - `latest`, when it is the newest release of all. A fix released for an
@@ -49,12 +51,12 @@ version names both: the chart's version is the release's.
 - **The chart** (`.github/workflows/helm.yml`, job `publish`): lint; then
   it checks that Chart.yaml says `X.Y.Z`, waits (up to 2 hours) for the
   Images workflow to publish `X.Y.Z` of romulus-api and romulus-sandbox
-  built from the tag's commit, and pushes
+  built from the tag's commit, both architectures, and pushes
   `oci://ghcr.io/lupidae/charts/romulus`, version `X.Y.Z`. If the Images
   run fails, the publish stops too: fix it, then re-run both runs' failed
   jobs on the same tag.
 
-Check:
+Check (each lists linux/amd64 and linux/arm64):
 
 ```bash
 docker buildx imagetools inspect ghcr.io/lupidae/romulus-api:X.Y.Z

@@ -59,7 +59,7 @@ with unlimited members.
 
 ### Run it on your own server
 
-One Linux host with Docker and 4 GB of memory:
+One Linux host (x86-64 or arm64) with Docker and 4 GB of memory:
 
 ```bash
 git clone https://github.com/lupidae/romulus.git

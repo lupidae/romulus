@@ -328,12 +328,14 @@ check_host() {
     fi
     docker info >/dev/null 2>&1 ||
         die "cannot reach the Docker daemon: is it running, and may this user use it (the docker group, or sudo)?"
-    local registry
+    local registry arch
     registry=$(pick "$OPT_REGISTRY" ROMULUS_REGISTRY)
-    case $(uname -m) in
-    arm64 | aarch64)
+    arch=$(uname -m)
+    case $arch in
+    x86_64 | amd64 | aarch64 | arm64) ;;
+    *)
         if [ -z "$registry" ] || [ "$registry" = "$DEFAULT_REGISTRY" ]; then
-            warn "the published images are for amd64: on this arm64 host they run emulated, slowly, if at all"
+            warn "the published images are for amd64 and arm64: on this $arch host they run emulated, slowly, if at all"
         fi
         ;;
     esac

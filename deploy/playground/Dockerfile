@@ -13,6 +13,7 @@
 #
 # The same image runs the runner's file helper (`play-files`: create, copy,
 # delete a playground's directories), as root, with no network.
+# Built for linux/amd64 and linux/arm64, as deploy/sandbox.
 FROM postgres:17.11
 
 ARG POSTGIS_VERSION=3.6.4+dfsg-2.pgdg13+1

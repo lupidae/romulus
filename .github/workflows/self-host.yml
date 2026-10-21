@@ -1,10 +1,18 @@
 name: Self-host
 
 # The self-host bundle end to end (deploy/self-host/test/install-test.sh):
-# install.sh --non-interactive against images built here, then install
-# again, backup, restore, upgrade and uninstall. Nothing is pushed: the
-# images are loaded into this runner's Docker as local/romulus-api:test and
-# local/romulus-sandbox:test (ROMULUS_REGISTRY=local, ROMULUS_VERSION=test).
+# install.sh --non-interactive, then install again, sign in, a database and
+# a pushed version, backup, restore, upgrade and uninstall.
+#   amd64  images built here, nothing pushed: loaded into this runner's
+#          Docker as local/romulus-api:test and local/romulus-sandbox:test
+#          (ROMULUS_REGISTRY=local, ROMULUS_VERSION=test). Forks' pull
+#          requests too.
+#   arm64  the images the Images workflow published for this commit
+#          (ghcr.io/<owner>/romulus-*:<sha>, pulled from the multi-arch
+#          list), on GitHub's arm64 runner, with playgrounds: gVisor and an
+#          XFS volume set up as docs/self-host/playgrounds.md says, then a
+#          playground built and queried. Not on forks' pull requests (the
+#          Images workflow publishes nothing for them).
 on:
   pull_request:
     paths:
@@ -13,6 +21,8 @@ on:
       - "migrations/**"
       - "crates/romulus-api/**"
       - ".github/workflows/self-host.yml"
+      # As the Images workflow ignores them: the arm64 job needs its images.
+      - "!**/*.md"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +34,7 @@ concurrency:
 
 jobs:
   install:
-    name: install.sh end to end
+    name: install.sh end to end (amd64)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -47,8 +57,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: local/romulus-api:test
-          cache-from: type=gha,scope=romulus-api
-          cache-to: type=gha,mode=max,scope=romulus-api
+          cache-from: type=gha,scope=romulus-api-amd64
+          cache-to: type=gha,mode=max,scope=romulus-api-amd64
 
       - name: Build the sandbox image (Postgres 17)
         uses: docker/build-push-action@v7
@@ -59,11 +69,171 @@ jobs:
           load: true
           tags: local/romulus-sandbox:test
           build-args: PG_MAJOR=17
-          cache-from: type=gha,scope=romulus-sandbox
-          cache-to: type=gha,mode=max,scope=romulus-sandbox
+          cache-from: type=gha,scope=romulus-sandbox-amd64
+          cache-to: type=gha,mode=max,scope=romulus-sandbox-amd64
 
-      - name: Install, re-install, backup, restore, upgrade, uninstall
+      - name: Install, re-install, push, backup, restore, upgrade, uninstall
         env:
           ROMULUS_REGISTRY: local
           ROMULUS_VERSION: test
+        run: deploy/self-host/test/install-test.sh
+
+  # Waits on an amd64 runner, so no arm64 runner idles while the Images
+  # workflow builds on them.
+  published:
+    name: this commit's images (arm64)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # A cold arm64 build of the Rust images takes most of an hour.
+    timeout-minutes: 130
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    outputs:
+      sha: ${{ steps.wait.outputs.sha }}
+      registry: ${{ steps.wait.outputs.registry }}
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Until <image>:<sha> lists linux/arm64 built from this commit (its
+      # revision label), for each image the test runs; stops when the Images
+      # run for this commit failed, or never started.
+      - name: Wait for the Images workflow
+        id: wait
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          registry=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          arm64_revision() {
+            docker buildx imagetools inspect "$registry/$1:$SHA" --format '{{json .Image}}' 2>/dev/null |
+              jq -r 'to_entries[] | select(.key | test("^linux/arm64"))
+                     | .value.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null || true
+          }
+          deadline=$((SECONDS + 7200))
+          no_run_deadline=$((SECONDS + 600))
+          after_success=0
+          while :; do
+            missing=""
+            for name in romulus-api romulus-sandbox romulus-play romulus-playground; do
+              [ "$(arm64_revision "$name")" = "$SHA" ] || missing="$missing $name"
+            done
+            if [ -z "$missing" ]; then
+              echo "published for linux/arm64 from $SHA"
+              break
+            fi
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow images.yml --commit "$SHA" --limit 1 \
+              --json status,conclusion,url --jq '.[0] // empty | "\(.status) \(.conclusion) \(.url)"' || true)
+            case $run in
+            "completed success "*)
+              after_success=$((after_success + 1))
+              if [ "$after_success" -gt 3 ]; then
+                echo "::error::the Images run succeeded but did not publish:$missing ($run)"
+                exit 1
+              fi
+              ;;
+            completed\ *)
+              echo "::error::the Images run for $SHA did not succeed: $run"
+              exit 1
+              ;;
+            "")
+              if [ "$SECONDS" -ge "$no_run_deadline" ]; then
+                echo "::error::no Images run for $SHA: the arm64 test runs on the images it publishes"
+                exit 1
+              fi
+              ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::still not published after 2 hours:$missing"
+              exit 1
+            fi
+            echo "waiting for:$missing (${run:-no Images run yet})"
+            sleep 60
+          done
+
+  install-arm64:
+    name: install.sh end to end (arm64, playgrounds)
+    needs: published
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    env:
+      REGISTRY: ${{ needs.published.outputs.registry }}
+      SHA: ${{ needs.published.outputs.sha }}
+    steps:
+      # The commit the images were built from, so install.sh and
+      # compose.yaml are theirs.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.published.outputs.sha }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # As install.sh would (it runs with --no-pull here): the multi-arch
+      # list must give this host the arm64 build.
+      - name: Pull the images
+        run: |
+          for name in romulus-api romulus-sandbox romulus-play romulus-playground; do
+            docker pull -q "$REGISTRY/$name:$SHA"
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$REGISTRY/$name:$SHA")
+            if [ "$platform" != linux/arm64 ]; then
+              echo "::error::$name:$SHA pulled as $platform, not linux/arm64"
+              exit 1
+            fi
+            echo "$name:$SHA is $platform"
+          done
+
+      # docs/self-host/playgrounds.md, "Set up the host", step by step.
+      - name: The playground host (gVisor, an XFS volume)
+        run: |
+          sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" \
+            | sudo tee /etc/apt/sources.list.d/gvisor.list >/dev/null
+          sudo apt-get update && sudo apt-get install -y runsc
+          runsc --version
+
+          # The two runtimes, merged into what the runner's daemon.json holds.
+          sudo mkdir -p /etc/docker
+          [ -s /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+          jq '.runtimes += {
+                "runsc": {"path": "/usr/bin/runsc"},
+                "runsc-uds": {"path": "/usr/bin/runsc", "runtimeArgs": ["--host-uds=create"]}
+              }' /etc/docker/daemon.json >"$RUNNER_TEMP/daemon.json"
+          sudo cp "$RUNNER_TEMP/daemon.json" /etc/docker/daemon.json
+          sudo systemctl reload docker
+          for _ in $(seq 1 30); do
+            docker info --format '{{json .Runtimes}}' | grep -q '"runsc-uds"' && break
+            sleep 1
+          done
+          docker info --format '{{json .Runtimes}}'
+
+          sudo apt-get install -y xfsprogs
+          sudo truncate -s 12G /var/lib/romulus-play.img
+          sudo mkfs.xfs -m reflink=1 /var/lib/romulus-play.img
+          sudo mkdir -p /var/lib/romulus-play
+          echo '/var/lib/romulus-play.img /var/lib/romulus-play xfs loop,prjquota,noatime 0 0' | sudo tee -a /etc/fstab
+          sudo mount /var/lib/romulus-play
+          findmnt -no FSTYPE,OPTIONS --target /var/lib/romulus-play
+
+          # gVisor runs a container at all on this host.
+          docker run --rm --runtime runsc --network none --entrypoint uname "$REGISTRY/romulus-playground:$SHA" -m
+
+      - name: Install (playgrounds on), push, build a playground, backup, restore, upgrade, uninstall
+        env:
+          ROMULUS_REGISTRY: ${{ needs.published.outputs.registry }}
+          ROMULUS_VERSION: ${{ needs.published.outputs.sha }}
+          ROMULUS_TEST_PLAY_DIR: /var/lib/romulus-play
         run: deploy/self-host/test/install-test.sh
