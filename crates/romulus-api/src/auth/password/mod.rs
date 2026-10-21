@@ -1067,6 +1067,7 @@ async fn reset(
     // starts from nothing too, and so do the agents its tokens let in.
     forget_devices(&mut tx, user_id, None).await?;
     let tokens = access_tokens::revoke_all(&mut tx, user_id).await?;
+    let apps = crate::oauth::apps::revoke_all(&mut tx, user_id).await?;
     throttle::clear(&mut *tx, &link.email).await?;
     events::record(
         &mut *tx,
@@ -1078,6 +1079,7 @@ async fn reset(
                 "first": link.first_password,
                 "sessions_ended": ended.len(),
                 "access_tokens_revoked": tokens,
+                "app_grants_revoked": apps,
             })),
     )
     .await?;
@@ -1192,13 +1194,18 @@ async fn change(
     forget_devices(&mut tx, user.id, device.as_deref()).await?;
     // Signed out everywhere else: agents too.
     let tokens = access_tokens::revoke_all(&mut tx, user.id).await?;
+    let apps = crate::oauth::apps::revoke_all(&mut tx, user.id).await?;
     events::record(
         &mut *tx,
         Event::new(AuthEventKind::PasswordChanged)
             .user(Some(user.id))
             .email(&account.email)
             .ip(ip)
-            .details(json!({ "sessions_ended": ended.len(), "access_tokens_revoked": tokens })),
+            .details(json!({
+                "sessions_ended": ended.len(),
+                "access_tokens_revoked": tokens,
+                "app_grants_revoked": apps,
+            })),
     )
     .await?;
     tx.commit().await?;

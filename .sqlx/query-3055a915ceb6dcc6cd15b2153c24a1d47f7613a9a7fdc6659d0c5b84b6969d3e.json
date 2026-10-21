@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_codes SET grant_id = $2 WHERE code_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3055a915ceb6dcc6cd15b2153c24a1d47f7613a9a7fdc6659d0c5b84b6969d3e"
+}

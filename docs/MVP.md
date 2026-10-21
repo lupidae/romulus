@@ -1086,7 +1086,7 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
   a password reset or change revokes them all. It is accepted at `/api/mcp` only; the endpoint
   never accepts the session cookie, and an `Origin` other than romulus's is refused. Limits run
   before any lookup where they can (per client for tokens that fail, per token, per person).
-  MCP's OAuth flow (connecting by signing in) is left for later: the 401 challenge is the seam.
+  Connecting by signing in followed (task OAUTH, next section).
 - **One code path for permissions.** Every tool calls the REST handlers the web app calls,
   through the API's own router, as the token's person (a request extension only the server
   sets, which `CurrentUser` and `Member` resolve). Roles, validation, rate limits, plan limits
@@ -1123,11 +1123,11 @@ Policy promise the same. All of it lives in the API's `retention` module.
   would go). Self-service deletion is for later: an endpoint calling the same
   `Deleter::delete_account` for the signed-in person.
 - **An account** goes with its sessions, password, devices, links,
-  personal access tokens, memberships, approvals and unread markers, and with
-  every organization it is the only member of. All of it under the account's
-  row lock, planned and checked again there: a sign-in or a token's use
-  meanwhile waits, and an inactive account used is kept. Its single sign-on
-  user is deleted at Zitadel under that lock, before the rows
+  personal access tokens, connected apps, memberships, approvals and unread
+  markers, and with every organization it is the only member of. All of it
+  under the account's row lock, planned and checked again there: a sign-in
+  or a token's use meanwhile waits, and an inactive account used is kept.
+  Its single sign-on user is deleted at Zitadel under that lock, before the rows
   (`ROMULUS_ZITADEL_TOKEN`, a machine user the provisioner makes with
   IAM_USER_MANAGER; without it the command prints the user to delete in the
   console, and the log warns with its id; rows failing after Zitadel's delete
@@ -1170,8 +1170,8 @@ Policy promise the same. All of it lives in the API's `retention` module.
   on; needs mail, and `ROMULUS_ZITADEL_TOKEN` with single sign-on):
   `users.last_seen_at` moves (`retention::activity::account_used`, at most
   hourly) at every sign-in and with the use of a session, of a personal
-  access token, or of an API token the account made (CI pushing to its
-  database); OAuth tokens will call the same. The migration counts those
+  access token or a connected app's OAuth token, or of an API token the
+  account made (CI pushing to its database). The migration counts those
   already recorded. At 3 years less 30 days the address is emailed the date;
   the account is deleted 30 days later at the earliest, if unused since
   (using it clears the notice). The notice goes once: claimed by an
@@ -1195,6 +1195,46 @@ Policy promise the same. All of it lives in the API's `retention` module.
   `users.inactivity_notice_at`, `inactivity_failures`, `inactivity_retry_at`;
   `audit_events.database_name`, its `database_id` `ON DELETE SET NULL`;
   `users.updated_at` moves with identity columns only.
+
+## Agents connect by signing in: OAuth (decided 2026-10-21, built: task OAUTH)
+
+A person connects their agent with its URL alone; the agent opens the browser, they sign in
+to romulus as usual and approve it (MCP's authorization flow, OAuth 2.1). What was decided:
+
+- **romulus's API is the authorization server of its own MCP resource.** Zitadel stays the
+  identity provider only (it has no dynamic client registration, and the MCP resource is
+  romulus's). The endpoints are under `/api/oauth/…` (register, authorize, token, revoke) so
+  the existing proxying holds; the discovery documents are at the origin's
+  `/.well-known/oauth-protected-resource/api/mcp` (none at the root: it would describe the
+  origin, RFC 9728 3.3) and `/.well-known/oauth-authorization-server`, which the homepage's
+  Function proxies too. The
+  issuer is the public URL's origin; tokens are for `<public URL>/api/mcp` only (RFC 8707).
+- **Dynamic client registration, open, public clients only.** Limited per client address;
+  no client secret (PKCE protects the code); https redirect URIs, or loopback http on any
+  port (RFC 8252); nothing unverified is shown but the name the client gave, always next to
+  its redirect URI's host. Clients unused for 30 days with no grant left are deleted. Client
+  ID metadata documents (which Claude prefers when offered) are not served yet: fetching a
+  URL a stranger names is its own piece of work.
+- **romulus never redirects to a client on its own before the person decided.** Clients
+  register themselves, so a refusal sent straight back to a redirect URI would make romulus an
+  open redirect: refusals (PKCE, scope, resource, rate limit) stay on the consent page, which
+  offers "Return to <host>", built and checked again by the API. Only the person's decision
+  (a code, or `access_denied`) goes back by itself.
+- **The consent screen is the web app's** (`/app/oauth/authorize`), after the usual sign-in.
+  The request is kept by the API and bound to the browser that started it by a cookie: a
+  link to someone else's request shows and approves nothing. The person may allow less than
+  asked (read only). Localhost redirects get a warning: any local program can ask. PKCE
+  (S256 only) is required; `state` is not (OAuth 2.1 with PKCE, and some MCP clients omit
+  it): echoed back unchanged when sent.
+- **Tokens are the personal tokens' identity.** Access tokens (`rmls_oat_`, an hour, sha256
+  stored) resolve to the same agent acting as its person, so tools, roles, caps, limits and
+  audit (`agent_action`, with the app's name) are unchanged. Scopes `romulus.read` and
+  `romulus.write` are the tokens' read and write. Refresh tokens (`rmls_ort_`) rotate on
+  every use; a replay, or a code exchanged twice, revokes the whole grant. 30 days unused,
+  90 days at most. A read-only app calling a write tool gets `insufficient_scope` (step-up).
+- **Connected apps** sit next to Access tokens in the account; Disconnect revokes every
+  token of that app at once. A password reset or change disconnects them all, like tokens;
+  deleting an account deletes its grants. The person is emailed when an app connects.
 
 ## Decided
 

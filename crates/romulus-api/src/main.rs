@@ -470,6 +470,10 @@ async fn serve() -> Result<(), MainError> {
     // What a deletion ended, from any process (`romulus-api delete-org`
     // too): drafts closed, sockets of removed members.
     let deletions = romulus_api::retention::live::listen(state.clone());
+    // OAuth: requests nobody decided, spent codes and tokens, grants long
+    // over, clients nobody uses: now, and every hour.
+    let oauth_sweeper =
+        romulus_api::oauth::apps::sweeper(state.db.clone(), romulus_api::oauth::SWEEP_EVERY);
     // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
     let app = app(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
@@ -485,6 +489,7 @@ async fn serve() -> Result<(), MainError> {
     purger.abort();
     retention.abort();
     deletions.abort();
+    oauth_sweeper.abort();
     if let Some(password_sweeper) = password_sweeper {
         password_sweeper.abort();
     }

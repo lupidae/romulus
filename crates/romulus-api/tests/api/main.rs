@@ -29,6 +29,7 @@ mod mcp;
 mod members;
 mod migration;
 mod migration_tests;
+mod oauth;
 mod oidc;
 mod orgs;
 mod passwords;

@@ -1,6 +1,6 @@
 //! Rate limits for endpoints that cost real work: pushes (per API token), SQL
-//! compiles (per person, and per database), MCP requests (per personal access
-//! token). A token bucket per key: a burst, then one more
+//! compiles (per person, and per database), MCP requests (per access token),
+//! OAuth's open endpoints (per client IP, per client). A token bucket per key: a burst, then one more
 //! request per refill period. In memory, like everything per-instance in the
 //! MVP (one API instance); a restart forgets the counts, which only ever
 //! errs on the generous side.
@@ -195,6 +195,23 @@ pub struct Limits {
     /// MCP requests refused for their token, per client (IPv4 address or
     /// IPv6 /48): past the burst, the client is refused before any lookup.
     pub access_token_failures: Limiter<std::net::IpAddr>,
+    /// OAuth client registrations per client IP (`oauth::clients`): open
+    /// to anyone, so counted before anything is read. Generous: a hosted
+    /// agent registers from a few shared addresses for all its users.
+    pub oauth_registrations: Limiter<std::net::IpAddr>,
+    /// Authorization requests started per client IP (each keeps a row).
+    pub oauth_authorizations: Limiter<std::net::IpAddr>,
+    /// Token requests per OAuth client (codes exchanged, refreshes).
+    pub oauth_tokens: Limiter<Uuid>,
+    /// Token requests refused for their code or refresh token
+    /// (`invalid_grant`) per client IP and OAuth client: past the burst,
+    /// that client from that address is refused before any lookup.
+    pub oauth_failures: Limiter<(std::net::IpAddr, Uuid)>,
+    /// The same per client IP alone, much higher: a hosted client serves
+    /// many people from a few addresses.
+    pub oauth_ip_failures: Limiter<std::net::IpAddr>,
+    /// Revocations per client IP.
+    pub oauth_revocations: Limiter<std::net::IpAddr>,
 }
 
 impl Default for Limits {
@@ -215,6 +232,12 @@ impl Default for Limits {
             access_tokens: Limiter::new(60, Duration::from_millis(500)),
             access_token_people: Limiter::new(120, Duration::from_millis(250)),
             access_token_failures: Limiter::new(20, Duration::from_secs(3)),
+            oauth_registrations: Limiter::new(30, Duration::from_secs(6)),
+            oauth_authorizations: Limiter::new(30, Duration::from_secs(2)),
+            oauth_tokens: Limiter::new(20, Duration::from_secs(3)),
+            oauth_failures: Limiter::new(20, Duration::from_secs(3)),
+            oauth_ip_failures: Limiter::new(200, Duration::from_millis(500)),
+            oauth_revocations: Limiter::new(30, Duration::from_secs(2)),
         }
     }
 }

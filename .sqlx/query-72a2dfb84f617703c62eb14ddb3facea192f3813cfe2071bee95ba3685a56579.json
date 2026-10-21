@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.scope AS \"scope: AccessTokenScope\", r.redirect_uri,\n                  r.created_at + make_interval(secs => $3) AS \"expires_at!\",\n                  c.id AS client_id, c.name, c.created_at AS registered_at\n           FROM oauth_requests r JOIN oauth_clients c ON c.id = r.client_id\n           WHERE r.id = $1 AND r.binding_hash = $2\n             AND r.created_at > now() - make_interval(secs => $3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope: AccessTokenScope",
+        "type_info": {
+          "Custom": {
+            "name": "access_token_scope",
+            "kind": {
+              "Enum": [
+                "read",
+                "write"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "oauth_requests",
+            "name": "scope"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "redirect_uri",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "oauth_requests",
+            "name": "redirect_uri"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "expires_at!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "client_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_clients",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "oauth_clients",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "registered_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "oauth_clients",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "72a2dfb84f617703c62eb14ddb3facea192f3813cfe2071bee95ba3685a56579"
+}

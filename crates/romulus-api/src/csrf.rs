@@ -7,8 +7,9 @@
 //! CORS preflight we never grant) and an `Origin` equal to the public URL.
 //!
 //! Requests with `Authorization: Bearer …` (remus, CI, agents) carry no
-//! ambient credential and are exempt, and so is the MCP endpoint, which
-//! only ever takes a personal access token. **Whatever authenticates them must then use the
+//! ambient credential and are exempt, and so are the MCP endpoint, which
+//! only ever takes an access token, and OAuth's registration, token and
+//! revocation endpoints, which take none. **Whatever authenticates them must then use the
 //! bearer token alone and never fall back to the cookie**, or this exemption
 //! becomes a bypass (`auth::CurrentUser` refuses bearer requests).
 //!
@@ -52,10 +53,13 @@ pub async fn guard(
     // The MCP endpoint authenticates by personal access token only, never
     // the cookie (`crate::mcp`): nothing ambient to forge; it answers a
     // request without a token itself (401 with its challenge).
+    // OAuth's registration, token and revocation endpoints read no cookie
+    // either (`crate::oauth`): MCP clients call them as themselves.
     if request.method().is_safe()
         || has_bearer(request.headers())
         || request.uri().path() == WEBHOOK
         || request.uri().path() == crate::mcp::PATH
+        || crate::oauth::OPEN_PATHS.contains(&request.uri().path())
     {
         return Ok(next.run(request).await);
     }

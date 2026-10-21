@@ -2,7 +2,7 @@ import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
-import { DatabaseIcon, KeyIcon, SparksIcon } from "@/components/icons";
+import { AppWindowIcon, DatabaseIcon, KeyIcon, SparksIcon } from "@/components/icons";
 import { AppShell, PageBody } from "@/components/shell/app-shell";
 import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toaster";
@@ -12,9 +12,10 @@ import { requireUser, signOut } from "@/features/auth/session";
 import { readLastOrg } from "@/features/orgs/last-org";
 import { orgsQuery } from "@/features/orgs/queries";
 
-// The signed-in person's own settings (/app/settings/…): their AI agents and
-// access tokens, in every organization at once. The shell keeps the last
-// organization visited in its switcher, so getting back is one click.
+// The signed-in person's own settings (/app/settings/…): their AI agents, the
+// apps they connected and their access tokens, in every organization at once.
+// The shell keeps the last organization visited in its switcher, so getting
+// back is one click.
 export const Route = createFileRoute("/settings")({
   beforeLoad: async ({ context: { queryClient }, location }) => {
     await requireUser(queryClient, location.href);
@@ -38,6 +39,9 @@ function AccountLayout() {
       <SidebarSection label="Your account">
         <SidebarItem asChild icon={<SparksIcon />} label="Connect your agent">
           <Link to="/settings/agent" />
+        </SidebarItem>
+        <SidebarItem asChild icon={<AppWindowIcon />} label="Connected apps">
+          <Link to="/settings/apps" />
         </SidebarItem>
         <SidebarItem asChild icon={<KeyIcon />} label="Access tokens">
           <Link to="/settings/tokens" />

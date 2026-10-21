@@ -22,6 +22,11 @@
 //! token never writes: the MCP endpoint refuses its write tools, and the
 //! identity it lends refuses every unsafe method.
 //!
+//! An OAuth access token (`crate::oauth`, `rmls_oat_`: an app the person
+//! connected by signing in) resolves to the same [`Agent`], its grant
+//! standing for the token ([`TokenKind::App`]): everything above holds for
+//! it too.
+//!
 //! Table: `personal_access_tokens`.
 
 use axum::{
@@ -347,9 +352,21 @@ async fn revoke(
 /// The token a request came with, as the handlers it reaches see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenRef {
+    /// The personal token's id, or the connected app's grant.
     pub id: Uuid,
+    /// The token's name, or the app's (as it registered).
     pub name: String,
     pub scope: AccessTokenScope,
+    pub kind: TokenKind,
+}
+
+/// Which kind of token lets an agent in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind {
+    /// A personal access token (`rmls_pat_`), made by the person.
+    Personal,
+    /// An OAuth access token (`rmls_oat_`) of an app the person connected.
+    App,
 }
 
 impl TokenRef {
@@ -359,9 +376,10 @@ impl TokenRef {
 }
 
 /// A request to the MCP endpoint, authenticated by a personal access token
-/// (`Authorization: Bearer rmls_pat_…`), never by a cookie. Answers 401
-/// `invalid_token` without a live token (unknown, revoked, expired, or its
-/// person gone). Records `last_used_at` (at most once a minute).
+/// (`Authorization: Bearer rmls_pat_…`) or a connected app's OAuth access
+/// token (`rmls_oat_…`), never by a cookie. Answers 401 `invalid_token`
+/// without a live token (unknown, revoked, expired, or its person gone).
+/// Records `last_used_at` (at most once a minute).
 #[derive(Debug, Clone)]
 pub struct Agent {
     pub token: TokenRef,
@@ -369,9 +387,9 @@ pub struct Agent {
     pub user: CurrentUser,
 }
 
-pub const NO_TOKEN: &str = "Authenticate with a personal access token: \
-                            `Authorization: Bearer rmls_pat_…`. Create one in romulus: \
-                            your account menu, Access tokens.";
+pub const NO_TOKEN: &str = "Connect your agent to romulus: it signs you in in your browser \
+                            (OAuth). Or authenticate with a personal access token, \
+                            `Authorization: Bearer rmls_pat_…`: your account menu, Access tokens.";
 const BAD_TOKEN: &str = "This access token is not valid: it may have been revoked. \
                          Create a new one in romulus: your account menu, Access tokens.";
 
@@ -387,8 +405,9 @@ impl FromRequestParts<AppState> for Agent {
 }
 
 impl Agent {
-    /// The secret of `Authorization: Bearer rmls_pat_…`, if it has a
-    /// personal token's shape (nothing looked up).
+    /// The secret of `Authorization: Bearer rmls_pat_…` (or `rmls_oat_…`),
+    /// if it has a personal or an OAuth access token's shape (nothing
+    /// looked up).
     pub fn bearer(parts: &Parts) -> Result<&str, ApiError> {
         let secret = parts
             .headers
@@ -399,7 +418,7 @@ impl Agent {
                 scheme.eq_ignore_ascii_case("bearer ").then(|| rest.trim())
             })
             .ok_or_else(|| ApiError::InvalidToken(NO_TOKEN.into()))?;
-        if !is_well_formed(secret) {
+        if !is_well_formed(secret) && !crate::oauth::token::is_access_token(secret) {
             return Err(ApiError::InvalidToken(BAD_TOKEN.into()));
         }
         Ok(secret)
@@ -409,6 +428,9 @@ impl Agent {
     /// when there is none (unknown, revoked, expired, its person gone).
     /// Its last use is not written ([`Self::touch`]).
     pub async fn lookup(state: &AppState, secret: &str) -> Result<Self, ApiError> {
+        if crate::oauth::token::is_access_token(secret) {
+            return crate::oauth::apps::agent(state, secret).await;
+        }
         let row = sqlx::query!(
             r#"SELECT t.id, t.name, t.scope AS "scope: AccessTokenScope", t.expires_at,
                       coalesce(t.expires_at <= now(), false) AS "expired!",
@@ -434,6 +456,7 @@ impl Agent {
             id: row.id,
             name: row.name,
             scope: row.scope,
+            kind: TokenKind::Personal,
         };
         Ok(Self {
             user: CurrentUser {
@@ -450,18 +473,23 @@ impl Agent {
 
     /// Records the token's use, at most once a minute: an agent calling in
     /// a loop writes no faster. Its person's account counts as used then
-    /// (`retention::activity`): an agent working with the token is its
-    /// person using romulus.
+    /// (`retention::activity`): an agent working with the token, personal
+    /// or a connected app's, is its person using romulus.
     pub async fn touch(&self, db: &PgPool) -> Result<(), sqlx::Error> {
-        let touched = sqlx::query!(
-            "UPDATE personal_access_tokens SET last_used_at = now()
-             WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
-            self.token.id
-        )
-        .execute(db)
-        .await?
-        .rows_affected();
-        if touched > 0 {
+        let touched = if self.token.kind == TokenKind::App {
+            crate::oauth::apps::touch(db, self.token.id).await?
+        } else {
+            sqlx::query!(
+                "UPDATE personal_access_tokens SET last_used_at = now()
+                 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
+                self.token.id
+            )
+            .execute(db)
+            .await?
+            .rows_affected()
+                > 0
+        };
+        if touched {
             crate::retention::activity::account_used(db, self.user.id).await?;
         }
         Ok(())
@@ -469,13 +497,18 @@ impl Agent {
 }
 
 /// Notes which client uses the token, as it says it (`initialize`'s
-/// `clientInfo`): shown in the token list. Best effort.
-pub async fn note_client(db: &PgPool, token: Uuid, client: &str) {
+/// `clientInfo`): shown in the token list, or the connected apps. Best
+/// effort.
+pub async fn note_client(db: &PgPool, token: &TokenRef, client: &str) {
     let client: String = client
         .chars()
         .filter(|c| !c.is_control())
         .take(200)
         .collect();
+    if token.kind == TokenKind::App {
+        return crate::oauth::apps::note_client(db, token.id, &client).await;
+    }
+    let token = token.id;
     let noted = sqlx::query!(
         "UPDATE personal_access_tokens SET last_client = $2
          WHERE id = $1 AND last_client IS DISTINCT FROM $2",

@@ -9,8 +9,9 @@
 //! server-initiated stream and no session. Both eras of the protocol are
 //! served, statelessly ([`protocol`]).
 //!
-//! **Who.** A personal access token only (`auth::access_tokens::Agent`,
-//! `Authorization: Bearer rmls_pat_…`), never the session cookie: nothing
+//! **Who.** A personal access token (`auth::access_tokens::Agent`,
+//! `Authorization: Bearer rmls_pat_…`) or a connected app's OAuth access
+//! token (`rmls_oat_…`, `crate::oauth`), never the session cookie: nothing
 //! here is ambient, which is why the CSRF guard lets this path through. An
 //! `Origin` header, when sent, must be the public URL's (DNS rebinding: a
 //! page elsewhere cannot drive it from someone's browser). Limits come
@@ -28,12 +29,14 @@
 //! refuses any write. [`prompts`] are the common flows; [`resources`] each
 //! version's SQL and the CI guide.
 //!
-//! **OAuth.** Not yet: MCP's authorization flow (OAuth 2.1, protected
-//! resource metadata) would let a client connect without pasting a token.
-//! The seam is [`unauthorized`] (the `WWW-Authenticate` challenge a client
-//! reads first) and `Agent` (what a bearer token resolves to): an
-//! authorization server issuing access tokens for a person would resolve to
-//! the same `Agent`.
+//! **OAuth.** A client without a token gets a 401 whose `WWW-Authenticate`
+//! names the protected resource metadata ([`unauthorized`]): that is how
+//! MCP clients find romulus's authorization server (`crate::oauth`) and send
+//! their person to sign in. The tokens it issues resolve to the same
+//! `Agent`. A read-only app calling a write tool gets a 403
+//! `insufficient_scope` challenge ([`insufficient_scope`]), so its client
+//! can ask the person for more (step-up); a read-only personal token gets
+//! the tool's error, as before.
 
 pub mod api;
 pub mod prompts;
@@ -41,7 +44,7 @@ pub mod protocol;
 pub mod resources;
 pub mod tools;
 
-use std::{net::SocketAddr, time::Duration};
+use std::{fmt::Write as _, net::SocketAddr, time::Duration};
 
 use axum::{
     Extension,
@@ -101,8 +104,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         (status = 200, description = "The JSON-RPC response (`result`, or `error`)", body = Object),
         (status = 202, description = "A notification or a response, accepted"),
         (status = 400, description = "A JSON-RPC error: malformed, a batch, headers that do not match the body, an unsupported protocol version", body = Object),
-        (status = 401, description = "No live personal access token (`WWW-Authenticate: Bearer`)", body = Object),
-        (status = 403, description = "An `Origin` other than romulus's", body = Object),
+        (status = 401, description = "No live access token (`WWW-Authenticate: Bearer resource_metadata=…`)", body = Object),
+        (status = 403, description = "An `Origin` other than romulus's; or a read-only app calling a write tool (`WWW-Authenticate: Bearer error=\"insufficient_scope\"`)", body = Object),
         (status = 404, description = "An unknown method (protocol 2026-07-28)", body = Object),
         (status = 413, body = ErrorBody),
         (status = 429, description = "Too many requests: with this token, with the person's tokens, or with tokens that are not valid from this client (`Retry-After`)", body = Object),
@@ -138,6 +141,7 @@ pub(crate) async fn message(
     if let Some(wait) = limits.access_token_failures.waiting(&ip) {
         return too_many("Too many requests with tokens that are not valid", wait);
     }
+    let presented = headers.contains_key(header::AUTHORIZATION);
     let agent = match Agent::bearer(&parts) {
         Ok(secret) => {
             let hash = crate::token::hash(secret);
@@ -152,9 +156,12 @@ pub(crate) async fn message(
         Ok(agent) => agent,
         Err(ApiError::InvalidToken(message)) => {
             // Counted once refused; past the burst the client is refused
-            // before anything is looked up.
-            let _ = limits.access_token_failures.check(ip);
-            return unauthorized(&message);
+            // before anything is looked up. A request with no token at all
+            // is how a client starts connecting: not a failure.
+            if presented {
+                let _ = limits.access_token_failures.check(ip);
+            }
+            return unauthorized(&state.config, &message, presented);
         }
         Err(err) => return cannot_check(&err),
     };
@@ -175,6 +182,9 @@ pub(crate) async fn message(
         Ok(None) => return StatusCode::ACCEPTED.into_response(),
         Err(response) => return *response,
     };
+    if method == "tools/call" && needs_more_scope(&agent, &params) {
+        return insufficient_scope(&state.config, &id);
+    }
     let era = if method == "initialize" {
         Era::Legacy(None)
     } else {
@@ -184,7 +194,7 @@ pub(crate) async fn message(
         }
     };
     if let Some(client) = protocol::client_info(&method, Some(&params)) {
-        access_tokens::note_client(&state.db, agent.token.id, &client).await;
+        access_tokens::note_client(&state.db, &agent.token, &client).await;
     }
     let public_url = state.config.public_url.clone();
     let ctx = Ctx::new(
@@ -418,16 +428,39 @@ fn cannot_check(err: &ApiError) -> Response {
     )
 }
 
-/// 401 with the challenge MCP clients read first. An OAuth authorization
-/// server would add `resource_metadata` here (the protected resource
-/// metadata's URL), which is what sends a client through its flow.
-fn unauthorized(message: &str) -> Response {
+/// 401 with the challenge MCP clients read first: where the protected
+/// resource metadata is (RFC 9728, 5.1), the scopes to ask for, and, when a
+/// token was presented, why it was refused (RFC 6750, 3.1).
+fn unauthorized(config: &crate::Config, message: &str, presented: bool) -> Response {
     let mut response = rpc_error(
         None,
         &RpcError::new(StatusCode::UNAUTHORIZED, code::UNAUTHORIZED, message),
     );
-    // A header value: visible ASCII only (`…` becomes `...`), no quotes.
-    let description: String = message
+    let mut challenge = format!(
+        "Bearer realm=\"romulus\", resource_metadata=\"{}\", scope=\"{} {}\"",
+        crate::oauth::resource_metadata_url(config),
+        crate::oauth::SCOPE_READ,
+        crate::oauth::SCOPE_WRITE,
+    );
+    if presented {
+        let _ = write!(
+            challenge,
+            ", error=\"invalid_token\", error_description=\"{}\"",
+            header_text(message)
+        );
+    }
+    if let Ok(value) = HeaderValue::from_str(&challenge) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
+    }
+    response
+}
+
+/// A message as a quoted header parameter: visible ASCII only (`…` becomes
+/// `...`), no quotes or backslashes.
+fn header_text(message: &str) -> String {
+    message
         .replace('…', "...")
         .chars()
         .map(|c| match c {
@@ -435,9 +468,38 @@ fn unauthorized(message: &str) -> Response {
             c if c == ' ' || c.is_ascii_graphic() => c,
             _ => '?',
         })
-        .collect();
+        .collect()
+}
+
+/// Whether this `tools/call` is a write tool asked by a read-only app,
+/// which may ask its person for more ([`insufficient_scope`]). A personal
+/// token cannot be widened: its tool call answers the tool's own error.
+fn needs_more_scope(agent: &Agent, params: &Value) -> bool {
+    agent.token.kind == access_tokens::TokenKind::App
+        && !agent.token.can_write()
+        && params
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(tools::find)
+            .is_some_and(|tool| tool.writes)
+}
+
+/// 403 with the step-up challenge (MCP authorization, "Scope Challenge
+/// Handling"): the scope this call needs, for the client to ask its person.
+fn insufficient_scope(config: &crate::Config, id: &Value) -> Response {
+    let message = "This app may only read in romulus: allow it to make changes (connect it \
+                   again with read and write access) to use this tool.";
+    let mut response = rpc_error(
+        Some(id),
+        &RpcError::new(StatusCode::FORBIDDEN, code::REFUSED, message),
+    );
     let challenge = format!(
-        "Bearer realm=\"romulus\", error=\"invalid_token\", error_description=\"{description}\""
+        "Bearer error=\"insufficient_scope\", scope=\"{} {}\", resource_metadata=\"{}\", \
+         error_description=\"{}\"",
+        crate::oauth::SCOPE_READ,
+        crate::oauth::SCOPE_WRITE,
+        crate::oauth::resource_metadata_url(config),
+        header_text(message),
     );
     if let Ok(value) = HeaderValue::from_str(&challenge) {
         response

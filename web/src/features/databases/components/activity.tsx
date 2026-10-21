@@ -192,8 +192,12 @@ function sentence(event: AuditEvent): string {
       return `${who} ran a migration on a playground of ${v}${details.outcome ? `: ${details.outcome}` : ""}`;
     case "playground_restarted":
       return `A playground of ${v} restarted to undo a role changed from inside it`;
-    case "agent_action":
-      return `${who}'s agent ${details.outcome ?? `used ${details.tool ?? "a tool"}`}, with the access token “${details.token_name ?? "?"}”`;
+    case "agent_action": {
+      const did = details.outcome ?? `used ${details.tool ?? "a tool"}`;
+      return details.app_name
+        ? `${who}'s agent ${did}, through the connected app “${details.app_name}”`
+        : `${who}'s agent ${did}, with the access token “${details.token_name ?? "?"}”`;
+    }
     case "terms_accepted":
       return `${who} accepted the Terms of Service to subscribe`;
     case "subscription_changed":

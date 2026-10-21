@@ -9,8 +9,10 @@
 //! - an API token's use by CI, for the account that made it
 //!   (`databases::tokens::Bearer`): a database someone keeps pushing to is
 //!   theirs in use;
-//! - OAuth access tokens, when they come: call it where their use is
-//!   recorded, with the token's person.
+//! - a connected app's OAuth access token, by the person's agent, the same
+//!   way (`Agent::touch`, through `oauth::apps::touch`). Getting tokens is
+//!   not using the account: a client refreshing without calling counts
+//!   nothing (and its grant lasts 90 days at most).
 
 use std::time::Duration;
 

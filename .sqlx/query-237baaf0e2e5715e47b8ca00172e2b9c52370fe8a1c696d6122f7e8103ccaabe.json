@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_grants SET resource = 'https://old.example/api/mcp'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "237baaf0e2e5715e47b8ca00172e2b9c52370fe8a1c696d6122f7e8103ccaabe"
+}

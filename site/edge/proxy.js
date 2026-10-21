@@ -1,7 +1,9 @@
 // The app and the API on the homepage's origin. Pages serves the homepage
-// (public/) itself; /app and /api go to the API through this proxy, which
-// functions/_middleware.js runs (public/_routes.json limits the Function to
-// those paths, so the homepage never runs it).
+// (public/) itself; /app, /api and OAuth's discovery documents
+// (/.well-known/oauth-*, where MCP clients look for how to sign in) go to the
+// API through this proxy, which functions/_middleware.js runs
+// (public/_routes.json limits the Function to those paths, so the homepage
+// never runs it).
 //
 // The API is behind a Cloudflare Tunnel at env.ROMULUS_ORIGIN. That hostname
 // is public, so every forwarded request carries the edge key, a secret shared
@@ -20,9 +22,21 @@ export const CLIENT_IP_HEADER = "x-romulus-client-ip";
 
 const PREFIXES = ["/app", "/api"];
 
+// OAuth's discovery, where MCP clients look for how to sign in: the
+// protected resource metadata of /api/mcp (RFC 9728, path-suffixed; none at
+// the root) and the authorization server metadata (RFC 8414).
+const RESOURCE_METADATA = "/.well-known/oauth-protected-resource/";
+const SERVER_METADATA = "/.well-known/oauth-authorization-server";
+
 /** Whether the API answers this path (the rest is the homepage). */
 export function proxied(pathname) {
-  return PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  return (
+    PREFIXES.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    ) ||
+    pathname.startsWith(RESOURCE_METADATA) ||
+    pathname === SERVER_METADATA
+  );
 }
 
 /** Forwards `request` to the API. `env` holds the Function's variables. */
@@ -31,7 +45,10 @@ export async function proxy(request, env, fetchImpl = fetch) {
   // romulus-site.pages.dev and preview deployments: one public origin only,
   // the one cookies, redirects and Origin checks are built for.
   if (url.hostname !== env.ROMULUS_PUBLIC_HOST) {
-    return Response.redirect(`https://${env.ROMULUS_PUBLIC_HOST}${url.pathname}${url.search}`, 308);
+    return Response.redirect(
+      `https://${env.ROMULUS_PUBLIC_HOST}${url.pathname}${url.search}`,
+      308,
+    );
   }
   if (!env.ROMULUS_EDGE_KEY || !env.ROMULUS_ORIGIN) {
     return unavailable("romulus is not configured here yet.");
@@ -58,11 +75,16 @@ export async function proxy(request, env, fetchImpl = fetch) {
     });
   } catch (err) {
     console.error("proxy: the origin is unreachable", err);
-    return unavailable("romulus is unreachable right now. Try again in a minute.");
+    return unavailable(
+      "romulus is unreachable right now. Try again in a minute.",
+    );
   }
 }
 
 /** A 503 in the API's error format, which the web app understands. */
 function unavailable(message) {
-  return Response.json({ code: "unavailable", message }, { status: 503, headers: { "cache-control": "no-store" } });
+  return Response.json(
+    { code: "unavailable", message },
+    { status: 503, headers: { "cache-control": "no-store" } },
+  );
 }

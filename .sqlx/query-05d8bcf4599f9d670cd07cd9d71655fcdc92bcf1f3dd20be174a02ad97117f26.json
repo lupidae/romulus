@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_requests SET created_at = now() - interval '21 minutes'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "05d8bcf4599f9d670cd07cd9d71655fcdc92bcf1f3dd20be174a02ad97117f26"
+}

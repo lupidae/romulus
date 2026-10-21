@@ -986,8 +986,10 @@ async fn a_reset_link_sets_a_new_password_once_and_ends_every_session(db: PgPool
     let id = account(&db, "alice@acme.io", "Alice").await;
     let elsewhere = session(&db, id).await;
     let agent = super::mcp::pat(&db, &elsewhere, AccessTokenScope::Write).await;
+    let connected = super::oauth::connected(&db, &elsewhere, AccessTokenScope::Write).await;
     let (app, outbox) = app_with(db.clone(), true, SignUpPolicy::Invite);
     assert_eq!(initialize(&app, &agent).await.status, StatusCode::OK);
+    assert_eq!(initialize(&app, &connected).await.status, StatusCode::OK);
 
     // Unknown and known addresses: the same answer; only the account gets mail.
     let forgot = async |email: &str| {
@@ -1038,9 +1040,13 @@ async fn a_reset_link_sets_a_new_password_once_and_ends_every_session(db: PgPool
         app.as_user(&elsewhere).get("/api/me").await.code(),
         "session_expired"
     );
-    // Signed out everywhere: agents too.
+    // Signed out everywhere: agents too, connected apps included.
     assert_eq!(
         initialize(&app, &agent).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        initialize(&app, &connected).await.status,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
@@ -1170,6 +1176,7 @@ async fn changing_a_password_keeps_this_browser_and_signs_out_the_others(db: PgP
     let here = session(&db, id).await;
     let elsewhere = session(&db, id).await;
     let agent = super::mcp::pat(&db, &here, AccessTokenScope::Read).await;
+    let connected = super::oauth::connected(&db, &here, AccessTokenScope::Read).await;
     let change = async |current: &str, new: &str| {
         app.as_user(&here)
             .post(
@@ -1204,9 +1211,13 @@ async fn changing_a_password_keeps_this_browser_and_signs_out_the_others(db: PgP
         app.as_user(&elsewhere).get("/api/me").await.code(),
         "session_expired"
     );
-    // Every other place is signed out, agents included.
+    // Every other place is signed out, agents and connected apps included.
     assert_eq!(
         initialize(&app, &agent).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        initialize(&app, &connected).await.status,
         StatusCode::UNAUTHORIZED
     );
     let notice = outbox.to("alice@acme.io").last().unwrap().clone();

@@ -36,6 +36,13 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, fileURLToPath(new URL("..", import.meta.url)), "ROMULUS_");
   const port = (name: string, fallback: number) => Number(env[name] ?? fallback);
   const api = { target: `http://127.0.0.1:${port("ROMULUS_API_PORT", 41001)}`, ws: true };
+  // The API, and OAuth's discovery documents it serves at the root, where MCP
+  // clients look for them (crates/romulus-api/src/oauth/metadata.rs).
+  const proxy = {
+    "/api": api,
+    "/.well-known/oauth-protected-resource/": api,
+    "/.well-known/oauth-authorization-server": api,
+  };
 
   return {
     base: BASE,
@@ -52,13 +59,13 @@ export default defineConfig(({ mode }) => {
       host: "localhost",
       port: port("ROMULUS_WEB_PORT", 41000),
       strictPort: true,
-      proxy: { "/api": api },
+      proxy,
     },
     preview: {
       host: "localhost",
       port: port("ROMULUS_PREVIEW_PORT", 41005),
       strictPort: true,
-      proxy: { "/api": api },
+      proxy,
     },
     test: {
       environment: "jsdom",

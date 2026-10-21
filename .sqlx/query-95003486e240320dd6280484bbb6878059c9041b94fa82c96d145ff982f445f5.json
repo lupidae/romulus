@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM oauth_clients c\n         WHERE coalesce(c.last_used_at, c.created_at) < now() - make_interval(secs => $1)\n           AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = c.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95003486e240320dd6280484bbb6878059c9041b94fa82c96d145ff982f445f5"
+}

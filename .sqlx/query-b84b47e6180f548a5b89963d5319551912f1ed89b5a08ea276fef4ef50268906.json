@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM oauth_grants\n         WHERE coalesce(revoked_at, least(expires_at, idle_expires_at)) < now() - interval '30 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "b84b47e6180f548a5b89963d5319551912f1ed89b5a08ea276fef4ef50268906"
+}

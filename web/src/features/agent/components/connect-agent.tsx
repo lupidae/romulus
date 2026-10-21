@@ -1,7 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import * as React from "react";
 
-import { CheckCircleIcon, OpenNewWindowIcon } from "@/components/icons";
+import {
+  CheckCircleIcon,
+  NavArrowDownIcon,
+  NavArrowRightIcon,
+  OpenNewWindowIcon,
+} from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -13,11 +19,31 @@ import { cn } from "@/lib/utils";
 
 import { type ConnectionCheck, checkConnection } from "../connection";
 import { DOCS_URL, scopeLabel } from "../labels";
-import { accessTokensQuery, type CreatedAccessToken } from "../queries";
-import { type AgentClient, endpoint, snippet, TOKEN_PLACEHOLDER } from "../snippets";
+import {
+  accessTokensQuery,
+  type ConnectedApp,
+  connectedAppsQuery,
+  type CreatedAccessToken,
+} from "../queries";
+import {
+  type AgentClient,
+  endpoint,
+  snippet,
+  TOKEN_PLACEHOLDER,
+  type TokenClient,
+  tokenSnippet,
+} from "../snippets";
+import { UNNAMED_APP } from "./consent";
 import { TokenForm } from "./token-form";
 
 const clients: { value: AgentClient; label: string }[] = [
+  { value: "claude-code", label: "Claude Code" },
+  { value: "claude", label: "Claude" },
+  { value: "cursor", label: "Cursor" },
+  { value: "other", label: "Other" },
+];
+
+const tokenClients: { value: TokenClient; label: string }[] = [
   { value: "claude-code", label: "Claude Code" },
   { value: "claude-desktop", label: "Claude Desktop" },
   { value: "cursor", label: "Cursor" },
@@ -25,49 +51,21 @@ const clients: { value: AgentClient; label: string }[] = [
 ];
 
 /**
- * Connecting an AI agent, in three steps on one page: a token of its own,
- * the agent's configuration with the endpoint and that token filled in, and
- * a check that it works (from this browser, then the agent's own first
- * request, seen as the token's last use).
+ * Connecting an AI agent: add romulus to it, then approve it when it opens
+ * this browser (OAuth), seen arriving in the connected apps. Agents that
+ * cannot open a browser (CI, scripts) take an access token instead: the
+ * Advanced section, its own three steps.
  */
 export function ConnectAgent() {
-  const [created, setCreated] = React.useState<CreatedAccessToken | null>(null);
   const [client, setClient] = React.useState<AgentClient>("claude-code");
+  const [advanced, setAdvanced] = React.useState(false);
   const url = endpoint(window.location.origin);
-  const token = created?.secret ?? TOKEN_PLACEHOLDER;
+  const advancedId = React.useId();
 
   return (
     <div className="grid gap-4">
       <ol className="grid grid-cols-1 gap-4" aria-label="Steps">
-        <Step
-          number={1}
-          title="Create a token for your agent"
-          done={created !== null}
-          description="It acts as you, with your role in each organization."
-        >
-          {created ? (
-            <div className="grid gap-3">
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{created.token.name}</span>,{" "}
-                {scopeLabel[created.token.scope].toLowerCase()}. Shown only here: copy it now. The
-                configurations below hold it; Claude Code&rsquo;s command asks for it.
-              </p>
-              <CopyField value={created.secret} label="Access token" />
-            </div>
-          ) : (
-            <TokenForm defaultName="Claude Code" onCreated={setCreated}>
-              {(submitting) => (
-                <div>
-                  <Button type="submit" variant="primary" loading={submitting}>
-                    Create token
-                  </Button>
-                </div>
-              )}
-            </TokenForm>
-          )}
-        </Step>
-
-        <Step number={2} title="Add romulus to your agent">
+        <Step number={1} title="Add romulus to your agent">
           <Tabs
             className="min-w-0"
             value={client}
@@ -81,7 +79,7 @@ export function ConnectAgent() {
               ))}
             </TabsList>
             {clients.map((c) => {
-              const shown = snippet(c.value, url, token);
+              const shown = snippet(c.value, url);
               return (
                 <TabsContent key={c.value} value={c.value} className="grid gap-2">
                   <p className="text-sm text-muted-foreground">{shown.where}</p>
@@ -90,17 +88,42 @@ export function ConnectAgent() {
               );
             })}
           </Tabs>
-          {!created && snippet(client, url, token).code.includes(TOKEN_PLACEHOLDER) && (
-            <p className="text-sm text-muted-foreground">
-              The token goes in place of {TOKEN_PLACEHOLDER}.
-            </p>
-          )}
         </Step>
 
-        <Step number={3} title="Check that it works">
-          <Check url={url} created={created} />
+        <Step
+          number={2}
+          title="Approve it in your browser"
+          description="Your agent opens this browser. Check its name and where it sends you back, then Allow."
+        >
+          <Arrival />
         </Step>
       </ol>
+
+      <Card className="p-0">
+        <Button
+          variant="ghost"
+          className="h-auto w-full justify-start gap-3 rounded-lg px-4 py-3 text-left whitespace-normal sm:h-auto sm:px-5"
+          aria-expanded={advanced}
+          aria-controls={advancedId}
+          onClick={() => setAdvanced((open) => !open)}
+        >
+          {advanced ? <NavArrowDownIcon aria-hidden /> : <NavArrowRightIcon aria-hidden />}
+          <span className="grid gap-0.5">
+            <span className="text-base font-semibold text-foreground">
+              Advanced: connect with an access token
+            </span>
+            <span className="text-sm font-normal text-muted-foreground">
+              For CI, scripts and agents that cannot open a browser.
+            </span>
+          </span>
+        </Button>
+        {advanced && (
+          <div id={advancedId} className="border-t border-border p-4 sm:p-5">
+            <TokenSetup url={url} />
+          </div>
+        )}
+      </Card>
+
       <p className="text-sm">
         <a
           href={DOCS_URL}
@@ -116,7 +139,142 @@ export function ConnectAgent() {
   );
 }
 
+/**
+ * The newest app the person connected since this page opened: what the
+ * agent's sign-in made, seen as it lands.
+ */
+function Arrival() {
+  const [since] = React.useState(() => Date.now());
+  const apps = useQuery({ ...connectedAppsQuery, refetchInterval: 5000 });
+  const arrived: ConnectedApp | undefined = apps.data?.find(
+    (app) => Date.parse(app.connected_at) >= since - 5000,
+  );
+  return (
+    <div className="grid gap-2">
+      <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+        {arrived ? (
+          <>
+            <CheckCircleIcon aria-hidden className="mr-1 inline size-3.5 text-success" />
+            {arrived.name ?? UNNAMED_APP} connected {timeAgo(arrived.connected_at)} (
+            {scopeLabel[arrived.scope].toLowerCase()}). Ask it: &ldquo;What databases do we keep in
+            romulus?&rdquo;
+          </>
+        ) : (
+          <>Waiting for your agent to connect.</>
+        )}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Approved apps are listed in{" "}
+        <Link
+          to="/settings/apps"
+          className="font-medium text-foreground underline decoration-border-strong underline-offset-4 hover:decoration-foreground"
+        >
+          Connected apps
+        </Link>
+        .
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Connecting with a token, in three steps: a token of its own, the agent's
+ * configuration with the endpoint and that token filled in, and a check
+ * that it works (from this browser, then the agent's own first request,
+ * seen as the token's last use).
+ */
+function TokenSetup({ url }: { url: string }) {
+  const [created, setCreated] = React.useState<CreatedAccessToken | null>(null);
+  const [client, setClient] = React.useState<TokenClient>("claude-code");
+  const token = created?.secret ?? TOKEN_PLACEHOLDER;
+
+  return (
+    <ol className="grid grid-cols-1 gap-6" aria-label="Steps with a token">
+      <SubStep
+        number={1}
+        title="Create a token for your agent"
+        done={created !== null}
+        description="It acts as you, with your role in each organization."
+      >
+        {created ? (
+          <div className="grid gap-3">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{created.token.name}</span>,{" "}
+              {scopeLabel[created.token.scope].toLowerCase()}. Shown only here: copy it now. The
+              configurations below hold it; Claude Code&rsquo;s command asks for it.
+            </p>
+            <CopyField value={created.secret} label="Access token" />
+          </div>
+        ) : (
+          <TokenForm defaultName="Claude Code" onCreated={setCreated}>
+            {(submitting) => (
+              <div>
+                <Button type="submit" variant="primary" loading={submitting}>
+                  Create token
+                </Button>
+              </div>
+            )}
+          </TokenForm>
+        )}
+      </SubStep>
+
+      <SubStep number={2} title="Add romulus to your agent, with the token">
+        <Tabs className="min-w-0" value={client} onValueChange={(v) => setClient(v as TokenClient)}>
+          <TabsList aria-label="Agent for the token" className="max-w-full overflow-x-auto">
+            {tokenClients.map((c) => (
+              <TabsTrigger key={c.value} value={c.value}>
+                {c.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {tokenClients.map((c) => {
+            const shown = tokenSnippet(c.value, url, token);
+            return (
+              <TabsContent key={c.value} value={c.value} className="grid gap-2">
+                <p className="text-sm text-muted-foreground">{shown.where}</p>
+                <CodeBlock code={shown.code} label={shown.label} />
+              </TabsContent>
+            );
+          })}
+        </Tabs>
+        {!created && tokenSnippet(client, url, token).code.includes(TOKEN_PLACEHOLDER) && (
+          <p className="text-sm text-muted-foreground">
+            The token goes in place of {TOKEN_PLACEHOLDER}.
+          </p>
+        )}
+      </SubStep>
+
+      <SubStep number={3} title="Check that it works">
+        <Check url={url} created={created} />
+      </SubStep>
+    </ol>
+  );
+}
+
 function Step({
+  number,
+  title,
+  description,
+  children,
+}: {
+  number: number;
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  const id = React.useId();
+  return (
+    <li aria-labelledby={id}>
+      <Card className="grid grid-cols-1 gap-4 p-4 sm:p-5">
+        <StepHeading id={id} number={number} title={title} description={description} />
+        <div className="grid min-w-0 grid-cols-1 gap-3 sm:pl-9">{children}</div>
+      </Card>
+    </li>
+  );
+}
+
+/** A step inside the Advanced section: the same heading, no card of its own. */
+function SubStep({
   number,
   title,
   description,
@@ -131,29 +289,45 @@ function Step({
 }) {
   const id = React.useId();
   return (
-    <li aria-labelledby={id}>
-      <Card className="grid grid-cols-1 gap-4 p-4 sm:p-5">
-        <div className="flex items-start gap-3">
-          <span
-            aria-hidden
-            className={cn(
-              "flex size-6 shrink-0 items-center justify-center rounded-full text-sm font-semibold tabular-nums",
-              done ? "bg-success/10 text-success" : "bg-muted text-muted-foreground",
-            )}
-          >
-            {done ? <CheckCircleIcon className="size-4" /> : number}
-          </span>
-          <div className="grid min-w-0 gap-0.5">
-            <h2 id={id} className="text-base font-semibold text-foreground">
-              {title}
-              {done && <span className="sr-only"> (done)</span>}
-            </h2>
-            {description && <p className="text-sm text-muted-foreground">{description}</p>}
-          </div>
-        </div>
-        <div className="grid min-w-0 grid-cols-1 gap-3 sm:pl-9">{children}</div>
-      </Card>
+    <li aria-labelledby={id} className="grid grid-cols-1 gap-4">
+      <StepHeading id={id} number={number} title={title} description={description} done={done} />
+      <div className="grid min-w-0 grid-cols-1 gap-3 sm:pl-9">{children}</div>
     </li>
+  );
+}
+
+function StepHeading({
+  id,
+  number,
+  title,
+  description,
+  done = false,
+}: {
+  id: string;
+  number: number;
+  title: string;
+  description?: string;
+  done?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-6 shrink-0 items-center justify-center rounded-full text-sm font-semibold tabular-nums",
+          done ? "bg-success/10 text-success" : "bg-muted text-muted-foreground",
+        )}
+      >
+        {done ? <CheckCircleIcon className="size-4" /> : number}
+      </span>
+      <div className="grid min-w-0 gap-0.5">
+        <h2 id={id} className="text-base font-semibold text-foreground">
+          {title}
+          {done && <span className="sr-only"> (done)</span>}
+        </h2>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </div>
+    </div>
   );
 }
 

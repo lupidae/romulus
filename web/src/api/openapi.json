@@ -1297,7 +1297,7 @@
             }
           },
           "401": {
-            "description": "No live personal access token (`WWW-Authenticate: Bearer`)",
+            "description": "No live access token (`WWW-Authenticate: Bearer resource_metadata=…`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1307,7 +1307,7 @@
             }
           },
           "403": {
-            "description": "An `Origin` other than romulus's",
+            "description": "An `Origin` other than romulus's; or a read-only app calling a write tool (`WWW-Authenticate: Bearer error=\"insufficient_scope\"`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1514,6 +1514,514 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/connected-apps": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The person's connected apps.",
+        "operationId": "list_connected_apps",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectedApp"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me/connected-apps/{client_id}": {
+      "delete": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Disconnects an app: every token it holds for the person stops working\nat once.",
+        "operationId": "disconnect_app",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "description": "The app's client id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Disconnected"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such app connected for the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/oauth/authorize": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Starts an authorization (OAuth 2.1, 4.1.1): checks it, then sends the\nbrowser to the consent page.",
+        "operationId": "oauth_authorize",
+        "parameters": [
+          {
+            "name": "response_type",
+            "in": "query",
+            "description": "`code`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "description": "From registration",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "description": "One the client registered (any port on a loopback one); optional when it registered only one",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Optional (PKCE protects the flow): echoed back unchanged, 1024 characters at most",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "description": "PKCE: base64url(sha256(verifier))",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "description": "`S256` only",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "`romulus.read`, `romulus.write` (both when absent)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "description": "The MCP endpoint, `<public URL>/api/mcp` (RFC 8707)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Always to the consent page, never to the redirect URI: `/app/oauth/authorize?request=…` (with the cookie that binds the request to this browser); `?refused=…&client_id=…&redirect_uri=…[&state=…]` for a bad request (the page offers the way back); `?error=…` when the client or its redirect URI is unknown"
+          }
+        }
+      }
+    },
+    "/api/oauth/refusals": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The way back to a client after its request was refused, for the\nconsent page's \"Return to\" link. Signed out too: refusals come before\nsigning in. Answers only for a registered client and one of its\nredirect URIs, so the link can lead nowhere else.",
+        "operationId": "get_authorization_refusal",
+        "parameters": [
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "The consent page's `?refused=`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "The request's own, when it had one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefusedRequest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not a refusal romulus makes, an unknown client, or a redirect URI it did not register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/oauth/register": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Registers a client (RFC 7591): any MCP client may, without signing in.",
+        "operationId": "oauth_register",
+        "requestBody": {
+          "description": "Client metadata (RFC 7591, 2): `redirect_uris` (required), `client_name`, `grant_types`, `response_types`, `token_endpoint_auth_method`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredClient"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_redirect_uri` or `invalid_client_metadata` (`{error, error_description}`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many registrations from this client (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/oauth/requests/{id}": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The authorization request this browser started, for the consent page.",
+        "operationId": "get_authorization_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "From the consent page's `?request=`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Expired, answered, or started in another browser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Allows or denies an authorization request: answers where to send the\nbrowser (back to the app).",
+        "operationId": "decide_authorization_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "From the consent page's `?request=`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Decision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Decided"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Expired, answered, or started in another browser",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A scope wider than the app asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/oauth/revoke": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Revokes a token (RFC 7009): a refresh token ends its whole grant, an\naccess token itself. Answers 200 whatever the token was, so it tells\nnothing about tokens it did not revoke.",
+        "operationId": "oauth_revoke",
+        "requestBody": {
+          "description": "`token`, `token_type_hint`, `client_id`",
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Revoked, or nothing to revoke"
+          },
+          "400": {
+            "description": "`invalid_request`: no token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/oauth/token": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Exchanges a code, or a refresh token, for tokens.",
+        "operationId": "oauth_token",
+        "requestBody": {
+          "description": "`grant_type=authorization_code` with `code`, `code_verifier`, `client_id`, `redirect_uri`, `resource`; or `grant_type=refresh_token` with `refresh_token`, `client_id`, `scope`, `resource`",
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`, `invalid_grant`, `invalid_scope`, `invalid_target`, `unsupported_grant_type` (`{error, error_description}`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`invalid_client`: register again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
                 }
               }
             }
@@ -8937,6 +9445,13 @@
         "type": "object",
         "description": "What an event says beyond who, when and which version; the fields its\naction has.",
         "properties": {
+          "app_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The connected app's name then (an OAuth token, `crate::oauth`), as\nit registered."
+          },
           "approvals": {
             "type": [
               "integer",
@@ -9095,14 +9610,14 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The personal access token an agent acted with (`agent_action`)."
+            "description": "The personal access token an agent acted with (`agent_action`), or\nthe grant of the connected app it acted through."
           },
           "token_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Its name then."
+            "description": "The personal token's name then."
           },
           "tool": {
             "type": [
@@ -9257,6 +9772,34 @@
           }
         ],
         "description": "Who made a version: a person (uploads, drafts) or an API token (pushes)."
+      },
+      "AuthorizationRequest": {
+        "type": "object",
+        "description": "A request for the person to decide on.",
+        "required": [
+          "id",
+          "client",
+          "scope",
+          "expires_at"
+        ],
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/RequestingClient"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Decide before then."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AccessTokenScope",
+            "description": "What it asks for: `write` is everything the person's roles allow."
+          }
+        }
       },
       "BillingAudit": {
         "type": "object",
@@ -10010,6 +10553,69 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "ConnectedApp": {
+        "type": "object",
+        "description": "An app the person connected to romulus.",
+        "required": [
+          "client_id",
+          "redirect_host",
+          "loopback",
+          "scope",
+          "connected_at",
+          "expires_at"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The client's id: what Disconnect takes."
+          },
+          "connected_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the person first approved it."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it stops working unless it is used before."
+          },
+          "last_client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The MCP client that last said who it is (`claude-code 2.1.4`)."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Its last request (written at most once a minute), or refresh;\n`null` if never used."
+          },
+          "loopback": {
+            "type": "boolean",
+            "description": "Its redirect is a loopback address: a program on the person's\ncomputer."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name it registered under, unverified; `null` if it gave none."
+          },
+          "redirect_host": {
+            "type": "string",
+            "description": "Where the person approved it to send them back (`claude.ai`,\n`localhost`): its latest grant's redirect URI."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AccessTokenScope",
+            "description": "The widest access among its grants."
           }
         }
       },
@@ -11196,6 +11802,42 @@
             "type": "integer",
             "format": "int64",
             "description": "How many versions it has (removed ones not counted)."
+          }
+        }
+      },
+      "Decided": {
+        "type": "object",
+        "description": "Where the browser goes now.",
+        "required": [
+          "redirect_url"
+        ],
+        "properties": {
+          "redirect_url": {
+            "type": "string",
+            "description": "The app's redirect URI with a code (allowed) or `error=access_denied`,\n`state` and `iss`."
+          }
+        }
+      },
+      "Decision": {
+        "type": "object",
+        "description": "The person's answer.",
+        "required": [
+          "allow"
+        ],
+        "properties": {
+          "allow": {
+            "type": "boolean"
+          },
+          "scope": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AccessTokenScope",
+                "description": "Less than asked: `read` when the app asked for `write`. Absent: what\nit asked."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -16716,6 +17358,96 @@
           }
         }
       },
+      "RefusedRequest": {
+        "type": "object",
+        "description": "A refused authorization request, as the consent page shows it.",
+        "required": [
+          "error",
+          "description",
+          "return_url",
+          "redirect_host",
+          "loopback"
+        ],
+        "properties": {
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the client registered under, unverified."
+          },
+          "description": {
+            "type": "string",
+            "description": "What went wrong, in a sentence."
+          },
+          "error": {
+            "type": "string",
+            "description": "The OAuth error the client is told (`invalid_request`…)."
+          },
+          "loopback": {
+            "type": "boolean",
+            "description": "A program on this computer."
+          },
+          "redirect_host": {
+            "type": "string",
+            "description": "The return URL's host, as the link names it."
+          },
+          "return_url": {
+            "type": "string",
+            "description": "The client's redirect URI with `error`, `error_description`, `state`\n(when it sent one) and `iss`: one of its registered URIs, checked\nagain here."
+          }
+        }
+      },
+      "RegisteredClient": {
+        "type": "object",
+        "description": "A client as registered (RFC 7591, 3.2.1). No secret: it is public.",
+        "required": [
+          "client_id",
+          "client_id_issued_at",
+          "redirect_uris",
+          "grant_types",
+          "response_types",
+          "token_endpoint_auth_method"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_id_issued_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds since the epoch."
+          },
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grant_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "response_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "token_endpoint_auth_method": {
+            "type": "string",
+            "description": "Always `none`: a public client."
+          }
+        }
+      },
       "Relation": {
         "type": "object",
         "description": "A schema-qualified relation name, unquoted.",
@@ -16935,6 +17667,41 @@
           "enum_value",
           "attribute"
         ]
+      },
+      "RequestingClient": {
+        "type": "object",
+        "description": "The client asking, as far as romulus can tell.",
+        "required": [
+          "id",
+          "redirect_host",
+          "loopback",
+          "registered_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "loopback": {
+            "type": "boolean",
+            "description": "The redirect URI is a loopback address: a program on this computer."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name it registered under, unverified; `null` if it gave none."
+          },
+          "redirect_host": {
+            "type": "string",
+            "description": "Where the browser goes back to: the part that can be trusted."
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "ResetLink": {
         "type": "object",
@@ -18691,6 +19458,40 @@
           }
         ],
         "description": "A version in the timeline."
+      },
+      "TokenResponse": {
+        "type": "object",
+        "description": "Tokens issued (OAuth 2.1, 3.2.3).",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token",
+          "scope"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "`rmls_oat_…`, for `Authorization: Bearer` at the MCP endpoint."
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds."
+          },
+          "refresh_token": {
+            "type": "string",
+            "description": "`rmls_ort_…`, single use: each refresh answers a new one."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`romulus.read`, or `romulus.read romulus.write`."
+          },
+          "token_type": {
+            "type": "string",
+            "description": "`Bearer`."
+          }
+        }
       },
       "TokenScope": {
         "type": "string",

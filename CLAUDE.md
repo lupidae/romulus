@@ -464,9 +464,10 @@ src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; n
 src/features/comments/   comment threads (see "Comments" below): the model (anchors, `---`
                          lines, SQL placement), Discussion sources (draft: Yjs; version: REST),
                          CommentsPanel, CommentPins (graph + comment mode), sqlThreads (CodeMirror)
-src/features/agent/      personal access tokens and connecting an AI agent (MCP): the account pages
-                         (/app/settings/agent, /app/settings/tokens), the org home's AgentCard,
-                         the client snippets (snippets.ts) and Test connection (connection.ts)
+src/features/agent/      connecting an AI agent (MCP): the account pages (/app/settings/agent,
+                         /app/settings/apps, /app/settings/tokens), the consent page's Consent
+                         (/app/oauth/authorize), the org home's AgentCard, the client snippets
+                         (snippets.ts) and Test connection (connection.ts)
 src/features/time-machine/  the time machine: versions superposed (history, scale, frames,
                          timeline, history panel); /app/dev/time-machine shows it on fixtures
 src/features/migration/  MigrationView (tool picker, concurrently, renames to switch (`Renames`;
@@ -486,7 +487,7 @@ src/styles/globals.css   every token; the only file with raw colors
   and gate actions on `canWrite(org.role)` / `canManageMembers(org.role)`
   (`features/orgs/roles.ts`); the API enforces it anyway. Slugs must not
   collide with top-level routes: `signin`, `new`, `invite`, `dev`,
-  `settings`, `api`, `app` are reserved (API and database refuse them; `/app/settings/…`
+  `settings`, `api`, `app`, `oauth` are reserved (API and database refuse them; `/app/settings/…`
   is the person's own account: `routes/settings.tsx`). The
   sign-in pages live under `/signin/…` (`signin_.forgot`, `signin_.reset`,
   `signin_.new`, `signin_.welcome`: not nested in `signin.tsx`), on
@@ -1220,10 +1221,26 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
   from `Api`'s record of writes. Once something is created, answer its id even when what
   follows fails (no retry makes a second one). Answers are text, with ids and links
   (`Ctx::link`), never models or layouts (`whoami` alone adds `structuredContent`).
+- **OAuth** (`oauth`, docs/MVP.md "Agents connect by signing in"): romulus is the
+  authorization server of `/api/mcp`. Discovery at the root (`oauth::metadata::well_known`,
+  merged in `app()`: `/.well-known/oauth-protected-resource/api/mcp` (none at the root),
+  `/.well-known/oauth-authorization-server`; Vite and the homepage's Function proxy them);
+  `POST /oauth/register` (DCR, public clients), `GET /oauth/authorize` (checks, keeps an
+  `oauth_requests` row bound to the browser by one cookie holding its last 3, sends it to
+  `/app/oauth/authorize`; never redirects to a client before the person decided: a refusal
+  lands on the page with `?refused=`, and `GET /oauth/refusals` re-checks the way back),
+  `GET/POST /oauth/requests/{id}` (the consent page), `POST /oauth/token` and `/oauth/revoke`
+  (forms, OAuth's `{error, error_description}`: `OAuthError`; CSRF-exempt, `oauth::OPEN_PATHS`;
+  CORS `*`). `rmls_oat_` tokens resolve in `Agent::lookup` (`oauth::apps::agent`) to the same
+  `Agent`, `TokenRef::kind` = `TokenKind::App`, `id` = the grant. A grant is one approval:
+  revoke it (`apps::revoke_grant`) and every token of it stops. `apps::revoke_all` runs where
+  `access_tokens::revoke_all` does. `GET/DELETE /me/connected-apps`. Sweeper:
+  `oauth::apps::sweeper`, hourly.
 - **Tests**: `tests/api/mcp.rs` (`Mcp::new(&app, pat(..))`, `.rpc`, `.tool`, `.ok`, `.refused`;
   every tool per role, reusing `migration_tests::setup` and `playgrounds::setup`),
-  `tests/api/access_tokens.rs`, `tests/api/draft_text.rs`; web: `features/agent`
-  (`snippets.test.ts`), `e2e/agent.spec.ts`.
+  `tests/api/access_tokens.rs`, `tests/api/draft_text.rs`, `tests/api/oauth.rs` (`connect`
+  runs a whole connection; `connected(db, who, scope)` makes an app token directly); web:
+  `features/agent` (`snippets.test.ts`), `e2e/agent.spec.ts`, `e2e/oauth.spec.ts`.
 
 ## Retention and deletion (`retention`)
 
@@ -1261,9 +1278,11 @@ docs/MVP.md "Retention and deletion" has the decisions.
   back-off), never stops the batch.
 - **What counts as use** is `retention::activity::account_used` (hourly at
   most, clears the notice and the back-off): `session::create` and a
-  session's touch, `access_tokens::Agent::touch`, `databases::tokens::Bearer`
-  (the token's maker). A new way in (OAuth tokens) calls it where its use is
-  recorded. `users.updated_at` moves with identity columns only.
+  session's touch, `access_tokens::Agent::touch` (personal tokens and
+  connected apps' OAuth tokens, through `oauth::apps::touch`; getting or
+  refreshing tokens is not a use), `databases::tokens::Bearer` (the token's
+  maker). A new way in calls it where its use is recorded. `users.updated_at`
+  moves with identity columns only.
 - **Source and commit**: `config::COMMIT` (`ROMULUS_COMMIT` at build time, the
   Dockerfile's build argument from images.yml), `Config::source_url`
   (`ROMULUS_SOURCE_URL`, the build's repository by default),

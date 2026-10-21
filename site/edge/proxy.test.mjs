@@ -21,8 +21,21 @@ function recorder(response = new Response("ok")) {
   return { calls, fetchImpl };
 }
 
-test("only the app and the API are proxied", () => {
-  for (const path of ["/app", "/app/", "/app/acme/shop", "/api/health", "/api"])
+/** Where MCP clients look for how to sign in (RFC 9728, RFC 8414). */
+const WELL_KNOWN = [
+  "/.well-known/oauth-protected-resource/api/mcp",
+  "/.well-known/oauth-authorization-server",
+];
+
+test("only the app, the API and OAuth's discovery documents are proxied", () => {
+  for (const path of [
+    "/app",
+    "/app/",
+    "/app/acme/shop",
+    "/api/health",
+    "/api",
+    ...WELL_KNOWN,
+  ])
     assert.ok(proxied(path), path);
   for (const path of [
     "/",
@@ -33,20 +46,37 @@ test("only the app and the API are proxied", () => {
     "/fonts/x.woff2",
     "/mentions-legales",
     "/legal-notice",
+    "/.well-known/security.txt",
+    // The root form would describe the origin as a resource (RFC 9728, 3.3).
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resources",
+    "/.well-known/oauth-authorization-server/api/mcp",
+    "/.well-known/openid-configuration",
   ])
     assert.ok(!proxied(path), path);
 });
 
 /** Whether Pages runs the Function for `path`: public/_routes.json, where `*` matches anything and exclude wins. */
 function routed(path) {
-  const routes = JSON.parse(readFileSync(new URL("../public/_routes.json", import.meta.url), "utf8"));
+  const routes = JSON.parse(
+    readFileSync(new URL("../public/_routes.json", import.meta.url), "utf8"),
+  );
   const matches = (rule) =>
-    new RegExp(`^${rule.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`).test(path);
+    new RegExp(
+      `^${rule.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`,
+    ).test(path);
   return routes.include.some(matches) && !routes.exclude.some(matches);
 }
 
-test("_routes.json runs the Function for the app and the API only: the homepage and the legal notice stay static", () => {
-  for (const path of ["/app", "/app/", "/app/acme/shop", "/api/health"]) assert.ok(routed(path), path);
+test("_routes.json runs the Function for the app, the API and OAuth's discovery only: the homepage and the legal notice stay static", () => {
+  for (const path of [
+    "/app",
+    "/app/",
+    "/app/acme/shop",
+    "/api/health",
+    ...WELL_KNOWN,
+  ])
+    assert.ok(routed(path), path);
   for (const path of [
     "/",
     "/index.html",
@@ -56,6 +86,8 @@ test("_routes.json runs the Function for the app and the API only: the homepage 
     "/legal-notice.html",
     "/sitemap.xml",
     "/apple",
+    "/.well-known/security.txt",
+    "/.well-known/oauth-protected-resource",
   ])
     assert.ok(!routed(path), path);
 });
@@ -221,4 +253,50 @@ test("an agent's MCP request passes with its token, and the answer comes back as
   // The origin's response itself: nothing buffers it on the way.
   assert.equal(response, answer);
   assert.equal(await response.text(), '{"jsonrpc":"2.0","id":1,"result":{}}');
+});
+
+test("an MCP client finds romulus's authorization server through the proxy", async () => {
+  const document = Response.json({
+    resource: `https://${env.ROMULUS_PUBLIC_HOST}/api/mcp`,
+  });
+  const { calls, fetchImpl } = recorder(document);
+  for (const path of WELL_KNOWN) {
+    const response = await proxy(
+      new Request(`https://${env.ROMULUS_PUBLIC_HOST}${path}`),
+      env,
+      fetchImpl,
+    );
+    assert.equal(response, document, path);
+  }
+  assert.deepEqual(
+    calls.map((call) => call.url),
+    WELL_KNOWN.map((path) => new URL(path, env.ROMULUS_ORIGIN).href),
+  );
+  for (const call of calls) {
+    assert.equal(call.init.method, "GET");
+    assert.equal(call.init.headers.get(KEY_HEADER), env.ROMULUS_EDGE_KEY);
+  }
+});
+
+test("a client's token request reaches the API as a form, without a cookie of its own", async () => {
+  const { calls, fetchImpl } = recorder();
+  const body =
+    "grant_type=authorization_code&code=c&code_verifier=v&client_id=id";
+  await proxy(
+    new Request(`https://${env.ROMULUS_PUBLIC_HOST}/api/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+    }),
+    env,
+    fetchImpl,
+  );
+  const [{ url, init }] = calls;
+  assert.equal(url, new URL("/api/oauth/token", env.ROMULUS_ORIGIN).href);
+  assert.equal(await new Response(init.body).text(), body);
+  assert.equal(
+    init.headers.get("content-type"),
+    "application/x-www-form-urlencoded",
+  );
+  assert.equal(init.headers.get("cookie"), null);
 });

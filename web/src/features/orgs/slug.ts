@@ -1,5 +1,5 @@
 /** Top-level app routes an organization slug would shadow (the API refuses them too). */
-export const RESERVED_SLUGS = ["signin", "new", "invite", "dev", "settings", "api", "app"];
+export const RESERVED_SLUGS = ["signin", "new", "invite", "dev", "settings", "api", "app", "oauth"];
 
 export const SLUG_MAX = 63;
 

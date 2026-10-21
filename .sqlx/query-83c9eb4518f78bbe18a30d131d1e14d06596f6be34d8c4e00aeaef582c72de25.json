@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT scope AS \"scope: AccessTokenScope\" FROM oauth_requests",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "scope: AccessTokenScope",
+        "type_info": {
+          "Custom": {
+            "name": "access_token_scope",
+            "kind": {
+              "Enum": [
+                "read",
+                "write"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "oauth_requests",
+            "name": "scope"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "83c9eb4518f78bbe18a30d131d1e14d06596f6be34d8c4e00aeaef582c72de25"
+}
