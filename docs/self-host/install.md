@@ -150,7 +150,10 @@ redirected to `/app/`, everything proxied to the API.
 
 The API is published on `127.0.0.1:8080` (`ROMULUS_BIND`, `ROMULUS_PORT`).
 Proxy the whole origin to it, websockets included: live editing of drafts
-and the playground console use them. Send the client's address in
+and the playground console use them. That includes
+`/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-authorization-server`, where AI agents find how to sign
+in ([mcp.md](../mcp.md#self-hosted-installs)). Send the client's address in
 `X-Forwarded-For`, replacing whatever the client sent.
 
 Caddy: `deploy/self-host/Caddyfile.example`. nginx:

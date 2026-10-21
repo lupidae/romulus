@@ -1,11 +1,12 @@
 //! The romulus API: one axum app under `/api`, documented with utoipa.
 //!
 //! Feature modules (`auth`, `orgs`, `databases`, `versions`, `imports`,
-//! `drafts`, `collab`, `compile`, `playgrounds`, `billing`, `mcp`) each expose `router()`, an [`OpenApiRouter`] whose
+//! `drafts`, `collab`, `compile`, `playgrounds`, `billing`, `mcp`, `oauth`) each expose `router()`, an [`OpenApiRouter`] whose
 //! paths are relative to `/api`. [`routes`] merges them; it is the only place
 //! that lists every module, so adding endpoints never means editing it.
 //! With `ROMULUS_WEB_DIR` set, [`app`] also serves the web app at `/app`
-//! ([`web`]).
+//! ([`web`]). The one other path outside `/api` is OAuth's discovery,
+//! `/.well-known/oauth-*` (`oauth::metadata`), where MCP clients look.
 
 pub mod admin;
 pub mod audit;
@@ -32,6 +33,7 @@ mod layers;
 pub mod mail;
 pub mod mcp;
 pub mod migration_tests;
+pub mod oauth;
 pub mod orgs;
 pub mod playgrounds;
 pub mod rate;
@@ -90,6 +92,7 @@ fn routes() -> OpenApiRouter<AppState> {
         .merge(billing::router())
         .merge(export::router())
         .merge(mcp::router())
+        .merge(oauth::router())
 }
 
 pub(crate) fn router_and_spec() -> (Router<AppState>, utoipa::openapi::OpenApi) {
@@ -108,7 +111,9 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 pub fn app(state: AppState) -> Router {
     let (router, spec) = router_and_spec();
     let spec = Arc::new(spec);
-    let mut router = router.route("/api/openapi.json", get(move || async move { Json(spec) }));
+    let mut router = router
+        .route("/api/openapi.json", get(move || async move { Json(spec) }))
+        .merge(oauth::metadata::well_known());
     if let Some(dir) = &state.config.web_dir {
         router = router.merge(web::router(dir));
     }

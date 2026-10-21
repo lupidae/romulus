@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO oauth_grants (client_id, user_id, scope, resource, expires_at, idle_expires_at)\n         VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5),\n                 now() + make_interval(secs => least($5, $6)))\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_grants",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "access_token_scope",
+            "kind": {
+              "Enum": [
+                "read",
+                "write"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "98af7c57dea610208fb8db15386e6b42f7405e648fb3560816325c420356d408"
+}

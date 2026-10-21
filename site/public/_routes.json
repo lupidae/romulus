@@ -1,5 +1,13 @@
 {
   "version": 1,
-  "include": ["/app", "/app/*", "/api/*"],
+  "include": [
+    "/app",
+    "/app/*",
+    "/api/*",
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/*",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-authorization-server/*"
+  ],
   "exclude": []
 }

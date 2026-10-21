@@ -1,6 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 
 import {
+  AppWindowIcon,
   CodeIcon,
   ComputerIcon,
   HalfMoonIcon,
@@ -81,6 +82,10 @@ export function UserMenu({
         <MenuItem onSelect={() => void navigate({ to: "/settings/agent" })}>
           <SparksIcon />
           Connect your agent
+        </MenuItem>
+        <MenuItem onSelect={() => void navigate({ to: "/settings/apps" })}>
+          <AppWindowIcon />
+          Connected apps
         </MenuItem>
         <MenuItem onSelect={() => void navigate({ to: "/settings/tokens" })}>
           <KeyIcon />

@@ -23,8 +23,10 @@ import { Route as DevShellRouteImport } from './routes/dev/shell'
 import { Route as DevTimeMachineRouteImport } from './routes/dev/time-machine'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
+import { Route as OauthAuthorizeRouteImport } from './routes/oauth.authorize'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as SettingsAgentRouteImport } from './routes/settings/agent'
+import { Route as SettingsAppsRouteImport } from './routes/settings/apps'
 import { Route as SettingsTokensRouteImport } from './routes/settings/tokens'
 import { Route as SigninForgotRouteImport } from './routes/signin_.forgot'
 import { Route as SigninNewRouteImport } from './routes/signin_.new'
@@ -119,6 +121,11 @@ const InviteTokenRoute = InviteTokenRouteImport.update({
   path: '/invite/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OauthAuthorizeRoute = OauthAuthorizeRouteImport.update({
+  id: '/oauth/authorize',
+  path: '/oauth/authorize',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsIndexRoute = SettingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -127,6 +134,11 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
 const SettingsAgentRoute = SettingsAgentRouteImport.update({
   id: '/agent',
   path: '/agent',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsAppsRoute = SettingsAppsRouteImport.update({
+  id: '/apps',
+  path: '/apps',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsTokensRoute = SettingsTokensRouteImport.update({
@@ -260,7 +272,9 @@ export interface FileRoutesByFullPath {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
   '/settings/agent': typeof SettingsAgentRoute
+  '/settings/apps': typeof SettingsAppsRoute
   '/settings/tokens': typeof SettingsTokensRoute
   '/signin/forgot': typeof SigninForgotRoute
   '/signin/new': typeof SigninNewRoute
@@ -297,7 +311,9 @@ export interface FileRoutesByTo {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
   '/settings/agent': typeof SettingsAgentRoute
+  '/settings/apps': typeof SettingsAppsRoute
   '/settings/tokens': typeof SettingsTokensRoute
   '/signin/forgot': typeof SigninForgotRoute
   '/signin/new': typeof SigninNewRoute
@@ -339,7 +355,9 @@ export interface FileRoutesById {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
   '/settings/agent': typeof SettingsAgentRoute
+  '/settings/apps': typeof SettingsAppsRoute
   '/settings/tokens': typeof SettingsTokensRoute
   '/signin_/forgot': typeof SigninForgotRoute
   '/signin_/new': typeof SigninNewRoute
@@ -382,7 +400,9 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/oauth/authorize'
     | '/settings/agent'
+    | '/settings/apps'
     | '/settings/tokens'
     | '/signin/forgot'
     | '/signin/new'
@@ -419,7 +439,9 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/oauth/authorize'
     | '/settings/agent'
+    | '/settings/apps'
     | '/settings/tokens'
     | '/signin/forgot'
     | '/signin/new'
@@ -460,7 +482,9 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/oauth/authorize'
     | '/settings/agent'
+    | '/settings/apps'
     | '/settings/tokens'
     | '/signin_/forgot'
     | '/signin_/new'
@@ -501,6 +525,7 @@ export interface RootRouteChildren {
   DevTimeMachineRoute: typeof DevTimeMachineRoute
   DevViewerRoute: typeof DevViewerRoute
   InviteTokenRoute: typeof InviteTokenRoute
+  OauthAuthorizeRoute: typeof OauthAuthorizeRoute
   SigninForgotRoute: typeof SigninForgotRoute
   SigninNewRoute: typeof SigninNewRoute
   SigninResetRoute: typeof SigninResetRoute
@@ -609,6 +634,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/oauth/authorize': {
+      id: '/oauth/authorize'
+      path: '/oauth/authorize'
+      fullPath: '/oauth/authorize'
+      preLoaderRoute: typeof OauthAuthorizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings/': {
       id: '/settings/'
       path: '/'
@@ -621,6 +653,13 @@ declare module '@tanstack/react-router' {
       path: '/agent'
       fullPath: '/settings/agent'
       preLoaderRoute: typeof SettingsAgentRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/apps': {
+      id: '/settings/apps'
+      path: '/apps'
+      fullPath: '/settings/apps'
+      preLoaderRoute: typeof SettingsAppsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/tokens': {
@@ -835,12 +874,14 @@ const OrgRouteWithChildren = OrgRoute._addFileChildren(OrgRouteChildren)
 
 interface SettingsRouteChildren {
   SettingsAgentRoute: typeof SettingsAgentRoute
+  SettingsAppsRoute: typeof SettingsAppsRoute
   SettingsTokensRoute: typeof SettingsTokensRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentRoute: SettingsAgentRoute,
+  SettingsAppsRoute: SettingsAppsRoute,
   SettingsTokensRoute: SettingsTokensRoute,
   SettingsIndexRoute: SettingsIndexRoute,
 }
@@ -878,6 +919,7 @@ const rootRouteChildren: RootRouteChildren = {
   DevTimeMachineRoute: DevTimeMachineRoute,
   DevViewerRoute: DevViewerRoute,
   InviteTokenRoute: InviteTokenRoute,
+  OauthAuthorizeRoute: OauthAuthorizeRoute,
   SigninForgotRoute: SigninForgotRoute,
   SigninNewRoute: SigninNewRoute,
   SigninResetRoute: SigninResetRoute,

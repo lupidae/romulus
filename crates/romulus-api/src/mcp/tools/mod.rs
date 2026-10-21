@@ -378,9 +378,11 @@ async fn record(ctx: &Ctx, audit: &Audit) {
         Some(Target::Slug(_)) => place.database_id,
         None => None,
     };
+    let app = agent.token.kind == crate::auth::access_tokens::TokenKind::App;
     let details = AuditDetails {
         token_id: Some(agent.token.id),
-        token_name: Some(agent.token.name.clone()),
+        token_name: (!app).then(|| agent.token.name.clone()),
+        app_name: app.then(|| agent.token.name.clone()),
         tool: Some(tool.to_owned()),
         outcome: Some(audit.outcome.clone()),
         ..audit.details.clone()

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO oauth_access_tokens (grant_id, token_hash, expires_at)\n           SELECT id, $2, least(now() + make_interval(secs => $3), expires_at)\n           FROM oauth_grants WHERE id = $1\n           RETURNING ceil(extract(epoch FROM expires_at - now()))::bigint AS \"expires_in!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "expires_in!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "371ff6b777ac60b64d2c83b9f9df3ff4c529769efdf70925cdd66aebb1414fe1"
+}

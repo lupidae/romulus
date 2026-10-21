@@ -33,17 +33,28 @@ test("an agent gets a token on the Connect page, connects, and is cut off by rev
   await page.getByRole("link", { name: "Connect your agent" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Connect your agent" })).toBeVisible();
 
-  // Claude Code's command asks for the token; the configurations wait for it.
-  await expect(page.getByLabel("Claude Code command", { exact: true })).toContainText(
+  // By default, nothing secret: the agent signs in through the browser.
+  const origin = new URL(page.url()).origin;
+  await expect(page.getByLabel("Claude Code command", { exact: true })).toHaveText(
+    `claude mcp add --transport http romulus ${origin}/api/mcp`,
+  );
+  await expect(page.getByText("Waiting for your agent to connect.")).toBeVisible();
+
+  // With a token (Advanced): Claude Code's command asks for it; the
+  // configurations wait for it.
+  await expect(page.getByLabel("Name")).toHaveCount(0);
+  await page.getByRole("button", { name: /^Advanced: connect with an access token/ }).click();
+  const tokenTabs = page.getByRole("tablist", { name: "Agent for the token" });
+  await expect(page.getByLabel("Claude Code command with a token", { exact: true })).toContainText(
     "read -rs ROMULUS_TOKEN",
   );
   await expect(page.getByText("The token goes in place of")).toHaveCount(0);
-  await page.getByRole("tab", { name: "Cursor" }).click();
-  await expect(page.getByLabel("Cursor configuration", { exact: true })).toContainText(
+  await tokenTabs.getByRole("tab", { name: "Cursor" }).click();
+  await expect(page.getByLabel("Cursor configuration with a token", { exact: true })).toContainText(
     "Bearer <your token>",
   );
   await expect(page.getByText("The token goes in place of <your token>.")).toBeVisible();
-  await page.getByRole("tab", { name: "Claude Code" }).click();
+  await tokenTabs.getByRole("tab", { name: "Claude Code" }).click();
   await page.getByLabel("Name").fill("Claude Code e2e");
   await page.getByRole("button", { name: "Create token" }).click();
   const secret = await page.getByRole("textbox", { name: "Access token" }).inputValue();
@@ -51,18 +62,19 @@ test("an agent gets a token on the Connect page, connects, and is cut off by rev
 
   // Every snippet holds the endpoint; the configurations hold the token, and
   // Claude Code's command asks for it (a command stays in shell history).
-  await page.getByRole("button", { name: "Copy claude code command" }).click();
+  await page.getByRole("button", { name: "Copy claude code command with a token" }).click();
   const command = await page.evaluate(() => navigator.clipboard.readText());
   expect(command).toBe(
     [
       "read -rs ROMULUS_TOKEN",
-      `claude mcp add --transport http romulus ${new URL(page.url()).origin}/api/mcp --header "Authorization: Bearer $ROMULUS_TOKEN"`,
+      `claude mcp add --transport http romulus ${origin}/api/mcp --header "Authorization: Bearer $ROMULUS_TOKEN"`,
     ].join("\n"),
   );
   expect(command).not.toContain(secret);
-  await page.getByRole("tab", { name: "Cursor" }).click();
+  await tokenTabs.getByRole("tab", { name: "Cursor" }).click();
   const cursor = JSON.parse(
-    (await page.getByLabel("Cursor configuration", { exact: true }).textContent()) ?? "{}",
+    (await page.getByLabel("Cursor configuration with a token", { exact: true }).textContent()) ??
+      "{}",
   ) as { mcpServers: { romulus: { headers: { Authorization: string } } } };
   expect(cursor.mcpServers.romulus.headers.Authorization).toBe(`Bearer ${secret}`);
 
@@ -95,6 +107,7 @@ test("a token made on the tokens page is shown once, read only", async ({ page }
   await page.goto("./settings/tokens");
   await expect(page.getByText("No access tokens")).toBeVisible();
   await page.goto("./settings/agent");
+  await page.getByRole("button", { name: /^Advanced: connect with an access token/ }).click();
   await page.getByLabel("Name").fill("first");
   await page.getByRole("button", { name: "Create token" }).click();
   await expect(page.getByRole("textbox", { name: "Access token" })).toBeVisible();

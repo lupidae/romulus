@@ -93,12 +93,17 @@ pub struct AuditDetails {
     /// (`created draft "Add invoices"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
-    /// The personal access token an agent acted with (`agent_action`).
+    /// The personal access token an agent acted with (`agent_action`), or
+    /// the grant of the connected app it acted through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_id: Option<Uuid>,
-    /// Its name then.
+    /// The personal token's name then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_name: Option<String>,
+    /// The connected app's name then (an OAuth token, `crate::oauth`), as
+    /// it registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_name: Option<String>,
     /// The MCP tool it called (`create_draft`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,

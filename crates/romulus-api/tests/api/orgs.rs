@@ -76,14 +76,20 @@ async fn invalid_names_and_slugs_name_their_field(db: PgPool) {
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn the_database_refuses_reserved_slugs_too(db: PgPool) {
-    let err = sqlx::query!("INSERT INTO organizations (name, slug) VALUES ('App', 'app')")
+    for slug in romulus_api::orgs::slug::RESERVED {
+        let err = sqlx::query!(
+            "INSERT INTO organizations (name, slug) VALUES ('Reserved', $1)",
+            slug
+        )
         .execute(&db)
         .await
         .unwrap_err();
-    assert_eq!(
-        romulus_api::db::constraint(&err),
-        Some("organizations_slug_not_reserved")
-    );
+        assert_eq!(
+            romulus_api::db::constraint(&err),
+            Some("organizations_slug_not_reserved"),
+            "{slug}"
+        );
+    }
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_clients SET last_used_at = now() - interval '31 days' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c119e55591d2ce0ef65c0e8f6e91f4267cf9e7d0f756d6b4a5d9e83ef5f47384"
+}

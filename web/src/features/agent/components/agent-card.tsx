@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Tooltip } from "@/components/ui/tooltip";
 import { usePreference } from "@/lib/use-preference";
 
-import { accessTokensQuery } from "../queries";
+import { accessTokensQuery, connectedAppsQuery } from "../queries";
 
 const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
 
@@ -18,8 +18,10 @@ const isBoolean = (value: unknown): value is boolean => typeof value === "boolea
  */
 export function AgentCard({ userId, writer }: { userId: string; writer: boolean }) {
   const tokens = useQuery(accessTokensQuery);
+  const apps = useQuery(connectedAppsQuery);
   const [dismissed, setDismissed] = usePreference(`romulus:agent-card:${userId}`, false, isBoolean);
-  if (dismissed || !tokens.data || tokens.data.length > 0) return null;
+  if (dismissed || !tokens.data || !apps.data) return null;
+  if (tokens.data.length > 0 || apps.data.length > 0) return null;
   return (
     <Card className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:gap-5">
       <span

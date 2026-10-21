@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id FROM oauth_refresh_tokens r JOIN oauth_grants g ON g.id = r.grant_id\n             WHERE r.token_hash = $1 AND ($2::uuid IS NULL OR g.client_id = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "oauth_grants",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9f726b7962dcf86f8fe238a2f2f1ccb242f96b1979b426b8da4531150f95e813"
+}

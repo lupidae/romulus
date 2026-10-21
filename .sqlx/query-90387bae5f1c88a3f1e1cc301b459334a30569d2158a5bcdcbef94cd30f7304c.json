@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_codes SET created_at = now() - interval '61 seconds' WHERE code_hash = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "90387bae5f1c88a3f1e1cc301b459334a30569d2158a5bcdcbef94cd30f7304c"
+}

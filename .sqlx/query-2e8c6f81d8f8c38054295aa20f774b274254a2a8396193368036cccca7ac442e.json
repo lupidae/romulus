@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT details->>'app_name' AS \"app?\" FROM audit_events\n           WHERE org_id = $1 AND action = 'agent_action'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "app?",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2e8c6f81d8f8c38054295aa20f774b274254a2a8396193368036cccca7ac442e"
+}

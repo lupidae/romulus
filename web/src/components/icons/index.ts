@@ -2,6 +2,7 @@
 // `npm run icons:add -- <name>` (names: https://icon-sets.iconify.design/iconoir/).
 // Never mix in another icon library.
 export { ActivityIcon } from "./activity";
+export { AppWindowIcon } from "./app-window";
 export { ArchiveIcon } from "./archive";
 export { ArrowLeftIcon } from "./arrow-left";
 export { ArrowRightIcon } from "./arrow-right";

@@ -456,6 +456,139 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/me/connected-apps": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The person's connected apps. */
+    get: operations["list_connected_apps"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/me/connected-apps/{client_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Disconnects an app: every token it holds for the person stops working
+     *     at once.
+     */
+    delete: operations["disconnect_app"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/oauth/authorize": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Starts an authorization (OAuth 2.1, 4.1.1): checks it, then sends the
+     *     browser to the consent page.
+     */
+    get: operations["oauth_authorize"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/oauth/register": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Registers a client (RFC 7591): any MCP client may, without signing in. */
+    post: operations["oauth_register"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/oauth/requests/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The authorization request this browser started, for the consent page. */
+    get: operations["get_authorization_request"];
+    put?: never;
+    /**
+     * Allows or denies an authorization request: answers where to send the
+     *     browser (back to the app).
+     */
+    post: operations["decide_authorization_request"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/oauth/revoke": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Revokes a token (RFC 7009): a refresh token ends its whole grant, an
+     *     access token itself. Answers 200 whatever the token was, so it tells
+     *     nothing about tokens it did not revoke.
+     */
+    post: operations["oauth_revoke"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/oauth/token": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Exchanges a code, or a refresh token, for tokens. */
+    post: operations["oauth_token"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs": {
     parameters: {
       query?: never;
@@ -1927,6 +2060,11 @@ export interface components {
      */
     AuditDetails: {
       /**
+       * @description The connected app's name then (an OAuth token, `crate::oauth`), as
+       *     it registered.
+       */
+      app_name?: string | null;
+      /**
        * Format: int32
        * @description The approvals it had, and how many the organization required.
        */
@@ -1988,10 +2126,11 @@ export interface components {
       to?: number | null;
       /**
        * Format: uuid
-       * @description The personal access token an agent acted with (`agent_action`).
+       * @description The personal access token an agent acted with (`agent_action`), or
+       *     the grant of the connected app it acted through.
        */
       token_id?: string | null;
-      /** @description Its name then. */
+      /** @description The personal token's name then. */
       token_name?: string | null;
       /** @description The MCP tool it called (`create_draft`). */
       tool?: string | null;
@@ -2042,6 +2181,19 @@ export interface components {
           kind: "token";
           name: string;
         };
+    /** @description A request for the person to decide on. */
+    AuthorizationRequest: {
+      client: components["schemas"]["RequestingClient"];
+      /**
+       * Format: date-time
+       * @description Decide before then.
+       */
+      expires_at: string;
+      /** Format: uuid */
+      id: string;
+      /** @description What it asks for: `write` is everything the person's roles allow. */
+      scope: components["schemas"]["AccessTokenScope"];
+    };
     /** @description What a billing event records. */
     BillingAudit: {
       /** Format: int64 */
@@ -2294,6 +2446,43 @@ export interface components {
       schema: string;
       sql: components["schemas"]["Sides"];
       status: components["schemas"]["Status"];
+    };
+    /** @description An app the person connected to romulus. */
+    ConnectedApp: {
+      /**
+       * Format: uuid
+       * @description The client's id: what Disconnect takes.
+       */
+      client_id: string;
+      /**
+       * Format: date-time
+       * @description When the person first approved it.
+       */
+      connected_at: string;
+      /**
+       * Format: date-time
+       * @description When it stops working unless it is used before.
+       */
+      expires_at: string;
+      /** @description The MCP client that last said who it is (`claude-code 2.1.4`). */
+      last_client?: string | null;
+      /**
+       * Format: date-time
+       * @description Its last request (written at most once a minute), or refresh;
+       *     `null` if never used.
+       */
+      last_used_at?: string | null;
+      /**
+       * @description Its redirect is a loopback address: a program on the person's
+       *     computer.
+       */
+      loopback: boolean;
+      /** @description The name it registered under, unverified; `null` if it gave none. */
+      name?: string | null;
+      /** @description Where its sign-ins go back to (`claude.ai`, `localhost`). */
+      redirect_host: string;
+      /** @description The widest access among its grants. */
+      scope: components["schemas"]["AccessTokenScope"];
     };
     /** @description A result column: its name and type, as `format_type` prints it. */
     ConsoleColumn: {
@@ -2717,6 +2906,19 @@ export interface components {
        * @description How many versions it has (removed ones not counted).
        */
       versions: number;
+    };
+    /** @description Where the browser goes now. */
+    Decided: {
+      /**
+       * @description The app's redirect URI with a code (allowed) or `error=access_denied`,
+       *     `state` and `iss`.
+       */
+      redirect_url: string;
+    };
+    /** @description The person's answer. */
+    Decision: {
+      allow: boolean;
+      scope?: components["schemas"]["AccessTokenScope"] | null;
     };
     /**
      * @description One message about the SQL, located in the text the user wrote (never in
@@ -4822,6 +5024,21 @@ export interface components {
     Received: {
       received: boolean;
     };
+    /** @description A client as registered (RFC 7591, 3.2.1). No secret: it is public. */
+    RegisteredClient: {
+      client_id: string;
+      /**
+       * Format: int64
+       * @description Seconds since the epoch.
+       */
+      client_id_issued_at: number;
+      client_name?: string | null;
+      grant_types: string[];
+      redirect_uris: string[];
+      response_types: string[];
+      /** @description Always `none`: a public client. */
+      token_endpoint_auth_method: string;
+    };
     /** @description A schema-qualified relation name, unquoted. */
     Relation: {
       name: string;
@@ -4930,6 +5147,19 @@ export interface components {
       | "composite"
       | "enum_value"
       | "attribute";
+    /** @description The client asking, as far as romulus can tell. */
+    RequestingClient: {
+      /** Format: uuid */
+      id: string;
+      /** @description The redirect URI is a loopback address: a program on this computer. */
+      loopback: boolean;
+      /** @description The name it registered under, unverified; `null` if it gave none. */
+      name?: string | null;
+      /** @description Where the browser goes back to: the part that can be trusted. */
+      redirect_host: string;
+      /** Format: date-time */
+      registered_at: string;
+    };
     ResetLink: {
       email: string;
       /** Format: date-time */
@@ -5620,6 +5850,22 @@ export interface components {
        * @description Removed (only with `removed=true`): when, and why.
        */
       removed_at: string | null;
+    };
+    /** @description Tokens issued (OAuth 2.1, 3.2.3). */
+    TokenResponse: {
+      /** @description `rmls_oat_…`, for `Authorization: Bearer` at the MCP endpoint. */
+      access_token: string;
+      /**
+       * Format: int64
+       * @description Seconds.
+       */
+      expires_in: number;
+      /** @description `rmls_ort_…`, single use: each refresh answers a new one. */
+      refresh_token: string;
+      /** @description `romulus.read`, or `romulus.read romulus.write`. */
+      scope: string;
+      /** @description `Bearer`. */
+      token_type: string;
     };
     /**
      * @description What an API token may do (`api_token_scope`).
@@ -7000,7 +7246,7 @@ export interface operations {
           "application/json": Record<string, never>;
         };
       };
-      /** @description No live personal access token (`WWW-Authenticate: Bearer`) */
+      /** @description No live access token (`WWW-Authenticate: Bearer resource_metadata=…`) */
       401: {
         headers: {
           [name: string]: unknown;
@@ -7009,7 +7255,7 @@ export interface operations {
           "application/json": Record<string, never>;
         };
       };
-      /** @description An `Origin` other than romulus's */
+      /** @description An `Origin` other than romulus's; or a read-only app calling a write tool (`WWW-Authenticate: Bearer error="insufficient_scope"`) */
       403: {
         headers: {
           [name: string]: unknown;
@@ -7192,6 +7438,331 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  list_connected_apps: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConnectedApp"][];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  disconnect_app: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The app's client id */
+        client_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Disconnected */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No such app connected for the caller */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  oauth_authorize: {
+    parameters: {
+      query: {
+        /** @description `code` */
+        response_type: string;
+        /** @description From registration */
+        client_id: string;
+        /** @description One the client registered (any port on a loopback one); optional when it registered only one */
+        redirect_uri?: string;
+        /** @description Required */
+        state: string;
+        /** @description PKCE: base64url(sha256(verifier)) */
+        code_challenge: string;
+        /** @description `S256` only */
+        code_challenge_method: string;
+        /** @description `romulus.read`, `romulus.write` (both when absent) */
+        scope?: string;
+        /** @description The MCP endpoint, `<public URL>/api/mcp` (RFC 8707) */
+        resource?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description To the consent page (`/app/oauth/authorize?request=…`, with the cookie that binds the request to this browser); to the redirect URI with `error` for a bad request; to `/app/oauth/authorize?error=…` when the client or its redirect URI is unknown */
+      303: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  oauth_register: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** @description Client metadata (RFC 7591, 2): `redirect_uris` (required), `client_name`, `grant_types`, `response_types`, `token_endpoint_auth_method` */
+    requestBody: {
+      content: {
+        "application/json": Record<string, never>;
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RegisteredClient"];
+        };
+      };
+      /** @description `invalid_redirect_uri` or `invalid_client_metadata` (`{error, error_description}`) */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description Too many registrations from this client (`Retry-After`) */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+    };
+  };
+  get_authorization_request: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description From the consent page's `?request=` */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AuthorizationRequest"];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Expired, answered, or started in another browser */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  decide_authorization_request: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description From the consent page's `?request=` */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["Decision"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Decided"];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Expired, answered, or started in another browser */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description A scope wider than the app asked for */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  oauth_revoke: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** @description `token`, `token_type_hint`, `client_id` */
+    requestBody: {
+      content: {
+        "application/x-www-form-urlencoded": string;
+      };
+    };
+    responses: {
+      /** @description Revoked, or nothing to revoke */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description `invalid_request`: no token */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description Too many requests (`Retry-After`) */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+    };
+  };
+  oauth_token: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** @description `grant_type=authorization_code` with `code`, `code_verifier`, `client_id`, `redirect_uri`, `resource`; or `grant_type=refresh_token` with `refresh_token`, `client_id`, `scope`, `resource` */
+    requestBody: {
+      content: {
+        "application/x-www-form-urlencoded": string;
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TokenResponse"];
+        };
+      };
+      /** @description `invalid_request`, `invalid_grant`, `invalid_scope`, `invalid_target`, `unsupported_grant_type` (`{error, error_description}`) */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description `invalid_client`: register again */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
+        };
+      };
+      /** @description Too many requests (`Retry-After`) */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": Record<string, never>;
         };
       };
     };

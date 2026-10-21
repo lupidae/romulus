@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::{Ctx, Output, Tool, ToolError, args, schema};
 use crate::{
-    auth::CurrentUser,
+    auth::{CurrentUser, access_tokens::TokenKind},
     databases::{Database, search::SearchResults},
     drafts::Draft,
     orgs::Org,
@@ -64,8 +64,12 @@ async fn whoami(ctx: &Ctx) -> Result<Output, ToolError> {
     } else {
         "read-only"
     };
+    let (through, kind) = match token.kind {
+        TokenKind::Personal => ("the access token", "personal"),
+        TokenKind::App => ("the connected app", "app"),
+    };
     let mut text = format!(
-        "{} <{}>, through the access token \"{}\" ({access}).\nromulus: {}\n",
+        "{} <{}>, through {through} \"{}\" ({access}).\nromulus: {}\n",
         me.name,
         me.email,
         token.name,
@@ -89,7 +93,7 @@ async fn whoami(ctx: &Ctx) -> Result<Output, ToolError> {
     // The same facts, for a program checking a connection.
     let structured = json!({
         "user": { "name": me.name, "email": me.email },
-        "token": { "name": token.name, "access": access },
+        "token": { "name": token.name, "access": access, "kind": kind },
         "organizations": orgs.iter().map(|org| json!({
             "slug": org.slug, "name": org.name, "role": role(org),
         })).collect::<Vec<_>>(),

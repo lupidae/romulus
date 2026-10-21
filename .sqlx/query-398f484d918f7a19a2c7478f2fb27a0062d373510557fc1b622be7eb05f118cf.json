@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE oauth_access_tokens SET expires_at = now() - interval '1 second',\n                created_at = now() - interval '2 hours'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "398f484d918f7a19a2c7478f2fb27a0062d373510557fc1b622be7eb05f118cf"
+}

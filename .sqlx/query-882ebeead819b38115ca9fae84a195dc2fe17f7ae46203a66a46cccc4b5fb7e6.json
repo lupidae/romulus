@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO oauth_codes\n                 (code_hash, client_id, user_id, redirect_uri, redirect_uri_given,\n                  code_challenge, scope, resource)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Text",
+        {
+          "Custom": {
+            "name": "access_token_scope",
+            "kind": {
+              "Enum": [
+                "read",
+                "write"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "882ebeead819b38115ca9fae84a195dc2fe17f7ae46203a66a46cccc4b5fb7e6"
+}
