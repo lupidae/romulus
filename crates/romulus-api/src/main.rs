@@ -655,8 +655,9 @@ async fn serve() -> Result<(), MainError> {
             romulus_api::auth::password::SWEEP_EVERY,
         )
     });
-    // Billing: playground hours metered every minute, the emails it owes
-    // (renewal reminders, payment notices) every hour.
+    // Billing: Stripe's webhook events past 90 days swept every hour (on
+    // or off); on, playground hours metered every minute, the emails it
+    // owes (renewal reminders, payment notices) every hour.
     let billing_tasks = romulus_api::billing::tasks(&state);
     // The Terms' records past their retention: now, and every day. Contract
     // and billing letters: sent once the mail server takes them.

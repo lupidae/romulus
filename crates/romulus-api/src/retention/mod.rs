@@ -24,7 +24,8 @@
 //! as using an account is [`activity`]'s.
 //!
 //! Kept elsewhere, by their own rules: invoices (in Stripe), the sign-in log
-//! (`auth_events`, 90 days: it records the deletions too), backups (the
+//! (`auth_events`, 90 days: it records the deletions too), Stripe's webhook
+//! events (`billing_events`, 90 days: `billing::events`), backups (the
 //! operator's).
 //!
 //! Self-service deletion (later): an endpoint calls
@@ -64,24 +65,9 @@ pub const SWEEP_LOCK: &str = "romulus.retention";
 /// on) the inactive accounts' notices and deletions. Each step logs its own
 /// failure and lets the others run.
 pub async fn sweep(state: &AppState) -> Swept {
-    // A connection of its own, out of the pool: the lock is the session's,
-    // and goes with the connection whatever happens.
-    let mut lock = match state.db.acquire().await {
-        Ok(conn) => conn.detach(),
-        Err(err) => {
-            tracing::warn!(error = %err, "retention: no connection to sweep with");
-            return Swept::default();
-        }
-    };
-    let locked = sqlx::query_scalar!(
-        r#"SELECT pg_try_advisory_lock(hashtext($1)) AS "locked!""#,
-        SWEEP_LOCK
-    )
-    .fetch_one(&mut lock)
-    .await;
-    match locked {
-        Ok(true) => {}
-        Ok(false) => {
+    let lock = match crate::db::try_advisory_lock(&state.db, SWEEP_LOCK).await {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
             tracing::info!("retention: another process is sweeping, skipped");
             return Swept::default();
         }
@@ -89,7 +75,7 @@ pub async fn sweep(state: &AppState) -> Swept {
             tracing::warn!(error = %err, "retention: cannot take the sweep's lock");
             return Swept::default();
         }
-    }
+    };
     let swept = sweep_locked(state).await;
     // Closing the connection releases the lock too.
     if let Err(err) = sqlx::Connection::close(lock).await {

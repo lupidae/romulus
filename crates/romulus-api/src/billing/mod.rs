@@ -12,7 +12,8 @@
 //!   `drafts::approvals` (override), `playgrounds` and `migration_tests`
 //!   (size, hours), and every read of versions (the history window).
 //! - [`stripe`]: the calls romulus makes, behind a trait (`Http`, `Fake`).
-//! - [`api`]: the endpoints below; [`webhook`]: Stripe's events.
+//! - [`api`]: the endpoints below; [`webhook`]: Stripe's events;
+//!   [`events`]: the events kept, 90 days (billing on or off).
 //! - [`hours`]: playground time metered per organization and month, the
 //!   80 % warning, the stop at 100 %.
 //! - [`notices`]: the emails, in English or French: the subscription's
@@ -46,6 +47,7 @@ pub mod api;
 pub mod caps;
 pub mod copy;
 pub mod countries;
+pub mod events;
 pub mod hours;
 pub mod notices;
 pub mod plans;
@@ -178,17 +180,20 @@ impl Billing {
     }
 }
 
-/// Billing's background tasks, when it is on: playground hours metered
-/// every minute, the emails it owes (renewal reminders, payment notices)
-/// every hour. None with billing off.
+/// Billing's background tasks: Stripe's webhook events past 90 days swept
+/// every hour, billing on or off (those of a past configuration go too);
+/// when it is on, playground hours metered every minute, the emails it
+/// owes (renewal reminders, payment notices) every hour.
 pub fn tasks(state: &crate::AppState) -> Vec<tokio::task::JoinHandle<()>> {
+    let events = events::sweeper(state.db.clone(), events::SWEEP_EVERY);
     let Some(inner) = state.billing.inner() else {
-        return Vec::new();
+        return vec![events];
     };
     if inner.fake.is_some() {
         tracing::warn!("billing: ROMULUS_BILLING=fake, Stripe is simulated (tests only)");
     }
     vec![
+        events,
         hours::meter(state.clone(), hours::METER_EVERY),
         notices::run(state.clone(), notices::NOTICES_EVERY),
     ]

@@ -1197,7 +1197,9 @@ docs/MVP.md "Billing" has the decisions.
   time per organization and UTC month, 80 % email, stop at 100 % through
   `Backend::stop` with a reason) and `notices::run` (hourly: renewal
   reminders 40 days ahead, grace warnings, downgrades), each email once
-  (`billing_notices`).
+  (`billing_notices`). Billing on or off, `events::sweeper` (hourly, one
+  process at a time: `db::try_advisory_lock`, as retention's sweep) deletes
+  `billing_events` past 90 days, as the privacy policy says.
 - **Export** (`GET …/databases/{db}/export` member, `GET /orgs/{org}/export`
   admin): a ZIP streamed from its own task (`export::Archive`, one version in
   memory at a time), hidden versions included, never capped, on with billing

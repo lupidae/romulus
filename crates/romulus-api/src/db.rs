@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sqlx::{
-    PgPool, Postgres, Transaction,
+    PgConnection, PgPool, Postgres, Transaction,
     migrate::Migrator,
     postgres::{PgDatabaseError, PgPoolOptions},
 };
@@ -35,6 +35,25 @@ pub async fn begin_read_committed(
     db: &PgPool,
 ) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
     db.begin_with("BEGIN ISOLATION LEVEL READ COMMITTED").await
+}
+
+/// Takes the session-level advisory lock `name` (`hashtext` of it) on a
+/// connection of its own, out of the pool: the lock is the session's and
+/// goes with the connection whatever happens (close it to release). `None`
+/// when another session holds it. For work one process does at a time
+/// (sweeps).
+pub async fn try_advisory_lock(
+    db: &PgPool,
+    name: &str,
+) -> Result<Option<PgConnection>, sqlx::Error> {
+    let mut conn = db.acquire().await?.detach();
+    let locked = sqlx::query_scalar!(
+        r#"SELECT pg_try_advisory_lock(hashtext($1)) AS "locked!""#,
+        name
+    )
+    .fetch_one(&mut conn)
+    .await?;
+    Ok(locked.then_some(conn))
 }
 
 /// The constraint a database error names, if any: unique and foreign-key
