@@ -183,12 +183,8 @@ pub async fn run(
     Ok(())
 }
 
-async fn portal(
-    setup: &Setup,
-    stripe: &Http,
-    prices: &[(Plan, Vec<String>)],
-    out: &mut impl Write,
-) -> Result<(), SetupError> {
+/// The portal's settings, apart from the plans it may switch between.
+fn portal_form() -> Form {
     let mut form = Form::new()
         .set("business_profile[headline]", "romulus: plans and invoices")
         .set("features[customer_update][enabled]", "true")
@@ -206,24 +202,6 @@ async fn portal(
         .set(
             "features[subscription_cancel][cancellation_reason][enabled]",
             "false",
-        )
-        // Stripe requires the reasons even when the survey is off (a create
-        // without them is refused); they are never shown.
-        .set(
-            "features[subscription_cancel][cancellation_reason][options][0]",
-            "too_expensive",
-        )
-        .set(
-            "features[subscription_cancel][cancellation_reason][options][1]",
-            "missing_features",
-        )
-        .set(
-            "features[subscription_cancel][cancellation_reason][options][2]",
-            "unused",
-        )
-        .set(
-            "features[subscription_cancel][cancellation_reason][options][3]",
-            "other",
         )
         .set("features[subscription_update][enabled]", "true")
         .set(
@@ -243,6 +221,26 @@ async fn portal(
             "shortening_interval",
         )
         .set("metadata[romulus]", "portal");
+    // Stripe requires the reasons even with the survey off (a create without
+    // them is refused); they are never shown.
+    for (n, reason) in CANCELLATION_REASONS.iter().enumerate() {
+        form = form.set(
+            format!("features[subscription_cancel][cancellation_reason][options][{n}]"),
+            *reason,
+        );
+    }
+    form
+}
+
+const CANCELLATION_REASONS: [&str; 4] = ["too_expensive", "missing_features", "unused", "other"];
+
+async fn portal(
+    setup: &Setup,
+    stripe: &Http,
+    prices: &[(Plan, Vec<String>)],
+    out: &mut impl Write,
+) -> Result<(), SetupError> {
+    let mut form = portal_form();
     for (n, (plan, ids)) in prices.iter().enumerate() {
         form = form
             .set(
