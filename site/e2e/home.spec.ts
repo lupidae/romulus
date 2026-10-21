@@ -9,6 +9,7 @@ import { price, readPlans, withPlans } from "../tools/pricing.mjs";
 
 const publicFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../public/${name}`, import.meta.url)), "utf8");
+const repoFile = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8");
 
 /** The static picture only: the live hero (e2e/hero.spec.ts) is not loaded. */
 async function withoutLiveHero(page: Page) {
@@ -79,6 +80,7 @@ test("the page covers what ships, section by section", async ({ page }) => {
     "Bring your migrations. Get the next one written.",
     "Try the migration on rows first.",
     "Push the real schema from CI.",
+    "Your agent speaks romulus.",
     "Postgres, down to the last policy.",
     "Roles that match how teams review.",
     "Flat plans. Bring the whole team.",
@@ -116,6 +118,55 @@ test("the header and the pricing card lead to pricing and self-hosting", async (
   await expect(page.getByRole("banner").getByRole("link", { name: "romulus on GitHub" })).toHaveAttribute(
     "href",
     "https://github.com/lupidae/romulus",
+  );
+});
+
+test("the agents section: in the nav, a readable session, the command to connect", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await withoutLiveHero(page);
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Sections" }).getByRole("link", { name: "MCP" }).click();
+  await expect(page).toHaveURL(/#mcp$/);
+  const section = page.locator("#mcp");
+  await expect(section.getByRole("heading", { level: 2, name: "Your agent speaks romulus." })).toBeInViewport();
+
+  // The session is text a screen reader reads, not a picture: Ada asks, the
+  // agent calls three tools, then answers.
+  const session = section.getByRole("figure", { name: /Ada's agent/ });
+  await expect(session).toBeVisible();
+  const turns = session.locator(".transcript > li");
+  await expect(turns).toHaveCount(5);
+  await expect(turns.first()).toContainText("Add a refunds table linked to invoices, and test the migration.");
+  await expect(turns.last()).toContainText("Shall I request a review?");
+  const tools = await session.locator(".call-name").allInnerTexts();
+  expect(tools).toEqual(["create_draft", "generate_migration", "test_migration"]);
+  await expect(session.getByText("Tool call:")).toHaveCount(3);
+  await expect(session).toContainText("Up and down ran on 4,237 rows. Everything came back.");
+
+  // Honest: the tools exist under these names, and their answers read so.
+  const toolSources = ["drafts.rs", "testing.rs"]
+    .map((file) => repoFile(`crates/romulus-api/src/mcp/tools/${file}`))
+    .join("\n");
+  for (const tool of tools) expect(toolSources, tool).toContain(`name: "${tool}"`);
+  for (const said of [
+    '"Created draft {} \\"{}\\" in {org}/{} ({}, {}).\\n"',
+    "{} that can lose data or fail on existing rows.",
+    '"PASSED (up and down)"',
+  ])
+    expect(toolSources).toContain(said);
+  const check = repoFile("crates/romulus-migration-check/src/lib.rs");
+  for (const said of ['"Up and down ran on {rows} rows."', '"{ran} Everything came back."'])
+    expect(check).toContain(said);
+
+  const button = section.getByRole("button", { name: "Copy the MCP command" });
+  await button.click();
+  await expect(button).toContainText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "claude mcp add --transport http romulus https://romulus.lupidae.com/api/mcp\n",
+  );
+  await expect(section.getByRole("link", { name: "use an access token" })).toHaveAttribute(
+    "href",
+    "https://github.com/lupidae/romulus/blob/main/docs/mcp.md",
   );
 });
 
@@ -208,7 +259,29 @@ test("every plan starts with a free sign-up, Team is the one recommended", async
   await expect(pricing.locator(".plan.is-recommended h3")).toHaveText("Team");
   // No fake urgency, no popularity claims.
   await expect(pricing).not.toContainText(/popular|limited time|only \d+ left/i);
-  await expect(pricing.getByText("TVA non applicable, art. 293 B du CGI.")).toHaveAttribute("lang", "fr");
+  // Who the paid plans are for, and the VAT, said once, under the switch.
+  const note = pricing.locator(".period-note");
+  await expect(note).toContainText("Paid plans are for businesses and professionals.");
+  await expect(note).toContainText("Prices excl. VAT; VAT not applicable, art. 293 B du CGI.");
+  await expect(note.locator('[lang="fr"]')).toHaveText("art. 293 B du CGI");
+  await expect(pricing.getByText(/VAT|TVA/)).toHaveCount(1);
+});
+
+test("the plans promise what the hosted Terms say", async ({ page }) => {
+  await page.goto("/#pricing");
+  const pricing = page.locator("#pricing");
+  const limit = (label: string) =>
+    pricing.locator(".plan-limits > div").filter({ has: page.locator("dt", { hasText: label }) }).locator("dd");
+  // The cap counts one version's tables and views (billing::plans, `schema_objects`).
+  await expect(limit("Tables and views in each version")).toHaveText(["50", "200", "1,000", "5,000"]);
+  await expect(pricing.getByText("Tables and views per database")).toHaveCount(0);
+  // Terms 7.1 and 13.3: support by email on paid plans, its times are targets.
+  await expect(limit("Support")).toHaveText([
+    "Community",
+    "Email",
+    "Email, aiming to answer in 2 business days",
+    "Priority email",
+  ]);
 });
 
 test("the push command copies to the clipboard", async ({ page, context }) => {
@@ -281,7 +354,7 @@ for (const width of [360, 390]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/#ci");
     const blocks = page.locator(".terminal-body");
-    expect(await blocks.count()).toBe(4);
+    expect(await blocks.count()).toBe(5);
     for (const pre of await blocks.all()) {
       const { scroll, client } = await pre.evaluate((el) => ({
         scroll: el.scrollWidth,
@@ -306,10 +379,16 @@ test("the footer links the project, its docs, its security policy and a contact"
     "https://github.com/lupidae/romulus/blob/main/SECURITY.md",
   );
   await expect(href("Contact")).toHaveAttribute("href", "mailto:romulus@lupidae.com");
-  // The legal notice only: terms and privacy wait for counsel.
   const legal = page.getByRole("navigation", { name: "Legal" });
-  await expect(legal.getByRole("link")).toHaveText(["Legal notice"]);
-  await expect(legal.getByRole("link", { name: "Legal notice" })).toHaveAttribute("href", "/legal-notice");
+  const documents = [
+    ["Legal notice", "/legal-notice"],
+    ["Terms", "/legal/terms"],
+    ["Privacy", "/legal/privacy"],
+    ["DPA (for businesses)", "/legal/dpa"],
+  ];
+  await expect(legal.getByRole("link")).toHaveText(documents.map(([name]) => name));
+  for (const [name, path] of documents)
+    await expect(legal.getByRole("link", { name, exact: true })).toHaveAttribute("href", path);
 });
 
 test("the theme choice applies at once and is shared with the app", async ({ page }) => {
@@ -381,6 +460,34 @@ test("FAQ answers open from the keyboard", async ({ page }) => {
   await question.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText("romulus never holds a connection string")).toBeVisible();
+});
+
+test("the FAQ says what ships: agents, paid plans, the export", async ({ page }) => {
+  await withoutLiveHero(page);
+  await page.goto("/#faq");
+  const faq = page.locator(".faq");
+  const open = async (question: string) => {
+    const item = faq.locator("details").filter({ has: page.getByText(question, { exact: true }) });
+    await item.locator("summary").click();
+    const answer = item.locator("p");
+    await expect(answer).toBeVisible();
+    return answer;
+  };
+
+  const agents = await open("Does it work with my AI agent?");
+  await expect(agents).toContainText("MCP server built in");
+  await agents.getByRole("link", { name: "See how to connect it" }).click();
+  await expect(page).toHaveURL(/#mcp$/);
+  await expect(page.getByRole("heading", { level: 2, name: "Your agent speaks romulus." })).toBeInViewport();
+
+  // Paid plans can be bought now, and the export exists, on every plan.
+  await expect(await open("What does it cost?")).toContainText(
+    "an admin moves it to a paid plan from its Billing page",
+  );
+  await expect(await open("Can we move from hosted to self-hosted?")).toContainText(
+    "On every plan, an admin can export the whole organization as one ZIP",
+  );
+  await expect(faq).not.toContainText(/not open yet|being built/);
 });
 
 test("an unknown path gets the 404 page", async ({ page }) => {
