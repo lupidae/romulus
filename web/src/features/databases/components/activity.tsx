@@ -13,6 +13,7 @@ import {
   RefreshDoubleIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SparksIcon,
   TrashIcon,
   UndoIcon,
   WarningTriangleIcon,
@@ -126,6 +127,7 @@ const icons = {
   passing_test_required_changed: SettingsIcon,
   migration_test_acknowledged: ShieldCheckIcon,
   passing_test_overridden: ShieldCheckIcon,
+  agent_action: SparksIcon,
   // Billing's (organization-level, kept out of a database's activity by the API).
   terms_accepted: CreditCardIcon,
   subscription_changed: CreditCardIcon,
@@ -186,6 +188,8 @@ function sentence(event: AuditEvent): string {
       return `${who} ran a migration on a playground of ${v}${details.outcome ? `: ${details.outcome}` : ""}`;
     case "playground_restarted":
       return `A playground of ${v} restarted to undo a role changed from inside it`;
+    case "agent_action":
+      return `${who}'s agent ${details.outcome ?? `used ${details.tool ?? "a tool"}`}, with the access token “${details.token_name ?? "?"}”`;
     case "terms_accepted":
       return `${who} accepted the Terms of Service to subscribe`;
     case "subscription_changed":
@@ -214,7 +218,7 @@ function Event({ event }: { event: AuditEvent }) {
         {(details.message || details.draft_name) && (
           <p className="truncate text-sm text-muted-foreground">
             {details.draft_name
-              ? `${event.action === "comment_deleted" ? "In" : event.action.startsWith("playground_") || event.action === "migration_test_acknowledged" ? "For" : "From"} the draft “${details.draft_name}”`
+              ? `${event.action === "comment_deleted" ? "In" : event.action.startsWith("playground_") || event.action === "migration_test_acknowledged" || event.action === "agent_action" ? "For" : "From"} the draft “${details.draft_name}”`
               : details.message}
           </p>
         )}

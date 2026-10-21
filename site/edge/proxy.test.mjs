@@ -187,3 +187,38 @@ test("without its configuration, or its origin, the proxy answers 503 in the API
   );
   assert.equal(down.status, 503);
 });
+
+test("an agent's MCP request passes with its token, and the answer comes back as the origin streams it", async () => {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0","id":1,'));
+      controller.enqueue(new TextEncoder().encode('"result":{}}'));
+      controller.close();
+    },
+  });
+  const answer = new Response(stream, {
+    headers: { "content-type": "application/json" },
+  });
+  const { calls, fetchImpl } = recorder(answer);
+  const request = new Request(`https://${env.ROMULUS_PUBLIC_HOST}/api/mcp`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer rmls_pat_secret",
+      "content-type": "application/json",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": "tools/call",
+      "mcp-name": "whoami",
+    },
+    body: '{"jsonrpc":"2.0","id":1,"method":"tools/call"}',
+  });
+  assert.ok(proxied("/api/mcp"));
+  const response = await proxy(request, env, fetchImpl);
+  const [{ url, init }] = calls;
+  assert.equal(url, new URL("/api/mcp", env.ROMULUS_ORIGIN).href);
+  assert.equal(init.headers.get("authorization"), "Bearer rmls_pat_secret");
+  for (const header of ["mcp-protocol-version", "mcp-method", "mcp-name"])
+    assert.ok(init.headers.get(header), header);
+  // The origin's response itself: nothing buffers it on the way.
+  assert.equal(response, answer);
+  assert.equal(await response.text(), '{"jsonrpc":"2.0","id":1,"result":{}}');
+});

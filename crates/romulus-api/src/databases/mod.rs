@@ -10,6 +10,9 @@
 //! - `POST /orgs/{org}/databases/{db}/major/check`, `PUT …/major`
 //!   [developer]: move it to another Postgres major, once its latest version
 //!   compiles there (see [`major`]).
+//! - `GET /orgs/{org}/search?q=` [member]: tables, columns and enums of
+//!   every database's latest version matching a name or comment
+//!   ([`search`]).
 //! - `GET/POST /orgs/{org}/databases/{db}/tokens`, `DELETE
 //!   …/tokens/{id}` [developer]: API tokens (see [`tokens`]), and the
 //!   [`tokens::Bearer`] extractor the machine API authenticates with.
@@ -19,6 +22,7 @@
 //! creation): every compile of its SQL runs on that major's sandbox.
 
 pub mod major;
+pub mod search;
 pub mod slug;
 pub mod tokens;
 
@@ -47,6 +51,7 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, create))
         .routes(routes!(get, update, delete))
+        .routes(routes!(search::search))
         .merge(major::router())
         .merge(tokens::router())
 }

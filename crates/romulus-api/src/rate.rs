@@ -1,5 +1,6 @@
 //! Rate limits for endpoints that cost real work: pushes (per API token), SQL
-//! compiles (per person, and per database). A token bucket per key: a burst, then one more
+//! compiles (per person, and per database), MCP requests (per personal access
+//! token). A token bucket per key: a burst, then one more
 //! request per refill period. In memory, like everything per-instance in the
 //! MVP (one API instance); a restart forgets the counts, which only ever
 //! errs on the generous side.
@@ -169,6 +170,10 @@ pub struct Limits {
     pub org_exports: Limiter<Uuid>,
     /// Exports streaming at once, per organization and in all.
     pub export_slots: Slots,
+    /// MCP requests per personal access token: an agent working through a
+    /// task fits, a loop does not. What each tool calls is limited on top,
+    /// as for the person in the web app.
+    pub access_tokens: Limiter<Uuid>,
 }
 
 impl Default for Limits {
@@ -186,6 +191,7 @@ impl Default for Limits {
             exports: Limiter::new(5, Duration::from_secs(30)),
             org_exports: Limiter::new(10, Duration::from_secs(15)),
             export_slots: Slots::new(2, 6),
+            access_tokens: Limiter::new(60, Duration::from_millis(500)),
         }
     }
 }

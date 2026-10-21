@@ -34,7 +34,8 @@
                 "payment_succeeded",
                 "plan_downgraded",
                 "playground_hours_used_up",
-                "subscription_duplicate_cancelled"
+                "subscription_duplicate_cancelled",
+                "agent_action"
               ]
             }
           }

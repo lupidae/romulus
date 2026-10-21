@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.source FROM versions v JOIN databases d ON d.id = v.database_id\n         WHERE d.slug = 'billing-service'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "source"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "346b7252664a91885fcf0d64c68a85efce587e605c1d968ee802e39b795f22e6"
+}

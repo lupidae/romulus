@@ -13,7 +13,10 @@
 //! Extractors: [`CurrentUser`] (any signed-in person) and [`Member`] (a
 //! member of the `{org}` in the path with at least a role: see [`member`]).
 //! Requests with `Authorization: Bearer` authenticate by API token only and
-//! never as a [`CurrentUser`] (see `crate::csrf`).
+//! never as a [`CurrentUser`] (see `crate::csrf`). Personal access tokens
+//! (`GET/POST /me/access-tokens`, `DELETE /me/access-tokens/{id}`:
+//! [`access_tokens`]) are accepted at the MCP endpoint only, which lends
+//! the handlers it calls its person's identity.
 //!
 //! Browser navigations (login, callback, dev sign-in) answer with redirects,
 //! never JSON: a failure lands on `/app/signin?error=<code>`, whose page
@@ -27,6 +30,7 @@
 //! Zitadel, for QA and the Playwright suite. Otherwise it answers 404 like any
 //! unknown path, and it is not in the OpenAPI document.
 
+pub mod access_tokens;
 pub mod events;
 pub mod limit;
 pub mod member;
@@ -69,6 +73,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(logout))
         .routes(routes!(me))
         .merge(password::router())
+        .merge(access_tokens::router())
         // Undocumented: it only exists in development (see the module docs).
         .route("/auth/dev-signin", any(dev_signin))
 }

@@ -44,6 +44,10 @@ sandboxed Postgres of the version you run (15, 16, 17 or 18).
 - **Playgrounds.** A real Postgres holding a version's schema and generated
   rows. Query it, run a draft's migration on it to see each statement's
   locks, rewrites and timing, then reset. Each one runs isolated in gVisor.
+- **Your AI agent.** Claude Code, Claude Desktop, Cursor or any MCP client
+  works in romulus as you, with a personal access token: it reads schemas,
+  drafts a change, tests its migration on data and asks for a review, under
+  your organization's rules. [docs/mcp.md](docs/mcp.md) connects it.
 
 ## Quick start
 

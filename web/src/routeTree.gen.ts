@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as OrgRouteImport } from './routes/$org'
 import { Route as NewRouteImport } from './routes/new'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as OrgIndexRouteImport } from './routes/$org/index'
 import { Route as OrgDbRouteImport } from './routes/$org/$db'
@@ -22,6 +23,9 @@ import { Route as DevShellRouteImport } from './routes/dev/shell'
 import { Route as DevTimeMachineRouteImport } from './routes/dev/time-machine'
 import { Route as DevViewerRouteImport } from './routes/dev/viewer'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
+import { Route as SettingsIndexRouteImport } from './routes/settings/index'
+import { Route as SettingsAgentRouteImport } from './routes/settings/agent'
+import { Route as SettingsTokensRouteImport } from './routes/settings/tokens'
 import { Route as SigninForgotRouteImport } from './routes/signin_.forgot'
 import { Route as SigninNewRouteImport } from './routes/signin_.new'
 import { Route as SigninResetRouteImport } from './routes/signin_.reset'
@@ -58,6 +62,11 @@ const OrgRoute = OrgRouteImport.update({
 const NewRoute = NewRouteImport.update({
   id: '/new',
   path: '/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SigninRoute = SigninRouteImport.update({
@@ -109,6 +118,21 @@ const InviteTokenRoute = InviteTokenRouteImport.update({
   id: '/invite/$token',
   path: '/invite/$token',
   getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsAgentRoute = SettingsAgentRouteImport.update({
+  id: '/agent',
+  path: '/agent',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTokensRoute = SettingsTokensRouteImport.update({
+  id: '/tokens',
+  path: '/tokens',
+  getParentRoute: () => SettingsRoute,
 } as any)
 const SigninForgotRoute = SigninForgotRouteImport.update({
   id: '/signin_/forgot',
@@ -226,6 +250,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$org': typeof OrgRouteWithChildren
   '/new': typeof NewRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/signin': typeof SigninRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/diff': typeof DevDiffRoute
@@ -235,11 +260,14 @@ export interface FileRoutesByFullPath {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/settings/agent': typeof SettingsAgentRoute
+  '/settings/tokens': typeof SettingsTokensRoute
   '/signin/forgot': typeof SigninForgotRoute
   '/signin/new': typeof SigninNewRoute
   '/signin/reset': typeof SigninResetRoute
   '/signin/welcome': typeof SigninWelcomeRoute
   '/$org/': typeof OrgIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
@@ -269,11 +297,14 @@ export interface FileRoutesByTo {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/settings/agent': typeof SettingsAgentRoute
+  '/settings/tokens': typeof SettingsTokensRoute
   '/signin/forgot': typeof SigninForgotRoute
   '/signin/new': typeof SigninNewRoute
   '/signin/reset': typeof SigninResetRoute
   '/signin/welcome': typeof SigninWelcomeRoute
   '/$org': typeof OrgIndexRoute
+  '/settings': typeof SettingsIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
@@ -298,6 +329,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/$org': typeof OrgRouteWithChildren
   '/new': typeof NewRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/signin': typeof SigninRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/diff': typeof DevDiffRoute
@@ -307,11 +339,14 @@ export interface FileRoutesById {
   '/dev/time-machine': typeof DevTimeMachineRoute
   '/dev/viewer': typeof DevViewerRoute
   '/invite/$token': typeof InviteTokenRoute
+  '/settings/agent': typeof SettingsAgentRoute
+  '/settings/tokens': typeof SettingsTokensRoute
   '/signin_/forgot': typeof SigninForgotRoute
   '/signin_/new': typeof SigninNewRoute
   '/signin_/reset': typeof SigninResetRoute
   '/signin_/welcome': typeof SigninWelcomeRoute
   '/$org/': typeof OrgIndexRoute
+  '/settings/': typeof SettingsIndexRoute
   '/$org/$db/history': typeof OrgDbHistoryRoute
   '/$org/$db/import': typeof OrgDbImportRoute
   '/$org/$db/settings': typeof OrgDbSettingsRoute
@@ -337,6 +372,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$org'
     | '/new'
+    | '/settings'
     | '/signin'
     | '/$org/$db'
     | '/dev/diff'
@@ -346,11 +382,14 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/settings/agent'
+    | '/settings/tokens'
     | '/signin/forgot'
     | '/signin/new'
     | '/signin/reset'
     | '/signin/welcome'
     | '/$org/'
+    | '/settings/'
     | '/$org/$db/history'
     | '/$org/$db/import'
     | '/$org/$db/settings'
@@ -380,11 +419,14 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/settings/agent'
+    | '/settings/tokens'
     | '/signin/forgot'
     | '/signin/new'
     | '/signin/reset'
     | '/signin/welcome'
     | '/$org'
+    | '/settings'
     | '/$org/$db/history'
     | '/$org/$db/import'
     | '/$org/$db/settings'
@@ -408,6 +450,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$org'
     | '/new'
+    | '/settings'
     | '/signin'
     | '/$org/$db'
     | '/dev/diff'
@@ -417,11 +460,14 @@ export interface FileRouteTypes {
     | '/dev/time-machine'
     | '/dev/viewer'
     | '/invite/$token'
+    | '/settings/agent'
+    | '/settings/tokens'
     | '/signin_/forgot'
     | '/signin_/new'
     | '/signin_/reset'
     | '/signin_/welcome'
     | '/$org/'
+    | '/settings/'
     | '/$org/$db/history'
     | '/$org/$db/import'
     | '/$org/$db/settings'
@@ -446,6 +492,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   OrgRoute: typeof OrgRouteWithChildren
   NewRoute: typeof NewRoute
+  SettingsRoute: typeof SettingsRouteWithChildren
   SigninRoute: typeof SigninRoute
   DevDiffRoute: typeof DevDiffRoute
   DevEditorRoute: typeof DevEditorRoute
@@ -483,6 +530,13 @@ declare module '@tanstack/react-router' {
       path: '/new'
       fullPath: '/new'
       preLoaderRoute: typeof NewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signin': {
@@ -554,6 +608,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/invite/$token'
       preLoaderRoute: typeof InviteTokenRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/settings/': {
+      id: '/settings/'
+      path: '/'
+      fullPath: '/settings/'
+      preLoaderRoute: typeof SettingsIndexRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/agent': {
+      id: '/settings/agent'
+      path: '/agent'
+      fullPath: '/settings/agent'
+      preLoaderRoute: typeof SettingsAgentRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/tokens': {
+      id: '/settings/tokens'
+      path: '/tokens'
+      fullPath: '/settings/tokens'
+      preLoaderRoute: typeof SettingsTokensRouteImport
+      parentRoute: typeof SettingsRoute
     }
     '/signin_/forgot': {
       id: '/signin_/forgot'
@@ -758,6 +833,22 @@ const OrgRouteChildren: OrgRouteChildren = {
 
 const OrgRouteWithChildren = OrgRoute._addFileChildren(OrgRouteChildren)
 
+interface SettingsRouteChildren {
+  SettingsAgentRoute: typeof SettingsAgentRoute
+  SettingsTokensRoute: typeof SettingsTokensRoute
+  SettingsIndexRoute: typeof SettingsIndexRoute
+}
+
+const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAgentRoute: SettingsAgentRoute,
+  SettingsTokensRoute: SettingsTokensRoute,
+  SettingsIndexRoute: SettingsIndexRoute,
+}
+
+const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
+  SettingsRouteChildren,
+)
+
 interface DevShellRouteChildren {
   DevShellMembersRoute: typeof DevShellMembersRoute
   DevShellSettingsRoute: typeof DevShellSettingsRoute
@@ -778,6 +869,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   OrgRoute: OrgRouteWithChildren,
   NewRoute: NewRoute,
+  SettingsRoute: SettingsRouteWithChildren,
   SigninRoute: SigninRoute,
   DevDiffRoute: DevDiffRoute,
   DevEditorRoute: DevEditorRoute,

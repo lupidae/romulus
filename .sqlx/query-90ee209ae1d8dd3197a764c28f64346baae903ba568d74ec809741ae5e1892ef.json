@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE personal_access_tokens SET last_client = $2\n         WHERE id = $1 AND last_client IS DISTINCT FROM $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "90ee209ae1d8dd3197a764c28f64346baae903ba568d74ec809741ae5e1892ef"
+}

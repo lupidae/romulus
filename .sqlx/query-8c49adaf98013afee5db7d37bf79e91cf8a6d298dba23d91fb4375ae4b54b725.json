@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH latest AS (\n               SELECT DISTINCT ON (v.database_id) d.slug, d.name AS database_name, v.number, v.model\n               FROM versions v JOIN databases d ON d.id = v.database_id\n               WHERE d.org_id = $1 AND d.deleted_at IS NULL AND v.removed_at IS NULL\n               ORDER BY v.database_id, v.number DESC\n           ),\n           entities AS (\n               SELECT l.slug, l.database_name, l.number, e.value AS entity\n               FROM latest l, jsonb_array_elements(coalesce(l.model -> 'entities', '[]')) e\n           ),\n           hits AS (\n               SELECT CASE entity ->> 'kind' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'\n                                             WHEN 'f' THEN 'foreign_table' ELSE 'table' END AS kind,\n                      slug, database_name, number, entity ->> 'schema' AS schema,\n                      entity ->> 'name' AS name, NULL::text AS column_name, NULL::text AS type_name,\n                      entity ->> 'comment' AS comment, entity ->> 'name' AS matched\n               FROM entities\n               UNION ALL\n               SELECT 'column', slug, database_name, number, entity ->> 'schema', entity ->> 'name',\n                      c ->> 'name', c ->> 'type', c ->> 'comment', c ->> 'name'\n               FROM entities, jsonb_array_elements(coalesce(entity -> 'columns', '[]')) c\n               UNION ALL\n               SELECT 'enum', l.slug, l.database_name, l.number, e ->> 'schema', e ->> 'name', NULL,\n                      (SELECT string_agg(label, ', ') FROM jsonb_array_elements_text(coalesce(e -> 'labels', '[]')) label),\n                      e ->> 'comment', e ->> 'name'\n               FROM latest l, jsonb_array_elements(coalesce(l.model -> 'enums', '[]')) e\n           )\n           SELECT kind AS \"kind!\", slug AS \"database!\", database_name AS \"database_name!\",\n                  number AS \"version!\", schema AS \"schema!\", name AS \"name!\",\n                  column_name AS \"column\", type_name AS \"type\", comment\n           FROM hits\n           WHERE strpos(lower(matched), lower($2)) > 0\n              OR strpos(lower(coalesce(comment, '')), lower($2)) > 0\n              OR (kind = 'enum' AND strpos(lower(coalesce(type_name, '')), lower($2)) > 0)\n           ORDER BY CASE WHEN lower(matched) = lower($2) THEN 0\n                         WHEN starts_with(lower(matched), lower($2)) THEN 1\n                         WHEN strpos(lower(matched), lower($2)) > 0 THEN 2\n                         ELSE 3 END,\n                    slug, schema, name, column_name NULLS FIRST\n           LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "database!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "database_name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "version!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "schema!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "column",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "type",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "comment",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8c49adaf98013afee5db7d37bf79e91cf8a6d298dba23d91fb4375ae4b54b725"
+}

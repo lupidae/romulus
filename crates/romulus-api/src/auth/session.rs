@@ -19,6 +19,7 @@ use sqlx::{PgExecutor, PgPool};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::access_tokens::{self, Delegated, TokenRef};
 use crate::{ApiError, AppState, Config, csrf, token};
 
 /// A session nobody uses for this long is over.
@@ -36,6 +37,11 @@ const TOUCH_EVERY: Duration = Duration::from_mins(5);
 /// with a cookie whose session is gone, and 401 `unauthorized` for any
 /// request with `Authorization: Bearer`: API tokens are not people, and a
 /// bearer request never falls back to the cookie (see `crate::csrf`).
+///
+/// The one other way to be someone: a request the MCP endpoint makes for a
+/// personal access token's person (`access_tokens::Delegated`, a request
+/// extension only server code sets). Then `via` is the token, and a `read`
+/// token's identity refuses every unsafe method (403 `read_only_token`).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CurrentUser {
     pub id: Uuid,
@@ -45,6 +51,11 @@ pub struct CurrentUser {
     pub name: String,
     /// Signs in with a password (and may change it), not single sign-on.
     pub password_account: bool,
+    /// The personal access token this request came with (an agent's,
+    /// through the MCP endpoint); `None` for the person's own session.
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub via: Option<TokenRef>,
 }
 
 /// Cached in the request's extensions: [`super::Member`] and a handler may
@@ -57,7 +68,9 @@ impl CurrentUser {
         if let Some(resolved) = parts.extensions.get::<Resolved>() {
             return Ok(resolved.clone());
         }
-        let resolved = if csrf::has_bearer(&parts.headers) {
+        let resolved = if let Some(Delegated(agent)) = parts.extensions.get::<Delegated>() {
+            Resolved(Some(agent.user.clone()), false)
+        } else if csrf::has_bearer(&parts.headers) {
             Resolved(None, false)
         } else {
             match CookieJar::from_headers(&parts.headers).get(&state.config.session_cookie) {
@@ -75,7 +88,7 @@ impl FromRequestParts<AppState> for CurrentUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         match Self::resolve(parts, state).await? {
-            Resolved(Some(user), _) => Ok(user),
+            Resolved(Some(user), _) => within_scope(user, parts),
             Resolved(None, true) => Err(ApiError::SessionExpired),
             Resolved(None, false) => Err(ApiError::Unauthorized),
         }
@@ -90,7 +103,25 @@ impl OptionalFromRequestParts<AppState> for CurrentUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Option<Self>, ApiError> {
-        Ok(Self::resolve(parts, state).await?.0)
+        Self::resolve(parts, state)
+            .await?
+            .0
+            .map(|user| within_scope(user, parts))
+            .transpose()
+    }
+}
+
+/// A read-only token's person never makes an unsafe request.
+fn within_scope(user: CurrentUser, parts: &Parts) -> Result<CurrentUser, ApiError> {
+    match &user.via {
+        Some(token)
+            if !token.can_write()
+                && !parts.method.is_safe()
+                && parts.extensions.get::<access_tokens::Reading>().is_none() =>
+        {
+            Err(access_tokens::read_only())
+        }
+        _ => Ok(user),
     }
 }
 
@@ -131,6 +162,7 @@ async fn lookup(db: &PgPool, token: &str) -> Result<Option<CurrentUser>, ApiErro
         email_verified: row.email_verified,
         name: row.name,
         password_account: row.password_account,
+        via: None,
     }))
 }
 

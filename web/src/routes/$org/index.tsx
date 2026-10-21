@@ -10,6 +10,8 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip } from "@/components/ui/tooltip";
+import { AgentCard } from "@/features/agent/components/agent-card";
+import { meQuery } from "@/features/auth/queries";
 import { CreateDatabaseDialog } from "@/features/databases/components/create-database-dialog";
 import { DatabaseList, DatabaseListSkeleton } from "@/features/databases/components/database-list";
 import { databasesQuery } from "@/features/databases/queries";
@@ -31,6 +33,7 @@ export const Route = createFileRoute("/$org/")({
 function OrgHome() {
   const { org: slug } = Route.useParams();
   const { data: org } = useSuspenseQuery(orgQuery(slug));
+  const { data: me } = useSuspenseQuery(meQuery);
   const databases = useQuery(databasesQuery(slug));
   const navigate = useNavigate();
   const writer = canWrite(org.role);
@@ -99,6 +102,7 @@ function OrgHome() {
           <DatabaseList org={slug} databases={databases.data} />
         )}
       </Card>
+      <AgentCard userId={me.id} writer={writer} />
       {writer && (
         <CreateDatabaseDialog
           org={slug}

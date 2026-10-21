@@ -31,6 +31,8 @@
 //! - `GET …/playgrounds/{id}/runs` [member]: the shared history ([`runs`]):
 //!   the newest [`runs::CONSOLE_RUNS_KEPT`] console runs, every reset and
 //!   migration run.
+//! - `POST …/playgrounds/{id}/query` [member]: one console run over REST,
+//!   its results answered ([`query`]: the MCP endpoint's queries).
 //! - `GET …/playgrounds/{id}/console` [member]: the console's websocket
 //!   ([`console`]): runs rate limited per person, at most
 //!   [`RUNS_PER_PERSON`] in flight per person.
@@ -45,6 +47,7 @@ pub mod build;
 pub mod console;
 pub mod host;
 pub mod migration;
+pub mod query;
 pub mod runs;
 pub mod sweeper;
 
@@ -115,6 +118,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(migration::run_migration))
         .routes(routes!(runs::list_runs))
         .routes(routes!(console::connect))
+        .routes(routes!(query::query))
 }
 
 /// The access a role gets on a playground: reviewers read, developers and

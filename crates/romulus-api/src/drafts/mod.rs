@@ -31,6 +31,9 @@
 //! - `GET …/drafts/{id}/reads`, `PUT …/drafts/{id}/reads/{thread}`
 //!   [member]: up to when the caller read each comment thread (the threads
 //!   themselves are in the doc: `collab::comments`) ([`reads`]).
+//! - `GET …/drafts/{id}/text` [member], `PUT` [developer]: the source as
+//!   text, with its compile, and a person's edit of it outside the editor
+//!   (the MCP endpoint's draft tools) ([`text`]).
 //! - `POST …/drafts/{id}/mode` [developer]: switches between schema mode
 //!   (the SQL is the source) and migration mode (a migration from the base
 //!   version is) ([`mode`]).
@@ -45,6 +48,7 @@ pub mod mode;
 pub mod publish;
 pub mod reads;
 mod source;
+pub mod text;
 pub mod tidy;
 pub mod update;
 pub mod versions;
@@ -83,6 +87,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(mode::switch_mode))
         .routes(routes!(reads::list))
         .routes(routes!(reads::read))
+        .routes(routes!(text::read, text::edit))
+        .routes(routes!(text::set_renames))
 }
 
 /// A draft, as the database page and the editor show it.

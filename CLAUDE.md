@@ -461,6 +461,9 @@ src/features/diff/       SchemaDiffView (change list | graph | SQL merge view; n
 src/features/comments/   comment threads (see "Comments" below): the model (anchors, `---`
                          lines, SQL placement), Discussion sources (draft: Yjs; version: REST),
                          CommentsPanel, CommentPins (graph + comment mode), sqlThreads (CodeMirror)
+src/features/agent/      personal access tokens and connecting an AI agent (MCP): the account pages
+                         (/app/settings/agent, /app/settings/tokens), the org home's AgentCard,
+                         the client snippets (snippets.ts) and Test connection (connection.ts)
 src/features/time-machine/  the time machine: versions superposed (history, scale, frames,
                          timeline, history panel); /app/dev/time-machine shows it on fixtures
 src/features/migration/  MigrationView (tool picker, concurrently, renames to switch (`Renames`;
@@ -480,7 +483,8 @@ src/styles/globals.css   every token; the only file with raw colors
   and gate actions on `canWrite(org.role)` / `canManageMembers(org.role)`
   (`features/orgs/roles.ts`); the API enforces it anyway. Slugs must not
   collide with top-level routes: `signin`, `new`, `invite`, `dev`,
-  `settings`, `api`, `app` are reserved (API and database refuse them). The
+  `settings`, `api`, `app` are reserved (API and database refuse them; `/app/settings/…`
+  is the person's own account: `routes/settings.tsx`). The
   sign-in pages live under `/signin/…` (`signin_.forgot`, `signin_.reset`,
   `signin_.new`, `signin_.welcome`: not nested in `signin.tsx`), on
   `features/auth/components/auth-page.tsx`; one-time links carry their token
@@ -1180,6 +1184,31 @@ docs/MVP.md "Billing" has the decisions.
   signatures, idempotency, order, downgrade, grace, reminders, hours, roles),
   `tests/api/export.rs`, unit tests in each module, `e2e/billing/` (its own
   API with `ROMULUS_BILLING=fake` on `ROMULUS_E2E_BILLING_PORT`).
+
+## Agents over MCP (`mcp`, `auth::access_tokens`)
+
+docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
+
+- **Personal access tokens** (`auth::access_tokens`): `GET/POST /me/access-tokens`, `DELETE
+  /me/access-tokens/{id}` (the person signed in; a token never manages tokens), table
+  `personal_access_tokens`, `rmls_pat_` + `token::generate()`, sha256 stored. `Agent` is the
+  extractor `/api/mcp` authenticates with (401 `invalid_token`; last use at most once a
+  minute; `note_client` keeps the client's name).
+- **The endpoint** (`mcp`): `POST /api/mcp`, exempt from the CSRF guard (`mcp::PATH`), its own
+  60 s deadline (`layers`), a 4 MiB body; `protocol.rs` serves both eras statelessly (header
+  checks, version errors, `resultType`); 403 for a foreign `Origin`; `rate::Limits::access_tokens`.
+- **Tools are a thin adapter** (`mcp::tools`): never query or check permissions there beyond
+  finding where an id lives (`draft_place`, `test_place`, `playground_place`, membership-
+  filtered); call the REST API through `mcp::api::Api` (`get`, `post`, `put`, `patch`,
+  `delete`; `post_reading` for a POST that only reads), which dispatches to the routes with
+  `Delegated` (the person, `CurrentUser::via` = the token). A new capability is a REST
+  endpoint first, then a tool. Write tools: `writes: true` and a description starting
+  "Changes shared state"; return `Output::audited(..)` (an `agent_action` event). Answers are
+  text, with ids and links (`Ctx::link`), never models or layouts.
+- **Tests**: `tests/api/mcp.rs` (`Mcp::new(&app, pat(..))`, `.rpc`, `.tool`, `.ok`, `.refused`;
+  every tool per role, reusing `migration_tests::setup` and `playgrounds::setup`),
+  `tests/api/access_tokens.rs`, `tests/api/draft_text.rs`; web: `features/agent`
+  (`snippets.test.ts`), `e2e/agent.spec.ts`.
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 
