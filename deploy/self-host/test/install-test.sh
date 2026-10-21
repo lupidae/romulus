@@ -282,7 +282,9 @@ CREATE TABLE stores (
         expect 200 '.status == "ok" and (.statements[0].rows | length) == 1' "a query in the console"
         pass "queried as play_read: $(body | jq -c '.statements[0].rows[0]')"
         status=$(api POST "/api/orgs/acme-test/databases/shop/playgrounds/$play_id/query" '{"sql":"DELETE FROM orders"}')
-        expect 200 '.status == "error" and .statements[-1].error.sqlstate == "42501"' "a write in the console"
+        # A read-only transaction (25006), and play_read's privileges (42501) behind it.
+        expect 200 '.status == "error" and (.statements[-1].error.sqlstate | . == "25006" or . == "42501")' \
+            "a write in the console"
         pass "a write in the console is refused: $(body | jq -r '.statements[-1].error.message')"
         status=$(api DELETE "/api/orgs/acme-test/databases/shop/playgrounds/$play_id")
         [ "$status" = 204 ] || fail "deleting the playground answered $status: $(body)"
