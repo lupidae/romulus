@@ -71,8 +71,8 @@ release's, and it installs that release's images (`X.Y.Z`). Without
 `--version`, Helm takes the newest; pin one:
 
 ```bash
-helm install romulus oci://ghcr.io/lupidae/charts/romulus --version 0.1.0 -n romulus …
-helm show chart oci://ghcr.io/lupidae/charts/romulus --version 0.1.0   # what it is
+helm install romulus oci://ghcr.io/lupidae/charts/romulus --version 0.2.0 -n romulus …
+helm show chart oci://ghcr.io/lupidae/charts/romulus --version 0.2.0   # what it is
 ```
 
 ### A trial without an ingress
@@ -93,7 +93,7 @@ last release's images (its appVersion) while the templates may be newer;
 main's own images are tagged `main` and by commit:
 
 ```bash
-git checkout v0.1.0
+git checkout v0.2.0
 helm install romulus deploy/helm/romulus -n romulus --create-namespace --set host=romulus.example.com
 # or main's images, for testing: --set image.tag=main (or a commit sha)
 ```

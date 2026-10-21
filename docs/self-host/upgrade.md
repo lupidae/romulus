@@ -62,8 +62,8 @@ directory). Neither changes the version.
 
 ## On arm64, from 0.1.0
 
-0.1.0's images are amd64 only, which an arm64 host runs emulated. Later
-releases publish amd64 and arm64 under the same tags, so the upgrade
+0.1.0's images are amd64 only, which an arm64 host runs emulated. From
+0.2.0, releases publish amd64 and arm64 under the same tags, so the upgrade
 pulls the arm64 builds and starts the containers on them, with the same
 volumes. Nothing to do by hand.
 

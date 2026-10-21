@@ -64,8 +64,8 @@ notes). Each publishes its images as `X.Y.Z`, as `X.Y` (the newest
 
 ```bash
 git clone https://github.com/lupidae/romulus.git
-cd romulus && git checkout v0.1.0 && cd deploy/self-host
-./install.sh --version 0.1.0
+cd romulus && git checkout v0.2.0 && cd deploy/self-host
+./install.sh --version 0.2.0
 ```
 
 The script from the release's tag goes with its images. Later,
