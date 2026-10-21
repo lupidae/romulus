@@ -589,6 +589,17 @@ impl Hub {
         wait.await.map_err(|_| HubError::Unavailable)
     }
 
+    /// Who edited the draft, as its room knows now (a first edit is written
+    /// to `draft_editors` behind the room); empty when the room is not
+    /// loaded: it wrote everything before it left, the database says.
+    pub async fn editors(&self, draft: Uuid) -> HashSet<Uuid> {
+        let (reply, wait) = oneshot::channel();
+        if !self.0.tell(draft, Command::Editors { reply }) {
+            return HashSet::new();
+        }
+        wait.await.unwrap_or_default()
+    }
+
     /// An approval was written: everyone in the draft hears it. Answers
     /// once the room (when loaded) counts it, so that what the caller reads
     /// next ([`Hub::approved_by`]) has it.
