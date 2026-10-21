@@ -27,6 +27,7 @@ mod legal;
 mod live;
 mod majors;
 mod mcp;
+mod mcp_files;
 mod members;
 mod migration;
 mod migration_tests;

@@ -1,0 +1,136 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.status AS \"status: ImportUploadStatus\", u.dry_run, u.progress,\n                  u.outcome, u.created_at, u.expires_at, u.expires_at <= now() AS \"expired!\",\n                  (SELECT count(DISTINCT path) FROM import_upload_files f\n                   WHERE f.upload_id = u.id) AS \"files!\",\n                  (SELECT coalesce(sum(octet_length(content)), 0) FROM import_upload_files f\n                   WHERE f.upload_id = u.id)::bigint AS \"bytes!\"\n           FROM import_uploads u\n           WHERE u.id = $1 AND u.database_id = $2 AND u.created_by = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status: ImportUploadStatus",
+        "type_info": {
+          "Custom": {
+            "name": "import_upload_status",
+            "kind": {
+              "Enum": [
+                "open",
+                "importing",
+                "checked",
+                "failed",
+                "imported"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "dry_run",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "dry_run"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "progress",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "progress"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "outcome",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "outcome"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "expired!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "files!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "c6e658f2feb1453eb032757111cb7b9a33a6a631bf51b059bd081f62f7e1a5a2"
+}

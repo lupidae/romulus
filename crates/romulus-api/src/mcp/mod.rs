@@ -27,7 +27,7 @@
 //! roles, validation, limits and the audit log are the web app's; a
 //! read-only token is offered the reading tools only, and its lent identity
 //! refuses any write. [`prompts`] are the common flows; [`resources`] each
-//! version's SQL and the CI guide.
+//! version's SQL, the CI guide and the migration exporters.
 //!
 //! **OAuth.** A client without a token gets a 401 whose `WWW-Authenticate`
 //! names the protected resource metadata ([`unauthorized`]): that is how
@@ -83,8 +83,10 @@ numbered), drafts (the next version in the making, edited live by people and age
 migration between any two, tests of a migration on generated rows, and playgrounds to query. \
 Start with whoami, then list_databases. To change a schema: create_draft, update_draft (exact \
 `edits`), get_draft (problems and the migration with its hazards), test_migration, then \
-request_review; publish_draft only when your person says so. Tools marked as changing shared \
-state are seen by the whole organization. Never paste secrets into a draft.";
+request_review; publish_draft only when your person says so. romulus cannot read your person's \
+disk: to bring a repository's migrations in, read them and send them (import_migrations); to \
+write a migration into it, get_migration_files. Tools marked as changing shared state are seen \
+by the whole organization. Never paste secrets into a draft.";
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()

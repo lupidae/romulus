@@ -537,7 +537,7 @@
       <p>romulus has an MCP server built in, at <code>/api/mcp</code>: nothing to install. Claude Code, Claude Desktop, claude.ai, Cursor or any MCP client works in romulus the way you do.</p>
       <ul class="points">
         <li><strong>From a question to a published version</strong><span>It reads schemas, versions and diffs, and searches across databases. It drafts a change, gets its migration with renames detected, tests it up and down in a playground, then requests review and publishes.</span></li>
-        <li><strong>A new database from a dump</strong><span>Hand it a <code>pg_dump --schema-only</code> or remus's output: it creates the database with that first version, then hands you the CI step that keeps it current.</span></li>
+        <li><strong>A new database from a dump</strong><span>Hand it a <code>pg_dump --schema-only</code> or remus's output: it creates the database with that first version, then hands you the CI step that keeps it current. Or point it at your migrations folder: it imports one version per migration.</span></li>
         <li><strong>It acts as you, with your role</strong><span>A read-only token can't change anything. Approvals, required tests and the rules for publishing apply to agents too.</span></li>
       </ul>
     </div>

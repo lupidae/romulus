@@ -241,6 +241,36 @@ impl From<MigrationFormat> for romulus_sandbox::import::Format {
     }
 }
 
+/// Where migration files sent a few at a time stand
+/// (`import_upload_status`, `imports::uploads`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "import_upload_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ImportUploadStatus {
+    /// Taking files.
+    Open,
+    /// An import of its files runs.
+    Importing,
+    /// A dry run replayed them: they can be imported (or changed).
+    Checked,
+    /// The last import was refused or stopped: fix a file, import again.
+    Failed,
+    /// Imported: its versions exist, its files are gone.
+    Imported,
+}
+
+impl ImportUploadStatus {
+    /// Files can be added, and an import started.
+    pub fn takes_files(self) -> bool {
+        matches!(self, Self::Open | Self::Checked | Self::Failed)
+    }
+
+    /// It will not change unless someone acts.
+    pub fn is_final(self) -> bool {
+        !matches!(self, Self::Importing)
+    }
+}
+
 /// A draft's lifecycle (`draft_status`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "draft_status", rename_all = "snake_case")]

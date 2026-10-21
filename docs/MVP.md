@@ -1214,6 +1214,21 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
   streams or sessions, and has to sit inside the API's auth, errors and limits.
 - **Tool answers are text only**: clients hand a model `structuredContent` instead of the
   text when both are present, and the text carries the ids, links and next steps.
+- **Migration files between a repository and romulus** (task MCP-FILES). The MCP server
+  cannot read the person's disk: the agent reads the files and sends them, and writes the
+  files romulus answers. `import_migrations` goes through an upload (`imports::uploads`,
+  REST first: `POST …/imports/uploads`, `…/{id}/files`, `…/{id}/import`, `GET …/{id}`): the
+  files in one call or several (a message is 4 MiB at most; a file larger than a call in
+  numbered parts, a path sent again replaces it), stored in Postgres (`import_uploads`,
+  `import_upload_files`), never in the API's memory, private to their person, expiring an
+  hour after the last files; then the web import's own engine (`run::prepare`: plan,
+  refusals, caps, one version per migration), whose job the upload follows (progress, then
+  report or error) so `get_import` polls it after the call's 40 s. A refused or failed import
+  keeps the files: fix one, import again. Rails, Django and Alembic are imported from their
+  exporters' SQL, served as MCP resources. `get_migration_files` is the web download (the
+  same endpoints and options), paged at 50 KB of content, every page pinned by a cursor to
+  the first one's version and the draft's reviewed text. Code tools (Rails, Django, Alembic)
+  get `plain` SQL to wrap in a migration of theirs: romulus generates no Ruby or Python.
 
 ## Retention and deletion (decided 2026-10-21, built: task RETAIN)
 

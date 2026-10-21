@@ -5430,6 +5430,417 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/imports/uploads": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Starts an upload of migration files, with some or none. Developers and\nadmins. See the module documentation.",
+        "operationId": "start_import_upload",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportUpload"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`too_many_uploads`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: send fewer files per request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (a path, a part, too many or too large files), `invalid_file`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/imports/uploads/{id}": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "An upload: its files, and its import's progress or outcome. Its starter\nonly.",
+        "operationId": "get_import_upload",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The upload's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportUpload"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/imports/uploads/{id}/files": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Adds files to an upload (a path and part sent again replaces it).\nDevelopers and admins, the upload's starter only.",
+        "operationId": "add_import_files",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The upload's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadFiles"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportUpload"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`upload_expired`, `upload_busy` (its import runs), `upload_closed` (imported)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: send fewer files per request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation` (a path, a part, too many or too large files), `invalid_file`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/databases/{db}/imports/uploads/{id}/import": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Imports an upload's files: what the import refuses is answered at once,\notherwise it runs on (202); read the upload to follow it. Developers and\nadmins, the upload's starter only.",
+        "operationId": "import_upload",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The upload's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "How to import them; none: the format detected, no append",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/UploadImportOptions"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The import runs: read the upload to follow it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportUpload"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: the versions would pass the plan's cap; nothing stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`upload_expired`, `upload_busy`, `upload_closed`; the import's own: `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`incomplete_upload` (a part missing), `invalid_migrations`, `import_failed` (a syntax error), `too_many_migrations`, `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/major": {
       "put": {
         "tags": [
@@ -13764,6 +14175,38 @@
           }
         }
       },
+      "ImportProgress": {
+        "type": "object",
+        "description": "A running import's progress.",
+        "required": [
+          "stage",
+          "replayed",
+          "total"
+        ],
+        "properties": {
+          "first_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The number the first new version gets."
+          },
+          "replayed": {
+            "type": "integer",
+            "description": "New migrations replayed so far…",
+            "minimum": 0
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ImportStage"
+          },
+          "total": {
+            "type": "integer",
+            "description": "…of these many (the versions it creates).",
+            "minimum": 0
+          }
+        }
+      },
       "ImportReport": {
         "type": "object",
         "description": "What an import did.",
@@ -13807,6 +14250,15 @@
           }
         }
       },
+      "ImportStage": {
+        "type": "string",
+        "description": "Where a running import is.",
+        "enum": [
+          "planned",
+          "queued",
+          "replaying"
+        ]
+      },
       "ImportStatus": {
         "type": "string",
         "description": "How an import ended.",
@@ -13814,6 +14266,98 @@
           "created",
           "unchanged",
           "checked"
+        ]
+      },
+      "ImportUpload": {
+        "type": "object",
+        "description": "An upload: its files, and its import once asked for.",
+        "required": [
+          "id",
+          "status",
+          "files",
+          "bytes",
+          "dry_run",
+          "created_at",
+          "expires_at",
+          "expired"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "The last import asked was a dry run."
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody",
+                "description": "Why the last import was refused or stopped (`failed`): the import's\nown errors (`import_failed` with an `ImportFailure`, `has_versions`…)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Past it, the files are gone: start again."
+          },
+          "files": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Files received (one sent in parts counts once), and their size."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportProgress",
+                "description": "While importing."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImportReport",
+                "description": "How the last import ended (`checked`, `imported`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ImportUploadStatus"
+          }
+        }
+      },
+      "ImportUploadStatus": {
+        "type": "string",
+        "description": "Where migration files sent a few at a time stand\n(`import_upload_status`, `imports::uploads`).",
+        "enum": [
+          "open",
+          "importing",
+          "checked",
+          "failed",
+          "imported"
         ]
       },
       "ImportedMigration": {
@@ -20130,6 +20674,43 @@
           }
         }
       },
+      "UploadFiles": {
+        "type": "object",
+        "description": "Files to add.",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadedFile"
+            }
+          }
+        }
+      },
+      "UploadImportOptions": {
+        "type": "object",
+        "description": "How to import an upload's files (all optional: a bare `POST` detects\nthe format and refuses to append).",
+        "properties": {
+          "append": {
+            "type": "boolean",
+            "description": "Import even though the database has versions that were not\nimported: the imported ones continue the numbering."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Replay without storing anything: the files are kept, to import for\nreal next."
+          },
+          "format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationFormat",
+                "description": "Read the files as this tool's; detected from them when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "UploadSql": {
         "type": "object",
         "required": [
@@ -20150,6 +20731,32 @@
           "sql": {
             "type": "string",
             "description": "The schema as SQL DDL, at most 1 MiB."
+          }
+        }
+      },
+      "UploadedFile": {
+        "type": "object",
+        "description": "A file, or a part of one.",
+        "required": [
+          "path",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The file's text (UTF-8), exactly as it is on disk."
+          },
+          "part": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For a file too large for one request: which part this is, 1, 2…\n(joined in order). 1 by default."
+          },
+          "path": {
+            "type": "string",
+            "description": "Its path relative to the repository (or to the migrations folder),\nwith `/`: `db/migration/V2__add_invoices.sql`,\n`prisma/migrations/20240101000000_init/migration.sql`. The import\nreads the tool and each migration's name from paths. Never absolute,\nnever `..`."
           }
         }
       },

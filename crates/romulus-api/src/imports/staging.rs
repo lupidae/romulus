@@ -3,7 +3,8 @@
 //! stored (`versions::store::store_import`), deleted when it ends. Rows an
 //! import left behind (a process stopped mid-import) are swept at startup
 //! and every [`SWEEP_EVERY`] ([`sweeper`]), once older than any import
-//! runs, and never those of an import in flight ([`Turns`]).
+//! runs, and never those of an import in flight ([`Turns`]). The same
+//! sweeper ends uploads ([`super::uploads::sweep`]).
 
 use std::time::Duration;
 
@@ -56,6 +57,11 @@ pub fn sweeper(db: PgPool, turns: Turns, every: Duration) -> tokio::task::JoinHa
                 Ok(0) => {}
                 Ok(rows) => tracing::info!(rows, "swept models imports left behind"),
                 Err(err) => tracing::warn!(error = %err, "sweeping staged models failed"),
+            }
+            match super::uploads::sweep(&db).await {
+                Ok(0) => {}
+                Ok(rows) => tracing::info!(rows, "swept expired uploads of migrations"),
+                Err(err) => tracing::warn!(error = %err, "sweeping uploads of migrations failed"),
             }
             tokio::time::sleep(every).await;
         }

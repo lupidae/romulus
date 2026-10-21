@@ -142,6 +142,42 @@ pub async fn start(
     options: ImportOptions,
     stream: bool,
 ) -> ApiResult<Response> {
+    let job = prepare(state, target, author, files, options).await?;
+    if stream {
+        let body = ndjson(job.spawn(), KEEP_ALIVE);
+        return Ok((
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "application/x-ndjson"),
+                (header::CACHE_CONTROL, "no-cache"),
+                // Proxies must pass lines on as they come.
+                (header::HeaderName::from_static("x-accel-buffering"), "no"),
+            ],
+            Body::from_stream(body),
+        )
+            .into_response());
+    }
+    let report = tokio::spawn(job.run(None))
+        .await
+        .map_err(ApiError::internal)??;
+    let status = if report.status == ImportStatus::Created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(report)).into_response())
+}
+
+/// The import of `files`, planned, with what cannot be imported refused
+/// (an error to answer at once: 409, 402, 422): ready to run. Every way in
+/// (the web, CI, uploads) goes through here.
+pub(super) async fn prepare(
+    state: AppState,
+    target: Target,
+    author: Author,
+    files: Vec<romulus_sandbox::import::SourceFile>,
+    options: ImportOptions,
+) -> ApiResult<Job> {
     let started = Instant::now();
     let mut planned = plan::plan(&state.db, target.database_id, files, &options).await?;
     // One import of a database at a time, settled before any answer goes
@@ -180,7 +216,7 @@ pub async fn start(
             0,
         )?;
     }
-    let job = Job {
+    Ok(Job {
         state,
         target,
         author,
@@ -188,34 +224,7 @@ pub async fn start(
         planned,
         started,
         running,
-    };
-    if stream {
-        let (events, received) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            let _ = job.run(Some(events)).await;
-        });
-        let body = ndjson(received, KEEP_ALIVE);
-        return Ok((
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "application/x-ndjson"),
-                (header::CACHE_CONTROL, "no-cache"),
-                // Proxies must pass lines on as they come.
-                (header::HeaderName::from_static("x-accel-buffering"), "no"),
-            ],
-            Body::from_stream(body),
-        )
-            .into_response());
-    }
-    let report = tokio::spawn(job.run(None))
-        .await
-        .map_err(ApiError::internal)??;
-    let status = if report.status == ImportStatus::Created {
-        StatusCode::CREATED
-    } else {
-        StatusCode::OK
-    };
-    Ok((status, Json(report)).into_response())
+    })
 }
 
 /// The events as NDJSON lines, a blank line after `keep_alive` without
@@ -239,7 +248,7 @@ fn ndjson(
     })
 }
 
-struct Job {
+pub(super) struct Job {
     state: AppState,
     target: Target,
     author: Author,
@@ -254,6 +263,21 @@ struct Job {
 type Events = mpsc::UnboundedSender<ImportEvent>;
 
 impl Job {
+    /// What the import was planned as.
+    pub(super) fn preview(&self) -> &ImportPreview {
+        &self.planned.preview
+    }
+
+    /// Runs the job in a task of its own (a client leaving does not stop
+    /// it): its progress, one event at a time, the last `done` or `failed`.
+    pub(super) fn spawn(self) -> mpsc::UnboundedReceiver<ImportEvent> {
+        let (events, received) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let _ = self.run(Some(events)).await;
+        });
+        received
+    }
+
     /// The job, start to end. Its outcome also ends the stream.
     async fn run(self, events: Option<Events>) -> ApiResult<ImportReport> {
         if let Some(events) = &events {
