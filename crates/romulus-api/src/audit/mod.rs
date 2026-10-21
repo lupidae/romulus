@@ -150,6 +150,15 @@ pub struct BillingAudit {
     /// performed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub withdrawal_acknowledged: Option<bool>,
+    /// The professional edition: the buyer attested buying for their
+    /// business, not as a consumer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub professional_use: Option<bool>,
+    /// The version of the boxes' wording ticked, and the page's language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
     /// The Stripe event applied (webhooks), and its type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stripe_event: Option<String>,

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE withdrawals SET last_error = $2, failed_at = CASE WHEN $3 THEN now() END\n                 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31d8979b1f75c6e99ae58da6b0637df74b23abd693442837e7cbf93dc13fd6be"
+}

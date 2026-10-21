@@ -15,14 +15,22 @@
 //! - [`api`]: the endpoints below; [`webhook`]: Stripe's events.
 //! - [`hours`]: playground time metered per organization and month, the
 //!   80 % warning, the stop at 100 %.
-//! - [`notices`]: yearly renewal reminders, payment and grace emails.
+//! - [`notices`]: the emails, in English or French: the subscription's
+//!   and a cancellation's confirmations, renewal reminders, payment and
+//!   grace emails, price changes.
+//! - [`withdrawal`]: a consumer's withdrawal within 14 days (cancelled at
+//!   once, the unused part refunded, Free).
+//! - [`copy`]: the checkout boxes' words (shared with the web app).
 //! - [`setup`]: `romulus-api stripe-setup`, products, prices and the portal.
 //!
 //! Endpoints (who may call them in brackets; see `auth::member`):
 //! - `GET /orgs/{org}/billing` [member]: the plan, the subscription, usage
 //!   against every cap, the plans on offer.
-//! - `POST /orgs/{org}/billing/checkout` [admin]: Terms accepted (audited),
-//!   a Stripe Checkout Session's URL.
+//! - `POST /orgs/{org}/billing/checkout` [admin]: as a business or a
+//!   consumer, the Terms and the boxes of each accepted (recorded in
+//!   `legal_acceptances`, audited), a Stripe Checkout Session's URL.
+//! - `POST /orgs/{org}/billing/withdrawal` [admin]: a consumer withdraws
+//!   (within 14 days of subscribing).
 //! - `POST /orgs/{org}/billing/portal` [admin]: a Customer Portal session's
 //!   URL, at its home page or straight in a flow (cancel, change plan).
 //! - `GET /orgs/{org}/billing/invoices` [admin].
@@ -30,11 +38,14 @@
 //!   events, idempotent by event id, each re-reading the subscription.
 //!
 //! Tables: `org_billing`, `billing_events`, `playground_usage`,
-//! `billing_notices`; events in `audit_events` (org-level, not shown in a
-//! database's activity).
+//! `billing_notices`, `withdrawals`; the checkout's records in
+//! `legal_acceptances` (`legal`); events in `audit_events` (org-level, not
+//! shown in a database's activity).
 
 pub mod api;
 pub mod caps;
+pub mod copy;
+pub mod countries;
 pub mod hours;
 pub mod notices;
 pub mod plans;
@@ -42,6 +53,7 @@ pub mod setup;
 pub mod state;
 pub mod stripe;
 pub mod webhook;
+pub mod withdrawal;
 
 use std::sync::Arc;
 
@@ -59,7 +71,7 @@ use self::{
 };
 use crate::{
     ApiError, ApiResult, Config,
-    config::{BillingConfig, StripeKeys},
+    config::{BillingConfig, LegalConfig, StripeKeys},
     domain::{Interval, Plan},
 };
 
@@ -70,6 +82,8 @@ pub struct Billing(Option<Arc<Inner>>);
 
 pub struct Inner {
     pub config: BillingConfig,
+    /// The Terms checkout has people accept (billing needs them).
+    pub legal: LegalConfig,
     pub stripe: Arc<dyn StripeApi>,
     /// The fake, when it is one: its checkout page completes sessions.
     pub fake: Option<Fake>,
@@ -88,6 +102,11 @@ impl Billing {
         let Some(billing) = &config.billing else {
             return Self::off();
         };
+        let Some(legal) = config.legal.clone() else {
+            // Config refuses billing without Terms.
+            tracing::error!("billing: no Terms configured, billing is off");
+            return Self::off();
+        };
         let (stripe, fake): (Arc<dyn StripeApi>, _) = match &billing.stripe {
             StripeKeys::Stripe { secret_key, .. } => {
                 (Arc::new(Http::new(secret_key.clone())), None)
@@ -99,6 +118,7 @@ impl Billing {
         };
         Self(Some(Arc::new(Inner {
             config: billing.clone(),
+            legal,
             stripe,
             fake,
             public_url: config.public_url.clone(),
@@ -109,12 +129,14 @@ impl Billing {
     /// On, with `stripe` (tests: a [`Fake`]).
     pub fn with_stripe(
         config: BillingConfig,
+        legal: LegalConfig,
         public_url: url::Url,
         db: sqlx::PgPool,
         stripe: Fake,
     ) -> Self {
         Self(Some(Arc::new(Inner {
             config,
+            legal,
             stripe: Arc::new(stripe.clone()),
             fake: Some(stripe),
             public_url,
@@ -180,7 +202,8 @@ pub async fn stored(db: impl PgExecutor<'_>, org: Uuid) -> Result<Stored, sqlx::
                   interval AS "interval: Interval", status, current_period_end,
                   cancel_at_period_end, amount_cents, currency, past_due_since,
                   scheduled_plan AS "scheduled_plan: Plan",
-                  scheduled_interval AS "scheduled_interval: Interval", scheduled_at, updated_at
+                  scheduled_interval AS "scheduled_interval: Interval", scheduled_at, updated_at,
+                  acceptance_id, started_at, withdrawn_at
            FROM org_billing WHERE org_id = $1"#,
         org,
     )
@@ -206,6 +229,9 @@ pub async fn stored(db: impl PgExecutor<'_>, org: Uuid) -> Result<Stored, sqlx::
             scheduled_plan: r.scheduled_plan,
             scheduled_interval: r.scheduled_interval,
             scheduled_at: r.scheduled_at,
+            acceptance_id: r.acceptance_id,
+            started_at: r.started_at,
+            withdrawn_at: r.withdrawn_at,
             updated_at: Some(r.updated_at),
         },
     ))
@@ -222,23 +248,6 @@ pub async fn lock_org(tx: &mut sqlx::PgConnection, org: Uuid) -> Result<(), sqlx
     .fetch_one(tx)
     .await?;
     Ok(())
-}
-
-/// The admins of `org` (who billing emails go to): name and address.
-pub async fn admins(
-    db: impl PgExecutor<'_>,
-    org: Uuid,
-) -> Result<Vec<(String, String)>, sqlx::Error> {
-    Ok(sqlx::query!(
-        "SELECT u.name, u.email FROM memberships m JOIN users u ON u.id = m.user_id
-         WHERE m.org_id = $1 AND m.role = 'admin' ORDER BY u.name",
-        org,
-    )
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|r| (r.name, r.email))
-    .collect())
 }
 
 /// Money as people read it: `€19.00`, `€490.00`.

@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT requested_at, paid_cents, refund_cents, currency, completed_at\n         FROM withdrawals WHERE subscription_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "requested_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "requested_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "paid_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "paid_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "refund_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "refund_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "completed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "completed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "0c9865c4378a2b561d98bb0f003de59030650cbd6e1b829537d03542b61e1c24"
+}

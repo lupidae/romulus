@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM legal_notices WHERE document = $1 AND version = $2 AND user_id = $3) AS \"told!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "told!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "legal_document",
+            "kind": {
+              "Enum": [
+                "terms",
+                "privacy",
+                "dpa"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d2f8432238f9ee92e02033ef1612ec0c8a4a0973f834b48d386381e3be59821c"
+}

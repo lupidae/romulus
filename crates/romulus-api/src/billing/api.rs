@@ -10,22 +10,27 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
+use uuid::Uuid;
 
 use super::{
-    Billing, Inner, hours,
+    Billing, Inner, copy, hours,
     plans::{self, Limits},
     state::Stored,
     stored,
     stripe::{NewCheckout, NewCustomer, NewPortal, PortalFlow, StripeError},
     webhook,
+    withdrawal::{self, WithdrawalInfo},
 };
 use crate::{
     ApiError, ApiResult, AppState,
     audit::{self, AuditDetails, BillingAudit},
     auth::{Member, min},
-    domain::{AuditAction, Interval, Plan, PlaygroundSize},
+    domain::{
+        AcceptanceKind, AuditAction, Buyer, Interval, Locale, Plan, PlaygroundSize, TermsEdition,
+    },
     error::ErrorBody,
     extract::{Json, Path},
+    legal::LegalLinks,
     orgs::invalid,
 };
 
@@ -35,6 +40,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(checkout))
         .routes(routes!(portal))
         .routes(routes!(invoices))
+        .routes(routes!(withdrawal::withdraw))
         .routes(routes!(webhook::receive))
         // Undocumented: only with `ROMULUS_BILLING=fake` (the e2e suite).
         .route("/billing/fake/checkout/{session}", get(fake_checkout))
@@ -147,35 +153,150 @@ pub struct OrgBilling {
     pub plans: Vec<PlanOffer>,
     /// The caller may change billing (admins).
     pub can_manage: bool,
-    /// The Terms of Service checkout has people accept.
-    pub terms_url: String,
-    pub terms_version: String,
+    /// The Terms checkout has people accept, and the other documents, in
+    /// English and in French.
+    pub documents: LegalLinks,
+    /// The version of the checkout boxes' wording a checkout must send.
+    pub checkout_copy_version: String,
+    /// As whom the subscription was bought (`null`: no record of its
+    /// checkout, or no subscription).
+    pub buyer: Option<Buyer>,
+    /// A consumer's right of withdrawal: until when, or the withdrawal
+    /// made. `null` for a business.
+    pub withdrawal: Option<WithdrawalInfo>,
 }
 
-/// Who buys: the checkout page asks a consumer for more.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Buyer {
-    Business,
-    Consumer,
-}
-
+/// What the buyer states before paying (Terms 3.4 c, 3.5 and 9.3): as whom,
+/// and the boxes of each, in the words of `checkout_copy_version`.
 #[derive(Debug, Deserialize, ToSchema)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the boxes on the page, one flag each"
+)]
 pub struct StartCheckout {
     /// A paid plan.
     pub plan: Plan,
     pub interval: Interval,
-    /// The Terms of Service (`terms_url`, `terms_version`) are accepted.
+    /// The Terms of Service in force are read and accepted.
     pub accept_terms: bool,
-    pub buyer: Buyer,
-    /// A consumer asks for the service to start before the withdrawal period
-    /// ends…
+    /// Required, never assumed, when consumers may buy (`consumer_sales`):
+    /// a business or a consumer. Businesses only otherwise: absent, or
+    /// `business`.
+    #[serde(default)]
+    pub buyer: Option<Buyer>,
+    /// A business: subscribing for its trade, business or profession, on
+    /// behalf of the business named, authorised to bind it (the professional
+    /// edition's box adds: not as a consumer).
+    #[serde(default)]
+    pub business_confirmed: bool,
+    /// A business: its name and country (ISO 3166-1 alpha-2), required;
+    /// its VAT or registration number, optional.
+    #[serde(default)]
+    pub company_name: Option<String>,
+    #[serde(default)]
+    pub company_country: Option<String>,
+    #[serde(default)]
+    pub company_tax_id: Option<String>,
+    /// A consumer expressly asks for the service to start before the
+    /// withdrawal period ends…
     #[serde(default)]
     pub immediate_start: bool,
-    /// …and acknowledges losing the right of withdrawal once it is fully
-    /// performed.
+    /// …and acknowledges paying for the service until a withdrawal, and
+    /// losing the right once it is fully performed.
     #[serde(default)]
     pub withdrawal_acknowledged: bool,
+    /// The version of the wording the boxes showed.
+    pub copy_version: String,
+    /// The language of the page: the payment page's and the contract's.
+    #[serde(default)]
+    pub locale: Option<Locale>,
+}
+
+/// A checkout's statements, checked.
+struct Statement {
+    buyer: Buyer,
+    company: Option<(String, String, Option<String>)>,
+    locale: Locale,
+}
+
+impl StartCheckout {
+    fn checked(&self, consumer_sales: bool) -> ApiResult<Statement> {
+        let buyer = match (self.buyer, consumer_sales) {
+            (Some(Buyer::Consumer), false) => {
+                return Err(invalid("buyer", "romulus is for professional use only."));
+            }
+            (None, false) => Buyer::Business,
+            (Some(buyer), _) => buyer,
+            (None, true) => {
+                return Err(invalid(
+                    "buyer",
+                    "Choose whether you are buying as a business or as an individual.",
+                ));
+            }
+        };
+        if !self.accept_terms {
+            return Err(invalid(
+                "accept_terms",
+                "Accept the Terms of Service to continue.",
+            ));
+        }
+        let company = match buyer {
+            Buyer::Business => {
+                if !self.business_confirmed {
+                    return Err(invalid(
+                        "business_confirmed",
+                        "Confirm that you are subscribing for your business.",
+                    ));
+                }
+                let name = self
+                    .company_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| invalid("company_name", "Enter your business's name."))?;
+                if name.chars().count() > 200 {
+                    return Err(invalid("company_name", "Keep the name to 200 characters."));
+                }
+                let country = self
+                    .company_country
+                    .as_deref()
+                    .map(|c| c.trim().to_ascii_uppercase())
+                    .filter(|c| super::countries::is_country(c))
+                    .ok_or_else(|| invalid("company_country", "Choose your business's country."))?;
+                let tax_id = self
+                    .company_tax_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
+                if tax_id.as_ref().is_some_and(|id| id.chars().count() > 40) {
+                    return Err(invalid(
+                        "company_tax_id",
+                        "Keep the number to 40 characters.",
+                    ));
+                }
+                Some((name.to_owned(), country, tax_id))
+            }
+            Buyer::Consumer => {
+                if !(self.immediate_start && self.withdrawal_acknowledged) {
+                    return Err(invalid(
+                        if self.immediate_start {
+                            "withdrawal_acknowledged"
+                        } else {
+                            "immediate_start"
+                        },
+                        "To subscribe now, tick both boxes. If you would rather not, you can stay on the Free plan.",
+                    ));
+                }
+                None
+            }
+        };
+        Ok(Statement {
+            buyer,
+            company,
+            locale: self.locale.unwrap_or_default(),
+        })
+    }
 }
 
 /// Where to send the browser.
@@ -325,6 +446,10 @@ async fn usage(
 
 fn subscription_info(stored: &Stored) -> Option<SubscriptionInfo> {
     stored.subscription_id.as_ref()?;
+    // Withdrawn from: nothing runs any more, whatever Stripe says meanwhile.
+    if stored.withdrawn_at.is_some() {
+        return None;
+    }
     let status = stored.status.clone()?;
     Some(SubscriptionInfo {
         plan: stored.plan,
@@ -362,8 +487,11 @@ fn subscription_info(stored: &Stored) -> Option<SubscriptionInfo> {
 async fn get_billing(member: Member, State(state): State<AppState>) -> ApiResult<Json<OrgBilling>> {
     let inner = state.billing.require()?;
     let stored = stored(&state.db, member.org.id).await?;
-    let plan = stored.effective(Utc::now());
+    let now = Utc::now();
+    let plan = stored.effective(now);
     let usage = usage(&state, member.org.id, plan, member.org.approvals_required).await?;
+    let buyer = withdrawal::buyer_of(&state.db, &stored).await?;
+    let withdrawal = withdrawal::info(&state, &stored, now).await?;
     Ok(Json(OrgBilling {
         plan,
         subscription: subscription_info(&stored),
@@ -379,18 +507,22 @@ async fn get_billing(member: Member, State(state): State<AppState>) -> ApiResult
             })
             .collect(),
         can_manage: member.role.can_manage_members(),
-        terms_url: inner.config.terms_url.to_string(),
-        terms_version: inner.config.terms_version.clone(),
+        documents: LegalLinks::of(&inner.legal),
+        checkout_copy_version: copy::version(inner.legal.edition()).to_owned(),
+        buyer: buyer.filter(|_| stored.subscription_id.is_some()),
+        withdrawal,
     }))
 }
 
-fn customer_for(inner: &Inner, member: &Member<min::Admin>) -> NewCustomer {
+fn customer_for(inner: &Inner, member: &Member<min::Admin>, statement: &Statement) -> NewCustomer {
     NewCustomer {
         org_id: member.org.id,
         name: member.org.name.clone(),
         email: member.user.email.clone(),
         invoice_footer: inner.config.invoice_footer.clone(),
         invoice_fields: inner.config.invoice_fields.clone(),
+        locale: statement.locale,
+        business_name: statement.company.as_ref().map(|(name, ..)| name.clone()),
     }
 }
 
@@ -401,6 +533,17 @@ struct Pending {
     session_id: Option<String>,
     nonce: Option<String>,
     price: Option<String>,
+    acceptance_id: Option<Uuid>,
+}
+
+/// A checkout being opened: who asks, for what, having stated what.
+struct Order<'a> {
+    member: &'a Member<min::Admin>,
+    plan: Plan,
+    interval: Interval,
+    price: &'a str,
+    statement: &'a Statement,
+    copy_version: &'a str,
 }
 
 /// Opens one Checkout Session for the organization, under its billing lock
@@ -416,17 +559,16 @@ struct Pending {
 ///    again after a timeout gets the same session, never a second one;
 /// 4. every other open session of the customer expired (after creating
 ///    this one, so that a replayed request never expires its own answer):
-///    one open checkout at a time, so two can never both be paid.
+///    one open checkout at a time, so two can never both be paid;
+/// 5. the record of what the buyer accepted and stated
+///    (`legal_acceptances`), with the session's id; the session and its
+///    subscription carry the record's id (kept with the nonce, so a retry
+///    sends Stripe the same request).
 ///
 /// What it learned (the customer, the pending nonce, the session) is
 /// committed even when Stripe fails midway, for the retry.
-async fn open_checkout(
-    state: &AppState,
-    inner: &Inner,
-    member: &Member<min::Admin>,
-    price: &str,
-) -> ApiResult<String> {
-    let org = member.org.id;
+async fn open_checkout(state: &AppState, inner: &Inner, order: &Order<'_>) -> ApiResult<String> {
+    let org = order.member.org.id;
     let mut tx = state.db.begin().await?;
     super::lock_org(&mut tx, org).await?;
     let current = stored(&mut *tx, org).await?;
@@ -442,13 +584,13 @@ async fn open_checkout(
     let pending = sqlx::query_as!(
         Pending,
         r#"SELECT customer_id, checkout_session_id AS session_id, checkout_nonce AS nonce,
-                  checkout_price AS price
+                  checkout_price AS price, checkout_acceptance_id AS acceptance_id
            FROM org_billing WHERE org_id = $1"#,
         org
     )
     .fetch_one(&mut *tx)
     .await?;
-    let outcome = exchange(inner, member, price, pending, &mut tx).await;
+    let outcome = exchange(inner, order, pending, &mut tx).await;
     // Kept whatever happened: the customer and the pending nonce matter to
     // the next attempt.
     tx.commit().await?;
@@ -456,25 +598,27 @@ async fn open_checkout(
 }
 
 /// The calls to Stripe of [`open_checkout`], writing what they learn in `tx`.
+#[allow(clippy::too_many_lines, reason = "the exchange with Stripe, in order")]
 async fn exchange(
     inner: &Inner,
-    member: &Member<min::Admin>,
-    price: &str,
+    order: &Order<'_>,
     pending: Pending,
     tx: &mut sqlx::PgConnection,
 ) -> ApiResult<String> {
+    let member = order.member;
+    let price = order.price;
     let org = member.org.id;
     let customer = if let Some(id) = pending.customer_id {
         inner
             .stripe
-            .update_customer(id.clone(), customer_for(inner, member))
+            .update_customer(id.clone(), customer_for(inner, member, order.statement))
             .await
             .map_err(|err| unavailable(&err))?;
         id
     } else {
         let id = inner
             .stripe
-            .create_customer(customer_for(inner, member))
+            .create_customer(customer_for(inner, member, order.statement))
             .await
             .map_err(|err| unavailable(&err))?;
         sqlx::query!(
@@ -494,19 +638,29 @@ async fn exchange(
     if !running.is_empty() {
         return Err(already_subscribed());
     }
-    let nonce = match (pending.nonce, pending.session_id) {
-        (Some(nonce), None) if pending.price.as_deref() == Some(price) => nonce,
-        _ => crate::token::generate(),
+    let (nonce, acceptance_id) = match (pending.nonce, pending.session_id, pending.acceptance_id) {
+        (Some(nonce), None, Some(acceptance)) if pending.price.as_deref() == Some(price) => {
+            (nonce, acceptance)
+        }
+        _ => (
+            crate::token::generate(),
+            sqlx::query_scalar!(r#"SELECT uuidv7() AS "id!""#)
+                .fetch_one(&mut *tx)
+                .await?,
+        ),
     };
     sqlx::query!(
-        "UPDATE org_billing SET checkout_nonce = $2, checkout_price = $3, checkout_session_id = NULL
+        "UPDATE org_billing SET checkout_nonce = $2, checkout_price = $3, checkout_session_id = NULL,
+                                checkout_acceptance_id = $4
          WHERE org_id = $1",
         org,
         nonce,
         price,
+        acceptance_id,
     )
     .execute(&mut *tx)
     .await?;
+    let locale = order.statement.locale;
     let session = inner
         .stripe
         .checkout(NewCheckout {
@@ -515,7 +669,11 @@ async fn exchange(
             price: price.to_owned(),
             success_url: billing_url(inner, &member.org.slug, "checkout=success"),
             cancel_url: billing_url(inner, &member.org.slug, "checkout=cancelled"),
-            idempotency_key: super::stripe::checkout_key(org, price, &nonce),
+            idempotency_key: super::stripe::checkout_key(org, price, locale, &nonce),
+            acceptance_id,
+            locale,
+            edition: inner.legal.edition(),
+            business: order.statement.buyer == Buyer::Business,
         })
         .await
         .map_err(|err| unavailable(&err))?;
@@ -541,9 +699,45 @@ async fn exchange(
             });
         }
     }
+    let statement = order.statement;
+    let company = statement.company.as_ref();
+    let consumer = statement.buyer == Buyer::Consumer;
+    sqlx::query!(
+        "INSERT INTO legal_acceptances (id, kind, user_id, user_email, user_name, terms_version, edition,
+                                        locale, org_id, org_name, plan, interval, buyer, company_name,
+                                        company_country, company_tax_id, business_confirmed,
+                                        immediate_start, withdrawal_acknowledged, copy_version,
+                                        checkout_session_id, professional_use)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                 $19, $20, $21, $22)",
+        acceptance_id,
+        AcceptanceKind::Checkout as AcceptanceKind,
+        member.user.id,
+        member.user.email,
+        member.user.name,
+        inner.legal.terms_version,
+        inner.legal.edition() as TermsEdition,
+        locale as Locale,
+        org,
+        member.org.name,
+        order.plan as Plan,
+        order.interval as Interval,
+        statement.buyer as Buyer,
+        company.map(|(name, ..)| name.as_str()),
+        company.map(|(_, country, _)| country.as_str()),
+        company.and_then(|(.., tax_id)| tax_id.as_deref()),
+        company.is_some().then_some(true),
+        consumer.then_some(true),
+        consumer.then_some(true),
+        order.copy_version,
+        session.id,
+        (inner.legal.edition() == TermsEdition::Professional).then_some(true),
+    )
+    .execute(&mut *tx)
+    .await?;
     sqlx::query!(
         "UPDATE org_billing SET checkout_session_id = $2, checkout_nonce = NULL, checkout_price = NULL,
-                                updated_at = now()
+                                checkout_acceptance_id = NULL, updated_at = now()
          WHERE org_id = $1",
         org,
         session.id,
@@ -562,10 +756,11 @@ fn already_subscribed() -> ApiError {
     }
 }
 
-/// Starts paying for a plan: the Terms accepted (kept in the audit log, with
-/// a consumer's requests), then a Stripe Checkout Session to send the
-/// browser to. Admins only. An organization already subscribed changes plan
-/// in the portal.
+/// Starts paying for a plan: as a business or a consumer (never assumed),
+/// the Terms accepted, a business's statement and name, or a consumer's two
+/// requests (recorded with the session, 10 years, and in the audit log),
+/// then a Stripe Checkout Session to send the browser to. Admins only, in
+/// person. An organization already subscribed changes plan in the portal.
 #[utoipa::path(
     post,
     path = "/orgs/{org}/billing/checkout",
@@ -577,8 +772,8 @@ fn already_subscribed() -> ApiError {
         (status = 200, body = BillingRedirect),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid", body = ErrorBody),
-        (status = 422, description = "`validation`: the Terms (or a consumer's requests) not accepted, or Free", body = ErrorBody),
+        (status = 409, description = "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload", body = ErrorBody),
+        (status = 422, description = "`validation` naming the field: no buyer chosen, the Terms or a box not ticked, a business's name or country missing, or Free", body = ErrorBody),
         (status = 503, description = "`billing_unavailable`: Stripe did not answer", body = ErrorBody),
     )
 )]
@@ -588,21 +783,24 @@ async fn checkout(
     Json(body): Json<StartCheckout>,
 ) -> ApiResult<Json<BillingRedirect>> {
     let inner = state.billing.require()?;
+    if member.user.via.is_some() {
+        return Err(ApiError::Denied {
+            code: "not_for_agents",
+            message: "Only the person, signed in, can accept the Terms and subscribe; an access token cannot.".into(),
+        });
+    }
     let lookup_key = body
         .plan
         .lookup_key(body.interval)
         .ok_or_else(|| invalid("plan", "Choose a paid plan: Free needs no checkout."))?;
-    if !body.accept_terms {
-        return Err(invalid(
-            "accept_terms",
-            "Accept the Terms of Service to continue.",
-        ));
-    }
-    if body.buyer == Buyer::Consumer && !(body.immediate_start && body.withdrawal_acknowledged) {
-        return Err(invalid(
-            "immediate_start",
-            "As a consumer, ask for the service to start now and acknowledge the withdrawal terms to continue.",
-        ));
+    let statement = body.checked(inner.legal.consumer_sales)?;
+    if body.copy_version != copy::version(inner.legal.edition()) {
+        return Err(ApiError::Conflict {
+            code: "checkout_copy_changed",
+            message:
+                "The wording of this page changed: reload it, read the boxes again, then continue."
+                    .into(),
+        });
     }
     if stored(&state.db, member.org.id)
         .await?
@@ -615,7 +813,19 @@ async fn checkout(
         .price(lookup_key)
         .await
         .map_err(|err| unavailable(&err))?;
-    let url = open_checkout(&state, inner, &member, &price).await?;
+    let url = open_checkout(
+        &state,
+        inner,
+        &Order {
+            member: &member,
+            plan: body.plan,
+            interval: body.interval,
+            price: &price,
+            statement: &statement,
+            copy_version: &body.copy_version,
+        },
+    )
+    .await?;
     audit::record(
         &state.db,
         &audit::Entry {
@@ -630,18 +840,22 @@ async fn checkout(
                 billing: Some(BillingAudit {
                     plan: Some(body.plan),
                     interval: Some(body.interval),
-                    terms_version: Some(inner.config.terms_version.clone()),
+                    terms_version: Some(inner.legal.terms_version.clone()),
                     buyer: Some(
-                        match body.buyer {
+                        match statement.buyer {
                             Buyer::Business => "business",
                             Buyer::Consumer => "consumer",
                         }
                         .to_owned(),
                     ),
-                    immediate_start: (body.buyer == Buyer::Consumer)
+                    immediate_start: (statement.buyer == Buyer::Consumer)
                         .then_some(body.immediate_start),
-                    withdrawal_acknowledged: (body.buyer == Buyer::Consumer)
+                    withdrawal_acknowledged: (statement.buyer == Buyer::Consumer)
                         .then_some(body.withdrawal_acknowledged),
+                    professional_use: (inner.legal.edition() == TermsEdition::Professional)
+                        .then_some(true),
+                    copy_version: Some(body.copy_version.clone()),
+                    locale: Some(statement.locale.tag().to_owned()),
                     ..BillingAudit::default()
                 }),
                 ..AuditDetails::default()

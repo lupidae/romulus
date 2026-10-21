@@ -77,6 +77,8 @@ major_port() { echo $((40000 + 10 * $1 + $2 - 10)); }
 smtp_port() { echo $((40000 + 10 * $1 + 1)); }
 # The billing end-to-end API (Playwright's e2e/billing, ROMULUS_BILLING=fake).
 billing_e2e_port() { echo $((40000 + 10 * $1 + 2)); }
+# The same with consumer sales on (Playwright's e2e/billing-consumers).
+consumers_e2e_port() { echo $((40000 + 10 * $1 + 3)); }
 
 # Every port of the slot, so a stack this registry does not know (another
 # user's, a stale one) is never reused.
@@ -97,6 +99,9 @@ slot_ports_free() {
         return 1
     fi
     if nc -z 127.0.0.1 "$(billing_e2e_port "$1")" 2>/dev/null; then
+        return 1
+    fi
+    if nc -z 127.0.0.1 "$(consumers_e2e_port "$1")" 2>/dev/null; then
         return 1
     fi
 }
@@ -170,6 +175,7 @@ site=$((base + $(offset site)))
 mail=$((base + $(offset mail)))
 smtp=$(smtp_port "$slot")
 billing_e2e=$(billing_e2e_port "$slot")
+consumers_e2e=$(consumers_e2e_port "$slot")
 pg15=$(major_port "$slot" 15)
 pg16=$(major_port "$slot" 16)
 pg18=$(major_port "$slot" 18)
@@ -196,6 +202,9 @@ ROMULUS_E2E_API_PORT=$e2e_api
 # Playwright's billing specs: an API with Stripe faked (ROMULUS_BILLING=fake)
 # serving the production build itself, on its own origin.
 ROMULUS_E2E_BILLING_PORT=$billing_e2e
+# The same with consumer sales on (ROMULUS_CONSUMER_SALES=true), for the
+# withdrawal and the business-or-consumer checkout (e2e/billing-consumers).
+ROMULUS_E2E_CONSUMERS_PORT=$consumers_e2e
 # The static homepage (site/), served by \`just site\`.
 ROMULUS_SITE_PORT=$site
 # The mail catcher: emails Zitadel and romulus send (sign-up codes, password

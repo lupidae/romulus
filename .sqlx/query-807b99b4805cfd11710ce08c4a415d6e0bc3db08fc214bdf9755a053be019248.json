@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT edition::text AS \"edition!\", buyer::text AS \"buyer\", immediate_start,\n                  withdrawal_acknowledged, professional_use, company_name\n           FROM legal_acceptances",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "edition!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "buyer",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "immediate_start",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "immediate_start"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "withdrawal_acknowledged",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "withdrawal_acknowledged"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "professional_use",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "professional_use"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "company_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "company_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "807b99b4805cfd11710ce08c4a415d6e0bc3db08fc214bdf9755a053be019248"
+}

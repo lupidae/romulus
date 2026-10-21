@@ -1,0 +1,128 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE auth_links l SET used_at = now()\n           WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()\n           RETURNING purpose AS \"purpose: LinkPurpose\", user_id, email, name, invitation_id, expires_at,\n                     NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)\n                       AS \"first_password!\",\n                     accepted_terms",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purpose: LinkPurpose",
+        "type_info": {
+          "Custom": {
+            "name": "auth_link_purpose",
+            "kind": {
+              "Enum": [
+                "sign_up",
+                "reset_password"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "purpose"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "email"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "invitation_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "invitation_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "first_password!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "accepted_terms",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "accepted_terms"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        {
+          "Custom": {
+            "name": "auth_link_purpose",
+            "kind": {
+              "Enum": [
+                "sign_up",
+                "reset_password"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      null,
+      true
+    ]
+  },
+  "hash": "0cc11862a0dc768535dab4eb1b257fb6f54d9329d585085112fb4a4479428992"
+}

@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO withdrawals (org_id, org_name, user_id, user_email, user_name, locale,\n                                    acceptance_id, subscription_id, plan, interval, subscribed_at,\n                                    paid_cents, refund_cents, currency, refunds)\n           VALUES ($1, $2, $3, $4, $5, $6, (SELECT id FROM legal_acceptances WHERE id = $7),\n                   $8, $9, $10, $11, $12, $13, $14, $15)\n           ON CONFLICT (subscription_id) DO NOTHING\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "locale",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "Timestamptz",
+        "Int8",
+        "Int8",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8f3c8b7c521a5934f3fda89ac449e8de05ea18a7f1aa20c316a5370feecd0834"
+}

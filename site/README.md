@@ -14,6 +14,11 @@ from `web/` and `crates/romulus-wasm` into `public/hero/`, and committed.
 public/            what Cloudflare Pages serves
   index.html       the page; the hero's static window is HTML, CSS and SVG; the plans' JSON (#plans-data)
   mentions-legales.html, legal-notice.html   the legal notice (LCEN), in French and in English
+  legal/terms.html, legal/privacy.html, legal/dpa.html,
+  fr/legal/conditions.html, fr/legal/confidentialite.html
+                   the hosted service's terms, privacy policy and DPA in force (the professional
+                   edition), rendered by tools/legal.mjs: do not edit
+  legal/full/, fr/legal/full/   the full edition (consumers included), published, not in force
   styles.css       layout and the marketing type scale (colors only from tokens)
   tokens.css       generated from web/src/styles/globals.css: do not edit
   app.js           header hairline, hero playback, loading the live hero, copy button, theme switch
@@ -24,6 +29,8 @@ tools/sync.mjs     copies tokens and fonts from web/ (--check for CI)
 tools/hero.mjs     builds public/hero/ (--check: is it built from the current sources?)
 tools/assets.mjs   renders og.png (tools/og.html + the hero window) and the icons
 tools/pricing.mjs  renders the plan cards from the page's #plans-data (--check: do they match?)
+tools/legal.mjs    renders legal/*.md into the legal pages and prints the Terms PDFs the API attaches (--check)
+legal/             the legal documents' sources, as approved (legal/README.md), and the PDFs' manifest.json
 serve.mjs          a local server that behaves like Pages (_headers, 404, compression)
 e2e/               Playwright + axe
 wrangler.toml      the Cloudflare Pages project
@@ -34,15 +41,17 @@ wrangler.toml      the Cloudflare Pages project
 ```bash
 npm ci --prefix site          # once (Playwright and axe); web/ needs `npm ci` too for sync
 just site                     # serve on $ROMULUS_SITE_PORT (scripts/dev-env, slot + 7)
-just site-check               # tokens/fonts in sync, the hero built, then Playwright + axe (CI: .github/workflows/site.yml)
+just site-check               # tokens/fonts in sync, the hero and the legal pages built, then Playwright + axe (CI: .github/workflows/site.yml)
 just site-gen                 # after a token change in web/, or a change to the hero or mark (rebuilds the live hero)
 just site-hero                # the live hero only, after a change to web/src/hero, the components it reuses, or romulus-wasm
+just site-legal               # the legal pages and the Terms PDFs, after editing site/legal/
 just site-lighthouse          # mobile and desktop reports in site/lighthouse/
 ```
 
 The CSP allows one inline script by hash: if you edit the theme script in
 `index.html` (it must stay identical in `404.html` and the two legal notice
-pages), update the hash in `_headers`; the e2e test says so when they
+pages; `tools/legal.mjs` copies it into the legal documents' pages, so run
+it), update the hash in `_headers`; the e2e test says so when they
 disagree.
 
 ## Deploy (Cloudflare Pages)
@@ -111,15 +120,44 @@ from the API.
   the pricing's one VAT mention (Terms 7.3).
 - Legal: the legal notice the LCEN requires is `mentions-legales.html`
   (French) and `legal-notice.html` (its English translation), served at
-  `/mentions-legales` and `/legal-notice`, each linking to the other, in the
-  sitemap, static like the homepage (the edge tests check `_routes.json`
-  keeps the Function off them). The homepage footer's `nav.footer-legal`
-  links that notice, the Terms (`/legal/terms`), the Privacy Policy
-  (`/legal/privacy`) and the DPA (`/legal/dpa`, for business customers);
-  the notice's own footer holds the notice, in the page's language. The
-  notice's data paragraph says the site sets no cookies and loads nothing from another
-  origin: `e2e/legal.spec.ts` checks both, so a change that breaks either
-  must change the notice too.
+  `/mentions-legales` and `/legal-notice`, each linking to the other. The
+  hosted service's terms, privacy policy and DPA are published from
+  `site/legal/*.md` (as approved, word for word: only markup is added) by
+  `tools/legal.mjs`, in the notice's chrome, in two editions
+  (`site/legal/README.md`). romulus is sold to professionals only, so the
+  professional edition is in force, at the canonical addresses:
+  `/legal/terms` ⇄ `/fr/legal/conditions`, `/legal/privacy` ⇄
+  `/fr/legal/confidentialite` (each pair linked both ways, with hreflang
+  alternates), and `/legal/dpa`, in English only, for both editions. The
+  full edition (consumers included) is published for later at
+  `/legal/full/terms` ⇄ `/fr/legal/full/conditions` and `/legal/full/privacy`
+  ⇄ `/fr/legal/full/confidentialite`: `noindex`, out of the sitemap, linked
+  from nowhere, with a notice above the document (chrome, not part of it)
+  saying it is not in force and linking the documents that are. When
+  consumer sales open, the full edition becomes a new version at the
+  canonical addresses (`site/legal/README.md` says how). Headings get ids
+  from their text (lowercase, accents stripped, other characters one `-`:
+  `/legal/full/terms#9-consumer-rights`); tables sit in a labelled frame that
+  scrolls when needed and become one card per row on a phone; `@media
+  print` gives A4 with the text alone. The same tool prints each edition of
+  the Terms, in both languages, to the PDFs the API attaches to its
+  confirmation emails (`crates/romulus-api/legal/terms-pro-<version>-<lang>.pdf`
+  for the professional edition, `terms-<version>-<lang>.pdf` for the full
+  one, with `site/legal/manifest.json`); `--check` (in `just check` and
+  `just site-check`) fails when a page or a PDF is not made from the
+  current sources, or the sitemap lists a document not in force or misses
+  one that is. All of it is static like the homepage (the edge tests check
+  `_routes.json` keeps the Function off every document). The footer's
+  `nav.footer-legal` holds the notice, the terms, the privacy policy and
+  the DPA in force, in the page's language (the DPA marked as English on
+  French pages), the page's own marked `aria-current`: its links are
+  `legalLinks` in `tools/legal.mjs`, which writes them into the legal pages
+  and `404.html` (`--check` fails when a page's differ). The homepage's
+  footer is `index.html`'s own, by hand: the notice, the terms, the privacy
+  policy and the DPA (for business customers) at their canonical addresses. The notice links the privacy
+  policy, and its data paragraph says the site sets no cookies and loads
+  nothing from another origin: `e2e/legal.spec.ts` checks both on every
+  legal page, so a change that breaks either must change the notice too.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows
   are plain radial gradients) and no layout reads during load. Those three
   cost ~2.5 s of main thread on Lighthouse's throttled phone.

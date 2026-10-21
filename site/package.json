@@ -15,11 +15,14 @@
     "assets": "node tools/assets.mjs",
     "pricing": "node tools/pricing.mjs",
     "pricing:check": "node tools/pricing.mjs --check",
+    "legal": "node tools/legal.mjs",
+    "legal:check": "node tools/legal.mjs --check",
     "e2e": "playwright test",
     "test:edge": "node --test \"edge/*.test.mjs\""
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
-    "@playwright/test": "1.64.1"
+    "@playwright/test": "1.64.1",
+    "marked": "18.1.1"
   }
 }

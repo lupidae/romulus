@@ -140,6 +140,7 @@ const icons = {
   // Kept out of a database's activity by the API: another database's purge.
   database_purged: TrashIcon,
   admin_appointed: GroupIcon,
+  contract_withdrawn: CreditCardIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -216,6 +217,8 @@ function sentence(event: AuditEvent): string {
       return `The database “${details.database_name ?? details.database_slug ?? "?"}” was deleted for good, 30 days after its deletion`;
     case "admin_appointed":
       return `${details.member?.name ?? "A member"} was made an admin of the organization`;
+    case "contract_withdrawn":
+      return `${who} withdrew from the paid plan within 14 days: it was cancelled and the days not used refunded`;
   }
 }
 

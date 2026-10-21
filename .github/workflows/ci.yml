@@ -63,8 +63,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            site/package-lock.json
       - run: npm ci --prefix web
+      # `just check` re-renders the legal pages (site/tools/legal.mjs, marked).
+      - run: npm ci --prefix site
 
       - name: Start the sandbox Postgres
         run: |

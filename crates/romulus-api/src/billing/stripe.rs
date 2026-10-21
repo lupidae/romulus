@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::config::Secret;
+use crate::{config::Secret, domain::Locale};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -60,6 +60,10 @@ pub struct NewCustomer {
     pub email: String,
     pub invoice_footer: Option<String>,
     pub invoice_fields: Vec<(String, String)>,
+    /// The language of Stripe's pages, emails and invoices for it.
+    pub locale: Locale,
+    /// A business buyer's name, which its invoices carry.
+    pub business_name: Option<String>,
 }
 
 /// A subscription checkout for one price.
@@ -73,6 +77,16 @@ pub struct NewCheckout {
     /// Made of the organization and the checkout's pending nonce: the same
     /// request again (after a timeout) gets the same session.
     pub idempotency_key: String,
+    /// The record of what the buyer accepted (`legal_acceptances`), which
+    /// the subscription carries in its metadata.
+    pub acceptance_id: Uuid,
+    /// The payment page's language, and of its words under the button.
+    pub locale: Locale,
+    /// The Terms in force: the words under the button are theirs.
+    pub edition: crate::domain::TermsEdition,
+    /// A business buys: the payment page requires its name (the business
+    /// named there is the Customer, Terms 3.5).
+    pub business: bool,
 }
 
 /// A Checkout Session, as romulus keeps it.
@@ -87,6 +101,71 @@ pub struct CheckoutSession {
 pub struct Refund {
     pub amount: i64,
     pub currency: String,
+}
+
+/// A paid invoice of a subscription, with the period its lines cover: what
+/// a withdrawal refunds a share of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaidInvoice {
+    pub id: String,
+    pub payment_intent: Option<String>,
+    pub amount_paid: i64,
+    pub currency: String,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
+}
+
+/// One refund a withdrawal makes (kept with it, `withdrawals.refunds`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlannedRefund {
+    pub invoice: String,
+    pub payment_intent: String,
+    pub amount: i64,
+    /// What the invoice was paid: no refund of it ever gives back more,
+    /// with the ones made before.
+    pub paid: i64,
+}
+
+/// A refund made on a payment already, as Stripe lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MadeRefund {
+    pub amount: i64,
+    /// `succeeded`, `pending`, `requires_action`, `failed`, `canceled`.
+    pub status: String,
+    /// The withdrawal it was made for (`metadata[withdrawal]`).
+    pub withdrawal: Option<String>,
+}
+
+/// What `planned` still gives back, given the refunds made on its payment:
+/// nothing when this withdrawal made one already (an attempt that ended
+/// before romulus heard back); otherwise its amount, at most what was paid
+/// less what was refunded (by hand in the Dashboard, say). A failed or
+/// canceled refund gave nothing back.
+pub fn still_due(planned: &PlannedRefund, withdrawal: Uuid, made: &[MadeRefund]) -> i64 {
+    let gave_back = |r: &&MadeRefund| !matches!(r.status.as_str(), "failed" | "canceled");
+    let ours = withdrawal.to_string();
+    if made
+        .iter()
+        .filter(gave_back)
+        .any(|r| r.withdrawal.as_deref() == Some(ours.as_str()))
+    {
+        return 0;
+    }
+    let refunded: i64 = made.iter().filter(gave_back).map(|r| r.amount).sum();
+    planned.amount.min(planned.paid - refunded).max(0)
+}
+
+fn parse_refunds(list: &Value) -> Vec<MadeRefund> {
+    list["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| MadeRefund {
+            amount: r["amount"].as_i64().unwrap_or(0),
+            status: text(&r["status"]).unwrap_or_default(),
+            withdrawal: text(&r["metadata"]["withdrawal"]),
+        })
+        .collect()
 }
 
 /// A Customer Portal session, at its home page or straight in one flow.
@@ -122,6 +201,10 @@ pub struct Subscription {
     pub item: Option<Item>,
     /// `metadata.org_id`, set at checkout.
     pub org_id: Option<Uuid>,
+    /// `metadata.acceptance_id`, set at checkout: its buyer's record.
+    pub acceptance_id: Option<Uuid>,
+    /// `start_date`: when the contract began.
+    pub started: Option<DateTime<Utc>>,
     pub latest_invoice: Option<String>,
     /// A change Stripe will make (a downgrade at the period's end).
     pub scheduled: Option<Scheduled>,
@@ -192,6 +275,21 @@ pub trait StripeApi: Send + Sync + 'static {
         &self,
         subscription: String,
     ) -> BoxFuture<'_, Result<Option<Refund>, StripeError>>;
+    /// The subscription's paid invoices, with the periods they cover.
+    fn paid_invoices(
+        &self,
+        subscription: String,
+    ) -> BoxFuture<'_, Result<Vec<PaidInvoice>, StripeError>>;
+    /// A consumer's withdrawal: cancels `subscription` now (no proration,
+    /// no final invoice) and makes `refunds`. Idempotent (keys by
+    /// subscription and invoice): the notices task calls it again until it
+    /// succeeds.
+    fn withdraw(
+        &self,
+        subscription: String,
+        withdrawal: Uuid,
+        refunds: Vec<PlannedRefund>,
+    ) -> BoxFuture<'_, Result<(), StripeError>>;
     /// A Customer Portal session's URL.
     fn portal(&self, portal: NewPortal) -> BoxFuture<'_, Result<String, StripeError>>;
     fn subscription(&self, id: String) -> BoxFuture<'_, Result<Subscription, StripeError>>;
@@ -289,10 +387,11 @@ pub fn customer_key(org: Uuid) -> String {
     format!("romulus-customer-{org}")
 }
 
-/// The idempotency key of a checkout: the organization, the price, and the
-/// nonce kept until the session is known.
-pub fn checkout_key(org: Uuid, price: &str, nonce: &str) -> String {
-    format!("romulus-checkout-{org}-{price}-{nonce}")
+/// The idempotency key of a checkout: the organization, the price, the
+/// language (the page's words), and the nonce kept until the session is
+/// known.
+pub fn checkout_key(org: Uuid, price: &str, locale: Locale, nonce: &str) -> String {
+    format!("romulus-checkout-{org}-{price}-{}-{nonce}", locale.tag())
 }
 
 /// Form pairs, Stripe's nested keys spelled out (`a[b][0]`).
@@ -319,10 +418,16 @@ fn customer_form(customer: &NewCustomer, create: bool) -> Form {
     let mut form = Form::new();
     if create {
         form = form
-            .set("name", &customer.name)
             .set("email", &customer.email)
             .set("metadata[org_id]", customer.org_id.to_string());
     }
+    if create || customer.business_name.is_some() {
+        form = form.set(
+            "name",
+            customer.business_name.as_deref().unwrap_or(&customer.name),
+        );
+    }
+    form = form.set("preferred_locales[0]", customer.locale.tag());
     // Empty strings clear them in Stripe, which is what an unset footer means.
     form = form.set(
         "invoice_settings[footer]",
@@ -406,8 +511,25 @@ fn payment_intent_of(invoice: &Value) -> Option<String> {
 }
 
 fn checkout_form(checkout: &NewCheckout) -> Form {
-    Form::new()
+    let form = Form::new()
         .set("mode", "subscription")
+        .set("locale", checkout.locale.tag())
+        // The "Subscribe" button cannot be renamed: the words under it say
+        // it is an order with an obligation to pay (Article L221-14). The
+        // Terms are accepted on romulus's own page, with their version,
+        // before this one: no consent_collection box repeating it here.
+        .set(
+            "custom_text[submit][message]",
+            &super::copy::boxes(checkout.edition, checkout.locale).submit,
+        )
+        .set(
+            "metadata[acceptance_id]",
+            checkout.acceptance_id.to_string(),
+        )
+        .set(
+            "subscription_data[metadata][acceptance_id]",
+            checkout.acceptance_id.to_string(),
+        )
         .set("customer", &checkout.customer)
         .set("client_reference_id", checkout.org_id.to_string())
         .set("line_items[0][price]", &checkout.price)
@@ -426,7 +548,15 @@ fn checkout_form(checkout: &NewCheckout) -> Form {
         // No Stripe Tax: VAT is not applicable (the invoices say why).
         .set("automatic_tax[enabled]", "false")
         .set("success_url", &checkout.success_url)
-        .set("cancel_url", &checkout.cancel_url)
+        .set("cancel_url", &checkout.cancel_url);
+    // A business's name, required on the page (Stripe refuses `optional`
+    // without `enabled`, so a consumer's form names neither).
+    if checkout.business {
+        form.set("name_collection[business][enabled]", "true")
+            .set("name_collection[business][optional]", "false")
+    } else {
+        form
+    }
 }
 
 fn time(value: &Value) -> Option<DateTime<Utc>> {
@@ -479,6 +609,10 @@ pub fn parse_subscription(value: &Value) -> Result<Subscription, StripeError> {
         org_id: value["metadata"]["org_id"]
             .as_str()
             .and_then(|id| id.parse().ok()),
+        acceptance_id: value["metadata"]["acceptance_id"]
+            .as_str()
+            .and_then(|id| id.parse().ok()),
+        started: time(&value["start_date"]),
         latest_invoice: id_of(&value["latest_invoice"]),
         scheduled,
     })
@@ -500,6 +634,32 @@ pub fn parse_invoice(value: &Value) -> Result<Invoice, StripeError> {
         subscription: id_of(&value["parent"]["subscription_details"]["subscription"])
             .or_else(|| id_of(&value["subscription"])),
         customer: id_of(&value["customer"]),
+    })
+}
+
+/// A paid invoice from Stripe's JSON (its payments expanded): the period is
+/// its lines' (the first line's start to the last one's end).
+pub fn parse_paid_invoice(value: &Value) -> Result<PaidInvoice, StripeError> {
+    let id = text(&value["id"]).ok_or_else(|| StripeError::Unexpected("invoice id".into()))?;
+    let lines = value["lines"]["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let start = lines
+        .iter()
+        .filter_map(|l| time(&l["period"]["start"]))
+        .min();
+    let end = lines.iter().filter_map(|l| time(&l["period"]["end"])).max();
+    let (Some(period_start), Some(period_end)) = (start, end) else {
+        return Err(StripeError::Unexpected(format!("invoice {id}: no period")));
+    };
+    Ok(PaidInvoice {
+        id,
+        payment_intent: payment_intent_of(value),
+        amount_paid: value["amount_paid"].as_i64().unwrap_or(0),
+        currency: text(&value["currency"]).unwrap_or_else(|| "eur".to_owned()),
+        period_start,
+        period_end,
     })
 }
 
@@ -690,6 +850,101 @@ impl StripeApi for Http {
         })
     }
 
+    fn paid_invoices(
+        &self,
+        subscription: String,
+    ) -> BoxFuture<'_, Result<Vec<PaidInvoice>, StripeError>> {
+        Box::pin(async move {
+            let list = self
+                .get(
+                    "invoices",
+                    &[
+                        ("subscription".into(), subscription),
+                        ("status".into(), "paid".into()),
+                        ("limit".into(), "20".into()),
+                        ("expand[]".into(), "data.payments".into()),
+                    ],
+                )
+                .await?;
+            list["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|invoice| invoice["amount_paid"].as_i64().unwrap_or(0) > 0)
+                .map(parse_paid_invoice)
+                .collect()
+        })
+    }
+
+    fn withdraw(
+        &self,
+        subscription: String,
+        withdrawal: Uuid,
+        refunds: Vec<PlannedRefund>,
+    ) -> BoxFuture<'_, Result<(), StripeError>> {
+        Box::pin(async move {
+            let read = parse_subscription(
+                &self
+                    .get(&format!("subscriptions/{subscription}"), &[])
+                    .await?,
+            )?;
+            if read.status != "canceled" {
+                // Defaults: no proration credit, no final invoice; the
+                // refunds below are the withdrawal's own.
+                self.delete(
+                    &format!("subscriptions/{subscription}"),
+                    &format!("romulus-withdraw-{subscription}"),
+                )
+                .await?;
+            }
+            for refund in refunds.into_iter().filter(|r| r.amount > 0) {
+                // What its payment had refunded already: this withdrawal's
+                // own refund (made by an attempt that ended before romulus
+                // heard back) is not made again, and no refund gives back
+                // more than what is left of the payment.
+                let made = parse_refunds(
+                    &self
+                        .get(
+                            "refunds",
+                            &[
+                                ("payment_intent".into(), refund.payment_intent.clone()),
+                                ("limit".into(), "100".into()),
+                            ],
+                        )
+                        .await?,
+                );
+                let amount = still_due(&refund, withdrawal, &made);
+                if amount <= 0 {
+                    continue;
+                }
+                let made = self
+                    .create(
+                        "refunds",
+                        Form::new()
+                            .set("payment_intent", &refund.payment_intent)
+                            .set("amount", amount.to_string())
+                            .set("reason", "requested_by_customer")
+                            .set("metadata[withdrawal]", withdrawal.to_string())
+                            .set("metadata[invoice]", &refund.invoice)
+                            .set("metadata[subscription]", &subscription)
+                            .pairs(),
+                        &format!("romulus-withdrawal-refund-{}-{amount}", refund.invoice),
+                    )
+                    .await;
+                match made {
+                    Ok(_) => {}
+                    // Refunded already (by hand, in the Dashboard): nothing
+                    // left to give back for it.
+                    Err(StripeError::Refused {
+                        code: Some(code), ..
+                    }) if code == "charge_already_refunded" => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(())
+        })
+    }
+
     fn portal(&self, portal: NewPortal) -> BoxFuture<'_, Result<String, StripeError>> {
         Box::pin(async move {
             let mut form = portal_form(&portal);
@@ -777,6 +1032,17 @@ pub struct FakeState {
     pub keys: HashMap<String, String>,
     /// Subscriptions cancelled as duplicates, with what was refunded.
     pub refunds: Vec<(String, i64)>,
+    /// Withdrawals' refunds: invoice, amount.
+    pub withdrawal_refunds: Vec<(String, i64)>,
+    /// Every refund made on a payment intent (withdrawals' and others',
+    /// e.g. by hand in the Dashboard: tests add them).
+    pub payment_refunds: HashMap<String, Vec<MadeRefund>>,
+    /// Paid invoices with no payment intent (paid from the balance).
+    pub without_payment: Vec<String>,
+    /// The next withdrawal fails (tests: Stripe down midway).
+    pub fail_withdrawal: bool,
+    /// Every withdrawal fails (tests: Stripe down for good).
+    pub withdrawals_down: bool,
     /// Subscriptions read so far (tests: a webhook reading again).
     pub reads: usize,
     /// The next subscription read signals the first, then waits for the
@@ -844,6 +1110,8 @@ impl Fake {
                 quantity: 1,
             }),
             org_id: Some(checkout.org_id),
+            acceptance_id: Some(checkout.acceptance_id),
+            started: Some(Utc::now()),
             latest_invoice: None,
             scheduled: None,
         };
@@ -1044,6 +1312,78 @@ impl StripeApi for Fake {
         })
     }
 
+    fn paid_invoices(
+        &self,
+        subscription: String,
+    ) -> BoxFuture<'_, Result<Vec<PaidInvoice>, StripeError>> {
+        Box::pin(async move {
+            let state = self.state();
+            let end = state
+                .subscriptions
+                .get(&subscription)
+                .and_then(|s| s.current_period_end)
+                .unwrap_or_else(Utc::now);
+            Ok(state
+                .invoices
+                .iter()
+                .filter(|i| {
+                    i.subscription.as_deref() == Some(subscription.as_str())
+                        && i.status.as_deref() == Some("paid")
+                        && i.total > 0
+                })
+                .map(|i| PaidInvoice {
+                    id: i.id.clone(),
+                    payment_intent: (!state.without_payment.contains(&i.id))
+                        .then(|| format!("pi_for_{}", i.id)),
+                    amount_paid: i.total,
+                    currency: i.currency.clone(),
+                    period_start: i.created,
+                    period_end: end,
+                })
+                .collect())
+        })
+    }
+
+    fn withdraw(
+        &self,
+        subscription: String,
+        withdrawal: Uuid,
+        refunds: Vec<PlannedRefund>,
+    ) -> BoxFuture<'_, Result<(), StripeError>> {
+        Box::pin(async move {
+            let mut state = self.state();
+            if std::mem::take(&mut state.fail_withdrawal) || state.withdrawals_down {
+                return Err(StripeError::Unreachable("the fake is down".into()));
+            }
+            if let Some(read) = state.subscriptions.get_mut(&subscription) {
+                read.status = "canceled".into();
+                read.cancel_at_period_end = false;
+            }
+            for refund in refunds.into_iter().filter(|r| r.amount > 0) {
+                let made = state
+                    .payment_refunds
+                    .get(&refund.payment_intent)
+                    .cloned()
+                    .unwrap_or_default();
+                let amount = still_due(&refund, withdrawal, &made);
+                if amount <= 0 {
+                    continue;
+                }
+                state
+                    .payment_refunds
+                    .entry(refund.payment_intent.clone())
+                    .or_default()
+                    .push(MadeRefund {
+                        amount,
+                        status: "succeeded".into(),
+                        withdrawal: Some(withdrawal.to_string()),
+                    });
+                state.withdrawal_refunds.push((refund.invoice, amount));
+            }
+            Ok(())
+        })
+    }
+
     fn portal(&self, portal: NewPortal) -> BoxFuture<'_, Result<String, StripeError>> {
         Box::pin(async move {
             let flow = match &portal.flow {
@@ -1115,6 +1455,56 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_withdrawal_refund_is_made_once_and_never_more_than_is_left() {
+        let ours = Uuid::from_u128(7);
+        let planned = PlannedRefund {
+            invoice: "in_1".into(),
+            payment_intent: "pi_1".into(),
+            amount: 1_700,
+            paid: 1_900,
+        };
+        let made = |amount: i64, status: &str, withdrawal: Option<Uuid>| MadeRefund {
+            amount,
+            status: status.into(),
+            withdrawal: withdrawal.map(|w| w.to_string()),
+        };
+        assert_eq!(still_due(&planned, ours, &[]), 1_700);
+        // Made by an earlier attempt of this withdrawal: not again.
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_700, "succeeded", Some(ours))]),
+            0
+        );
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_700, "pending", Some(ours))]),
+            0
+        );
+        // That attempt's refund failed: it is made again.
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_700, "failed", Some(ours))]),
+            1_700
+        );
+        // 500 refunded by hand: at most the 1,400 left.
+        assert_eq!(
+            still_due(&planned, ours, &[made(500, "succeeded", None)]),
+            1_400
+        );
+        // All of it refunded already: nothing.
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_900, "succeeded", None)]),
+            0
+        );
+        // Another withdrawal's refund counts as refunded, not as ours.
+        assert_eq!(
+            still_due(
+                &planned,
+                ours,
+                &[made(100, "succeeded", Some(Uuid::from_u128(8)))]
+            ),
+            1_700
+        );
+    }
 
     #[test]
     fn a_subscription_reads_its_period_from_its_item_or_itself() {
@@ -1210,7 +1600,11 @@ mod tests {
             price: "price_1".into(),
             success_url: "s".into(),
             cancel_url: "c".into(),
-            idempotency_key: checkout_key(Uuid::nil(), "price_1", "n"),
+            idempotency_key: checkout_key(Uuid::nil(), "price_1", Locale::Fr, "n"),
+            acceptance_id: Uuid::from_u128(5),
+            locale: Locale::Fr,
+            edition: crate::domain::TermsEdition::Professional,
+            business: true,
         });
         let pairs: HashMap<_, _> = form.pairs().iter().cloned().collect();
         assert_eq!(pairs["mode"], "subscription");
@@ -1222,6 +1616,42 @@ mod tests {
             pairs["subscription_data[metadata][org_id]"],
             Uuid::nil().to_string()
         );
+        // The payment page in the buyer's language, its button an order
+        // with an obligation to pay, the record carried along.
+        assert_eq!(pairs["locale"], "fr");
+        assert!(pairs["custom_text[submit][message]"].contains("obligation de paiement"));
+        assert!(pairs["custom_text[submit][message]"].contains("hors taxes"));
+        // The business named on the payment page is the Customer.
+        assert_eq!(pairs["name_collection[business][enabled]"], "true");
+        assert_eq!(pairs["name_collection[business][optional]"], "false");
+        assert_eq!(
+            pairs["subscription_data[metadata][acceptance_id]"],
+            Uuid::from_u128(5).to_string()
+        );
+        assert!(!pairs.contains_key("consent_collection[terms_of_service]"));
+        // A consumer is asked no business name (and Stripe refuses
+        // `optional` alone).
+        let consumer = checkout_form(&NewCheckout {
+            business: false,
+            ..NewCheckout {
+                org_id: Uuid::nil(),
+                customer: "cus_1".into(),
+                price: "price_1".into(),
+                success_url: "s".into(),
+                cancel_url: "c".into(),
+                idempotency_key: "k".into(),
+                acceptance_id: Uuid::nil(),
+                locale: Locale::En,
+                edition: crate::domain::TermsEdition::Full,
+                business: true,
+            }
+        });
+        assert!(
+            consumer
+                .pairs()
+                .iter()
+                .all(|(key, _)| !key.starts_with("name_collection"))
+        );
     }
 
     #[test]
@@ -1229,10 +1659,23 @@ mod tests {
         let org = Uuid::from_u128(7);
         assert_eq!(customer_key(org), customer_key(org));
         assert_ne!(customer_key(org), customer_key(Uuid::from_u128(8)));
-        let key = checkout_key(org, "price_team_yearly", "n1");
-        assert_eq!(key, checkout_key(org, "price_team_yearly", "n1"));
-        assert_ne!(key, checkout_key(org, "price_team_monthly", "n1"));
-        assert_ne!(key, checkout_key(org, "price_team_yearly", "n2"));
+        let key = checkout_key(org, "price_team_yearly", Locale::En, "n1");
+        assert_eq!(
+            key,
+            checkout_key(org, "price_team_yearly", Locale::En, "n1")
+        );
+        assert_ne!(
+            key,
+            checkout_key(org, "price_team_monthly", Locale::En, "n1")
+        );
+        assert_ne!(
+            key,
+            checkout_key(org, "price_team_yearly", Locale::En, "n2")
+        );
+        assert_ne!(
+            key,
+            checkout_key(org, "price_team_yearly", Locale::Fr, "n1")
+        );
         assert!(key.len() <= 255, "Stripe takes keys up to 255 characters");
     }
 
@@ -1256,6 +1699,8 @@ mod tests {
             email: "a@acme.test".into(),
             invoice_footer: Some("Footer".into()),
             invoice_fields: vec![("Seller".into(), "Someone EI".into())],
+            locale: Locale::Fr,
+            business_name: Some("Acme SAS".into()),
         };
         let pairs: HashMap<_, _> = customer_form(&customer, true)
             .pairs()
@@ -1269,5 +1714,22 @@ mod tests {
             "Someone EI"
         );
         assert_eq!(pairs["metadata[org_id]"], Uuid::nil().to_string());
+        assert_eq!(pairs["name"], "Acme SAS");
+        assert_eq!(pairs["preferred_locales[0]"], "fr");
+    }
+
+    #[test]
+    fn a_paid_invoice_covers_its_lines_period() {
+        let value = json!({"id": "in_1", "amount_paid": 1900, "currency": "eur",
+        "payments": {"data": [{"status": "paid", "payment": {"payment_intent": "pi_1"}}]},
+        "lines": {"data": [
+            {"period": {"start": 1_800_000_000, "end": 1_802_678_400}},
+            {"period": {"start": 1_800_086_400, "end": 1_802_678_400}}
+        ]}});
+        let paid = parse_paid_invoice(&value).unwrap();
+        assert_eq!(paid.payment_intent.as_deref(), Some("pi_1"));
+        assert_eq!(paid.period_start.timestamp(), 1_800_000_000);
+        assert_eq!(paid.period_end.timestamp(), 1_802_678_400);
+        assert!(parse_paid_invoice(&json!({"id": "in_2"})).is_err());
     }
 }

@@ -227,9 +227,9 @@ async fn thresholds(
             tracing::warn!(playground = %id, error = %err, "billing: cannot stop a playground past its hours");
         }
     }
-    if notices::once(&state.db, org, "hours_used_up", &month_key).await? {
+    if let Some(mut decided) = notices::decide(state, org, "hours_used_up", &month_key).await? {
         audit::record(
-            &state.db,
+            decided.conn(),
             &audit::Entry {
                 org_id: org,
                 database_id: None,
@@ -249,7 +249,8 @@ async fn thresholds(
             },
         )
         .await?;
-        notices::hours_used_up(state, org, plan, month, next).await;
+        notices::hours_used_up(state, &mut decided, org, plan, month, next).await?;
+        decided.commit(state).await?;
     }
     Ok(())
 }

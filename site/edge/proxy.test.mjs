@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import { documents } from "../tools/legal.mjs";
 import { CLIENT_IP_HEADER, KEY_HEADER, proxied, proxy } from "./proxy.js";
 
 const env = {
@@ -52,8 +53,27 @@ test("only the app, the API and OAuth's discovery documents are proxied", () => 
     "/.well-known/oauth-protected-resources",
     "/.well-known/oauth-authorization-server/api/mcp",
     "/.well-known/openid-configuration",
+    ...LEGAL_PAGES,
   ])
     assert.ok(!proxied(path), path);
+});
+
+/** The hosted service's legal documents (every page site/tools/legal.mjs publishes): static, never the API's. */
+const LEGAL_PAGES = documents.map((doc) => doc.path);
+
+test("the legal documents are where the site says they are", () => {
+  for (const path of [
+    "/legal/terms",
+    "/fr/legal/conditions",
+    "/legal/privacy",
+    "/fr/legal/confidentialite",
+    "/legal/dpa",
+    "/legal/full/terms",
+    "/fr/legal/full/conditions",
+    "/legal/full/privacy",
+    "/fr/legal/full/confidentialite",
+  ])
+    assert.ok(LEGAL_PAGES.includes(path), path);
 });
 
 /** Whether Pages runs the Function for `path`: public/_routes.json, where `*` matches anything and exclude wins. */
@@ -68,7 +88,7 @@ function routed(path) {
   return routes.include.some(matches) && !routes.exclude.some(matches);
 }
 
-test("_routes.json runs the Function for the app, the API and OAuth's discovery only: the homepage and the legal notice stay static", () => {
+test("_routes.json runs the Function for the app, the API and OAuth's discovery only: the homepage and the legal pages stay static", () => {
   for (const path of [
     "/app",
     "/app/",
@@ -84,6 +104,7 @@ test("_routes.json runs the Function for the app, the API and OAuth's discovery 
     "/mentions-legales.html",
     "/legal-notice",
     "/legal-notice.html",
+    ...LEGAL_PAGES.flatMap((path) => [path, `${path}.html`]),
     "/sitemap.xml",
     "/apple",
     "/.well-known/security.txt",

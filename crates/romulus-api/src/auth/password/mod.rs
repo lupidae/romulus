@@ -537,6 +537,12 @@ pub struct PasswordSignUp {
     /// The token of the invitation link this sign-up comes from. Required
     /// unless sign-up is open; its address must be `email`.
     pub invitation: Option<String>,
+    /// The hosted service's Terms, accepted on the form (`instance.legal`):
+    /// required there (422 `terms`, `professional_use`; 409
+    /// `terms_changed`), recorded when the account is created. Ignored on
+    /// a server without Terms.
+    #[serde(default)]
+    pub terms: Option<crate::legal::AcceptTerms>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -585,6 +591,7 @@ async fn sign_up(
     state.passwords.requests.check(throttle::client_key(ip))?;
     let name = checked_name(&body.name)?;
     let email = checked_email(&body.email)?;
+    let terms = crate::legal::sign_up_terms(&state.config, body.terms.as_ref())?;
 
     let invitation = match body.invitation.as_deref() {
         Some(link) => {
@@ -616,7 +623,7 @@ async fn sign_up(
     };
 
     if state.mailer.is_on() {
-        sign_up_by_email(&state, ip, email, name, invitation).await?;
+        sign_up_by_email(&state, ip, email, name, invitation, terms).await?;
         // The same answer whatever happened.
         return Ok((
             StatusCode::ACCEPTED,
@@ -644,6 +651,11 @@ async fn sign_up(
         .await
         .map_err(duplicate_account)?;
     store_password(&mut tx, user_id, &phc).await?;
+    // The Terms first: the invitation joins the person to an organization,
+    // which is using the Service.
+    if let Some(terms) = &terms {
+        crate::legal::record_sign_up(&mut tx, &state.config, user_id, &email, &name, terms).await?;
+    }
     let org = invitations::claim_for(
         &state.billing,
         &mut tx,
@@ -690,6 +702,7 @@ async fn sign_up_by_email(
     email: String,
     name: String,
     invitation: Option<invitations::LiveInvitation>,
+    terms: Option<crate::legal::SignUpTerms>,
 ) -> ApiResult<()> {
     let existing = find_account(&state.db, &email).await?;
     events::record(
@@ -726,6 +739,7 @@ async fn sign_up_by_email(
                     name: Some(&name),
                     invitation_id: invitation.as_ref().map(|(id, _)| *id),
                     ttl: links::SIGN_UP_TTL,
+                    accepted_terms: terms.and_then(|t| serde_json::to_value(t).ok()),
                 },
             )
             .await?;
@@ -849,6 +863,16 @@ async fn finish_sign_up(
         .await
         .map_err(duplicate_account)?;
     store_password(&mut tx, user_id, &phc).await?;
+    // The Terms its form accepted, if still the ones in force (else the
+    // first sign-in asks again).
+    if let Some(terms) = link
+        .accepted_terms
+        .clone()
+        .and_then(|value| serde_json::from_value::<crate::legal::SignUpTerms>(value).ok())
+    {
+        crate::legal::record_sign_up(&mut tx, &state.config, user_id, &link.email, &name, &terms)
+            .await?;
+    }
     // Joined when the invitation still stands; the account exists either way.
     let org = match link.invitation_id {
         Some(id) => {
@@ -950,6 +974,7 @@ async fn forgot(
                     name: None,
                     invitation_id: None,
                     ttl: links::RESET_TTL,
+                    accepted_terms: None,
                 },
             )
             .await?;

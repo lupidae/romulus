@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(u.email, a.user_email) AS \"email!\", a.locale AS \"locale: Locale\"\n           FROM legal_acceptances a LEFT JOIN users u ON u.id = a.user_id\n           WHERE a.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "email!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "locale: Locale",
+        "type_info": {
+          "Custom": {
+            "name": "locale",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "locale"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      false
+    ]
+  },
+  "hash": "9e19a1031b4d0bc54083949340497be174b4f38197e6f9c4a54347744e0743a1"
+}

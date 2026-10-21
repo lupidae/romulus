@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT completed_at, attempts FROM withdrawals",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "completed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "completed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "attempts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "withdrawals",
+            "name": "attempts"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "489d4f7450aae3fa3f96ef2aec2a42a2767f4ab7496c30c03bd618462eb830ff"
+}

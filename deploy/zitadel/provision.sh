@@ -51,6 +51,9 @@ implicit) SMTP_PORT=${ROMULUS_SMTP_PORT:-465} ;;
 none) SMTP_PORT=${ROMULUS_SMTP_PORT:-25} ;;
 *) echo "zitadel-provision: ROMULUS_SMTP_TLS: starttls, implicit or none, not $SMTP_TLS" >&2; exit 2 ;;
 esac
+# The hosted service's contact for contract questions, as the API has it
+# (empty: none).
+LEGAL_CONTACT=${ROMULUS_LEGAL_CONTACT:-}
 
 issuer=$ISSUER
 # Every browser origin of the stack: dev has two (the dev server and the
@@ -286,6 +289,29 @@ upload icon-light.png icon
 upload icon-dark.png icon/dark
 upload inter.woff2 font
 TOLERATE=COMMAND-1m88i api POST /admin/v1/policies/label/_activate '{}' >/dev/null
+
+# The login's legal links (its privacy policy): none, ever. With a Terms
+# link, Zitadel's sign-up form adds a required "I accept the TOS" box, and
+# with a Privacy link "I accept the privacy policy": an unversioned second
+# acceptance, and a privacy policy is information, never something to
+# accept. romulus asks for its Terms itself (its sign-up form, its first
+# sign-in screen) and its own sign-in pages link them. Zitadel's defaults
+# (its own documents) are cleared too; the contact stays. Written only when
+# it differs, so a run that changes nothing asks for nothing.
+legal_links=$(jq -cn --arg contact "$LEGAL_CONTACT" '{
+    tosLink: "", privacyLink: "",
+    helpLink: "", docsLink: "", customLink: "", customLinkText: "",
+    supportEmail: $contact
+}')
+current_links=$(api GET /admin/v1/policies/privacy | jq -c '.policy | {
+    tosLink: (.tosLink // ""), privacyLink: (.privacyLink // ""), helpLink: (.helpLink // ""),
+    docsLink: (.docsLink // ""), customLink: (.customLink // ""), customLinkText: (.customLinkText // ""),
+    supportEmail: (.supportEmail // "")
+}')
+if [ "$(jq -S . <<<"$current_links")" != "$(jq -S . <<<"$legal_links")" ]; then
+    api PUT /admin/v1/policies/privacy "$legal_links" >/dev/null
+    log "login legal links: none (contact: ${LEGAL_CONTACT:-none})"
+fi
 TOLERATE=COMMAND-1m88i api PUT "/management/v1/projects/$project_id" \
     '{"name":"romulus","privateLabelingSetting":"PRIVATE_LABELING_SETTING_ENFORCE_PROJECT_RESOURCE_OWNER_POLICY"}' >/dev/null
 

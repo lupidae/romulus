@@ -4,6 +4,7 @@ import * as React from "react";
 import { LogoMark } from "@/components/brand/logo";
 import { SchemaPreview } from "@/components/shell/schema-preview";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LegalLinks } from "@/features/legal/components/legal-links";
 import { cn } from "@/lib/utils";
 
 interface AuthPageProps {
@@ -14,6 +15,8 @@ interface AuthPageProps {
   footer?: React.ReactNode;
   /** Move focus to the title on mount: a new step (sent, done) is a new screen. */
   focusTitle?: boolean;
+  /** The Terms and the Privacy Policy at the bottom (the hosted service); off where the page links them itself. */
+  legal?: boolean;
 }
 
 /**
@@ -21,7 +24,14 @@ interface AuthPageProps {
  * one-time links): the form on the left, a schema on the right on wide
  * screens. One column, centred, at phone width.
  */
-export function AuthPage({ title, description, children, footer, focusTitle }: AuthPageProps) {
+export function AuthPage({
+  title,
+  description,
+  children,
+  footer,
+  focusTitle,
+  legal = true,
+}: AuthPageProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
   React.useEffect(() => {
     if (focusTitle) heading.current?.focus();
@@ -52,6 +62,7 @@ export function AuthPage({ title, description, children, footer, focusTitle }: A
             {footer && <div className="mt-6 text-sm text-muted-foreground">{footer}</div>}
           </div>
         </div>
+        {legal && <LegalLinks className="justify-center" />}
       </main>
 
       <aside

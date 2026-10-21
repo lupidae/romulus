@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT edition::text AS \"edition!\" FROM legal_acceptances ORDER BY accepted_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "edition!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b9fa815bc495d93584c404edbec1b117c176c97baaed67388b3712631f575b4e"
+}

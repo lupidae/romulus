@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM withdrawals WHERE requested_at < now() - interval '10 years'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "08f1b64ebd777bc4f8abbcc37671d0413f196069e9cd437418e3f880760db6d8"
+}

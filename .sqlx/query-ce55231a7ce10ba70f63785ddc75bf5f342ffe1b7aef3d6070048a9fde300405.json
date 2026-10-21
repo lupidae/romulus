@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM legal_acceptances WHERE user_id = $1) AS \"accepted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "accepted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ce55231a7ce10ba70f63785ddc75bf5f342ffe1b7aef3d6070048a9fde300405"
+}

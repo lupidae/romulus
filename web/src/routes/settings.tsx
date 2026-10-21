@@ -2,13 +2,14 @@ import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
-import { AppWindowIcon, DatabaseIcon, KeyIcon, SparksIcon } from "@/components/icons";
+import { AppWindowIcon, DatabaseIcon, KeyIcon, PageIcon, SparksIcon } from "@/components/icons";
 import { AppShell, PageBody } from "@/components/shell/app-shell";
 import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toaster";
 import { ChangePasswordDialog } from "@/features/auth/components/change-password-dialog";
 import { instanceQuery, meQuery } from "@/features/auth/queries";
 import { requireUser, signOut } from "@/features/auth/session";
+import { ContractFooter } from "@/features/legal/components/contract-footer";
 import { readLastOrg } from "@/features/orgs/last-org";
 import { orgsQuery } from "@/features/orgs/queries";
 
@@ -46,6 +47,12 @@ function AccountLayout() {
         <SidebarItem asChild icon={<KeyIcon />} label="Access tokens">
           <Link to="/settings/tokens" />
         </SidebarItem>
+        {/* Hosted only: a server without Terms has no contract to show. */}
+        {instance.data?.legal && (
+          <SidebarItem asChild icon={<PageIcon />} label="Your contract">
+            <Link to="/settings/contract" />
+          </SidebarItem>
+        )}
       </SidebarSection>
       {org && (
         <SidebarSection label={org.name}>
@@ -75,6 +82,7 @@ function AccountLayout() {
     >
       <PageBody>
         <Outlet />
+        <ContractFooter />
       </PageBody>
       {me.password_account && (
         <ChangePasswordDialog

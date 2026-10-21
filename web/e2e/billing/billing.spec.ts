@@ -2,19 +2,15 @@ import { readFile } from "node:fs/promises";
 
 import { expect, type Page, test } from "@playwright/test";
 
-import { createOrg, devSignIn, unique } from "../helpers";
+import { fillBusinessCheckout, signedInOrg } from "../billing-flows";
 
 // Hosted billing, Stripe faked server-side (ROMULUS_BILLING=fake on this
-// project's API): a new organization is on Free (1 database, 1 member);
-// checkout goes through the API's fake page, which completes a paid
-// subscription; portal links point at billing.stripe.com, intercepted here.
+// project's API, sold to businesses only): a new account accepts the Terms
+// first; a new organization is on Free (1 database, 1 member); checkout goes
+// through the API's fake page, which completes a paid subscription; portal
+// links point at billing.stripe.com, intercepted here.
 
 const PORTAL = "https://billing.stripe.com/p/session/test_fake";
-
-async function signedInOrg(page: Page, who: string) {
-  await devSignIn(page, `${who}-${Date.now().toString(36)}@romulus.test`, "/app/new");
-  return createOrg(page, unique("Billing"));
-}
 
 async function newDatabase(page: Page, slug: string, name: string) {
   await page.goto(`./${slug}`);
@@ -68,9 +64,7 @@ test("upgrading through checkout, then Cancel opens Stripe's cancel page", async
 
   const checkout = page.getByRole("dialog", { name: "Upgrade to Starter" });
   await expect(checkout).toContainText("€19 a month");
-  await checkout.getByRole("button", { name: "Continue to payment" }).click();
-  await expect(checkout.getByRole("alert")).toHaveText("Accept the Terms of Service to continue.");
-  await checkout.getByRole("checkbox", { name: /I accept the/ }).check();
+  await fillBusinessCheckout(checkout);
   await checkout.getByRole("button", { name: "Continue to payment" }).click();
 
   // The fake checkout completes the subscription and comes back.

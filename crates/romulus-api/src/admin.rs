@@ -285,6 +285,7 @@ async fn new_link(
             name: None,
             invitation_id: None,
             ttl,
+            accepted_terms: None,
         },
     )
     .await?;

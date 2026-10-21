@@ -14,7 +14,12 @@
 //! - Handled: `checkout.session.completed`, `customer.subscription.created`,
 //!   `.updated`, `.deleted` (and Stripe's other subscription events),
 //!   `invoice.paid`, `invoice.payment_failed`. Every change is audited; a
-//!   failed payment emails the organization's admins (once per invoice).
+//!   failed payment emails the organization's admins (once per invoice); a
+//!   subscription starting confirms it to its buyer, a cancellation to the
+//!   admins (`notices`, once each). A completed checkout notes the business
+//!   Stripe's page named on its record (`legal_acceptances.stripe_business_name`);
+//!   a subscription over for good ends the contract its record concluded
+//!   (`contract_ended_at`).
 //!
 //! An event for an organization this server does not know (another
 //! environment sharing the Stripe account) is acknowledged and ignored.
@@ -212,6 +217,9 @@ pub(super) async fn receive(
     }
     let event: Event = serde_json::from_slice(&body)
         .map_err(|err| ApiError::BadRequest(format!("Not a Stripe event: {err}")))?;
+    if event.kind == "checkout.session.completed" {
+        note_business(&state, &event.data.object).await?;
+    }
     match subject(&event.kind, &event.data.object) {
         Some((subscription, invoice)) => {
             apply_subscription(&state, &event.id, &event.kind, &subscription, invoice).await?;
@@ -219,6 +227,30 @@ pub(super) async fn receive(
         None => record_only(&state, &event.id, &event.kind).await?,
     }
     Ok((StatusCode::OK, Json(Received { received: true })))
+}
+
+/// The business a completed checkout's payment page named (Terms 3.5 c:
+/// the Customer), kept with the checkout's record, once.
+async fn note_business(state: &AppState, session: &Value) -> ApiResult<()> {
+    let name = [
+        &session["collected_information"]["business_name"],
+        &session["customer_details"]["business_name"],
+    ]
+    .into_iter()
+    .find_map(|v| v.as_str().map(str::trim).filter(|n| !n.is_empty()))
+    .map(|n| n.chars().take(500).collect::<String>());
+    let (Some(name), Some(id)) = (name, session["id"].as_str()) else {
+        return Ok(());
+    };
+    sqlx::query!(
+        "UPDATE legal_acceptances SET stripe_business_name = $2
+         WHERE checkout_session_id = $1 AND kind = 'checkout' AND stripe_business_name IS NULL",
+        id,
+        name,
+    )
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 /// An event romulus does not act on: remembered, so a redelivery is cheap.
@@ -449,7 +481,9 @@ pub async fn apply_subscription(
             event.duplicate(&mut tx, &before, duplicate).await?;
         }
         let mut failure = None;
+        let mut letters = Letters::default();
         if let Some(next) = next_state(&before, read.as_ref(), id, looked.due) {
+            letters = Letters::of(&before, &next);
             event.store(&mut tx, &before, &next).await?;
             event
                 .payments(&mut tx, &next, invoice.as_ref(), looked.failure_stands)
@@ -478,12 +512,43 @@ pub async fn apply_subscription(
         if let Some((invoice, grace)) = failure {
             notices::payment_failed(state, org, &invoice, grace).await?;
         }
+        if let Some(started) = &letters.started {
+            notices::subscription_confirmed(state, org, started).await?;
+        }
+        if let Some(cancelled) = &letters.cancelled {
+            notices::cancellation_confirmed(state, org, cancelled).await?;
+        }
         return Ok(());
     }
     Err(ApiError::Down {
         code: "billing_unavailable",
         message: "This organization's billing kept changing: deliver the event again later.".into(),
     })
+}
+
+/// The letters a stored change owes (each sent once, after the commit).
+#[derive(Default)]
+struct Letters {
+    /// A subscription began paying: its confirmation.
+    started: Option<Stored>,
+    /// A running one is set to end at its period's end: the cancellation's.
+    cancelled: Option<Stored>,
+}
+
+impl Letters {
+    fn of(before: &Stored, next: &Stored) -> Self {
+        let paying = |s: &Stored| {
+            s.withdrawn_at.is_none() && matches!(s.status.as_deref(), Some("active" | "trialing"))
+        };
+        let same = before.subscription_id == next.subscription_id;
+        Self {
+            started: (paying(next) && !(same && paying(before))).then(|| next.clone()),
+            cancelled: (next.cancel_at_period_end
+                && next.is_live()
+                && !(same && before.cancel_at_period_end))
+                .then(|| next.clone()),
+        }
+    }
 }
 
 /// The row to store after reading subscription `id` (`None` from Stripe: it
@@ -572,8 +637,10 @@ impl Applied<'_> {
         sqlx::query!(
             "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, interval, status,
                                       current_period_end, cancel_at_period_end, amount_cents, currency,
-                                      past_due_since, scheduled_plan, scheduled_interval, scheduled_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                      past_due_since, scheduled_plan, scheduled_interval, scheduled_at,
+                                      acceptance_id, started_at, withdrawn_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17)
              ON CONFLICT (org_id) DO UPDATE SET
                  customer_id = coalesce(EXCLUDED.customer_id, org_billing.customer_id),
                  subscription_id = EXCLUDED.subscription_id, plan = EXCLUDED.plan,
@@ -583,6 +650,8 @@ impl Applied<'_> {
                  amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency,
                  past_due_since = EXCLUDED.past_due_since, scheduled_plan = EXCLUDED.scheduled_plan,
                  scheduled_interval = EXCLUDED.scheduled_interval, scheduled_at = EXCLUDED.scheduled_at,
+                 acceptance_id = EXCLUDED.acceptance_id, started_at = EXCLUDED.started_at,
+                 withdrawn_at = EXCLUDED.withdrawn_at,
                  updated_at = clock_timestamp()",
             self.org,
             next.customer_id,
@@ -598,9 +667,34 @@ impl Applied<'_> {
             next.scheduled_plan as Option<Plan>,
             next.scheduled_interval as Option<Interval>,
             next.scheduled_at,
+            next.acceptance_id,
+            next.started_at,
+            next.withdrawn_at,
         )
         .execute(&mut *tx)
         .await?;
+        // The contract a checkout concluded ends with its subscription (over
+        // for good, or replaced by another): its record is kept from then.
+        let mut over = Vec::new();
+        if next
+            .status
+            .as_deref()
+            .is_some_and(|s| super::state::ENDED_STATUSES.contains(&s))
+        {
+            over.extend(next.acceptance_id);
+        }
+        if before.acceptance_id != next.acceptance_id {
+            over.extend(before.acceptance_id);
+        }
+        if !over.is_empty() {
+            sqlx::query!(
+                "UPDATE legal_acceptances SET contract_ended_at = now()
+                 WHERE id = ANY($1) AND kind = 'checkout' AND contract_ended_at IS NULL",
+                &over,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
         let changed = (
             before.plan,
             before.interval,
@@ -716,6 +810,16 @@ fn from_subscription(
         scheduled_plan: scheduled.map(|s| s.0),
         scheduled_interval: scheduled.map(|s| s.1),
         scheduled_at: scheduled.map(|s| s.2),
+        // Who bought it (its metadata), when it began; a withdrawal belongs
+        // to the subscription it was made from.
+        acceptance_id: read
+            .acceptance_id
+            .or_else(|| before.acceptance_id.filter(|_| same)),
+        started_at: read
+            .started
+            .or_else(|| before.started_at.filter(|_| same))
+            .or(Some(now)),
+        withdrawn_at: before.withdrawn_at.filter(|_| same),
         updated_at: before.updated_at,
     }
 }

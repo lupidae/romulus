@@ -43,7 +43,7 @@ describe("planLimitOf", () => {
     const of = (cap: string, limit: number) =>
       capSummary(planLimitOf(refusal({ cap, plan: "starter", limit }))!);
     expect(of("versions", 500)).toBe("Starter keeps 500 versions per database");
-    expect(of("schema_size", 200)).toBe("Starter keeps 200 tables and views per schema");
+    expect(of("schema_size", 200)).toBe("Starter keeps 200 tables and views per schema version");
     expect(of("history", 365)).toBe("Starter shows 1 year of history");
     expect(of("playground_hours", 72_000)).toBe("Starter has 20 playground hours a month");
     expect(of("approvals", 1)).toBe("Starter allows 1 required approval");

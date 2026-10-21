@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT locale AS \"locale: Locale\" FROM users WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locale: Locale",
+        "type_info": {
+          "Custom": {
+            "name": "locale",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "locale"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "efbc7ba1e162f9d3d50a1f7a80f3b9fa8aefc95fe15d6e68c09c677d00e6b577"
+}

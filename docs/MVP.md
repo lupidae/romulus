@@ -999,8 +999,8 @@ email + password sign-in for self-hosters. This is what the build decided on top
 Hosted only. Off unless `ROMULUS_BILLING` is set: then nothing is capped and
 the billing routes answer 404, so a self-hosted install is unchanged (the
 API refuses billing with `ROMULUS_SINGLE_ORG`). Stripe, test mode until the
-legal pages are online; the legal drafts await counsel and are not in the
-repository.
+founder switches to live. The contract it sells under (the Terms, the
+checkout's boxes, withdrawal) is "Legal: terms, checkout, withdrawal" below.
 
 - **The plan table** (`billing::plans`, the one place the numbers live;
   enforcement, the billing page and `romulus-api stripe-setup` read it):
@@ -1039,12 +1039,14 @@ repository.
   the reason (their data stays until normal expiry; a test in progress
   finishes), new playgrounds, tests, console runs, resets and migration
   runs answer 402 until the month ends or the plan grows.
-- **Stripe**: Checkout (subscription mode, billing address required,
-  business name and VAT number collected, no Stripe Tax) after our own page
-  has an admin accept the Terms (`ROMULUS_TERMS_URL`, version
-  `ROMULUS_TERMS_VERSION`) and, for a consumer, ask for the service to start
-  at once and acknowledge the withdrawal terms: all audited
-  (`terms_accepted`). The customer is created first, carrying every
+- **Stripe**: Checkout (subscription mode, billing address required, a
+  business buyer's name required, VAT number collected, no Stripe Tax, the
+  page in the buyer's language with "the Subscribe button places an order
+  with an obligation to pay" under its button) after our own dialog (below,
+  "Legal"): recorded (`legal_acceptances`) and audited (`terms_accepted`).
+  No `consent_collection[terms_of_service]`: the Terms box is ours, with
+  its version and wording, ticked before Stripe's page; a second, unversioned
+  Stripe box would repeat it in other words. The customer is created first, carrying every
   invoice's footer and custom fields (`ROMULUS_INVOICE_FOOTER`, `_FIELDS`:
   the VAT mention and the seller, kept in configuration, not in code).
   Changing plans and cancelling go through the Customer Portal configured by
@@ -1073,6 +1075,106 @@ repository.
 - Deviations from the data model: `org_billing`, `billing_events`,
   `playground_usage`, `billing_notices`; audit actions for billing, kept
   out of a database's activity.
+
+## Legal: terms, checkout, withdrawal (decided 2026-10-21, built: task COMPLY)
+
+The hosted service's contract, as its documents (published by the homepage,
+`site/legal/`) promise. Off unless `ROMULUS_TERMS_VERSION` is set (with
+`ROMULUS_LEGAL_URL`, the site, and `ROMULUS_LEGAL_CONTACT`, the seller's
+address); billing needs it; a self-hosted install has no Terms at all. The
+hosted service runs `ROMULUS_TERMS_VERSION=1.0` (the documents' version
+1.0 of 21 October 2026); a new version of the documents is a new value, and
+its PDFs (`crates/romulus-api/legal`, `just site-legal`).
+
+- **Two editions of the Terms.** Launch: professionals only, on every plan
+  (`ROMULUS_CONSUMER_SALES` off, the default): the professional edition at
+  `/legal/terms`, `/fr/legal/conditions`, `/legal/privacy`,
+  `/fr/legal/confidentialite`. Consumer sales open once the founder has joined
+  a mediator: the flag on, the full edition (published now under
+  `/legal/full/…`, noindex, marked not in force) with the business-or-consumer
+  choice, the consumer's boxes and withdrawal. The flag alone is refused:
+  it needs `ROMULUS_TERMS_EDITION=full` and a version other than 1.0 (which
+  was published for businesses only). Each edition has its own
+  wording version for the boxes (`checkout-boxes.json`); a change of edition
+  is accepted again, like a new version. The DPA is one document
+  (`/legal/dpa`).
+- **The Terms before anything else.** At the first sign-in (every path:
+  single sign-on, password, invitation), the app shows `/app/signin/terms`:
+  the Terms box and, in the professional edition, the professional-use box
+  (the wording in `checkout-boxes.json`), in English or French. That
+  concludes the Free plan's contract. A password sign-up ticks the same
+  boxes on its form, recorded when the account is created (kept on the
+  emailed link meanwhile). Until then the API refuses creating or joining an
+  organization and everything in one (403 `terms_required`, from the browser
+  or an agent: `auth::Member`). A new version is asked for at the next
+  sign-in; who accepted an earlier one may say "Not now" (that one applies
+  meanwhile; in the professional edition the new one applies to whoever
+  keeps using the Service after it takes effect, Terms 21.3). Access tokens
+  never accept for a person.
+- **Records** (`legal_acceptances`, not tied to the organization, never
+  changed): who, when, the version and edition, the language, the wording
+  version, the attestation; for a checkout also the organization, the plan,
+  as whom, a business's name, country and VAT/SIREN, a consumer's requests
+  and the Stripe Checkout session (whose subscription carries the record's
+  id), the business Stripe's payment page named, and when the contract ended
+  (the subscription over for good, a withdrawal, the organization deleted).
+  Kept for the contract and 5 years after: a sign-in's from the account's
+  end, a checkout's from its contract's (or the account's, if later); under
+  the full edition a checkout's 10 years at least (L213-1). `legal::purge`
+  daily.
+- **Checkout.** Professional edition: no choice, a business (name and
+  country required, an ISO 3166-1 code; VAT/SIREN optional), its "not as a
+  consumer" box, the Terms. Full edition: the choice, never preselected; a
+  business as above, or a consumer's two boxes. 422 naming the field
+  otherwise; a stale wording 409 `checkout_copy_changed`; a consumer while
+  sales are off 422. Stripe labels its button "Subscribe" or "Pay and
+  subscribe" depending on the page: the Terms (3.4 d), the dialog and the
+  message under Stripe's button name both. Stripe asks the business's name
+  again on its page (its API cannot prefill it, checked against test mode):
+  the name it collects is recorded from `checkout.session.completed`.
+- **Withdrawal** (full edition, a consumer's subscription only): "Withdraw
+  from contract here" / « Renoncer au contrat ici » (the wording of the
+  French Terms and of L221-21's example) on the billing page until the end of
+  the 14th day after subscribing, in Paris (pushed past a weekend or a
+  French public holiday, Art. 642 CPC and Regulation 1182/71), then "Confirm
+  withdrawal". Recorded first (`withdrawals`) and the organization on Free at
+  once (`org_billing.withdrawn_at`), the acknowledgement queued with its
+  time (to the buyer too when another admin withdrew), then Stripe:
+  cancelled now, each paid invoice refunded for the whole days not used (a
+  day begun is free), a refund already made never made again and none
+  beyond what is left of the payment. Stripe failing is retried by the
+  notices task, for 8 attempts or a week, then left to the operator (an
+  error logged). A paid invoice with no payment intent refuses the
+  withdrawal here (503 `withdrawal_by_email`): the consumer writes instead.
+  Businesses never see it (403 `not_a_consumer`).
+- **Emails**, in each reader's language (`users.locale`: chosen with the
+  Terms, changed in account settings): the subscription's confirmation (the
+  plan, price, renewal, how to cancel, the Terms as a PDF; a consumer's
+  requests and how to withdraw), a cancellation's confirmation (when it ends,
+  what changes), the renewal reminder with the last day to cancel in a box,
+  the withdrawal's acknowledgement, every other billing email. Consumer-law
+  citations only while consumers may buy. Every one goes through an outbox
+  (`mail_outbox`): queued with what decides it, marked sent only once the
+  mail server accepted it, retried, never sent twice.
+- **Cancel your contract**: the app's footer (with the Terms and the Privacy
+  Policy) and the account's "Your contract" page lead to the organization's
+  Cancel button. Zitadel's login links neither the Terms nor the Privacy
+  Policy: with either link, its sign-up form adds an unversioned "I accept"
+  box of its own (and a privacy policy is information, never accepted).
+  romulus asks for the Terms itself and its sign-in pages link them.
+- **Notices** (admin commands, mail needed): `romulus-api legal-notice`
+  (a change to the Terms or the Privacy Policy to everyone, to the DPA to
+  admins, 30 days ahead unless the law requires sooner, once per person and
+  version, linking the new version's page, which must be published first;
+  what it says follows the edition in force) and `romulus-api
+  price-change` (the plan table's new price to each subscription still on
+  the old one, from its first renewal 30 days away).
+- **French**: the Terms screen, checkout, the billing page, withdrawal and
+  cancellation, and every billing email; the rest of the app stays English.
+- Deviations from the data model: `legal_acceptances`, `withdrawals`,
+  `legal_notices`, `mail_outbox`, `users.locale`, `auth_links.accepted_terms`,
+  `org_billing.acceptance_id`, `started_at`, `withdrawn_at`,
+  `checkout_acceptance_id`.
 
 ## Agents over MCP (decided 2026-10-20, built: task MCP)
 
@@ -1135,6 +1237,9 @@ Policy promise the same. All of it lives in the API's `retention` module.
   organization's and stays (versions, comments, frozen approvals: by a
   deleted account); the audit log keeps the name it recorded, as for someone
   who left. Requests about those go to the organization, the controller.
+  Its contract records (`legal_acceptances`, `withdrawals`: "Legal: terms,
+  checkout, withdrawal") stay, with its address, until their own retention
+  ends (`legal::purge`); the notices it was sent (`legal_notices`) go.
 - **An organization** goes in one statement with everything it holds
   (`ON DELETE CASCADE`; the history triggers allow it once the parent row is
   gone). Refused unless its Stripe subscription, if any, is over for good

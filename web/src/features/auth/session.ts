@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { redirect } from "@tanstack/react-router";
 
 import { api, ApiError, unwrap } from "@/api/client";
+import { needsTerms, termsQuery } from "@/features/legal/queries";
 import { safePath } from "@/lib/safe-path";
 
 import { meQuery } from "./queries";
@@ -77,9 +78,25 @@ export async function switchAccount(
 
 /**
  * For `beforeLoad`: the signed-in user, or a redirect to sign-in that comes
- * back to `href` (the router location) afterwards.
+ * back to `href` (the router location) afterwards. On the hosted service,
+ * someone who has not accepted the Terms goes to them first
+ * (`/signin/terms`), and back to `href` once they have.
  */
 export async function requireUser(queryClient: QueryClient, href: string) {
+  const me = await signedIn(queryClient, href);
+  const terms = await queryClient.ensureQueryData(termsQuery);
+  if (needsTerms(terms)) {
+    const next = appPath(href);
+    throw redirect({
+      to: "/signin/terms",
+      search: { next: next === `${APP_BASE}/` ? undefined : next },
+    });
+  }
+  return me;
+}
+
+/** The signed-in user (no Terms check: the Terms page itself), or sign-in. */
+export async function signedIn(queryClient: QueryClient, href: string) {
   try {
     return await queryClient.ensureQueryData(meQuery);
   } catch (error) {

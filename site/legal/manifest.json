@@ -1,0 +1,41 @@
+{
+  "$comment": "Written by site/tools/legal.mjs: the Terms PDFs the API attaches, each with the source it was printed from. `node site/tools/legal.mjs --check` compares the hashes; do not edit by hand.",
+  "pdfs": [
+    {
+      "pdf": "crates/romulus-api/legal/terms-pro-1.0-en.pdf",
+      "source": "site/legal/terms-pro.en.md",
+      "page": "/legal/terms",
+      "version": "1.0",
+      "source_sha256": "4811983d368093122e317293fbace899569db03cde1756b51a1892d27bdac9cf",
+      "pdf_sha256": "c202009af60d6b8b8c4ca337e3459cfe80e646fab2ed6123c3bac5bb7f71ed2c",
+      "bytes": 523344
+    },
+    {
+      "pdf": "crates/romulus-api/legal/terms-pro-1.0-fr.pdf",
+      "source": "site/legal/conditions-pro.fr.md",
+      "page": "/fr/legal/conditions",
+      "version": "1.0",
+      "source_sha256": "62bc3fb63a9ef9fd8f45e48879a7a3ef1dbe50c7c7577ec78db52f92c5049b96",
+      "pdf_sha256": "61d1ba9b401b265a5eb0a2dfa3d9b28da9dea68fb78252caca16312ca9e7c8ec",
+      "bytes": 526205
+    },
+    {
+      "pdf": "crates/romulus-api/legal/terms-1.0-en.pdf",
+      "source": "site/legal/terms.en.md",
+      "page": "/legal/full/terms",
+      "version": "1.0",
+      "source_sha256": "f80c724866026e91540b287b74d2dcf181e527ff08bd98226c2e7d430b52352d",
+      "pdf_sha256": "95860ef0ef62ec3480ce79a0bac22b7b801fbf6bb942b83607d622eea1da95ed",
+      "bytes": 613617
+    },
+    {
+      "pdf": "crates/romulus-api/legal/terms-1.0-fr.pdf",
+      "source": "site/legal/conditions.fr.md",
+      "page": "/fr/legal/full/conditions",
+      "version": "1.0",
+      "source_sha256": "0e4c641a6b85a888769f4f82718ca070422356962c5b4375058f7febb177315d",
+      "pdf_sha256": "d3b56149e37a00366df7b431a1b92fec29bee91cf17ebdd749871c2e50487e75",
+      "bytes": 620915
+    }
+  ]
+}

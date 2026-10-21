@@ -2,102 +2,97 @@ import type * as React from "react";
 
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { formatDate } from "@/lib/time";
+import { intlLocale, useLocale } from "@/features/legal/locale";
 import { cn } from "@/lib/utils";
 
+import { type BillingCopy, billingCopy } from "../copy";
 import {
-  count,
   duration,
+  formatLongDate,
   historyLabel,
   meterPercent,
   meterState,
   type MeterState,
   planNames,
-  sizeNames,
 } from "../format";
 import type { Meter, OrgBilling } from "../queries";
 
-const stateWords: Record<MeterState, string | null> = {
-  ok: null,
-  near: "Almost at the limit",
-  full: "At the limit",
-  over: "Over the limit: creating more waits",
-};
+type UsageWords = BillingCopy["usage"];
 
-/** A meter's value: "1 of 3", "4 (no limit)". */
-function ofLimit(
-  used: number,
-  limit: number | null | undefined,
-  format: (n: number) => string,
-): string {
-  return limit == null ? `${format(used)} (no limit)` : `${format(used)} of ${format(limit)}`;
+function stateWord(words: UsageWords, state: MeterState): string | null {
+  return state === "ok" ? null : words[state];
 }
 
 /** Usage against every cap of the plan in force, the plan's one line each. */
 export function UsageCard({ billing }: { billing: OrgBilling }) {
+  const locale = useLocale();
+  const t = billingCopy[locale].usage;
+  const number = (n: number) => n.toLocaleString(intlLocale(locale));
   const { usage } = billing;
   const hours = usage.playground_hours;
   return (
-    <Card aria-labelledby="usage-title">
+    <Card aria-labelledby="usage-title" lang={locale}>
       <CardHeader>
         <div className="grid gap-0.5">
-          <CardTitle id="usage-title">Usage</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Against the {planNames[billing.plan]} plan. Reaching a limit stops creating more;
-            nothing is deleted.
-          </p>
+          <CardTitle id="usage-title">{t.title}</CardTitle>
+          <p className="text-sm text-muted-foreground">{t.against(planNames[billing.plan])}</p>
         </div>
       </CardHeader>
       <ul className="divide-y divide-border">
-        <MeterRow label="Members and invitations" meter={usage.members} />
-        <MeterRow label="Databases" meter={usage.databases} />
+        <MeterRow words={t} label={t.members} meter={usage.members} format={number} />
+        <MeterRow words={t} label={t.databases} meter={usage.databases} format={number} />
         <MeterRow
-          label="Versions per database"
+          words={t}
+          label={t.versions}
           meter={usage.versions}
+          format={number}
           note={
             usage.versions.database && usage.versions.used > 0
-              ? `Most in ${usage.versions.database}`
+              ? t.mostIn(usage.versions.database)
               : undefined
           }
         />
         <MeterRow
-          label="Tables and views per schema"
+          words={t}
+          label={t.schema}
           meter={usage.schema_size}
+          format={number}
           note={
             usage.schema_size.database && usage.schema_size.used > 0
-              ? `Largest: ${usage.schema_size.database}`
+              ? t.largest(usage.schema_size.database)
               : undefined
           }
         />
         <Row
-          label="History shown"
-          value={historyLabel(usage.history_days)}
-          note={
-            usage.hidden_versions > 0
-              ? `${count(usage.hidden_versions, "older version is", "older versions are")} kept, hidden by the plan`
-              : undefined
-          }
+          words={t}
+          label={t.history}
+          value={historyLabel(usage.history_days, locale)}
+          note={usage.hidden_versions > 0 ? t.hidden(usage.hidden_versions) : undefined}
         />
         <MeterRow
-          label="Playground hours this month"
+          words={t}
+          label={t.hours}
           meter={{ used: hours.used_seconds, limit: hours.limit_seconds }}
           format={duration}
           metered
           note={
             hours.exhausted
-              ? `Playgrounds and tests wait until ${formatDate(hours.resets_on)}`
-              : `Counts again from ${formatDate(hours.resets_on)}`
+              ? t.hoursWait(formatLongDate(hours.resets_on, locale))
+              : t.hoursReset(formatLongDate(hours.resets_on, locale))
           }
         />
-        <Row label="Largest playground" value={`${sizeNames[usage.playground_size]} rows`} />
+        <Row words={t} label={t.playground} value={t.size(usage.playground_size)} />
         <Row
-          label="Required approvals"
+          words={t}
+          label={t.approvals}
           value={
             usage.approvals.limit === 0
-              ? "Not in this plan"
-              : `${usage.approvals.used} required, up to ${usage.approvals.limit}${
-                  usage.approvals_override ? ", admin override" : ""
-                }`
+              ? t.approvalsNone
+              : t.approvalsValue(
+                  usage.approvals.used,
+                  usage.approvals.limit ?? 0,
+                  usage.approvals_override,
+                )
           }
         />
       </ul>
@@ -114,6 +109,7 @@ function toneOf(state: MeterState, metered: boolean): "default" | "warning" | "d
 }
 
 function Row({
+  words,
   label,
   value,
   note,
@@ -121,6 +117,7 @@ function Row({
   state = "ok",
   metered = false,
 }: {
+  words: UsageWords;
   label: string;
   value: string;
   note?: string;
@@ -128,7 +125,7 @@ function Row({
   state?: MeterState;
   metered?: boolean;
 }) {
-  const word = stateWords[state];
+  const word = stateWord(words, state);
   const tone = toneOf(state, metered);
   return (
     <li className="grid gap-1.5 px-4 py-3">
@@ -159,26 +156,33 @@ function Row({
 }
 
 function MeterRow({
+  words,
   label,
   meter,
   note,
-  format = (n: number) => n.toLocaleString("en-US"),
+  format,
   metered = false,
 }: {
+  words: UsageWords;
   label: string;
   meter: Pick<Meter, "used" | "limit">;
   note?: string;
-  format?: (n: number) => string;
+  format: (n: number) => string;
   /** Time that runs out (playground hours), not a count. */
   metered?: boolean;
 }) {
   const state = meterState(meter.used, meter.limit);
-  const value = ofLimit(meter.used, meter.limit, format);
+  // "1 of 3", "4 (no limit)".
+  const value =
+    meter.limit == null
+      ? words.unlimited(format(meter.used))
+      : words.of(format(meter.used), format(meter.limit));
+  const word = stateWord(words, state);
   return (
-    <Row label={label} value={value} note={note} state={state} metered={metered}>
+    <Row words={words} label={label} value={value} note={note} state={state} metered={metered}>
       {meter.limit != null && (
         <Progress
-          aria-label={`${label}: ${value}${stateWords[state] ? `, ${stateWords[state]}` : ""}`}
+          aria-label={`${label}: ${value}${word ? `, ${word}` : ""}`}
           value={meterPercent(meter.used, meter.limit)}
           tone={toneOf(state, metered)}
         />

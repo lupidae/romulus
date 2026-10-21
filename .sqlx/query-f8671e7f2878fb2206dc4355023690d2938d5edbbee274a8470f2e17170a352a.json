@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mail_outbox SET last_error = $2,\n                                next_attempt_at = $3,\n                                failed_at = CASE WHEN $4 THEN now() END\n                         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f8671e7f2878fb2206dc4355023690d2938d5edbbee274a8470f2e17170a352a"
+}

@@ -257,6 +257,10 @@ fn explain(failure: &Failure) -> String {
              admin can change the plan on the organization's Billing page (Settings, then \
              Billing); tell your person rather than retrying.",
         ),
+        "terms_required" => Some(
+            "Nothing was done: your person has not accepted romulus's Terms of Service yet. Ask \
+             them to sign in to romulus once in their browser and accept them; then try again.",
+        ),
         "rate_limited" => Some("Wait the time it says, then try again."),
         "playground_limit" | "playground_host_full" | "too_many_tokens" => {
             Some("Delete one that is no longer needed, then try again.")

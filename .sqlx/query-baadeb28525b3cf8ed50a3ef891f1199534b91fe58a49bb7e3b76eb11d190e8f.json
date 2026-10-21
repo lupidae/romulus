@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legal_acceptances SET contract_ended_at = now() - interval '1 day' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "baadeb28525b3cf8ed50a3ef891f1199534b91fe58a49bb7e3b76eb11d190e8f"
+}

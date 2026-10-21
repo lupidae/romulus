@@ -27,10 +27,12 @@ import { Route as OauthAuthorizeRouteImport } from './routes/oauth.authorize'
 import { Route as SettingsIndexRouteImport } from './routes/settings/index'
 import { Route as SettingsAgentRouteImport } from './routes/settings/agent'
 import { Route as SettingsAppsRouteImport } from './routes/settings/apps'
+import { Route as SettingsContractRouteImport } from './routes/settings/contract'
 import { Route as SettingsTokensRouteImport } from './routes/settings/tokens'
 import { Route as SigninForgotRouteImport } from './routes/signin_.forgot'
 import { Route as SigninNewRouteImport } from './routes/signin_.new'
 import { Route as SigninResetRouteImport } from './routes/signin_.reset'
+import { Route as SigninTermsRouteImport } from './routes/signin_.terms'
 import { Route as SigninWelcomeRouteImport } from './routes/signin_.welcome'
 import { Route as OrgDbIndexRouteImport } from './routes/$org/$db/index'
 import { Route as OrgDbHistoryRouteImport } from './routes/$org/$db/history'
@@ -141,6 +143,11 @@ const SettingsAppsRoute = SettingsAppsRouteImport.update({
   path: '/apps',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsContractRoute = SettingsContractRouteImport.update({
+  id: '/contract',
+  path: '/contract',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsTokensRoute = SettingsTokensRouteImport.update({
   id: '/tokens',
   path: '/tokens',
@@ -159,6 +166,11 @@ const SigninNewRoute = SigninNewRouteImport.update({
 const SigninResetRoute = SigninResetRouteImport.update({
   id: '/signin_/reset',
   path: '/signin/reset',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SigninTermsRoute = SigninTermsRouteImport.update({
+  id: '/signin_/terms',
+  path: '/signin/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SigninWelcomeRoute = SigninWelcomeRouteImport.update({
@@ -275,10 +287,12 @@ export interface FileRoutesByFullPath {
   '/oauth/authorize': typeof OauthAuthorizeRoute
   '/settings/agent': typeof SettingsAgentRoute
   '/settings/apps': typeof SettingsAppsRoute
+  '/settings/contract': typeof SettingsContractRoute
   '/settings/tokens': typeof SettingsTokensRoute
   '/signin/forgot': typeof SigninForgotRoute
   '/signin/new': typeof SigninNewRoute
   '/signin/reset': typeof SigninResetRoute
+  '/signin/terms': typeof SigninTermsRoute
   '/signin/welcome': typeof SigninWelcomeRoute
   '/$org/': typeof OrgIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -314,10 +328,12 @@ export interface FileRoutesByTo {
   '/oauth/authorize': typeof OauthAuthorizeRoute
   '/settings/agent': typeof SettingsAgentRoute
   '/settings/apps': typeof SettingsAppsRoute
+  '/settings/contract': typeof SettingsContractRoute
   '/settings/tokens': typeof SettingsTokensRoute
   '/signin/forgot': typeof SigninForgotRoute
   '/signin/new': typeof SigninNewRoute
   '/signin/reset': typeof SigninResetRoute
+  '/signin/terms': typeof SigninTermsRoute
   '/signin/welcome': typeof SigninWelcomeRoute
   '/$org': typeof OrgIndexRoute
   '/settings': typeof SettingsIndexRoute
@@ -358,10 +374,12 @@ export interface FileRoutesById {
   '/oauth/authorize': typeof OauthAuthorizeRoute
   '/settings/agent': typeof SettingsAgentRoute
   '/settings/apps': typeof SettingsAppsRoute
+  '/settings/contract': typeof SettingsContractRoute
   '/settings/tokens': typeof SettingsTokensRoute
   '/signin_/forgot': typeof SigninForgotRoute
   '/signin_/new': typeof SigninNewRoute
   '/signin_/reset': typeof SigninResetRoute
+  '/signin_/terms': typeof SigninTermsRoute
   '/signin_/welcome': typeof SigninWelcomeRoute
   '/$org/': typeof OrgIndexRoute
   '/settings/': typeof SettingsIndexRoute
@@ -403,10 +421,12 @@ export interface FileRouteTypes {
     | '/oauth/authorize'
     | '/settings/agent'
     | '/settings/apps'
+    | '/settings/contract'
     | '/settings/tokens'
     | '/signin/forgot'
     | '/signin/new'
     | '/signin/reset'
+    | '/signin/terms'
     | '/signin/welcome'
     | '/$org/'
     | '/settings/'
@@ -442,10 +462,12 @@ export interface FileRouteTypes {
     | '/oauth/authorize'
     | '/settings/agent'
     | '/settings/apps'
+    | '/settings/contract'
     | '/settings/tokens'
     | '/signin/forgot'
     | '/signin/new'
     | '/signin/reset'
+    | '/signin/terms'
     | '/signin/welcome'
     | '/$org'
     | '/settings'
@@ -485,10 +507,12 @@ export interface FileRouteTypes {
     | '/oauth/authorize'
     | '/settings/agent'
     | '/settings/apps'
+    | '/settings/contract'
     | '/settings/tokens'
     | '/signin_/forgot'
     | '/signin_/new'
     | '/signin_/reset'
+    | '/signin_/terms'
     | '/signin_/welcome'
     | '/$org/'
     | '/settings/'
@@ -529,6 +553,7 @@ export interface RootRouteChildren {
   SigninForgotRoute: typeof SigninForgotRoute
   SigninNewRoute: typeof SigninNewRoute
   SigninResetRoute: typeof SigninResetRoute
+  SigninTermsRoute: typeof SigninTermsRoute
   SigninWelcomeRoute: typeof SigninWelcomeRoute
   OrgDbDraftsDraftRoute: typeof OrgDbDraftsDraftRoute
   OrgDbPlaygroundsPlaygroundRoute: typeof OrgDbPlaygroundsPlaygroundRoute
@@ -662,6 +687,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsAppsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/contract': {
+      id: '/settings/contract'
+      path: '/contract'
+      fullPath: '/settings/contract'
+      preLoaderRoute: typeof SettingsContractRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/tokens': {
       id: '/settings/tokens'
       path: '/tokens'
@@ -688,6 +720,13 @@ declare module '@tanstack/react-router' {
       path: '/signin/reset'
       fullPath: '/signin/reset'
       preLoaderRoute: typeof SigninResetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signin_/terms': {
+      id: '/signin_/terms'
+      path: '/signin/terms'
+      fullPath: '/signin/terms'
+      preLoaderRoute: typeof SigninTermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signin_/welcome': {
@@ -875,6 +914,7 @@ const OrgRouteWithChildren = OrgRoute._addFileChildren(OrgRouteChildren)
 interface SettingsRouteChildren {
   SettingsAgentRoute: typeof SettingsAgentRoute
   SettingsAppsRoute: typeof SettingsAppsRoute
+  SettingsContractRoute: typeof SettingsContractRoute
   SettingsTokensRoute: typeof SettingsTokensRoute
   SettingsIndexRoute: typeof SettingsIndexRoute
 }
@@ -882,6 +922,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentRoute: SettingsAgentRoute,
   SettingsAppsRoute: SettingsAppsRoute,
+  SettingsContractRoute: SettingsContractRoute,
   SettingsTokensRoute: SettingsTokensRoute,
   SettingsIndexRoute: SettingsIndexRoute,
 }
@@ -923,6 +964,7 @@ const rootRouteChildren: RootRouteChildren = {
   SigninForgotRoute: SigninForgotRoute,
   SigninNewRoute: SigninNewRoute,
   SigninResetRoute: SigninResetRoute,
+  SigninTermsRoute: SigninTermsRoute,
   SigninWelcomeRoute: SigninWelcomeRoute,
   OrgDbDraftsDraftRoute: OrgDbDraftsDraftRoute,
   OrgDbPlaygroundsPlaygroundRoute: OrgDbPlaygroundsPlaygroundRoute,

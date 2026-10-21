@@ -1,0 +1,147 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT org_id, plan AS \"plan: Plan\", current_period_end AS \"period_end!\", amount_cents, currency,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at\n           FROM org_billing\n           WHERE interval = 'year' AND status IN ('active', 'trialing') AND NOT cancel_at_period_end\n             AND withdrawn_at IS NULL\n             AND current_period_end > $1 AND current_period_end <= $1 + make_interval(days => $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "org_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "plan: Plan",
+        "type_info": {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "plan"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "period_end!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "current_period_end"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "amount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "amount_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "currency",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "currency"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "scheduled_plan: Plan",
+        "type_info": {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "scheduled_plan"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "scheduled_interval: Interval",
+        "type_info": {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "scheduled_interval"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "scheduled_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "scheduled_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "727c868c20c36ed66bdf87a4ed8bbfc437691e5d81a97ab795ea77e28000b483"
+}

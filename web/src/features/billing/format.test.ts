@@ -3,6 +3,8 @@ import {
   direction,
   duration,
   euros,
+  formatDay,
+  formatLongDate,
   historyLabel,
   isLive,
   meterPercent,
@@ -71,7 +73,7 @@ describe("prices and plans", () => {
       "Unlimited members",
       "10 databases",
       "Unlimited versions",
-      "1,000 tables and views per schema",
+      "1,000 tables and views per schema version",
       "All history kept",
       "80 playground hours a month, medium rows",
       "Up to 10 required approvals",
@@ -101,23 +103,81 @@ describe("prices and plans", () => {
   });
 });
 
-describe("checkoutProblems", () => {
-  const form = { acceptTerms: true, consumer: false, immediateStart: false, withdrawal: false };
+describe("in French", () => {
+  it("writes prices, dates and plans as French does", () => {
+    expect(euros(1900, "fr")).toBe("19\u00a0€");
+    expect(euros(1950, "fr")).toBe("19,50\u00a0€");
+    expect(priceLine(team, "year", "fr")).toBe("490\u00a0€ par an");
+    expect(formatLongDate("2026-11-04T12:00:00Z", "fr")).toBe("4 novembre 2026");
+    expect(planFeatures(team.limits, "fr")).toContain(
+      "1\u202f000 tables et vues par version du schéma",
+    );
+    expect(historyLabel(365, "fr")).toBe("1 an");
+    expect(
+      statusOf({ plan: "team", status: "active", cancel_at_period_end: true }, "fr").label,
+    ).toBe("Prend fin en fin de période");
+  });
+});
 
-  it("needs the Terms from everyone", () => {
-    expect(checkoutProblems(form)).toEqual({ terms: undefined, consumer: undefined });
+describe("checkoutProblems", () => {
+  const form = {
+    buyer: "business" as const,
+    acceptTerms: true,
+    businessConfirmed: true,
+    companyName: "Acme SAS",
+    country: "FR",
+    immediateStart: false,
+    withdrawal: false,
+  };
+
+  it("needs a buyer chosen, never assumed, and the Terms from everyone", () => {
+    expect(Object.values(checkoutProblems(form)).filter(Boolean)).toEqual([]);
+    expect(checkoutProblems({ ...form, buyer: undefined }).buyer).toMatch(
+      /business or as an individual/,
+    );
     expect(checkoutProblems({ ...form, acceptTerms: false }).terms).toMatch(/Terms of Service/);
   });
 
-  it("needs both of a consumer's requests, never a business's", () => {
-    expect(checkoutProblems({ ...form, consumer: true }).consumer).toBeDefined();
-    expect(
-      checkoutProblems({ ...form, consumer: true, immediateStart: true }).consumer,
-    ).toBeDefined();
-    expect(
-      checkoutProblems({ ...form, consumer: true, immediateStart: true, withdrawal: true })
-        .consumer,
-    ).toBeUndefined();
-    expect(checkoutProblems({ ...form, immediateStart: false }).consumer).toBeUndefined();
+  it("needs a business's statement, name and country", () => {
+    expect(checkoutProblems({ ...form, businessConfirmed: false }).business).toBeDefined();
+    expect(checkoutProblems({ ...form, companyName: "  " }).companyName).toBeDefined();
+    expect(checkoutProblems({ ...form, country: undefined }).country).toBeDefined();
   });
+
+  it("needs both of a consumer's requests, and nothing of a business", () => {
+    const consumer = {
+      ...form,
+      buyer: "consumer" as const,
+      businessConfirmed: false,
+      companyName: "",
+      country: undefined,
+    };
+    expect(checkoutProblems(consumer).consumer).toBeDefined();
+    expect(checkoutProblems(consumer).business).toBeUndefined();
+    expect(checkoutProblems(consumer).companyName).toBeUndefined();
+    expect(checkoutProblems({ ...consumer, immediateStart: true }).consumer).toBeDefined();
+    expect(
+      checkoutProblems({ ...consumer, immediateStart: true, withdrawal: true }).consumer,
+    ).toBeUndefined();
+  });
+
+  it("speaks the buyer's language", () => {
+    expect(checkoutProblems({ ...form, acceptTerms: false }, "fr").terms).toBe(
+      "Acceptez les Conditions générales pour continuer.",
+    );
+  });
+});
+
+describe("the last day to withdraw", () => {
+  it("reads in UTC, as the emails say it, whatever the browser's time zone", () => {
+    // The period ends at midnight UTC; a second before is the last day.
+    expect(formatLongDate("2026-11-04T23:59:59Z", "en", "UTC")).toBe("November 4, 2026");
+    expect(formatLongDate("2026-11-04T23:59:59Z", "fr", "UTC")).toBe("4 novembre 2026");
+  });
+});
+
+it("says a calendar day as written, whatever the reader's time zone", () => {
+  // The withdrawal's last day, as the API counts it in Paris.
+  expect(formatDay("2026-11-04", "en")).toBe("November 4, 2026");
+  expect(formatDay("2026-11-04", "fr")).toBe("4 novembre 2026");
 });

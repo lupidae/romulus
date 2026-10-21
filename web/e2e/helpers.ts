@@ -91,6 +91,44 @@ export async function emailedLink(email: string, page: "welcome" | "reset"): Pro
   throw new Error(`no ${page} link emailed to ${email}`);
 }
 
+/** A message the stack's mail catcher holds: what romulus sent `email` about `subject`. */
+export async function emailed(
+  email: string,
+  subject: RegExp,
+): Promise<{
+  Subject: string;
+  Text: string;
+  Attachments: { FileName: string; ContentType: string }[];
+}> {
+  const port = process.env.ROMULUS_MAIL_PORT;
+  if (!port) throw new Error("ROMULUS_MAIL_PORT is not set: run scripts/dev-env");
+  const api = `http://localhost:${port}/api/v1`;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const search = (await (
+      await fetch(`${api}/search?query=${encodeURIComponent(`to:"${email}"`)}`)
+    ).json()) as { messages?: { ID: string; Subject: string }[] };
+    const found = (search.messages ?? []).find((m) => subject.test(m.Subject));
+    if (found) return (await (await fetch(`${api}/message/${found.ID}`)).json()) as never;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`nothing emailed to ${email} about ${subject}`);
+}
+
+/**
+ * On the hosted service (the billing projects): the Terms screen every new
+ * account meets first, accepted, in English. Professionals only (the
+ * default) also attest professional use.
+ */
+export async function acceptTerms(page: Page, { professional = true } = {}) {
+  await page.waitForURL(/\/app\/signin\/terms/);
+  await page.getByRole("checkbox", { name: /I have read and accept the/ }).check();
+  if (professional) {
+    await page.getByRole("checkbox", { name: /only for professional purposes/ }).check();
+  }
+  await page.getByRole("button", { name: /^Continue/ }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/app/signin"));
+}
+
 /**
  * The dev-only sign-in (ROMULUS_DEV_SIGNIN): any address, no identity
  * provider. Lands on `next` (the app may send someone with no organization

@@ -12,8 +12,9 @@ hosted by lupidae and self-hostable for one organization (`deploy/self-host`,
 
 ```
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/; `billing` (hosted
-                      plans, Stripe; off unless configured), `export` (ZIP of databases), `retention`
-                      (deleting accounts and organizations, purges, inactive accounts)
+                      plans, Stripe; off unless configured), `legal` (the hosted Terms: first sign-in,
+                      records, notices; legal/ = the Terms PDFs), `export` (ZIP of databases),
+                      `retention` (deleting accounts and organizations, purges, inactive accounts)
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API;
                       `rename`: renames between two models (known, detected and scored, chosen)
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
@@ -29,7 +30,8 @@ deploy/sandbox/       the sandbox image, one per Postgres major (PG_MAJOR 15–1
 deploy/playground/    a playground's Postgres image (17): the sandbox's, nothing trusted, init then scram-only
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
 web/                  Vite + React SPA served under /app (see "Web" below)
-site/                 the static homepage (tokens copied from web/; see site/README.md); its Pages
+site/                 the static homepage and the legal pages (site/legal/*.md → public/legal/; see
+                      site/README.md); its Pages
                       Function (functions/, edge/proxy.js) proxies /app and /api to the API; its
                       live hero (public/hero/, committed) is built from web/src/hero by `just site-hero`
 deploy/zitadel/       the provisioner that sets Zitadel up on `just up` (and on deploys), and the login's brand assets
@@ -104,7 +106,8 @@ user: `~/.local/state/romulus/slots`, so clones never collide) and writes
 | +9 | `ROMULUS_PLAY_PORT` | the playground service (`ROMULUS_PLAY_URL`; `just dev` or `just play` runs it) |
 | 40000 + 10·N + M − 10 | `ROMULUS_SANDBOX_PG15_PORT`, `…PG16…`, `…PG18…` | the other Postgres majors' sandboxes (`ROMULUS_SANDBOX_URL_PG15`…), on demand |
 | 40000 + 10·N + 1 | `ROMULUS_MAIL_SMTP_PORT` | Mailpit's SMTP: the API's mail (`ROMULUS_SMTP_*` in `.env`) |
-| 40000 + 10·N + 2 | `ROMULUS_E2E_BILLING_PORT` | the API Playwright's billing specs start (`e2e/billing/`: `ROMULUS_BILLING=fake`, serving the production build itself) |
+| 40000 + 10·N + 2 | `ROMULUS_E2E_BILLING_PORT` | the API Playwright's billing specs start (`e2e/billing/`: `ROMULUS_BILLING=fake`, serving the production build itself; businesses only) |
+| 40000 + 10·N + 3 | `ROMULUS_E2E_CONSUMERS_PORT` | the same with `ROMULUS_CONSUMER_SALES=true` (`e2e/billing-consumers/`: the business-or-consumer checkout, withdrawal) |
 
 Base port is `41000 + 10·N`. The compose project is `romulus-<dir>-<hash of
 the worktree path>`, computed by `scripts/dev-env --project-name` and passed
@@ -1148,8 +1151,9 @@ docs/MVP.md "The time machine" has the decisions.
 docs/MVP.md "Billing" has the decisions.
 
 - **Off unless configured** (`ROMULUS_BILLING=stripe` with `STRIPE_SECRET_KEY`,
-  `STRIPE_WEBHOOK_SECRET`, `ROMULUS_TERMS_URL`, `ROMULUS_TERMS_VERSION`, mail
-  required; `fake` for tests, loopback only). Off: `Billing::plan` is `None`,
+  `STRIPE_WEBHOOK_SECRET`, the Terms (`ROMULUS_TERMS_VERSION`,
+  `ROMULUS_LEGAL_URL`, `ROMULUS_LEGAL_CONTACT`), mail required; `fake` for
+  tests, loopback only). Off: `Billing::plan` is `None`,
   every cap passes, billing routes answer 404, `GET /api/instance` says
   `billing: false`. Refused with `ROMULUS_SINGLE_ORG`. Keys never in code,
   logs or the repository; the seller's invoice mentions are configuration
@@ -1183,14 +1187,83 @@ docs/MVP.md "Billing" has the decisions.
   memory at a time), hidden versions included, never capped, on with billing
   off too.
 - **Web** (`features/billing`): the billing page `/$org/settings/billing`
-  (sidebar item when `instance.billing`), the checkout dialog (Terms, a
-  consumer's requests; wording in `copy.ts` for counsel), the plan picker,
-  the upgrade prompt shown wherever an action answers `plan_limit`
-  (`isPlanLimit`), export buttons in the database and organization settings.
+  (sidebar item when `instance.billing`), the checkout dialog (see "The
+  hosted contract" below), the plan picker, the upgrade prompt shown
+  wherever an action answers `plan_limit` (`isPlanLimit`), export buttons
+  in the database and organization settings.
 - **Tests**: `tests/api/billing.rs` (fake Stripe and host: every cap,
   signatures, idempotency, order, downgrade, grace, reminders, hours, roles),
   `tests/api/export.rs`, unit tests in each module, `e2e/billing/` (its own
   API with `ROMULUS_BILLING=fake` on `ROMULUS_E2E_BILLING_PORT`).
+
+## The hosted contract (`legal`, `billing::withdrawal`, `features/legal`)
+
+docs/MVP.md "Legal: terms, checkout, withdrawal" has the decisions; the
+documents are `site/legal/*.md` (published by `site/tools/legal.mjs`).
+
+- **Config** (`Config::legal`, `LegalConfig`): `ROMULUS_TERMS_VERSION`
+  (`1.0` hosted), `ROMULUS_LEGAL_URL` (the site), `ROMULUS_LEGAL_CONTACT`,
+  `ROMULUS_CONSUMER_SALES` (off: the professional edition, businesses only;
+  `edition()`; on only with `ROMULUS_TERMS_EDITION=full` and a version other
+  than `1.0`). Billing needs it; `ROMULUS_BILLING=fake` defaults it (the
+  public origin, version `test`, no PDF). Off: no gate, no records.
+- **The gate**: `legal::require_accepted` in what joins the Service
+  (creating an organization, accepting an invitation) and `auth::Member`
+  (everything in an organization, browser or agent): 403 `terms_required`
+  for someone who never accepted; the web's `requireUser` (and any 403
+  `terms_required`, `main.tsx`) sends to `/signin/terms` (`needsTerms`).
+  A password sign-up ticks the boxes on its form (`PasswordSignUp::terms`,
+  `features/legal/components/terms-boxes.tsx`, kept on the emailed link:
+  `auth_links.accepted_terms`), recorded with the account
+  (`legal::record_sign_up`). `GET/POST /me/terms`, `PATCH /me/preferences`
+  (the language); `in_person` refuses access tokens. A new acceptance is
+  asked when the version or the edition changes.
+- **The words people tick** live in `web/src/features/billing/checkout-boxes.json`
+  (per edition, per language, with a version), read by the web (`copy.ts`,
+  `features/legal/copy.ts`; `copy.test.ts` keeps them identical) and the API
+  (`billing::copy`: the version a request must send, the email's quotes,
+  Stripe's submit message). Change a word: change that edition's version.
+- **Locale** (`domain::Locale`, `users.locale`): every billing and contract
+  email is written per reader (`billing::notices::Draft`, `legal::words`
+  for dates and amounts); the web's `useLocale()` (the account's, else the
+  browser's) drives the billing screens, the Terms screen, "Your contract".
+  The rest of the app is English.
+- **Mail**: `Letter::email_with(Extras { lang, framed, attachments })`; the
+  Terms PDFs are embedded (`legal::pdf`, `crates/romulus-api/legal/`,
+  printed by `just site-legal`; `just check` verifies them). Every contract
+  and billing letter goes through the outbox (`mail::outbox`, `mail_outbox`):
+  queued in the transaction that decides it (`billing::notices::decide`,
+  `Decided`; `legal_notices`; a withdrawal), keyed so it never goes twice,
+  marked sent only once the mail server accepted it, retried, given up
+  with an error log. Tests read letters after `outbox::deliver` (`Billed::mail`);
+  `Outbox::refuse_next` plays a server down.
+- **Withdrawal** (`billing::withdrawal`): eligibility from the checkout
+  record (`org_billing.acceptance_id`, a consumer's) and `deadline` (the
+  14th day in Paris, `chrono-tz`, pushed past weekends and French public
+  holidays: `last_day`); a paid invoice without a payment intent refuses it
+  (503 `withdrawal_by_email`); recorded and acknowledged (to the buyer too
+  when another admin withdrew), then Stripe (`StripeApi::paid_invoices`,
+  `withdraw`: each refund skipped when made already, `stripe::still_due`,
+  never more than is left of the payment), `complete_pending` from the
+  notices task until `MAX_ATTEMPTS` or a week (`withdrawals.failed_at`, an
+  error for the operator). `Stored::is_live` and `effective` treat a
+  withdrawn subscription as gone.
+- **Records' ends**: a checkout's `contract_ended_at` (the subscription over
+  for good or replaced, a withdrawal, the organization deleted: a trigger)
+  and `stripe_business_name` (`checkout.session.completed`) are the only
+  writes a record takes, once each; `legal::purge` counts from them.
+- **Tests**: `tests/api/legal.rs` (the gate, organizations' routes,
+  password sign-ups, records and their retention, editions, locale, the
+  notice commands), `tests/api/withdrawal.rs` (confirmation and
+  cancellation emails, withdrawal, refunds made once, giving up, languages),
+  `tests/api/billing.rs` (checkout statements per edition: `billed_with`,
+  `business_checkout`, `consumer_checkout`), unit tests per module;
+  web: `features/legal/*.test.ts`, `features/billing/*.test.ts`;
+  `e2e/billing/legal.spec.ts` (businesses only: the Terms screen, checkout,
+  the confirmation email, French, a password sign-up's boxes) and
+  `e2e/billing-consumers/` (its own API with consumer sales on, the full
+  edition and a test version, on `ROMULUS_E2E_CONSUMERS_PORT`: the buyer's
+  choice, withdrawal).
 
 ## Agents over MCP (`mcp`, `auth::access_tokens`)
 

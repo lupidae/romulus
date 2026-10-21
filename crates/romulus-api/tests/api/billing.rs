@@ -19,8 +19,8 @@ use romulus_api::{
         stripe::{Fake, PortalFlow},
         webhook::sign,
     },
-    config::{BillingConfig, Secret, StripeKeys},
-    domain::{Role, TokenScope},
+    config::{BillingConfig, LegalConfig, Secret, StripeKeys},
+    domain::{Role, TermsEdition, TokenScope},
     mail::{Mailer, Outbox},
     playgrounds::host::Host,
 };
@@ -42,11 +42,44 @@ fn billing_config() -> BillingConfig {
         stripe: StripeKeys::Fake {
             webhook_secret: Some(Secret::new(SECRET)),
         },
-        terms_url: Url::parse("https://romulus.example/terms").unwrap(),
-        terms_version: "2026-11-01".to_owned(),
         invoice_footer: Some("VAT not applicable".to_owned()),
         invoice_fields: vec![("Seller".to_owned(), "Example EI".to_owned())],
     }
+}
+
+/// The hosted Terms, version 1.0 (embedded PDFs), businesses only unless
+/// `consumer_sales`.
+pub(super) fn legal_config(consumer_sales: bool) -> LegalConfig {
+    LegalConfig {
+        site: Url::parse("https://romulus.example").unwrap(),
+        terms_version: "1.0".to_owned(),
+        contact: "legal@romulus.example".to_owned(),
+        consumer_sales,
+    }
+}
+
+/// What a business's admin sends to subscribe to `plan`, every box ticked,
+/// in the wording of the edition in force.
+pub(super) fn business_checkout(plan: &str, interval: &str, consumer_sales: bool) -> Value {
+    let edition = if consumer_sales {
+        TermsEdition::Full
+    } else {
+        TermsEdition::Professional
+    };
+    json!({
+        "plan": plan, "interval": interval, "accept_terms": true, "buyer": "business",
+        "business_confirmed": true, "company_name": "Acme SAS", "company_country": "FR",
+        "copy_version": romulus_api::billing::copy::version(edition),
+    })
+}
+
+/// A consumer's checkout (consumer sales on), both requests made.
+pub(super) fn consumer_checkout(plan: &str, interval: &str) -> Value {
+    json!({
+        "plan": plan, "interval": interval, "accept_terms": true, "buyer": "consumer",
+        "immediate_start": true, "withdrawal_acknowledged": true,
+        "copy_version": romulus_api::billing::copy::version(TermsEdition::Full),
+    })
 }
 
 pub(super) struct Billed {
@@ -54,12 +87,19 @@ pub(super) struct Billed {
     pub(super) stripe: Fake,
     pub(super) team: Team,
     host: FakeHost,
-    outbox: Outbox,
+    pub(super) outbox: Outbox,
+    pub(super) consumer_sales: bool,
 }
 
 /// Billing on with a fake Stripe, a fake playground host, mail in memory,
-/// team `acme` (Free until it subscribes).
+/// team `acme` (Free until it subscribes); businesses only. The sign-in
+/// gate stays off (`Config::legal` unset: `legal.rs` tests it).
 pub(super) async fn billed(db: &PgPool) -> Billed {
+    billed_with(db, false).await
+}
+
+/// [`billed`], consumers buying too when `consumer_sales`.
+pub(super) async fn billed_with(db: &PgPool, consumer_sales: bool) -> Billed {
     let stripe = Fake::new(ORIGIN);
     let host = FakeHost::default();
     let (mailer, outbox) = Mailer::memory();
@@ -67,6 +107,7 @@ pub(super) async fn billed(db: &PgPool) -> Billed {
     let config = Config::for_tests();
     let billing = Billing::with_stripe(
         billing_config(),
+        legal_config(consumer_sales),
         config.public_url.clone(),
         db.clone(),
         stripe.clone(),
@@ -87,6 +128,18 @@ pub(super) async fn billed(db: &PgPool) -> Billed {
         team,
         host,
         outbox,
+        consumer_sales,
+    }
+}
+
+impl Billed {
+    /// What was sent: the outbox delivered first (billing's letters wait
+    /// there until a worker sends them).
+    pub(super) async fn mail(&self) -> Outbox {
+        romulus_api::mail::outbox::deliver(&self.app.state.db, &self.app.state.mailer)
+            .await
+            .expect("the outbox delivers");
+        self.outbox.clone()
     }
 }
 
@@ -110,7 +163,7 @@ fn event(id: &str, kind: &str, object: &Value) -> String {
 }
 
 /// Delivers a new event (`evt_<random>`) of `kind` about `object`.
-async fn deliver(b: &Billed, kind: &str, object: Value) -> TestResponse {
+pub(super) async fn deliver(b: &Billed, kind: &str, object: Value) -> TestResponse {
     let body = event(&format!("evt_{}", Uuid::new_v4().simple()), kind, &object);
     let delivered = post_event(
         &b.app,
@@ -124,13 +177,13 @@ async fn deliver(b: &Billed, kind: &str, object: Value) -> TestResponse {
 
 /// Subscribes acme to `plan` through checkout and its webhook; the
 /// subscription's id.
-async fn subscribe(b: &Billed, plan: &str, interval: &str) -> String {
+pub(super) async fn subscribe(b: &Billed, plan: &str, interval: &str) -> String {
     let started = b
         .app
         .as_user(&b.team.admin)
         .post(
             &b.team.path("/billing/checkout"),
-            &json!({"plan": plan, "interval": interval, "accept_terms": true, "buyer": "business"}),
+            &business_checkout(plan, interval, b.consumer_sales),
         )
         .await;
     assert_eq!(started.status, StatusCode::OK, "{}", started.json());
@@ -146,7 +199,7 @@ async fn subscribe(b: &Billed, plan: &str, interval: &str) -> String {
     subscription
 }
 
-fn subscription_object(id: &str) -> Value {
+pub(super) fn subscription_object(id: &str) -> Value {
     json!({"id": id, "object": "subscription"})
 }
 
@@ -171,7 +224,7 @@ async fn create_database(b: &Billed, slug: &str) -> TestResponse {
         .await
 }
 
-async fn plan_of(db: &PgPool, org: Uuid) -> Option<String> {
+pub(super) async fn plan_of(db: &PgPool, org: Uuid) -> Option<String> {
     sqlx::query_scalar!(
         r#"SELECT plan::text AS "plan!" FROM org_billing WHERE org_id = $1"#,
         org
@@ -181,7 +234,7 @@ async fn plan_of(db: &PgPool, org: Uuid) -> Option<String> {
     .unwrap()
 }
 
-async fn audits(db: &PgPool, action: &str) -> i64 {
+pub(super) async fn audits(db: &PgPool, action: &str) -> i64 {
     sqlx::query_scalar!(
         r#"SELECT count(*) AS "n!" FROM audit_events WHERE action::text = $1"#,
         action
@@ -227,7 +280,10 @@ async fn with_billing_off_nothing_is_capped_and_billing_routes_do_not_exist(db: 
     );
     let checkout = app
         .as_user(&team.admin)
-        .post(&team.path("/billing/checkout"), &json!({"plan": "team", "interval": "month", "accept_terms": true, "buyer": "business"}))
+        .post(
+            &team.path("/billing/checkout"),
+            &business_checkout("team", "month", false),
+        )
         .await;
     assert_eq!(checkout.status, StatusCode::NOT_FOUND);
     let body = event(
@@ -312,7 +368,17 @@ async fn a_free_organization_keeps_one_database_and_the_refusal_names_the_plan_t
     assert_eq!(page["plans"].as_array().unwrap().len(), 4);
     assert_eq!(page["subscription"]["status"], "active");
     assert_eq!(page["subscription"]["amount_cents"], 1900);
-    assert_eq!(page["terms_url"], "https://romulus.example/terms");
+    assert_eq!(
+        page["documents"]["en"]["terms"],
+        "https://romulus.example/legal/terms"
+    );
+    assert_eq!(
+        page["documents"]["fr"]["terms"],
+        "https://romulus.example/fr/legal/conditions"
+    );
+    assert_eq!(page["documents"]["consumer_sales"], false);
+    assert_eq!(page["buyer"], "business");
+    assert!(page["withdrawal"].is_null(), "a business never withdraws");
 }
 
 /// A version of `database` made `days_ago`.
@@ -792,7 +858,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     assert_eq!(create_database(&b, "two").await.status, StatusCode::CREATED);
     let admin_mail = "admin-acme@romulus.test";
     let failed: Vec<_> = b
-        .outbox
+        .mail()
+        .await
         .to(admin_mail)
         .into_iter()
         .filter(|m| m.kind == "billing_payment_failed")
@@ -802,7 +869,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     // Stripe retries and fails again: the same invoice, no second email.
     deliver(&b, "invoice.payment_failed", invoice("in_1", 3)).await;
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_payment_failed")
@@ -821,7 +889,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     .unwrap();
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_grace_ending")
@@ -847,7 +916,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert_eq!(audits(&db, "plan_downgraded").await, 1);
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_downgraded")
@@ -893,7 +963,8 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     let admin_mail = "admin-acme@romulus.test";
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .all(|m| m.kind != "billing_renewal"),
@@ -911,7 +982,8 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     let reminders: Vec<_> = b
-        .outbox
+        .mail()
+        .await
         .to(admin_mail)
         .into_iter()
         .filter(|m| m.kind == "billing_renewal")
@@ -924,8 +996,14 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
         "{text}"
     );
     assert!(text.contains("Nothing is deleted"), "{text}");
+    // The last day to cancel, in its box (Terms 7.5 a); no consumer law
+    // cited while romulus sells to businesses only.
+    assert!(text.contains("Last day to cancel: "), "{text}");
+    assert!(reminders[0].html.contains("Last day to cancel: "));
+    assert!(reminders[0].html.contains("border:2px solid"));
+    assert!(!text.contains("L215-1"), "{text}");
     // Only admins get it.
-    assert_eq!(b.outbox.to("developer-acme@romulus.test"), Vec::new());
+    assert_eq!(b.mail().await.to("developer-acme@romulus.test"), Vec::new());
     // Cancelled: no reminder for the next period.
     b.stripe.update(&subscription, |s| {
         s.cancel_at_period_end = true;
@@ -939,7 +1017,8 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     .await;
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_renewal")
@@ -951,8 +1030,7 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn only_admins_change_billing_and_members_read_it(db: PgPool) {
     let b = billed(&db).await;
-    let checkout =
-        json!({"plan": "team", "interval": "month", "accept_terms": true, "buyer": "business"});
+    let checkout = business_checkout("team", "month", false);
     for who in [&b.team.developer, &b.team.reviewer] {
         let page = b.app.as_user(who).get(&b.team.path("/billing")).await;
         assert_eq!(page.status, StatusCode::OK);
@@ -1001,7 +1079,7 @@ async fn only_admins_change_billing_and_members_read_it(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn checkout_needs_the_terms_and_a_consumers_requests_and_is_audited(db: PgPool) {
+async fn checkout_sells_to_businesses_only_and_records_what_the_buyer_stated(db: PgPool) {
     let b = billed(&db).await;
     let start = |body: Value| {
         let app = &b.app;
@@ -1012,28 +1090,69 @@ async fn checkout_needs_the_terms_and_a_consumers_requests_and_is_audited(db: Pg
                 .await
         }
     };
-    let refused = start(
-        json!({"plan": "team", "interval": "month", "accept_terms": false, "buyer": "business"}),
-    )
-    .await;
-    assert_eq!(
-        (refused.status, refused.code().as_str()),
-        (StatusCode::UNPROCESSABLE_ENTITY, "validation")
+    let field = |response: &TestResponse, name: &str| {
+        assert_eq!(
+            (response.status, response.code().as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "validation"),
+            "{name}: {}",
+            response.json()
+        );
+        assert!(
+            response.json()["details"][name].is_string(),
+            "{name}: {}",
+            response.json()
+        );
+    };
+    let with = |change: &dyn Fn(&mut Value)| {
+        let mut body = business_checkout("team", "month", false);
+        change(&mut body);
+        body
+    };
+    field(
+        &start(with(&|b| b["accept_terms"] = json!(false))).await,
+        "accept_terms",
     );
-    assert!(refused.json()["details"]["accept_terms"].is_string());
-    let consumer = start(json!({"plan": "team", "interval": "month", "accept_terms": true, "buyer": "consumer", "immediate_start": true})).await;
-    assert_eq!(consumer.status, StatusCode::UNPROCESSABLE_ENTITY);
-    let free = start(
-        json!({"plan": "free", "interval": "month", "accept_terms": true, "buyer": "business"}),
-    )
-    .await;
-    assert_eq!(free.status, StatusCode::UNPROCESSABLE_ENTITY);
+    field(
+        &start(with(&|b| b["business_confirmed"] = json!(false))).await,
+        "business_confirmed",
+    );
+    field(
+        &start(with(&|b| b["company_name"] = json!("  "))).await,
+        "company_name",
+    );
+    field(
+        &start(with(&|b| b["company_country"] = json!("France"))).await,
+        "company_country",
+    );
+    field(
+        &start(with(&|b| b["company_tax_id"] = json!("x".repeat(41)))).await,
+        "company_tax_id",
+    );
+    // No consumers while consumer sales are off, even with both requests.
+    let consumer = start(consumer_checkout("team", "month")).await;
+    field(&consumer, "buyer");
+    assert!(
+        consumer.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("professional use only")
+    );
+    // The wording of the boxes must be the one in force.
+    let stale = start(with(&|b| b["copy_version"] = json!("2020-01-01"))).await;
+    assert_eq!(
+        (stale.status, stale.code().as_str()),
+        (StatusCode::CONFLICT, "checkout_copy_changed")
+    );
+    field(&start(with(&|b| b["plan"] = json!("free"))).await, "plan");
     assert_eq!(audits(&db, "terms_accepted").await, 0);
+    assert_eq!(acceptances(&db).await, 0);
 
-    let started = start(
-        json!({"plan": "team", "interval": "year", "accept_terms": true, "buyer": "consumer",
-                               "immediate_start": true, "withdrawal_acknowledged": true}),
-    )
+    // Businesses only: no buyer sent means a business.
+    let started = start(with(&|b| {
+        b.as_object_mut().unwrap().remove("buyer");
+        b["company_tax_id"] = json!(" FR12345678901 ");
+        b["locale"] = json!("fr");
+    }))
     .await;
     assert_eq!(started.status, StatusCode::OK, "{}", started.json());
     assert!(
@@ -1042,8 +1161,13 @@ async fn checkout_needs_the_terms_and_a_consumers_requests_and_is_audited(db: Pg
             .unwrap()
             .starts_with(&format!("{ORIGIN}/api/billing/fake/checkout/"))
     );
-    let (_, checkout) = b.stripe.last_checkout().unwrap();
-    assert_eq!(checkout.price, "price_team_yearly");
+    let (session, checkout) = b.stripe.last_checkout().unwrap();
+    assert_eq!(checkout.price, "price_team_monthly");
+    assert_eq!(checkout.locale, romulus_api::domain::Locale::Fr);
+    assert!(
+        checkout.business,
+        "the payment page asks the business's name"
+    );
     assert!(
         checkout
             .success_url
@@ -1056,15 +1180,71 @@ async fn checkout_needs_the_terms_and_a_consumers_requests_and_is_audited(db: Pg
         .get(&checkout.customer)
         .cloned()
         .unwrap();
+    assert_eq!(customer.business_name.as_deref(), Some("Acme SAS"));
+    assert_eq!(customer.locale, romulus_api::domain::Locale::Fr);
     assert_eq!(
         customer.invoice_footer.as_deref(),
         Some("VAT not applicable")
     );
-    assert_eq!(
-        customer.invoice_fields,
-        vec![("Seller".to_owned(), "Example EI".to_owned())]
-    );
     assert_eq!(customer.email, "admin-acme@romulus.test");
+
+    // The record: who, which Terms and wording, as whom, the session.
+    let record = sqlx::query!(
+        r#"SELECT id, kind::text AS "kind!", user_id, user_email, terms_version, edition::text AS "edition!",
+                  locale::text AS "locale!", org_id, org_name, plan::text AS "plan", buyer::text AS "buyer",
+                  company_name, company_country, company_tax_id, business_confirmed,
+                  professional_use, immediate_start, copy_version, checkout_session_id
+           FROM legal_acceptances"#
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            record.kind.as_str(),
+            record.edition.as_str(),
+            record.locale.as_str()
+        ),
+        ("checkout", "professional", "fr")
+    );
+    assert_eq!(record.user_id, Some(b.team.admin.user));
+    assert_eq!(record.user_email, "admin-acme@romulus.test");
+    assert_eq!(record.terms_version, "1.0");
+    assert_eq!(
+        (record.org_id, record.org_name.as_deref()),
+        (Some(b.team.org), Some("acme"))
+    );
+    assert_eq!(
+        (record.plan.as_deref(), record.buyer.as_deref()),
+        (Some("team"), Some("business"))
+    );
+    assert_eq!(
+        (
+            record.company_name.as_deref(),
+            record.company_country.as_deref(),
+            record.company_tax_id.as_deref()
+        ),
+        (Some("Acme SAS"), Some("FR"), Some("FR12345678901"))
+    );
+    assert_eq!(
+        (
+            record.business_confirmed,
+            record.professional_use,
+            record.immediate_start
+        ),
+        (Some(true), Some(true), None)
+    );
+    assert_eq!(
+        record.copy_version.as_deref(),
+        Some(romulus_api::billing::copy::version(
+            TermsEdition::Professional
+        ))
+    );
+    assert_eq!(
+        record.checkout_session_id.as_deref(),
+        Some(session.as_str())
+    );
+    assert_eq!(checkout.acceptance_id, record.id);
     let accepted = sqlx::query!(
         r#"SELECT actor_id, details FROM audit_events WHERE action = 'terms_accepted'"#
     )
@@ -1073,17 +1253,14 @@ async fn checkout_needs_the_terms_and_a_consumers_requests_and_is_audited(db: Pg
     .unwrap();
     assert_eq!(accepted.actor_id, Some(b.team.admin.user));
     let billing = &accepted.details["billing"];
-    assert_eq!(billing["terms_version"], "2026-11-01");
-    assert_eq!(billing["buyer"], "consumer");
-    assert_eq!(billing["immediate_start"], true);
-    assert_eq!(billing["withdrawal_acknowledged"], true);
+    assert_eq!(billing["terms_version"], "1.0");
+    assert_eq!(billing["buyer"], "business");
+    assert_eq!(billing["professional_use"], true);
+    assert_eq!(billing["locale"], "fr");
     assert_eq!(billing["plan"], "team");
 
     // One customer per organization, whatever the attempts.
-    start(
-        json!({"plan": "starter", "interval": "month", "accept_terms": true, "buyer": "business"}),
-    )
-    .await;
+    start(business_checkout("starter", "month", false)).await;
     assert_eq!(b.stripe.state().customers.len(), 1);
     let session = b.stripe.last_checkout().unwrap().0;
     let subscription = b.stripe.complete_checkout(&session).unwrap();
@@ -1093,14 +1270,96 @@ async fn checkout_needs_the_terms_and_a_consumers_requests_and_is_audited(db: Pg
         json!({"id": session, "subscription": subscription}),
     )
     .await;
-    let again = start(
-        json!({"plan": "team", "interval": "month", "accept_terms": true, "buyer": "business"}),
-    )
-    .await;
+    let again = start(business_checkout("team", "month", false)).await;
     assert_eq!(
         (again.status, again.code().as_str()),
         (StatusCode::CONFLICT, "already_subscribed")
     );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn with_consumer_sales_the_buyer_is_chosen_and_a_consumer_makes_both_requests(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    let start = |body: Value| {
+        let app = &b.app;
+        let team = &b.team;
+        async move {
+            app.as_user(&team.admin)
+                .post(&team.path("/billing/checkout"), &body)
+                .await
+        }
+    };
+    // Nothing is assumed: no buyer, no checkout.
+    let mut nobody = consumer_checkout("team", "year");
+    nobody.as_object_mut().unwrap().remove("buyer");
+    let refused = start(nobody).await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(refused.json()["details"]["buyer"].is_string());
+    for missing in ["immediate_start", "withdrawal_acknowledged"] {
+        let mut body = consumer_checkout("team", "year");
+        body[missing] = json!(false);
+        let refused = start(body).await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{missing}"
+        );
+    }
+    // The professional edition's wording is not this one's.
+    let mut stale = consumer_checkout("team", "year");
+    stale["copy_version"] = json!(romulus_api::billing::copy::version(
+        TermsEdition::Professional
+    ));
+    assert_eq!(start(stale).await.code(), "checkout_copy_changed");
+    // A business still names itself.
+    let mut business = business_checkout("team", "month", true);
+    business["company_name"] = json!(null);
+    assert!(start(business).await.json()["details"]["company_name"].is_string());
+
+    let started = start(consumer_checkout("team", "year")).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.json());
+    let (_, checkout) = b.stripe.last_checkout().unwrap();
+    assert!(!checkout.business, "a consumer is asked no business name");
+    let record = sqlx::query!(
+        r#"SELECT edition::text AS "edition!", buyer::text AS "buyer", immediate_start,
+                  withdrawal_acknowledged, professional_use, company_name
+           FROM legal_acceptances"#
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (record.edition.as_str(), record.buyer.as_deref()),
+        ("full", Some("consumer"))
+    );
+    assert_eq!(
+        (
+            record.immediate_start,
+            record.withdrawal_acknowledged,
+            record.professional_use
+        ),
+        (Some(true), Some(true), None)
+    );
+    assert_eq!(record.company_name, None);
+    let page = b
+        .app
+        .as_user(&b.team.admin)
+        .get(&b.team.path("/billing"))
+        .await
+        .json();
+    assert_eq!(
+        page["documents"]["en"]["terms"],
+        "https://romulus.example/legal/full/terms"
+    );
+    assert_eq!(page["documents"]["consumer_sales"], true);
+}
+
+/// How many acceptance records there are.
+pub(super) async fn acceptances(db: &PgPool) -> i64 {
+    sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM legal_acceptances"#)
+        .fetch_one(db)
+        .await
+        .unwrap()
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -1229,7 +1488,8 @@ async fn playground_sizes_and_hours_follow_the_plan_and_used_hours_stop_running_
         .unwrap();
     let admin_mail = "admin-acme@romulus.test";
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_hours_warning")
@@ -1262,7 +1522,8 @@ async fn playground_sizes_and_hours_follow_the_plan_and_used_hours_stop_running_
     assert!(stops[0].1.contains("playground hours"), "{}", stops[0].1);
     assert_eq!(audits(&db, "playground_hours_used_up").await, 1);
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_hours_used_up")
@@ -1346,7 +1607,7 @@ async fn a_second_checkout_expires_the_first_so_two_cannot_both_be_paid(db: PgPo
             app.as_user(&team.admin)
                 .post(
                     &team.path("/billing/checkout"),
-                    &json!({"plan": plan, "interval": "month", "accept_terms": true, "buyer": "business"}),
+                    &business_checkout(plan, "month", false),
                 )
                 .await
         }
@@ -1393,8 +1654,7 @@ async fn a_second_checkout_expires_the_first_so_two_cannot_both_be_paid(db: PgPo
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn a_checkout_retried_after_a_timeout_gets_the_same_session(db: PgPool) {
     let b = billed(&db).await;
-    let body =
-        json!({"plan": "team", "interval": "year", "accept_terms": true, "buyer": "business"});
+    let body = business_checkout("team", "year", false);
     let started = b
         .app
         .as_user(&b.team.admin)
@@ -1405,10 +1665,17 @@ async fn a_checkout_retried_after_a_timeout_gets_the_same_session(db: PgPool) {
     // The answer was lost: what a timeout leaves is the pending nonce, and a
     // session Stripe made under its key.
     let nonce = "pending-nonce";
-    let key = romulus_api::billing::stripe::checkout_key(b.team.org, "price_team_yearly", nonce);
+    let key = romulus_api::billing::stripe::checkout_key(
+        b.team.org,
+        "price_team_yearly",
+        romulus_api::domain::Locale::En,
+        nonce,
+    );
     b.stripe.state().keys.insert(key, session.clone());
+    // The record it was to carry was never written (the same transaction).
     sqlx::query!(
-        "UPDATE org_billing SET checkout_session_id = NULL, checkout_nonce = $2, checkout_price = 'price_team_yearly'
+        "UPDATE org_billing SET checkout_session_id = NULL, checkout_nonce = $2, checkout_price = 'price_team_yearly',
+                                checkout_acceptance_id = uuidv7()
          WHERE org_id = $1",
         b.team.org,
         nonce,
@@ -1469,7 +1736,8 @@ async fn a_second_live_subscription_is_cancelled_refunded_and_the_first_kept(db:
     );
     assert_eq!(audits(&db, "subscription_duplicate_cancelled").await, 1);
     let mails: Vec<_> = b
-        .outbox
+        .mail()
+        .await
         .to("admin-acme@romulus.test")
         .into_iter()
         .filter(|m| m.kind == "billing_duplicate_cancelled")
@@ -1611,7 +1879,8 @@ async fn a_late_payment_failure_for_an_invoice_paid_since_says_nothing(db: PgPoo
     .await;
     assert_eq!(audits(&db, "payment_failed").await, 0);
     assert!(
-        b.outbox
+        b.mail()
+            .await
             .to("admin-acme@romulus.test")
             .iter()
             .all(|m| m.kind != "billing_payment_failed")
@@ -1645,7 +1914,8 @@ async fn the_renewal_reminder_states_the_change_scheduled_for_the_renewal(db: Pg
     .await;
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     let reminder = b
-        .outbox
+        .mail()
+        .await
         .to("admin-acme@romulus.test")
         .into_iter()
         .find(|m| m.kind == "billing_renewal")
@@ -1671,6 +1941,7 @@ fn password_app(db: &PgPool) -> TestApp {
     config.auth.password = true;
     let billing = Billing::with_stripe(
         billing_config(),
+        legal_config(false),
         config.public_url.clone(),
         db.clone(),
         Fake::new(ORIGIN),
@@ -1841,4 +2112,141 @@ async fn a_console_past_the_hours_neither_connects_nor_opens(db: PgPool) {
     // And a new connection is refused before the upgrade.
     let refused = super::playgrounds::console(addr, &url, Some(&b.team.developer), ORIGIN).await;
     assert_eq!(refused.err(), Some(402));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_checkout_keeps_the_business_stripe_named_and_ends_with_its_subscription(db: PgPool) {
+    let b = billed(&db).await;
+    let started = b
+        .app
+        .as_user(&b.team.admin)
+        .post(
+            &b.team.path("/billing/checkout"),
+            &business_checkout("team", "month", false),
+        )
+        .await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.json());
+    let (session, _) = b.stripe.last_checkout().unwrap();
+    let subscription = b.stripe.complete_checkout(&session).unwrap();
+    let completed = json!({"id": session, "object": "checkout.session", "subscription": subscription,
+                           "client_reference_id": b.team.org,
+                           "collected_information": {"business_name": "  Acme SAS (Stripe)  "}});
+    deliver(&b, "checkout.session.completed", completed.clone()).await;
+    let record = || async {
+        sqlx::query!(
+            "SELECT stripe_business_name, contract_ended_at FROM legal_acceptances
+             WHERE checkout_session_id = $1",
+            session
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap()
+    };
+    let noted = record().await;
+    assert_eq!(
+        noted.stripe_business_name.as_deref(),
+        Some("Acme SAS (Stripe)")
+    );
+    assert!(noted.contract_ended_at.is_none(), "running");
+    // The same event again changes nothing (written once).
+    deliver(&b, "checkout.session.completed", completed).await;
+    // Over for good: the contract it concluded ended then.
+    b.stripe
+        .state()
+        .subscriptions
+        .get_mut(&subscription)
+        .unwrap()
+        .status = "canceled".into();
+    deliver(
+        &b,
+        "customer.subscription.deleted",
+        subscription_object(&subscription),
+    )
+    .await;
+    assert!(record().await.contract_ended_at.is_some());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_country_is_one_of_iso_3166(db: PgPool) {
+    let b = billed(&db).await;
+    let mut body = business_checkout("team", "month", false);
+    body["company_country"] = json!("UK");
+    let refused = b
+        .app
+        .as_user(&b.team.admin)
+        .post(&b.team.path("/billing/checkout"), &body)
+        .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(refused.json().to_string().contains("company_country"));
+    body["company_country"] = json!("gb");
+    let gb = b
+        .app
+        .as_user(&b.team.admin)
+        .post(&b.team.path("/billing/checkout"), &body)
+        .await;
+    assert_eq!(gb.status, StatusCode::OK, "{}", gb.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_letter_the_mail_server_refused_is_sent_later_and_only_once(db: PgPool) {
+    let b = billed(&db).await;
+    // The server is down for the confirmation.
+    b.outbox.refuse_next(1);
+    let subscription = subscribe(&b, "team", "month").await;
+    let delivered = romulus_api::mail::outbox::deliver(&b.app.state.db, &b.app.state.mailer)
+        .await
+        .unwrap();
+    assert_eq!((delivered.sent, delivered.retrying), (0, 1));
+    assert_eq!(b.outbox.all(), Vec::new(), "nothing marked sent");
+    let waiting = sqlx::query!("SELECT attempts, sent_at, last_error FROM mail_outbox")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(waiting.attempts, 1);
+    assert!(waiting.sent_at.is_none() && waiting.last_error.is_some());
+    // Not before its time; then once.
+    assert_eq!(b.mail().await.all(), Vec::new());
+    sqlx::query!("UPDATE mail_outbox SET next_attempt_at = now()")
+        .execute(&db)
+        .await
+        .unwrap();
+    let confirmations = |outbox: romulus_api::mail::Outbox| {
+        outbox
+            .all()
+            .into_iter()
+            .filter(|m| m.kind == "billing_subscription_confirmed")
+            .count()
+    };
+    assert_eq!(confirmations(b.mail().await), 1);
+    // Another event about the subscription: decided once, sent once.
+    deliver(
+        &b,
+        "customer.subscription.updated",
+        subscription_object(&subscription),
+    )
+    .await;
+    sqlx::query!("UPDATE mail_outbox SET next_attempt_at = now()")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(confirmations(b.mail().await), 1);
+    // Given up after its attempts: logged, and never sent.
+    b.outbox.refuse_next(100);
+    sqlx::query!(
+        "INSERT INTO mail_outbox (key, kind, recipient, subject, text_body, html_body, attempts)
+         VALUES ('test:down', 'test', 'x@y.z', 's', 't', 'h', $1)",
+        romulus_api::mail::outbox::MAX_ATTEMPTS - 1
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let delivered = romulus_api::mail::outbox::deliver(&b.app.state.db, &b.app.state.mailer)
+        .await
+        .unwrap();
+    assert_eq!(delivered.given_up, 1);
+    let failed = sqlx::query_scalar!("SELECT failed_at FROM mail_outbox WHERE key = 'test:down'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert!(failed.is_some());
 }

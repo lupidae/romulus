@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legal_acceptances SET contract_ended_at = now()\n         WHERE id = $1 AND contract_ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d2d4888bf69fe31241df6a6a7729c9311d3a2be29500f1647f6d9f9f29ea6942"
+}

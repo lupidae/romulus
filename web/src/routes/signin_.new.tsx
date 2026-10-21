@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 
@@ -25,6 +25,11 @@ import {
 } from "@/features/auth/password";
 import { authMethodsQuery, instanceQuery } from "@/features/auth/queries";
 import { afterSignIn, appPath } from "@/features/auth/session";
+import { copyVersions } from "@/features/billing/copy";
+import { TermsBoxes } from "@/features/legal/components/terms-boxes";
+import { NO_TICKS, termsTicked, type TermsTicks } from "@/features/legal/ticks";
+import { termsCopy } from "@/features/legal/copy";
+import { browserLocale } from "@/features/legal/locale";
 import { invitationPreviewQuery } from "@/features/orgs/queries";
 import { safePath } from "@/lib/safe-path";
 
@@ -126,6 +131,7 @@ function SignUpForm({
   footer: React.ReactNode;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const signUp = useSignUp();
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState(invitedEmail ?? "");
@@ -136,6 +142,14 @@ function SignUpForm({
   const emailRef = React.useRef<HTMLInputElement>(null);
   const passwordRef = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => nameRef.current?.focus(), []);
+  // The hosted service: its Terms are accepted here, with the account
+  // (Terms 3.4 b), in the browser's language; while it is sold to
+  // professionals only, said before anything else too.
+  const legal = useQuery(instanceQuery).data?.legal ?? undefined;
+  const locale = React.useMemo(() => browserLocale(), []);
+  const [ticks, setTicks] = React.useState<TermsTicks>(NO_TICKS);
+  const [showTicks, setShowTicks] = React.useState(false);
+  const termsId = React.useId();
 
   if (sentTo) {
     return (
@@ -163,15 +177,21 @@ function SignUpForm({
   const failure = signUp.error ? formErrors(signUp.error) : undefined;
   const wait = retryAfter(signUp.error);
   const exists = signUp.error instanceof ApiError && signUp.error.code === "account_exists";
+  const termsChanged = signUp.error instanceof ApiError && signUp.error.code === "terms_changed";
   const fieldError = (field: string) => problems[field] ?? failure?.fields[field];
 
   return (
     <AuthPage
       title={org ? `Join ${org} on romulus` : "Create your romulus account"}
       description={
-        mail
-          ? "We will email you a link to choose your password."
-          : "Use the address you were invited with."
+        <>
+          {legal && !legal.consumer_sales && (
+            <span lang={locale}>{termsCopy[locale].proIntro} </span>
+          )}
+          {mail
+            ? "We will email you a link to choose your password."
+            : "Use the address you were invited with."}
+        </>
       }
       footer={footer}
     >
@@ -184,17 +204,35 @@ function SignUpForm({
             password: mail ? undefined : newPasswordProblem(password),
           };
           setProblems(local);
+          setShowTicks(true);
           if (local.name) return nameRef.current?.focus();
           if (local.email) return emailRef.current?.focus();
           if (local.password) return passwordRef.current?.focus();
+          if (legal && !termsTicked(legal, ticks)) return;
           signUp.mutate(
             {
               name: name.trim(),
               email: email.trim(),
               password: mail ? undefined : password,
               invitation: token,
+              terms: legal
+                ? {
+                    version: legal.terms_version,
+                    locale,
+                    professional_use: !legal.consumer_sales && ticks.professional,
+                    copy_version: copyVersions[legal.edition],
+                  }
+                : undefined,
             },
             {
+              onError: (error) => {
+                // Another version of the Terms since this page loaded: read it.
+                if (error instanceof ApiError && error.code === "terms_changed") {
+                  setTicks(NO_TICKS);
+                  setShowTicks(false);
+                  void queryClient.invalidateQueries({ queryKey: instanceQuery.queryKey });
+                }
+              },
               onSuccess: (result) => {
                 if (result.outcome === "email_sent") return setSentTo(email.trim());
                 if (result.org) {
@@ -213,6 +251,10 @@ function SignUpForm({
         {exists ? (
           <Alert variant="info" title="You already have an account">
             Sign in with {email.trim()} instead, then open the invitation again.
+          </Alert>
+        ) : termsChanged ? (
+          <Alert variant="warning" title={termsCopy[locale].versionChanged}>
+            {null}
           </Alert>
         ) : (
           failure?.message && (
@@ -265,6 +307,16 @@ function SignUpForm({
             value={password}
             onChange={setPassword}
             error={fieldError("password")}
+          />
+        )}
+        {legal && (
+          <TermsBoxes
+            id={termsId}
+            links={legal}
+            locale={locale}
+            ticks={ticks}
+            onChange={setTicks}
+            showErrors={showTicks}
           />
         )}
         <Button

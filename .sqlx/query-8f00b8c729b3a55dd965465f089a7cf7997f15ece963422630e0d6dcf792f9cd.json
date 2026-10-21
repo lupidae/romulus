@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mail_outbox\n         WHERE sent_at < now() - interval '30 days' OR failed_at < now() - interval '90 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "8f00b8c729b3a55dd965465f089a7cf7997f15ece963422630e0d6dcf792f9cd"
+}

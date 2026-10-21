@@ -1,9 +1,12 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, unwrap } from "@/api/client";
 import type { components } from "@/api/schema.gen";
 
+import { billingKeys } from "./queries";
+
 type StartCheckout = components["schemas"]["StartCheckout"];
+type Locale = components["schemas"]["Locale"];
 type PortalChoice = components["schemas"]["PortalChoice"];
 
 /** Where the browser goes next (Stripe's pages); set apart so tests can watch it. */
@@ -29,5 +32,23 @@ export function useOpenPortal(org: string) {
           body: { flow },
         }),
       ),
+  });
+}
+
+/**
+ * A consumer withdraws from the plan (within 14 days of subscribing): the
+ * acknowledgement is emailed in `locale`, the page then shows the withdrawal.
+ */
+export function useWithdraw(org: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (locale: Locale) =>
+      unwrap(
+        api.POST("/api/orgs/{org}/billing/withdrawal", {
+          params: { path: { org } },
+          body: { locale },
+        }),
+      ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: billingKeys.one(org) }),
   });
 }

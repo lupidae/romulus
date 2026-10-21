@@ -27,6 +27,7 @@ import { requireUser, signOut } from "@/features/auth/session";
 import { databaseQuery } from "@/features/databases/queries";
 import { rememberLastOrg } from "@/features/orgs/last-org";
 import { orgQuery, orgsQuery } from "@/features/orgs/queries";
+import { ContractFooter } from "@/features/legal/components/contract-footer";
 import { canManageMembers } from "@/features/orgs/roles";
 
 // Every page of an organization: /app/<slug>/… inside the app shell. Signed
@@ -125,6 +126,7 @@ function OrgLayout() {
       ) : (
         <PageBody>
           <Outlet />
+          <ContractFooter org={slug} />
         </PageBody>
       )}
       {me.password_account && (

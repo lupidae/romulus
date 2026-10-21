@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legal_acceptances SET stripe_business_name = 'Other' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "49fb4497c81244f41dca9010ab4b44f3daeaaa7d72d6b706e82e58472f8fd987"
+}

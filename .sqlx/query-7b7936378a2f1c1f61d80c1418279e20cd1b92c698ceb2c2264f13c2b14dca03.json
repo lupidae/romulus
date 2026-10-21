@@ -1,0 +1,142 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.user_email, a.locale AS \"locale: Locale\", a.accepted_at, a.terms_version,\n                  a.edition AS \"edition: TermsEdition\", a.buyer AS \"buyer: Buyer\", a.copy_version,\n                  u.email AS \"current_email?\"\n           FROM legal_acceptances a LEFT JOIN users u ON u.id = a.user_id\n           WHERE a.id = $1 AND a.kind = 'checkout'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "user_email"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "locale: Locale",
+        "type_info": {
+          "Custom": {
+            "name": "locale",
+            "kind": {
+              "Enum": [
+                "en",
+                "fr"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "locale"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "accepted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "accepted_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "terms_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "terms_version"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "edition: TermsEdition",
+        "type_info": {
+          "Custom": {
+            "name": "terms_edition",
+            "kind": {
+              "Enum": [
+                "professional",
+                "full"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "edition"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "buyer: Buyer",
+        "type_info": {
+          "Custom": {
+            "name": "buyer",
+            "kind": {
+              "Enum": [
+                "business",
+                "consumer"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "buyer"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "copy_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "copy_version"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "current_email?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "email"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7b7936378a2f1c1f61d80c1418279e20cd1b92c698ceb2c2264f13c2b14dca03"
+}

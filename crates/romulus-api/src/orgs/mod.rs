@@ -166,7 +166,7 @@ async fn list(user: CurrentUser, State(db): State<PgPool>) -> ApiResult<Json<Vec
     request_body = CreateOrg,
     responses(
         (status = 201, body = Org),
-        (status = 403, description = "`single_org`: this install keeps one organization", body = ErrorBody),
+        (status = 403, description = "`single_org`: this install keeps one organization; `terms_required`: the Terms of Service are not accepted yet", body = ErrorBody),
         (status = 409, description = "`slug_taken`", body = ErrorBody),
         (status = 422, description = "`validation`, `details` names the field", body = ErrorBody),
     )
@@ -183,6 +183,7 @@ async fn create(
             message: "This server keeps one organization. Ask its admin to invite you.".to_owned(),
         });
     }
+    crate::legal::require_accepted(&db, &config, user.id).await?;
     let name = checked_name(&body.name)?;
     let slug = checked_slug(&body.slug)?;
     let mut tx = db::begin_read_committed(&db).await?;

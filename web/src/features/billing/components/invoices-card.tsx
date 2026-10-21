@@ -15,35 +15,37 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDate } from "@/lib/time";
+import { useLocale } from "@/features/legal/locale";
 
-import { euros } from "../format";
-import { type InvoiceSummary, invoicesQuery } from "../queries";
+import { billingCopy } from "../copy";
+import { formatShortDate, money } from "../format";
+import { invoicesQuery } from "../queries";
 
-const statusBadge: Record<string, { label: string; variant: "success" | "warning" | "neutral" }> = {
-  paid: { label: "Paid", variant: "success" },
-  open: { label: "Due", variant: "warning" },
-  uncollectible: { label: "Unpaid", variant: "warning" },
-  void: { label: "Void", variant: "neutral" },
+const statusVariant: Record<string, "success" | "warning" | "neutral"> = {
+  paid: "success",
+  open: "warning",
+  uncollectible: "warning",
+  void: "neutral",
 };
-
-function amount(invoice: InvoiceSummary): string {
-  return invoice.currency.toLowerCase() === "eur"
-    ? euros(invoice.total_cents)
-    : `${(invoice.total_cents / 100).toFixed(2)} ${invoice.currency.toUpperCase()}`;
-}
 
 /** Stripe's invoices for the organization, newest first (admins). */
 export function InvoicesCard({ org }: { org: string }) {
+  const locale = useLocale();
+  const t = billingCopy[locale].invoices;
+  const labels: Record<string, string> = {
+    paid: t.paid,
+    open: t.due,
+    uncollectible: t.unpaid,
+    void: t.void,
+  };
   const invoices = useQuery(invoicesQuery(org));
   return (
-    <Card aria-labelledby="invoices-title">
+    // min-w-0: the table scrolls inside the card rather than widening the page.
+    <Card aria-labelledby="invoices-title" lang={locale} className="min-w-0">
       <CardHeader>
         <div className="grid gap-0.5">
-          <CardTitle id="invoices-title">Invoices</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Each one opens on Stripe, to read, download or pay.
-          </p>
+          <CardTitle id="invoices-title">{t.title}</CardTitle>
+          <p className="text-sm text-muted-foreground">{t.description}</p>
         </div>
       </CardHeader>
       {invoices.isPending ? (
@@ -60,14 +62,14 @@ export function InvoicesCard({ org }: { org: string }) {
         <div className="p-4">
           <Alert
             variant="destructive"
-            title="Could not load the invoices"
+            title={t.loadFailed}
             action={
               <Button
                 size="sm"
                 loading={invoices.isFetching}
                 onClick={() => void invoices.refetch()}
               >
-                Retry
+                {billingCopy[locale].page.retry}
               </Button>
             }
           >
@@ -75,47 +77,45 @@ export function InvoicesCard({ org }: { org: string }) {
           </Alert>
         </div>
       ) : invoices.data.length === 0 ? (
-        <EmptyState
-          icon={<PageIcon />}
-          title="No invoices yet"
-          description="Each payment's invoice appears here, starting with the first plan you choose."
-        />
+        <EmptyState icon={<PageIcon />} title={t.empty} description={t.emptyBody} />
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead className="hidden sm:table-cell">Number</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>{t.date}</TableHead>
+              <TableHead className="hidden sm:table-cell">{t.number}</TableHead>
+              <TableHead className="text-right">{t.amount}</TableHead>
+              <TableHead>{t.status}</TableHead>
               <TableHead className="w-12">
-                <span className="sr-only">Open</span>
+                <span className="sr-only">{t.open}</span>
               </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {invoices.data.map((invoice) => {
-              const status = statusBadge[invoice.status ?? ""];
+              const status = invoice.status ?? "";
+              const variant = statusVariant[status];
               return (
                 <TableRow key={invoice.id}>
-                  <TableCell className="whitespace-nowrap">{formatDate(invoice.created)}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {formatShortDate(invoice.created, locale)}
+                  </TableCell>
                   <TableCell className="hidden font-mono text-sm sm:table-cell">
                     {invoice.number ?? "—"}
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{amount(invoice)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {money(invoice.total_cents, invoice.currency, locale)}
+                  </TableCell>
                   <TableCell>
-                    {status && <Badge variant={status.variant}>{status.label}</Badge>}
+                    {variant && <Badge variant={variant}>{labels[status]}</Badge>}
                   </TableCell>
                   <TableCell>
                     {invoice.url && (
                       <Button variant="ghost" size="sm" asChild>
                         <a href={invoice.url} target="_blank" rel="noreferrer">
-                          View
+                          {t.view}
                           <OpenNewWindowIcon aria-hidden />
-                          <span className="sr-only">
-                            {" "}
-                            invoice {invoice.number ?? ""} (opens in a new tab)
-                          </span>
+                          <span className="sr-only"> {t.viewLabel(invoice.number ?? "")}</span>
                         </a>
                       </Button>
                     )}

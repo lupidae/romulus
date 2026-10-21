@@ -139,6 +139,8 @@ check:
     npm --prefix web run build
     # The homepage's committed hero: built from what it says (see site/tools/hero.mjs).
     node site/tools/hero.mjs --check
+    # The Terms PDFs the API attaches (and the legal pages, with the site's packages): printed from site/legal/.
+    node site/tools/legal.mjs --check
 
 # rustfmt needs nightly for imports_granularity / group_imports (rustfmt.toml)
 fmt:
@@ -165,10 +167,11 @@ site: env
     port=$(sed -n 's/^ROMULUS_SITE_PORT=//p' .env)
     node site/serve.mjs "$port"
 
-# the homepage's checks: tokens and fonts in sync with web/, the live hero built from its sources, the edge proxy's tests, then Playwright and axe
+# the homepage's checks: tokens and fonts in sync with web/, the live hero and the legal pages built from their sources, the edge proxy's tests, then Playwright and axe
 site-check: env
     node site/tools/sync.mjs --check
     node site/tools/hero.mjs --check
+    node site/tools/legal.mjs --check
     npm --prefix site run test:edge
     npm --prefix site run e2e
 
@@ -181,6 +184,10 @@ site-gen:
 # rebuild the homepage's live hero only (crates/romulus-wasm + web/src/hero → site/public/hero)
 site-hero:
     node site/tools/hero.mjs
+
+# re-render the legal pages and the Terms PDFs the API attaches, after editing site/legal/
+site-legal:
+    node site/tools/legal.mjs
 
 # Lighthouse, mobile and desktop, against the homepage; reports in site/lighthouse/
 site-lighthouse: env
