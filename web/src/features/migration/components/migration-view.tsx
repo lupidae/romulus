@@ -327,7 +327,7 @@ export function MigrationView({
             )}
           </div>
         )}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {switching && <Spinner className="size-3.5 text-muted-foreground" label="Updating" />}
           {data && (
             <span className="text-sm text-muted-foreground tabular-nums">
@@ -374,31 +374,37 @@ export function MigrationView({
               </Button>
             </Tooltip>
           )}
-          {data &&
-            actions?.({
-              concurrently,
-              renames: decisions,
-              statements,
-              pending: pending || switching,
-            })}
-          <Button
-            size="sm"
-            onClick={() => void copy()}
-            disabled={!file}
-            aria-label={copied ? "Copied" : `Copy ${file ? basename(file.path) : "the file"}`}
-          >
-            {copied ? <CheckIcon className="text-success" /> : <CopyIcon />}
-            {copied ? "Copied" : "Copy"}
-          </Button>
-          <Button
-            size="sm"
-            variant={primary ? "primary" : "secondary"}
-            onClick={download}
-            disabled={files.length === 0}
-          >
-            <DownloadIcon />
-            {archive ? "Download .zip" : "Download"}
-          </Button>
+          {/* The actions wrap as one block, onto a line of their own; narrower
+              still, Test on data goes above Copy and Download, never apart. */}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {data &&
+              actions?.({
+                concurrently,
+                renames: decisions,
+                statements,
+                pending: pending || switching,
+              })}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => void copy()}
+                disabled={!file}
+                aria-label={copied ? "Copied" : `Copy ${file ? basename(file.path) : "the file"}`}
+              >
+                {copied ? <CheckIcon className="text-success" /> : <CopyIcon />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <Button
+                size="sm"
+                variant={primary ? "primary" : "secondary"}
+                onClick={download}
+                disabled={files.length === 0}
+              >
+                <DownloadIcon />
+                {archive ? "Download .zip" : "Download"}
+              </Button>
+            </div>
+          </div>
         </div>
         <span role="status" aria-live="polite" className="sr-only">
           {copied ? "Copied to the clipboard" : ""}

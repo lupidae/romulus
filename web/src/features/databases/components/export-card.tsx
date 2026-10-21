@@ -1,16 +1,21 @@
+import { useMutation } from "@tanstack/react-query";
 import type * as React from "react";
 
+import { ApiError } from "@/api/client";
 import { DownloadIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "@/components/ui/toaster";
+import { formatWait, retryAfter } from "@/features/auth/password";
 
-import { databaseExportUrl, orgExportUrl } from "../export";
+import { databaseExportUrl, downloadExport, orgExportUrl } from "../export";
 
 /**
- * A plain download link: the session cookie goes along (same origin), the
- * API streams the ZIP and names the file.
+ * Downloads the export at `href`: the session cookie goes along (same
+ * origin), the API streams the ZIP and names the file. A refusal is a toast
+ * (with the wait a 429 asks for), never a file.
  */
-export function ExportLink({
+export function ExportButton({
   href,
   label,
   size = "md",
@@ -19,12 +24,25 @@ export function ExportLink({
   label: string;
   size?: "sm" | "md";
 }) {
+  const download = useMutation({
+    mutationFn: () => downloadExport(href),
+    onError: (error) => {
+      const wait = retryAfter(error);
+      if (wait !== undefined) {
+        toast.error("Too many exports for now", {
+          description: `Try again in ${formatWait(wait)}.`,
+        });
+      } else {
+        toast.error("The export could not be downloaded", {
+          description: error instanceof ApiError ? error.message : "Check your connection.",
+        });
+      }
+    },
+  });
   return (
-    <Button size={size} asChild>
-      <a href={href} download>
-        <DownloadIcon />
-        {label}
-      </a>
+    <Button size={size} onClick={() => download.mutate()} loading={download.isPending}>
+      <DownloadIcon />
+      {label}
     </Button>
   );
 }
@@ -38,7 +56,7 @@ export function DatabaseExportCard({ org, db }: { org: string; db: string }) {
     <ExportCard
       title="Export"
       description={`A ZIP of this database: ${CONTENTS}`}
-      action={<ExportLink href={databaseExportUrl(org, db)} label="Export database (ZIP)" />}
+      action={<ExportButton href={databaseExportUrl(org, db)} label="Export database (ZIP)" />}
     />
   );
 }
@@ -49,7 +67,7 @@ export function OrgExportCard({ org }: { org: string }) {
     <ExportCard
       title="Export"
       description={`A ZIP with a folder per database: ${CONTENTS}`}
-      action={<ExportLink href={orgExportUrl(org)} label="Export organization (ZIP)" />}
+      action={<ExportButton href={orgExportUrl(org)} label="Export organization (ZIP)" />}
       className="max-w-2xl"
     />
   );
