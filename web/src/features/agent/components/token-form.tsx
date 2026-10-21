@@ -110,22 +110,23 @@ export function TokenForm({
 }
 
 /**
- * A select inside a `Field`: the field's id and aria attributes reach the
- * trigger, so the label names it.
+ * One of a few options, as a select. Inside a `Field`, the kit's `Select`
+ * hands the field's id and aria attributes to its trigger, so the label
+ * names it.
  */
 function Choice<T extends string>({
   value,
   onValueChange,
   options,
-  ...trigger
+  ...field
 }: {
   value: T;
   onValueChange: (value: T) => void;
   options: readonly { value: T; label: string; description?: string }[];
-} & Omit<React.ComponentProps<typeof SelectTrigger>, "value" | "onChange">) {
+} & Pick<React.ComponentProps<typeof Select>, "id" | "aria-describedby" | "aria-invalid">) {
   return (
-    <Select value={value} onValueChange={(next) => onValueChange(next as T)}>
-      <SelectTrigger {...trigger}>
+    <Select value={value} onValueChange={(next) => onValueChange(next as T)} {...field}>
+      <SelectTrigger>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
