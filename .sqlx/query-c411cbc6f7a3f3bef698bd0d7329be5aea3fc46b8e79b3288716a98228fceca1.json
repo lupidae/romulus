@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE version_threads SET frozen = true WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c411cbc6f7a3f3bef698bd0d7329be5aea3fc46b8e79b3288716a98228fceca1"
+}

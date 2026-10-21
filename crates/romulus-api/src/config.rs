@@ -76,7 +76,39 @@ pub struct Config {
     /// `ROMULUS_BILLING`: hosted billing (plans, caps, Stripe). `None`
     /// (unset): off, the self-hosted default: no caps, no billing routes.
     pub billing: Option<BillingConfig>,
+    /// `ROMULUS_DELETE_INACTIVE_ACCOUNTS=true`: an account unused for 3
+    /// years is deleted, after an email 30 days before (`retention::
+    /// inactive`; needs mail, and `ROMULUS_ZITADEL_TOKEN` with the OIDC
+    /// client). Off by default: a self-hosted install never loses an
+    /// account it did not choose to.
+    pub delete_inactive_accounts: bool,
+    /// `ROMULUS_ZITADEL_TOKEN`: a Zitadel personal access token allowed to
+    /// delete users (the provisioner's `romulus-api` machine user): deleting
+    /// an account then deletes its Zitadel user too, through the OIDC
+    /// issuer's user API. Unset: the operator deletes it in Zitadel's
+    /// console. Ignored without the OIDC client.
+    pub zitadel_token: Option<Secret>,
+    /// `ROMULUS_SOURCE_URL`: where the source of the running version is
+    /// published (AGPL-3.0, section 13), linked from the app at the commit
+    /// built ([`COMMIT`]). By default the repository the image was built
+    /// from, else <https://github.com/lupidae/romulus>: a fork points to
+    /// itself.
+    pub source_url: Url,
 }
+
+/// The commit this binary was built from (`ROMULUS_COMMIT` at build time:
+/// the Dockerfile's build argument), if the build said.
+pub const COMMIT: Option<&str> = match option_env!("ROMULUS_COMMIT") {
+    Some(commit) if !commit.is_empty() => Some(commit),
+    _ => None,
+};
+
+/// The repository [`Config::source_url`] defaults to: the one the build
+/// said (`ROMULUS_SOURCE_URL` at build time), else romulus's own.
+const DEFAULT_SOURCE_URL: &str = match option_env!("ROMULUS_SOURCE_URL") {
+    Some(url) if !url.is_empty() => url,
+    _ => "https://github.com/lupidae/romulus",
+};
 
 /// Hosted billing: Stripe's keys, the Terms the checkout page has people
 /// accept, and the mentions every invoice carries.
@@ -488,6 +520,9 @@ impl Config {
             mail: None,
             trusted_proxies: Vec::new(),
             billing: None,
+            delete_inactive_accounts: false,
+            zitadel_token: None,
+            source_url: Url::parse(DEFAULT_SOURCE_URL).expect("a valid default source URL"),
         }
     }
 
@@ -646,6 +681,35 @@ impl Config {
                 reason: "stripe needs mail for renewal reminders and payment notices: set ROMULUS_SMTP_HOST and ROMULUS_MAIL_FROM".to_owned(),
             });
         }
+        let delete_inactive_accounts = flag(&get, "ROMULUS_DELETE_INACTIVE_ACCOUNTS")?;
+        // The notice 30 days before is the promise: no mail, no deletion.
+        if delete_inactive_accounts && mail.is_none() {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_DELETE_INACTIVE_ACCOUNTS",
+                reason: "an account is deleted only after an email notice: set ROMULUS_SMTP_HOST and ROMULUS_MAIL_FROM".to_owned(),
+            });
+        }
+        let zitadel_token = get("ROMULUS_ZITADEL_TOKEN")
+            .map(Secret)
+            .filter(|_| oidc.is_some());
+        // Deleting a single sign-on account on its own would leave its
+        // Zitadel user behind, with nobody told to delete it.
+        if delete_inactive_accounts && oidc.is_some() && zitadel_token.is_none() {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_DELETE_INACTIVE_ACCOUNTS",
+                reason: "with single sign-on, an inactive account is deleted at Zitadel too: set ROMULUS_ZITADEL_TOKEN".to_owned(),
+            });
+        }
+        let source_url = url(
+            "ROMULUS_SOURCE_URL",
+            &get("ROMULUS_SOURCE_URL").unwrap_or_else(|| DEFAULT_SOURCE_URL.to_owned()),
+        )?;
+        if !matches!(source_url.scheme(), "https" | "http") {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_SOURCE_URL",
+                reason: "an http(s) URL, e.g. https://github.com/<owner>/romulus".to_owned(),
+            });
+        }
         // Self-hosted installs are never capped.
         if billing.is_some() && single_org {
             return Err(ConfigError::Invalid {
@@ -674,7 +738,21 @@ impl Config {
             mail,
             trusted_proxies,
             billing,
+            delete_inactive_accounts,
+            zitadel_token,
+            source_url,
         })
+    }
+
+    /// Where the running version's source is: [`Self::source_url`] at
+    /// [`COMMIT`] (`<repository>/tree/<sha>`), or the repository itself when
+    /// the build did not say.
+    pub fn source_at_commit(&self) -> String {
+        let base = self.source_url.as_str().trim_end_matches('/');
+        match COMMIT {
+            Some(commit) => format!("{base}/tree/{commit}"),
+            None => base.to_owned(),
+        }
     }
 }
 
@@ -1218,6 +1296,107 @@ mod tests {
                 .collect();
             assert_eq!(config(&vars).unwrap().mail.unwrap().port, 25, "{local}");
         }
+    }
+
+    #[test]
+    fn inactive_accounts_are_kept_unless_deleting_them_is_on_and_mail_can_warn() {
+        let config_ = config(&BASE).unwrap();
+        assert!(!config_.delete_inactive_accounts);
+        assert!(!Config::for_tests().delete_inactive_accounts);
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_DELETE_INACTIVE_ACCOUNTS", "true"));
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_DELETE_INACTIVE_ACCOUNTS",
+                ..
+            })
+        ));
+        vars.push(("ROMULUS_SMTP_HOST", "smtp.example.com"));
+        vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
+        assert!(config(&vars).unwrap().delete_inactive_accounts);
+    }
+
+    #[test]
+    fn deleting_inactive_accounts_with_single_sign_on_needs_the_zitadel_token() {
+        let mut vars = BASE.to_vec();
+        vars.extend([
+            ("ROMULUS_DELETE_INACTIVE_ACCOUNTS", "true"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_OIDC_ISSUER", "http://localhost:41004"),
+            ("ROMULUS_OIDC_CLIENT_ID", "client"),
+            ("ROMULUS_OIDC_CLIENT_SECRET", "secret"),
+        ]);
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_DELETE_INACTIVE_ACCOUNTS",
+                ..
+            })
+        ));
+        vars.push(("ROMULUS_ZITADEL_TOKEN", "pat"));
+        assert!(config(&vars).unwrap().delete_inactive_accounts);
+        // Password sign-in only: no identity provider to delete from.
+        let mut password = BASE.to_vec();
+        password.extend([
+            ("ROMULUS_AUTH", "password"),
+            ("ROMULUS_DELETE_INACTIVE_ACCOUNTS", "true"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_OIDC_ISSUER", "http://localhost:41004"),
+            ("ROMULUS_OIDC_CLIENT_ID", "client"),
+            ("ROMULUS_OIDC_CLIENT_SECRET", "secret"),
+        ]);
+        assert!(config(&password).unwrap().delete_inactive_accounts);
+    }
+
+    #[test]
+    fn the_zitadel_token_needs_the_oidc_client() {
+        let mut vars = BASE.to_vec();
+        vars.push(("ROMULUS_ZITADEL_TOKEN", "pat"));
+        assert!(config(&vars).unwrap().zitadel_token.is_none());
+        vars.extend([
+            ("ROMULUS_OIDC_ISSUER", "http://localhost:41004"),
+            ("ROMULUS_OIDC_CLIENT_ID", "client"),
+            ("ROMULUS_OIDC_CLIENT_SECRET", "secret"),
+        ]);
+        assert_eq!(
+            config(&vars).unwrap().zitadel_token.unwrap().expose(),
+            "pat"
+        );
+    }
+
+    #[test]
+    fn the_source_defaults_to_romulus_and_a_fork_names_its_own() {
+        let default = config(&BASE).unwrap();
+        assert_eq!(default.source_url.as_str(), DEFAULT_SOURCE_URL);
+        let mut vars = BASE.to_vec();
+        vars.push((
+            "ROMULUS_SOURCE_URL",
+            "https://git.example.com/acme/romulus/",
+        ));
+        let fork = config(&vars).unwrap();
+        let at = fork.source_at_commit();
+        match COMMIT {
+            Some(commit) => assert_eq!(
+                at,
+                format!("https://git.example.com/acme/romulus/tree/{commit}")
+            ),
+            None => assert_eq!(at, "https://git.example.com/acme/romulus"),
+        }
+        vars.push(("ROMULUS_SOURCE_URL", "ftp://example.com"));
+        let vars: Vec<_> = vars
+            .into_iter()
+            .filter(|&(k, v)| k != "ROMULUS_SOURCE_URL" || v.starts_with("ftp"))
+            .collect();
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_SOURCE_URL",
+                ..
+            })
+        ));
     }
 
     #[test]

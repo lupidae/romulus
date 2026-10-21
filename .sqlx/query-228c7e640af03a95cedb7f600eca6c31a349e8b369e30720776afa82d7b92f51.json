@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_approvals (version_id, database_id, user_id, name, approved_at, sql_sha256)\n         VALUES ($1, $2, $3, 'Author', now(), sha256('x'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "228c7e640af03a95cedb7f600eca6c31a349e8b369e30720776afa82d7b92f51"
+}

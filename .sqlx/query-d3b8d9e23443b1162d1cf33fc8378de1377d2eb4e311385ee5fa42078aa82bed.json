@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET inactivity_notice_at = now(), inactivity_retry_at = NULL, inactivity_failures = 0\n         WHERE id = $1 AND inactivity_notice_at IS NULL AND last_seen_at = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d3b8d9e23443b1162d1cf33fc8378de1377d2eb4e311385ee5fa42078aa82bed"
+}

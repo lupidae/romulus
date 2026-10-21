@@ -9,15 +9,19 @@
 //!   required), newest first (its settings page).
 //!
 //! Table: `audit_events` (no update, delete or truncate but with the
-//! organization or database). Written by `versions::removal` (a version
-//! removed, restored, purged), `drafts::approvals` (a draft published, with
+//! organization; a purged database's events stay, `database_id` NULL and
+//! `database_name` saying which, out of the other databases' activity).
+//! Written by `versions::removal` (a version removed, restored, purged),
+//! `drafts::approvals` (a draft published, with
 //! who approved it, or without the approvals it needed), `orgs` (the
 //! approvals required changed), `collab` (someone else's comments deleted
 //! in a draft, by its room's writer), `playgrounds` (one created,
 //! deleted, reset, or a migration run on its rows), `billing` (the Terms
 //! accepted, subscriptions changed, payments, downgrades: org-level, kept
-//! out of a database's activity) and `mcp` (what an agent changed with its
-//! person's access token). The actor's name is kept as it was.
+//! out of a database's activity), `mcp` (what an agent changed with its
+//! person's access token) and `retention` (a deleted database purged, kept
+//! out of the others' activity too; an admin appointed when the only one's
+//! account was deleted). The actor's name is kept as it was.
 
 use axum::extract::State;
 use chrono::{DateTime, Utc};
@@ -102,6 +106,14 @@ pub struct AuditDetails {
     /// payment, the plan downgraded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub billing: Option<BillingAudit>,
+    /// The database purged, by name and slug as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_slug: Option<String>,
+    /// The member an event is about (made an admin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<AuditActor>,
 }
 
 /// What a billing event records.
@@ -164,7 +176,7 @@ pub struct AuditApprover {
 
 /// Who did something: their name now, or as it was once their account is
 /// gone.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct AuditActor {
     /// `null` once their account is gone.
     pub id: Option<Uuid>,
@@ -186,12 +198,13 @@ pub struct Entry {
     pub details: AuditDetails,
 }
 
-/// Records `entry`, in the caller's transaction.
+/// Records `entry`, in the caller's transaction, with its database's name
+/// as it is now (it stays when the database is purged).
 pub async fn record(db: impl PgExecutor<'_>, entry: &Entry) -> Result<(), sqlx::Error> {
     let details = serde_json::to_value(&entry.details).unwrap_or_default();
     sqlx::query!(
-        "INSERT INTO audit_events (org_id, database_id, action, actor_id, actor_name, version_number, reason, details)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO audit_events (org_id, database_id, database_name, action, actor_id, actor_name, version_number, reason, details)
+         VALUES ($1, $2, (SELECT name FROM databases WHERE id = $2), $3, $4, $5, $6, $7, $8)",
         entry.org_id,
         entry.database_id,
         entry.action as AuditAction,
@@ -267,7 +280,7 @@ async fn activity(
                   e.created_at, u.id AS "actor_id?", coalesce(u.name, e.actor_name) AS actor_name
            FROM audit_events e
            LEFT JOIN users u ON u.id = e.actor_id
-           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.org_id = $4))
+           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.database_name IS NULL AND e.org_id = $4))
              AND ($2::uuid IS NULL OR e.id < $2)
              AND NOT (e.action = ANY($5))
            ORDER BY e.id DESC LIMIT $3"#,
@@ -275,7 +288,7 @@ async fn activity(
         query.before,
         limit + 1,
         member.org.id,
-        &AuditAction::BILLING as &[AuditAction],
+        &AuditAction::NOT_IN_DATABASE_ACTIVITY as &[AuditAction],
     )
     .fetch_all(&db)
     .await?;

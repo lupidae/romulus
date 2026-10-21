@@ -33,7 +33,9 @@
                 "password_link_created",
                 "unlocked",
                 "email_verified",
-                "admin_created"
+                "admin_created",
+                "account_deleted",
+                "organization_deleted"
               ]
             }
           }

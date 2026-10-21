@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET inactivity_retry_at = now() - interval '1 second' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f9931a6f0e25299e1928a656a03092cea6a39cbd0d8294be93790a64f5c4c773"
+}

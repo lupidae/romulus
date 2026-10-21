@@ -155,6 +155,8 @@ async fn lookup(db: &PgPool, token: &str) -> Result<Option<CurrentUser>, ApiErro
         )
         .execute(db)
         .await?;
+        // The account was used (its inactivity counts from here).
+        crate::retention::activity::account_used(db, row.id).await?;
     }
     Ok(Some(CurrentUser {
         id: row.id,
@@ -172,8 +174,9 @@ fn is_stale(last_seen_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
         .is_ok_and(|age| age >= TOUCH_EVERY)
 }
 
-/// Starts a session for `user_id` and returns its token (for the cookie).
-/// Also sweeps sessions that already expired, so the table does not grow.
+/// Starts a session for `user_id` and returns its token (for the cookie):
+/// a sign-in, so the account counts as used now. Also sweeps sessions that
+/// already expired, so the table does not grow.
 pub async fn create(db: &PgPool, user_id: Uuid) -> Result<String, sqlx::Error> {
     let token = token::generate();
     sqlx::query!(
@@ -185,6 +188,7 @@ pub async fn create(db: &PgPool, user_id: Uuid) -> Result<String, sqlx::Error> {
     )
     .execute(db)
     .await?;
+    crate::retention::activity::account_used(db, user_id).await?;
     sqlx::query!("DELETE FROM sessions WHERE expires_at <= now()")
         .execute(db)
         .await?;

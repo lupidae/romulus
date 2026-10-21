@@ -315,12 +315,20 @@ pub enum AuditAction {
     /// Someone's AI agent changed something with their personal access
     /// token (`token_id`, `token_name`, `tool` in the details).
     AgentAction,
+    /// A database deleted 30 days ago was purged with everything it held
+    /// (its name in the details). By romulus itself; organization-level,
+    /// kept out of the other databases' activity.
+    DatabasePurged,
+    /// The organization's only admin's account was deleted (3 years
+    /// unused): romulus made another member an admin (`member` in the
+    /// details, why in the reason).
+    AdminAppointed,
 }
 
 impl AuditAction {
-    /// Billing's own events: kept in the log, not shown in a database's
-    /// activity.
-    pub const BILLING: [Self; 7] = [
+    /// Kept in the log, not shown in a database's activity: billing's, and
+    /// another database's purge.
+    pub const NOT_IN_DATABASE_ACTIVITY: [Self; 8] = [
         Self::TermsAccepted,
         Self::SubscriptionChanged,
         Self::PaymentFailed,
@@ -328,6 +336,7 @@ impl AuditAction {
         Self::PlanDowngraded,
         Self::PlaygroundHoursUsedUp,
         Self::SubscriptionDuplicateCancelled,
+        Self::DatabasePurged,
     ];
 }
 
@@ -395,6 +404,12 @@ pub enum AuthEventKind {
     EmailVerified,
     /// `romulus-api setup` created the first admin.
     AdminCreated,
+    /// An account was deleted, with what it alone owned: on request
+    /// (`romulus-api delete-user`) or 3 years unused (`retention`).
+    AccountDeleted,
+    /// An organization was deleted with everything it held (`romulus-api
+    /// delete-org`, or with its only member's account).
+    OrganizationDeleted,
 }
 
 /// What a one-time link is for (`auth_link_purpose`).

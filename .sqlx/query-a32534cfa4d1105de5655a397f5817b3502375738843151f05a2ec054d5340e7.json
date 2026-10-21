@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT e.id, e.action AS \"action: AuditAction\", e.version_number, e.reason, e.details,\n                  e.created_at, u.id AS \"actor_id?\", coalesce(u.name, e.actor_name) AS actor_name\n           FROM audit_events e\n           LEFT JOIN users u ON u.id = e.actor_id\n           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.org_id = $4))\n             AND ($2::uuid IS NULL OR e.id < $2)\n             AND NOT (e.action = ANY($5))\n           ORDER BY e.id DESC LIMIT $3",
+  "query": "SELECT e.id, e.action AS \"action: AuditAction\", e.version_number, e.reason, e.details,\n                  e.created_at, u.id AS \"actor_id?\", coalesce(u.name, e.actor_name) AS actor_name\n           FROM audit_events e\n           LEFT JOIN users u ON u.id = e.actor_id\n           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.database_name IS NULL AND e.org_id = $4))\n             AND ($2::uuid IS NULL OR e.id < $2)\n             AND NOT (e.action = ANY($5))\n           ORDER BY e.id DESC LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -45,7 +45,9 @@
                 "plan_downgraded",
                 "playground_hours_used_up",
                 "subscription_duplicate_cancelled",
-                "agent_action"
+                "agent_action",
+                "database_purged",
+                "admin_appointed"
               ]
             }
           }
@@ -157,7 +159,9 @@
                       "plan_downgraded",
                       "playground_hours_used_up",
                       "subscription_duplicate_cancelled",
-                      "agent_action"
+                      "agent_action",
+                      "database_purged",
+                      "admin_appointed"
                     ]
                   }
                 }
@@ -178,5 +182,5 @@
       null
     ]
   },
-  "hash": "f333c563ab357cb2dc91b657273b7fe8d129418828bf4caee838633b6e74c3eb"
+  "hash": "a32534cfa4d1105de5655a397f5817b3502375738843151f05a2ec054d5340e7"
 }

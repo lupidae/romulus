@@ -35,6 +35,7 @@ pub mod migration_tests;
 pub mod orgs;
 pub mod playgrounds;
 pub mod rate;
+pub mod retention;
 pub mod state;
 pub mod token;
 pub mod versions;

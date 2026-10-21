@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_comments (thread_id, author_id, author_name, body) VALUES ($1, $2, 'Author', 'Looks right')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "184812f2b4a3c66a3bd58ebfdb53cb282b7b574a33578221385a638aa1b0956a"
+}

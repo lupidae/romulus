@@ -34,6 +34,17 @@ password sign-in (ROMULUS_AUTH=password); links print on stdout, run on the serv
                            the sign-in log, newest first, as JSON lines
   mail-test EMAIL          sends a test message through ROMULUS_SMTP_*
 
+deleting on request (both: --dry-run first says what would go; the address,
+or the admins, are emailed when it is done):
+  delete-user EMAIL [--dry-run]
+              every account with this address and what it alone holds (the
+              organizations it is the only member of), its Zitadel user too
+              (ROMULUS_ZITADEL_TOKEN); refused (exit 4) while it is the only
+              admin of an organization others belong to
+  delete-org SLUG [--dry-run]
+              the organization and everything in it; refused (exit 4) while
+              its subscription is live
+
 hosted billing (no database needed):
   stripe-setup [--public-url URL] [--terms-url URL] [--privacy-url URL]
                [--webhook-url URL [--secret-file PATH]] [--live]
@@ -63,11 +74,13 @@ enum MainError {
 
 impl MainError {
     /// 2: `setup` on an install someone else set up. 3: `mail-test` with
-    /// mail off. 1: anything else.
+    /// mail off. 4: a deletion refused until something is done first. 1:
+    /// anything else.
     fn exit_code(&self) -> u8 {
         match self {
             Self::Admin(AdminError::AlreadyOwned(_)) => 2,
             Self::Admin(AdminError::Mail(MailError::Off)) => 3,
+            Self::Admin(AdminError::Refused(_)) => 4,
             _ => 1,
         }
     }
@@ -88,6 +101,8 @@ enum AdminCommand {
     VerifyEmail(String),
     AuthEvents { email: Option<String>, limit: i64 },
     MailTest(String),
+    DeleteUser { email: String, dry_run: bool },
+    DeleteOrg { slug: String, dry_run: bool },
 }
 
 /// `--flag value` pairs (and `--flag=value`) after the command, by name.
@@ -135,6 +150,29 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
         Some("unlock") => Command::Admin(AdminCommand::Unlock(one()?)),
         Some("verify-email") => Command::Admin(AdminCommand::VerifyEmail(one()?)),
         Some("mail-test") => Command::Admin(AdminCommand::MailTest(one()?)),
+        Some(command @ ("delete-user" | "delete-org")) => {
+            let dry_run = rest.iter().any(|arg| arg == "--dry-run");
+            let target = match rest
+                .iter()
+                .filter(|arg| *arg != "--dry-run")
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                [target] if !target.starts_with("--") => (*target).clone(),
+                _ => return Err(MainError::Usage),
+            };
+            Command::Admin(if command == "delete-user" {
+                AdminCommand::DeleteUser {
+                    email: target,
+                    dry_run,
+                }
+            } else {
+                AdminCommand::DeleteOrg {
+                    slug: target,
+                    dry_run,
+                }
+            })
+        }
         Some("stripe-setup") => {
             let live = rest.iter().any(|arg| arg == "--live");
             let rest: Vec<String> = rest
@@ -321,6 +359,27 @@ async fn run_admin(command: AdminCommand) -> Result<(), MainError> {
                 writeln!(stdout)?;
             }
         }
+        // The plan first, refused or not; then the refusal (exit 4).
+        AdminCommand::DeleteUser { email, dry_run } => {
+            let mailer = romulus_api::mail::Mailer::from_config(&config);
+            let done = admin::delete_user(&pool, &config, mailer, &email, dry_run).await?;
+            for line in done.report() {
+                writeln!(stdout, "{line}")?;
+            }
+            if let Some(refused) = done.refused() {
+                return Err(AdminError::Refused(refused.to_owned()).into());
+            }
+        }
+        AdminCommand::DeleteOrg { slug, dry_run } => {
+            let mailer = romulus_api::mail::Mailer::from_config(&config);
+            let done = admin::delete_org(&pool, &config, mailer, &slug, dry_run).await?;
+            for line in done.report() {
+                writeln!(stdout, "{line}")?;
+            }
+            if let Some(refused) = done.refused() {
+                return Err(AdminError::Refused(refused.to_owned()).into());
+            }
+        }
         AdminCommand::MailTest(_) => unreachable!("handled above"),
     }
     Ok(())
@@ -401,6 +460,16 @@ async fn serve() -> Result<(), MainError> {
         state.db.clone(),
         romulus_api::versions::removal::PURGE_EVERY,
     );
+    // Deleted databases and expired invitations 30 days on, inactive
+    // accounts (when on): now, and every hour.
+    let retention =
+        romulus_api::retention::sweeper(state.clone(), romulus_api::retention::SWEEP_EVERY);
+    if state.config.delete_inactive_accounts {
+        tracing::info!("accounts unused for 3 years are deleted, after an email 30 days before");
+    }
+    // What a deletion ended, from any process (`romulus-api delete-org`
+    // too): drafts closed, sockets of removed members.
+    let deletions = romulus_api::retention::live::listen(state.clone());
     // The peer address reaches handlers as `ConnectInfo` (the sign-in limiter).
     let app = app(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
@@ -414,6 +483,8 @@ async fn serve() -> Result<(), MainError> {
         .await?;
     sweeper.abort();
     purger.abort();
+    retention.abort();
+    deletions.abort();
     if let Some(password_sweeper) = password_sweeper {
         password_sweeper.abort();
     }
@@ -453,4 +524,43 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutting down: finishing in-flight requests");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(line: &str) -> Vec<String> {
+        line.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn deletions_take_one_target_and_a_dry_run_anywhere() {
+        for line in [
+            "delete-user ada@acme.io --dry-run",
+            "delete-user --dry-run ada@acme.io",
+        ] {
+            assert!(matches!(
+                parse(&args(line)),
+                Ok(Command::Admin(AdminCommand::DeleteUser { ref email, dry_run: true })) if email == "ada@acme.io"
+            ));
+        }
+        assert!(matches!(
+            parse(&args("delete-org acme")),
+            Ok(Command::Admin(AdminCommand::DeleteOrg { ref slug, dry_run: false })) if slug == "acme"
+        ));
+        for wrong in ["delete-user", "delete-org a b", "delete-org --force acme"] {
+            assert!(
+                matches!(parse(&args(wrong)), Err(MainError::Usage)),
+                "{wrong}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_deletion_exits_4() {
+        let refused = MainError::Admin(AdminError::Refused("cancel it first".to_owned()));
+        assert_eq!(refused.exit_code(), 4);
+        assert_eq!(MainError::Usage.exit_code(), 1);
+    }
 }

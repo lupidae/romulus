@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET inactivity_failures = inactivity_failures + 1,\n                  inactivity_retry_at = now() + least(interval '1 hour' * power(2::float8, least(inactivity_failures, 8)::float8),\n                                                      interval '7 days')\n           WHERE id = $1 RETURNING inactivity_retry_at AS \"retry_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "retry_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "inactivity_retry_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "1a05060b93e1a8325dc9bd10c302a01a12a54df4a87f4d1bf9176527d83c3547"
+}

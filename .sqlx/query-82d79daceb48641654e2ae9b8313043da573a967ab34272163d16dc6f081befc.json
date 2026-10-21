@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET inactivity_retry_at = now() + interval '1 hour'\n           WHERE id = $1 AND inactivity_notice_at IS NULL AND last_seen_at = $2\n             AND (inactivity_retry_at IS NULL OR inactivity_retry_at <= now())\n           RETURNING greatest(last_seen_at + make_interval(years => $3),\n                              now() + make_interval(days => $4)) AS \"deleted_on!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "deleted_on!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "82d79daceb48641654e2ae9b8313043da573a967ab34272163d16dc6f081befc"
+}

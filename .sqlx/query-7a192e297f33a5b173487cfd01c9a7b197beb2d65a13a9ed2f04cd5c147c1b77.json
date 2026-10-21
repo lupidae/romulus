@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO audit_events (org_id, database_id, action, actor_id, actor_name, version_number, reason, details)\n         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+  "query": "INSERT INTO audit_events (org_id, database_id, database_name, action, actor_id, actor_name, version_number, reason, details)\n         VALUES ($1, $2, (SELECT name FROM databases WHERE id = $2), $3, $4, $5, $6, $7, $8)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -35,7 +35,9 @@
                 "plan_downgraded",
                 "playground_hours_used_up",
                 "subscription_duplicate_cancelled",
-                "agent_action"
+                "agent_action",
+                "database_purged",
+                "admin_appointed"
               ]
             }
           }
@@ -49,5 +51,5 @@
     },
     "nullable": []
   },
-  "hash": "4db96e0ea3a3aa4d133ff27d5be071b18508779d158f72c03a810d66fddba6f5"
+  "hash": "7a192e297f33a5b173487cfd01c9a7b197beb2d65a13a9ed2f04cd5c147c1b77"
 }

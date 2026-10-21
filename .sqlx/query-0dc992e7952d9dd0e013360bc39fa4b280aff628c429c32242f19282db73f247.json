@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT details FROM auth_events WHERE kind = 'account_deleted' AND email = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "details",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "auth_events",
+            "name": "details"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0dc992e7952d9dd0e013360bc39fa4b280aff628c429c32242f19282db73f247"
+}

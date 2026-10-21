@@ -186,7 +186,12 @@ services:
       ROMULUS_PUBLIC_URL: ${ROMULUS_PUBLIC_URL:?run scripts/dev-env}
       ROMULUS_API_PORT: ${ROMULUS_API_PORT:?run scripts/dev-env}
       ROMULUS_PREVIEW_PORT: ${ROMULUS_PREVIEW_PORT:?run scripts/dev-env}
-      MAIL_HOST: mail:1025
+      # The API's mail settings as seen from inside the network: Zitadel
+      # sends sign-up codes and password resets to the mail catcher too.
+      ROMULUS_SMTP_HOST: mail
+      ROMULUS_SMTP_PORT: "1025"
+      ROMULUS_SMTP_TLS: none
+      ROMULUS_MAIL_FROM: ${ROMULUS_MAIL_FROM:-romulus@romulus.localhost}
       OWNER: ${ROMULUS_UID:-1000}:${ROMULUS_GID:-1000}
     volumes:
       - ./deploy/zitadel/provision.sh:/provision.sh:ro

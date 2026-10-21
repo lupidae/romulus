@@ -449,16 +449,22 @@ impl Agent {
     }
 
     /// Records the token's use, at most once a minute: an agent calling in
-    /// a loop writes no faster.
+    /// a loop writes no faster. Its person's account counts as used then
+    /// (`retention::activity`): an agent working with the token is its
+    /// person using romulus.
     pub async fn touch(&self, db: &PgPool) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let touched = sqlx::query!(
             "UPDATE personal_access_tokens SET last_used_at = now()
              WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
             self.token.id
         )
         .execute(db)
-        .await
-        .map(drop)
+        .await?
+        .rows_affected();
+        if touched > 0 {
+            crate::retention::activity::account_used(db, self.user.id).await?;
+        }
+        Ok(())
     }
 }
 

@@ -40,6 +40,12 @@ RUN cargo chef cook --release --locked --package romulus-api --recipe-path recip
 COPY . .
 # The query macros check against .sqlx/, not a database.
 ENV SQLX_OFFLINE=true
+# The commit built and the repository it comes from, compiled in: the API
+# reports the commit (/api/health) and the app links its source (AGPL-3.0,
+# section 13). images.yml passes both; a local build leaves them empty (the
+# app then links https://github.com/lupidae/romulus, or ROMULUS_SOURCE_URL).
+ARG ROMULUS_COMMIT=""
+ARG ROMULUS_SOURCE_URL=""
 RUN cargo build --release --locked --package romulus-api
 
 # --- the playground runner and service (crates/romulus-play-runner, -playground)

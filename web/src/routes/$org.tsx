@@ -118,6 +118,7 @@ function OrgLayout() {
         void signOut().catch(() => toast.error("Could not sign out. Check your connection."))
       }
       onChangePassword={me.password_account ? () => setChangingPassword(true) : undefined}
+      source={instance.data?.source}
     >
       {fullBleed ? (
         <Outlet />

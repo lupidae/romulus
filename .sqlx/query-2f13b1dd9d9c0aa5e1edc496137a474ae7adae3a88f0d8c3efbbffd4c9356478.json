@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE databases SET deleted_at = now() - make_interval(days => $2) WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2f13b1dd9d9c0aa5e1edc496137a474ae7adae3a88f0d8c3efbbffd4c9356478"
+}

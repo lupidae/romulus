@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (oidc_subject, email, email_verified, name, last_seen_at,\n                            inactivity_failures, inactivity_retry_at)\n         SELECT 'stuck-' || i, 'stuck' || i || '@romulus.test', true, 'Stuck',\n                now() - interval '3 years 2 months', 1, now() + interval '1 hour'\n         FROM generate_series(1, 100) i",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "51b8ad35089e23fb6be93334f04b8c61f35f5717d82d1ef05e2fe57c3ca02e3a"
+}

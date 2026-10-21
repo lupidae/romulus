@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.email FROM memberships m JOIN users u ON u.id = m.user_id\n             WHERE m.org_id = $1 AND m.role = 'admin' ORDER BY m.created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "email"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e3cc781f74417ac1dfb0dd844ec5d64ba99cd9fa6d6978552f228a2927d7a0cc"
+}

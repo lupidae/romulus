@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT action::text AS \"action!\", database_id, database_name FROM audit_events\n           WHERE database_name = 'old' ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "action!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "database_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "audit_events",
+            "name": "database_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "database_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_events",
+            "name": "database_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "7a7e5a78b3d101ab754d2727a01b1089bddbd26c4381f04a3d2d439f831e989e"
+}

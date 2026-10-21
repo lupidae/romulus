@@ -330,13 +330,19 @@ impl<S: scope::Required> FromRequestParts<AppState> for Bearer<S> {
         }
 
         // At most once a minute: a token pushing in a loop writes no faster.
-        sqlx::query!(
+        // The account that made it counts as used (`retention::activity`).
+        let maker = sqlx::query_scalar!(
             "UPDATE api_tokens SET last_used_at = now()
-             WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')",
+             WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
+             RETURNING created_by",
             token.id
         )
-        .execute(&state.db)
-        .await?;
+        .fetch_optional(&state.db)
+        .await?
+        .flatten();
+        if let Some(maker) = maker {
+            crate::retention::activity::account_used(&state.db, maker).await?;
+        }
         Ok(Self {
             token_id: token.id,
             token_name: token.name,

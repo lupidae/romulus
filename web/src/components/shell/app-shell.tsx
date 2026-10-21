@@ -12,7 +12,7 @@ import { usePreference } from "@/lib/use-preference";
 import { cn } from "@/lib/utils";
 
 import { OrgSwitcher } from "./org-switcher";
-import type { ShellOrg, ShellUser } from "./types";
+import type { ShellOrg, ShellSource, ShellUser } from "./types";
 import { UserMenu } from "./user-menu";
 
 interface AppShellProps {
@@ -29,6 +29,8 @@ interface AppShellProps {
   onSignOut: () => void;
   /** Password accounts: "Change password" in the user menu. */
   onChangePassword?: () => void;
+  /** The version running: "Source code" in the user menu. */
+  source?: ShellSource;
   children: React.ReactNode;
 }
 
@@ -54,6 +56,7 @@ export function AppShell({
   onCreateOrg,
   onSignOut,
   onChangePassword,
+  source,
   children,
 }: AppShellProps) {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
@@ -136,7 +139,12 @@ export function AppShell({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <UserMenu user={user} onSignOut={onSignOut} onChangePassword={onChangePassword} />
+          <UserMenu
+            user={user}
+            onSignOut={onSignOut}
+            onChangePassword={onChangePassword}
+            source={source}
+          />
         </div>
       </header>
 

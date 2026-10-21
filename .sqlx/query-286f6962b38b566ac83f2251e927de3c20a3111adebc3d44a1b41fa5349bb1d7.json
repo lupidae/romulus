@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE users SET last_seen_at = now() - $2::text::interval, inactivity_notice_at = NULL WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "286f6962b38b566ac83f2251e927de3c20a3111adebc3d44a1b41fa5349bb1d7"
+}

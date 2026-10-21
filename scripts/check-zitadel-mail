@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Proves what the Zitadel provisioner set up beyond sign-in, on the dev stack:
+# Zitadel sends its email through romulus's SMTP settings (a password reset
+# for the test user alice reaches the mail catcher, from ROMULUS_MAIL_FROM),
+# and the romulus-api machine user (ROMULUS_ZITADEL_TOKEN) can delete users
+# (a throwaway one, created and deleted). Needs `just up`; leaves alice as she
+# was, with one more email in the catcher.
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+env_file=${ROMULUS_ENV_FILE:-.env}
+[ -f "$env_file" ] || { echo "check-zitadel-mail: no $env_file (run scripts/dev-env or just up)" >&2; exit 1; }
+set -a
+# shellcheck disable=SC1090
+source "$env_file"
+dev_dir=${ROMULUS_DEV_DIR:-.dev}
+[ -f "$dev_dir/zitadel/oidc.env" ] || { echo "check-zitadel-mail: no $dev_dir/zitadel/oidc.env (run just up)" >&2; exit 1; }
+# shellcheck disable=SC1091
+source "$dev_dir/zitadel/oidc.env"
+set +a
+
+ok() { echo "✓ $*"; }
+fail() { echo "✗ $*" >&2; exit 1; }
+
+issuer=$ROMULUS_OIDC_ISSUER
+token=${ROMULUS_ZITADEL_TOKEN:-}
+[ -n "$token" ] || fail "no ROMULUS_ZITADEL_TOKEN in $dev_dir/zitadel/oidc.env (run just up)"
+mail="http://localhost:$ROMULUS_MAIL_PORT/api/v1"
+email=$(jq -r '.[0].email' "$dev_dir/zitadel/users.json")
+# The token in a header file, never in curl's arguments (ps shows those).
+headers=$(mktemp)
+trap 'rm -f "$headers"' EXIT
+printf 'Authorization: Bearer %s\n' "$token" > "$headers"
+
+# zitadel METHOD PATH [JSON] → the body; fails on a non-2xx.
+zitadel() {
+    printf '%s' "${3:-}" | curl -sS --fail-with-body -X "$1" "$issuer$2" -H @"$headers" \
+        -H 'Content-Type: application/json' ${3:+--data-binary @-}
+}
+# found QUERY → how many messages the catcher has for a Mailpit search.
+found() { curl -sS "$mail/search?query=$(jq -rn --arg q "$1" '$q | @uri')" | jq '.messages_count'; }
+
+user_id=$(zitadel POST /v2/users "$(jq -cn --arg e "$email" \
+    '{queries: [{emailQuery: {emailAddress: $e, method: "TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE"}}]}')" \
+    | jq -r '.result[0].userId // empty')
+[ -n "$user_id" ] || fail "Zitadel has no user $email"
+ok "the romulus-api token reads users ($email is $user_id)"
+
+query="to:$email subject:\"Reset password\""
+before=$(found "$query")
+zitadel POST "/v2/users/$user_id/password_reset" '{"sendLink": {"notificationType": "NOTIFICATION_TYPE_Email"}}' >/dev/null
+for _ in $(seq 1 30); do
+    [ "$(found "$query")" -gt "$before" ] && break
+    sleep 1
+done
+[ "$(found "$query")" -gt "$before" ] || fail "no password reset email for $email in the catcher after 30 s"
+from=$(curl -sS "$mail/search?query=$(jq -rn --arg q "$query" '$q | @uri')&limit=1" | jq -r '.messages[0].From.Address')
+expected=$(sed -E 's/.*<([^>]+)>.*/\1/' <<<"${ROMULUS_MAIL_FROM:-romulus@romulus.localhost}")
+[ "$from" = "$expected" ] || fail "the reset came from $from, not $expected"
+ok "Zitadel's password reset reached the mail catcher, from $from"
+
+throwaway="zitadel-check-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')@romulus.test"
+created=$(zitadel POST /v2/users/human "$(jq -cn --arg e "$throwaway" '{
+    username: $e, profile: {givenName: "Check", familyName: "Mail"}, email: {email: $e, isVerified: true}
+}')" | jq -r .userId)
+zitadel DELETE "/v2/users/$created" >/dev/null
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$issuer/v2/users/$created" -H @"$headers")
+[ "$status" = 404 ] || fail "deleting $created again answered $status, not 404"
+ok "the romulus-api token deletes users (a throwaway one, then 404 for it)"
