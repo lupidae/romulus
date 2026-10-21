@@ -88,6 +88,7 @@
   <symbol id="i-code" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.5 6L10 18.5m-3.5-10L3 12l3.5 3.5m11-7L21 12l-3.5 3.5"/></symbol>
   <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"><path d="M4 19V5a2 2 0 0 1 2-2h13.4a.6.6 0 0 1 .6.6v13.114M6 17h14M6 21h14"/><path stroke-linejoin="round" d="M6 21a2 2 0 1 1 0-4"/><path d="M9 7h6"/></g></symbol>
   <symbol id="i-info-circle" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 11.5v5m0-8.99l.01-.011M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2S2 6.477 2 12s4.477 10 10 10"/></symbol>
+  <symbol id="i-sparks" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5" d="M8 15c4.875 0 7-2.051 7-7c0 4.949 2.11 7 7 7c-4.89 0-7 2.11-7 7c0-4.89-2.125-7-7-7ZM2 6.5c3.134 0 4.5-1.318 4.5-4.5c0 3.182 1.357 4.5 4.5 4.5c-3.143 0-4.5 1.357-4.5 4.5c0-3.143-1.366-4.5-4.5-4.5Z"/></symbol>
   <symbol id="i-nav-arrow-down" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m6 9l6 6l6-6"/></symbol>
 </svg>
 
@@ -105,6 +106,7 @@
       <a class="nav-wide" href="#review">Review</a>
       <a class="nav-wide" href="#migrations">Migrations</a>
       <a class="nav-wide" href="#playgrounds">Playgrounds</a>
+      <a class="nav-wide" href="#mcp">MCP</a>
       <a href="#pricing">Pricing</a>
       <a href="#self-host">Self-host</a>
       <a href="#faq">FAQ</a>
@@ -528,6 +530,83 @@
   </div>
 </section>
 
+<section class="section" id="mcp" aria-labelledby="mcp-title">
+  <div class="container split">
+    <div class="copy">
+      <h2 id="mcp-title">Your agent speaks romulus.</h2>
+      <p>romulus has an MCP server built in, at <code>/api/mcp</code>: nothing to install. Claude Code, Claude Desktop, claude.ai, Cursor or any MCP client works in romulus the way you do.</p>
+      <ul class="points">
+        <li><strong>From a question to a published version</strong><span>It reads schemas, versions and diffs, and searches across databases. It drafts a change, gets its migration with renames detected, tests it up and down in a playground, then requests review and publishes.</span></li>
+        <li><strong>A new database from a dump</strong><span>Hand it a <code>pg_dump --schema-only</code> or remus's output: it creates the database with that first version, then hands you the CI step that keeps it current.</span></li>
+        <li><strong>It acts as you, with your role</strong><span>A read-only token can't change anything. Approvals, required tests and the rules for publishing apply to agents too.</span></li>
+      </ul>
+    </div>
+
+    <div class="visual agent-stack">
+      <!-- The tools' names, arguments and answers are the real ones
+           (crates/romulus-api/src/mcp/tools), shortened: an ellipsis marks a cut. -->
+      <figure class="card agent">
+        <figcaption class="card-head">
+          <span class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-sparks"/></svg>Ada's agent<span class="card-range">acme/billing</span></span>
+          <span class="agent-status"><span class="dot-ok" aria-hidden="true"></span>Connected to romulus</span>
+        </figcaption>
+        <ol class="transcript">
+          <li class="comment turn">
+            <span class="avatar p1" aria-hidden="true">A</span>
+            <div class="comment-body">
+              <div class="comment-meta"><b>Ada</b></div>
+              <p>Add a refunds table linked to invoices, and test the migration.</p>
+            </div>
+          </li>
+          <li class="call">
+            <svg class="icon call-icon" aria-hidden="true"><use href="#i-check-circle"/></svg>
+            <div class="call-main">
+              <p class="call-head"><span class="sr-only">Tool call: </span><code class="call-name">create_draft</code><span class="call-args">database: "billing", name: "Add refunds", edits: […]</span></p>
+              <p class="call-out">Created draft 01a14c3b… "Add refunds" in acme/billing (schema SQL, from v14). Its SQL compiles.</p>
+            </div>
+          </li>
+          <li class="call">
+            <svg class="icon call-icon" aria-hidden="true"><use href="#i-check-circle"/></svg>
+            <div class="call-main">
+              <p class="call-head"><span class="sr-only">Tool call: </span><code class="call-name">generate_migration</code><span class="call-args">draft: "01a14c3b…"</span></p>
+              <p class="call-out">Migration v14 → v15: 2 statements, 0 that can lose data or fail on existing rows.</p>
+              <ol class="call-sql">
+                <li><span class="k">CREATE TABLE</span> <span class="i">public.refunds</span> <span class="p">(…);</span></li>
+                <li><span class="k">ALTER TABLE</span> <span class="i">public.refunds</span> <span class="k">ADD CONSTRAINT</span> <span class="i">refunds_invoice_id_fkey</span> <span class="k">FOREIGN KEY</span> <span class="p">(</span><span class="i">invoice_id</span><span class="p">)</span> <span class="k">REFERENCES</span> <span class="i">public.invoices</span><span class="p">(</span><span class="i">id</span><span class="p">);</span></li>
+              </ol>
+              <p class="call-out">… and the migration file.</p>
+            </div>
+          </li>
+          <li class="call">
+            <svg class="icon call-icon" aria-hidden="true"><use href="#i-check-circle"/></svg>
+            <div class="call-main">
+              <p class="call-head"><span class="sr-only">Tool call: </span><code class="call-name">test_migration</code><span class="call-args">draft: "01a14c3b…"</span></p>
+              <p class="call-out">Migration test 01a14c41… of acme/billing (draft "Add refunds" from v14): <b class="call-verdict">PASSED (up and down).</b> Up and down ran on 4,237 rows. Everything came back.</p>
+            </div>
+          </li>
+          <li class="comment turn">
+            <span class="agent-mark" aria-hidden="true"><svg class="icon"><use href="#i-sparks"/></svg></span>
+            <div class="comment-body">
+              <div class="comment-meta"><b>Agent</b></div>
+              <p>Done: the draft “Add refunds” adds <code>refunds</code>, linked to <code>invoices</code>, and its migration passed up and down. Shall I request a review?</p>
+            </div>
+          </li>
+        </ol>
+        <div class="card-foot"><svg class="icon" aria-hidden="true"><use href="#i-shield-check"/></svg><span>It ran as Ada, a developer in acme. Each change is in the database's Activity.</span></div>
+      </figure>
+
+      <div class="terminal dark">
+        <div class="terminal-bar">
+          <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>Add romulus to Claude Code</span></span>
+          <button class="copy-button" type="button" data-copy="#mcp-command" aria-label="Copy the MCP command"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span data-copy-label>Copy</span></button>
+        </div>
+<pre class="terminal-body"><code id="mcp-command"><span class="cl">claude mcp add --transport http romulus <span class="ts nw">https://romulus.lupidae.com/api/mcp</span></span></code></pre>
+        <p class="install-note">Then run <code>/mcp</code> and sign in with your browser. Other clients take the same URL. For CI and headless agents, <a href="https://github.com/lupidae/romulus/blob/main/docs/mcp.md">use an access token</a>. A self-hosted romulus has the same endpoint at its own address.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="section" id="postgres" aria-labelledby="postgres-title">
   <div class="container">
     <div class="section-head">
@@ -597,16 +676,21 @@
         <h2 id="pricing-title">Flat plans. Bring the whole team.</h2>
         <p>Every paid plan has unlimited members, reviewers included: plans grow with your schemas, not your team.</p>
       </div>
-      <fieldset class="period-switch">
-        <legend class="sr-only">Billing period</legend>
-        <label><input type="radio" name="period" value="month" id="period-month" checked>Monthly</label>
-        <label><input type="radio" name="period" value="year" id="period-year">Yearly<span class="period-save">2 months free</span></label>
-      </fieldset>
+      <div class="period">
+        <fieldset class="period-switch">
+          <legend class="sr-only">Billing period</legend>
+          <label><input type="radio" name="period" value="month" id="period-month" checked>Monthly</label>
+          <label><input type="radio" name="period" value="year" id="period-year">Yearly<span class="period-save">2 months free</span></label>
+        </fieldset>
+        <!-- The pricing's one VAT mention: the hosted Terms, 7.3. -->
+        <p class="period-note">Paid plans are for businesses and professionals.<br>Prices excl. VAT; VAT not applicable, <span lang="fr">art.&nbsp;293&nbsp;B du&nbsp;CGI</span>.</p>
+      </div>
     </div>
     <!-- The plans, in one place: edit them here, then run `npm --prefix site run
          pricing` to rewrite the cards below (the e2e test fails until you do).
          Yearly = monthly × yearly_months. `signup` is where every plan's button
-         goes while paid checkout is not open; the header's, the hero's and the
+         goes: every organization starts on Free, and an admin buys a paid plan
+         from its Billing page in the app. The header's, the hero's and the
          closing "Start free" go there too (the e2e test checks they agree). -->
     <script type="application/json" id="plans-data">
     {
@@ -618,7 +702,7 @@
         { "key": "members", "label": "Members" },
         { "key": "databases", "label": "Databases" },
         { "key": "versions", "label": "Versions per database" },
-        { "key": "tables", "label": "Tables and views per database" },
+        { "key": "tables", "label": "Tables and views in each version" },
         { "key": "history", "label": "History" },
         { "key": "playgrounds", "label": "Playgrounds" },
         { "key": "approvals", "label": "Required approvals" },
@@ -675,7 +759,7 @@
             "history": "Unlimited",
             "playgrounds": "Medium, 80 h a month",
             "approvals": "Up to 10",
-            "support": "Email, within 2 business days"
+            "support": "Email, aiming to answer in 2 business days"
           }
         },
         {
@@ -693,7 +777,7 @@
             "history": "Unlimited",
             "playgrounds": "Medium, 300 h a month",
             "approvals": "Up to 10, admin override",
-            "support": "Priority"
+            "support": "Priority email"
           }
         }
       ]
@@ -718,7 +802,7 @@
           <div><dt>Members</dt><dd>1</dd></div>
           <div><dt>Databases</dt><dd>1</dd></div>
           <div><dt>Versions per database</dt><dd>50</dd></div>
-          <div><dt>Tables and views per database</dt><dd>50</dd></div>
+          <div><dt>Tables and views in each version</dt><dd>50</dd></div>
           <div><dt>History</dt><dd>90 days</dd></div>
           <div><dt>Playgrounds</dt><dd>Small, 2 h a month</dd></div>
           <div><dt>Required approvals</dt><dd>None</dd></div>
@@ -742,7 +826,7 @@
           <div><dt>Members</dt><dd>Unlimited</dd></div>
           <div><dt>Databases</dt><dd>3</dd></div>
           <div><dt>Versions per database</dt><dd>500</dd></div>
-          <div><dt>Tables and views per database</dt><dd>200</dd></div>
+          <div><dt>Tables and views in each version</dt><dd>200</dd></div>
           <div><dt>History</dt><dd>1 year</dd></div>
           <div><dt>Playgrounds</dt><dd>Small, 20 h a month</dd></div>
           <div><dt>Required approvals</dt><dd>1</dd></div>
@@ -767,11 +851,11 @@
           <div><dt>Members</dt><dd>Unlimited</dd></div>
           <div><dt>Databases</dt><dd>10</dd></div>
           <div><dt>Versions per database</dt><dd>Unlimited</dd></div>
-          <div><dt>Tables and views per database</dt><dd>1,000</dd></div>
+          <div><dt>Tables and views in each version</dt><dd>1,000</dd></div>
           <div><dt>History</dt><dd>Unlimited</dd></div>
           <div><dt>Playgrounds</dt><dd>Medium, 80 h a month</dd></div>
           <div><dt>Required approvals</dt><dd>Up to 10</dd></div>
-          <div><dt>Support</dt><dd>Email, within 2 business days</dd></div>
+          <div><dt>Support</dt><dd>Email, aiming to answer in 2 business days</dd></div>
         </dl>
       </article>
       <article class="plan" aria-labelledby="plan-business">
@@ -792,11 +876,11 @@
           <div><dt>Members</dt><dd>Unlimited</dd></div>
           <div><dt>Databases</dt><dd>50</dd></div>
           <div><dt>Versions per database</dt><dd>Unlimited</dd></div>
-          <div><dt>Tables and views per database</dt><dd>5,000</dd></div>
+          <div><dt>Tables and views in each version</dt><dd>5,000</dd></div>
           <div><dt>History</dt><dd>Unlimited</dd></div>
           <div><dt>Playgrounds</dt><dd>Medium, 300 h a month</dd></div>
           <div><dt>Required approvals</dt><dd>Up to 10, admin override</dd></div>
-          <div><dt>Support</dt><dd>Priority</dd></div>
+          <div><dt>Support</dt><dd>Priority email</dd></div>
         </dl>
       </article>
     </div>
@@ -811,11 +895,12 @@
           <li>Test a migration on rows</li>
           <li>Comments</li>
           <li>The time machine</li>
+          <li>AI agents over MCP</li>
+          <li>Data export</li>
         </ul>
       </div>
       <div class="pricing-fine">
         <p class="note"><svg class="icon" aria-hidden="true"><use href="#i-info-circle"/></svg><span>Playground hours are the only metered resource; nothing is ever deleted when you reach a cap. A Small playground holds up to 50,000 generated rows, a Medium one up to a million.</span></p>
-        <p class="price-note">Prices in EUR. <span lang="fr">TVA non applicable, art. 293 B du CGI.</span></p>
       </div>
     </div>
     <div class="selfhost-plan">
@@ -903,6 +988,10 @@
         <p>No, it works with them. Import the history you have and keep running your tool: each change you design comes out as a migration file for it, plain SQL, sqlx, Flyway, Prisma, dbmate or golang-migrate.</p>
       </details>
       <details>
+        <summary>Does it work with my AI agent?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
+        <p>Yes. romulus has an MCP server built in, so Claude Code, Claude Desktop, claude.ai, Cursor or any MCP client can read your schemas, draft a change, generate and test its migration, and ask for a review. It acts as you, with your role, and your organization's rules apply. <a href="#mcp">See how to connect it</a>.</p>
+      </details>
+      <details>
         <summary>Which is the source of truth, the SQL or the graph?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
         <p>The SQL. Edits on the graph are written back as SQL statements, so the text is always what gets compiled and versioned. In a draft where you write the migration by hand, the migration is that text and the schema follows from it. Table positions and groups are saved next to it.</p>
       </details>
@@ -924,7 +1013,7 @@
       </details>
       <details>
         <summary>What does it cost?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
-        <p>The hosted plans are in <a href="#pricing">Pricing</a>: a free one for one person, then flat monthly or yearly prices with unlimited members. Paid checkout is not open yet, so every plan starts on Free. Self-hosting is free.</p>
+        <p>The hosted plans are in <a href="#pricing">Pricing</a>: a free one for one person, then flat monthly or yearly prices with unlimited members, for businesses and professionals. Every organization starts on Free, and an admin moves it to a paid plan from its Billing page whenever it needs more. Self-hosting is free.</p>
       </details>
       <details>
         <summary>What happens when we reach a cap?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
@@ -940,7 +1029,7 @@
       </details>
       <details>
         <summary>Can we move from hosted to self-hosted?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
-        <p>Yes. A data export, one ZIP of your organization, is being built for exactly that. Already today, remus pushes your schema from CI to any romulus, hosted or your own, and a folder of migrations imports the same way.</p>
+        <p>Yes. On every plan, an admin can export the whole organization as one ZIP: every version's SQL, the migrations between versions, open drafts and every comment. Any member can export a single database. remus pushes your schema from CI to any romulus, hosted or your own, and a folder of migrations imports the same way.</p>
       </details>
     </div>
   </div>
@@ -984,10 +1073,11 @@
   </div>
   <div class="container footer-base">
     <p>romulus is open source, under the <a href="https://github.com/lupidae/romulus/blob/main/LICENSE">AGPL-3.0</a>.</p>
-    <!-- Legal: the legal notice only. The terms and privacy links join it once
-         counsel has reviewed them. Not before. -->
     <nav class="footer-legal" aria-label="Legal">
       <a href="/legal-notice">Legal notice</a>
+      <a href="/legal/terms">Terms</a>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/legal/dpa">DPA (for businesses)</a>
     </nav>
   </div>
 </footer>

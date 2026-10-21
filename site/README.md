@@ -87,6 +87,13 @@ from the API.
   header and, quietest (a ghost button), third in the hero's row.
 - The push snippet follows the spec: `POST /api/databases/<id>/versions` with
   the database's bearer token, remus JSON as the body.
+- The agents section (`#mcp`) shows a session as a client would: the tools'
+  names, arguments and answers are the real ones
+  (`crates/romulus-api/src/mcp/tools`), shortened to the lines that matter
+  (an ellipsis marks a cut inside a line or a listing), and
+  the test's row count is in the range a Small test seeds for the hero's
+  billing schema. Change it when the tools' answers change. Its command is Claude
+  Code's, with the hosted URL; docs/mcp.md has the other clients.
 - Fonts are self-hosted (Inter with its optical-size axis, so large headings
   get Inter Display's shapes; JetBrains Mono for code), preloaded, `swap`.
 - Pricing: the plans live in one place, the JSON block `#plans-data` in
@@ -96,17 +103,21 @@ from the API.
   `yearly_months` (10) times the monthly price. The cards are static HTML
   holding both periods' prices, and the Monthly/Yearly switch is native
   radios and CSS (`:has()`), no script. Every plan's button goes to
-  `signup` (`/app/signin`: Zitadel's login creates the account) while paid
-  checkout is not open.
+  `signup` (`/app/signin`: Zitadel's login creates the account): every
+  organization starts on Free, and an admin buys a paid plan from its
+  Billing page in the app. The limits' labels and the support lines say what
+  the hosted Terms say (7.1, 13.3): the table cap counts one version's
+  tables and views, support times are targets. The line under the switch is
+  the pricing's one VAT mention (Terms 7.3).
 - Legal: the legal notice the LCEN requires is `mentions-legales.html`
   (French) and `legal-notice.html` (its English translation), served at
   `/mentions-legales` and `/legal-notice`, each linking to the other, in the
   sitemap, static like the homepage (the edge tests check `_routes.json`
-  keeps the Function off them). The footer's `nav.footer-legal` holds only
-  that notice, in the page's language; terms and privacy join it once
-  counsel has reviewed them, and the hosted service's privacy policy is
-  named (`/legal/privacy`), not linked, until then. The notice's data
-  paragraph says the site sets no cookies and loads nothing from another
+  keeps the Function off them). The homepage footer's `nav.footer-legal`
+  links that notice, the Terms (`/legal/terms`), the Privacy Policy
+  (`/legal/privacy`) and the DPA (`/legal/dpa`, for business customers);
+  the notice's own footer holds the notice, in the page's language. The
+  notice's data paragraph says the site sets no cookies and loads nothing from another
   origin: `e2e/legal.spec.ts` checks both, so a change that breaks either
   must change the notice too.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows
