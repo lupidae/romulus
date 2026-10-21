@@ -306,10 +306,10 @@ test("the footer links the project, its docs, its security policy and a contact"
     "https://github.com/lupidae/romulus/blob/main/SECURITY.md",
   );
   await expect(href("Contact")).toHaveAttribute("href", "mailto:romulus@lupidae.com");
-  // Terms and privacy wait for counsel: their place is kept, hidden and empty.
-  const legal = page.locator(".footer-legal");
-  await expect(legal).toBeHidden();
-  await expect(legal.locator("a")).toHaveCount(0);
+  // The legal notice only: terms and privacy wait for counsel.
+  const legal = page.getByRole("navigation", { name: "Legal" });
+  await expect(legal.getByRole("link")).toHaveText(["Legal notice"]);
+  await expect(legal.getByRole("link", { name: "Legal notice" })).toHaveAttribute("href", "/legal-notice");
 });
 
 test("the theme choice applies at once and is shared with the app", async ({ page }) => {
@@ -393,7 +393,7 @@ test("an unknown path gets the 404 page", async ({ page }) => {
 test("the CSP allows exactly the inline theme script", async ({ request }) => {
   const response = await request.get("/");
   const csp = response.headers()["content-security-policy"];
-  for (const page of ["index.html", "404.html"]) {
+  for (const page of ["index.html", "404.html", "mentions-legales.html", "legal-notice.html"]) {
     const scripts = [...publicFile(page).matchAll(/<script>([\s\S]*?)<\/script>/g)];
     expect(scripts).toHaveLength(1);
     const hash = createHash("sha256").update(scripts[0][1]).digest("base64");

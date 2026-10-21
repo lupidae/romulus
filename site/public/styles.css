@@ -112,7 +112,8 @@ a {
 }
 p a,
 .points a,
-.faq a {
+.faq a,
+.legal dd a {
   color: var(--foreground);
   text-decoration: underline;
   text-decoration-color: var(--border-strong);
@@ -122,7 +123,8 @@ p a,
 }
 p a:hover,
 .points a:hover,
-.faq a:hover {
+.faq a:hover,
+.legal dd a:hover {
   text-decoration-color: currentColor;
 }
 
@@ -2661,11 +2663,40 @@ code {
   color: var(--foreground);
 }
 .footer-base {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
   margin-top: 1.25rem;
 }
 .footer-base p {
   color: var(--faint-foreground);
   font-size: 0.8125rem;
+}
+/* The legal notice (terms and privacy join it once counsel has read them). */
+.footer-legal {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 1.25rem;
+  font-size: 0.8125rem;
+}
+.footer-legal a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.footer-legal a:hover,
+.footer-legal a[aria-current="page"] {
+  color: var(--foreground);
+}
+@media (pointer: coarse) {
+  .footer-legal a {
+    min-height: 2.75rem;
+  }
 }
 
 /* Theme: a three-way segmented control of native radios. */
@@ -2714,6 +2745,88 @@ code {
 .theme-switch .icon {
   width: 1rem;
   height: 1rem;
+}
+
+/* ---- Legal notice (mentions-legales.html, legal-notice.html) ----------- */
+.legal {
+  padding-block: clamp(2.5rem, 1.5rem + 4vw, 5rem) var(--section-space);
+}
+.legal-inner {
+  max-width: 44rem;
+}
+.legal h1 {
+  font-size: var(--text-h2);
+  font-weight: 640;
+  line-height: 1.1;
+  letter-spacing: -0.032em;
+}
+.legal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin-top: 1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+}
+.legal-intro {
+  max-width: 38rem;
+  margin-top: 1.5rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+.legal section {
+  margin-top: clamp(2.5rem, 2rem + 2vw, 3.5rem);
+}
+.legal h2 {
+  font-size: 1.25rem;
+  font-weight: 620;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.legal section > p {
+  margin-top: 0.875rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.65;
+  text-wrap: pretty;
+  overflow-wrap: break-word;
+}
+.legal section > p + p {
+  margin-top: 0.75rem;
+}
+/* Facts as label / value rows: stacked on a phone, side by side from 40rem. */
+.legal-facts {
+  margin-top: 1rem;
+  border-top: 0.0625rem solid var(--border);
+}
+.legal-facts > div {
+  display: grid;
+  gap: 0.125rem;
+  padding-block: 0.75rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+@media (min-width: 40rem) {
+  .legal-facts > div {
+    grid-template-columns: 13rem minmax(0, 1fr);
+    align-items: baseline;
+    gap: 1.5rem;
+  }
+}
+.legal-facts dt {
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+.legal-facts dd {
+  margin: 0;
+  font-size: var(--text-body);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.legal address {
+  font-style: normal;
 }
 
 /* ---- 404 ---------------------------------------------------------------- */

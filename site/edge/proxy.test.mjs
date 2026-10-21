@@ -1,5 +1,6 @@
 // node --test site/edge (just site-check runs it).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { CLIENT_IP_HEADER, KEY_HEADER, proxied, proxy } from "./proxy.js";
@@ -30,8 +31,33 @@ test("only the app and the API are proxied", () => {
     "/api-docs",
     "/styles.css",
     "/fonts/x.woff2",
+    "/mentions-legales",
+    "/legal-notice",
   ])
     assert.ok(!proxied(path), path);
+});
+
+/** Whether Pages runs the Function for `path`: public/_routes.json, where `*` matches anything and exclude wins. */
+function routed(path) {
+  const routes = JSON.parse(readFileSync(new URL("../public/_routes.json", import.meta.url), "utf8"));
+  const matches = (rule) =>
+    new RegExp(`^${rule.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`).test(path);
+  return routes.include.some(matches) && !routes.exclude.some(matches);
+}
+
+test("_routes.json runs the Function for the app and the API only: the homepage and the legal notice stay static", () => {
+  for (const path of ["/app", "/app/", "/app/acme/shop", "/api/health"]) assert.ok(routed(path), path);
+  for (const path of [
+    "/",
+    "/index.html",
+    "/mentions-legales",
+    "/mentions-legales.html",
+    "/legal-notice",
+    "/legal-notice.html",
+    "/sitemap.xml",
+    "/apple",
+  ])
+    assert.ok(!routed(path), path);
 });
 
 test("a request reaches the origin with its method, body, cookies and Origin, plus the edge key", async () => {

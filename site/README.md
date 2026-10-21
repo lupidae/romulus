@@ -13,6 +13,7 @@ from `web/` and `crates/romulus-wasm` into `public/hero/`, and committed.
 ```
 public/            what Cloudflare Pages serves
   index.html       the page; the hero's static window is HTML, CSS and SVG; the plans' JSON (#plans-data)
+  mentions-legales.html, legal-notice.html   the legal notice (LCEN), in French and in English
   styles.css       layout and the marketing type scale (colors only from tokens)
   tokens.css       generated from web/src/styles/globals.css: do not edit
   app.js           header hairline, hero playback, loading the live hero, copy button, theme switch
@@ -40,8 +41,9 @@ just site-lighthouse          # mobile and desktop reports in site/lighthouse/
 ```
 
 The CSP allows one inline script by hash: if you edit the theme script in
-`index.html` (it must stay identical in `404.html`), update the hash in
-`_headers`; the e2e test says so when they disagree.
+`index.html` (it must stay identical in `404.html` and the two legal notice
+pages), update the hash in `_headers`; the e2e test says so when they
+disagree.
 
 ## Deploy (Cloudflare Pages)
 
@@ -95,9 +97,18 @@ from the API.
   holding both periods' prices, and the Monthly/Yearly switch is native
   radios and CSS (`:has()`), no script. Every plan's button goes to
   `signup` (`/app/signin`: Zitadel's login creates the account) while paid
-  checkout is not open. No legal links yet: the footer keeps a hidden,
-  empty `nav.footer-legal` for terms and privacy once counsel has
-  reviewed them.
+  checkout is not open.
+- Legal: the legal notice the LCEN requires is `mentions-legales.html`
+  (French) and `legal-notice.html` (its English translation), served at
+  `/mentions-legales` and `/legal-notice`, each linking to the other, in the
+  sitemap, static like the homepage (the edge tests check `_routes.json`
+  keeps the Function off them). The footer's `nav.footer-legal` holds only
+  that notice, in the page's language; terms and privacy join it once
+  counsel has reviewed them, and the hosted service's privacy policy is
+  named (`/legal/privacy`), not linked, until then. The notice's data
+  paragraph says the site sets no cookies and loads nothing from another
+  origin: `e2e/legal.spec.ts` checks both, so a change that breaks either
+  must change the notice too.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows
   are plain radial gradients) and no layout reads during load. Those three
   cost ~2.5 s of main thread on Lighthouse's throttled phone.

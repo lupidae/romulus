@@ -2,6 +2,14 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://romulus.lupidae.com/</loc>
-    <lastmod>2026-10-20</lastmod>
+    <lastmod>2026-10-21</lastmod>
+  </url>
+  <url>
+    <loc>https://romulus.lupidae.com/mentions-legales</loc>
+    <lastmod>2026-10-21</lastmod>
+  </url>
+  <url>
+    <loc>https://romulus.lupidae.com/legal-notice</loc>
+    <lastmod>2026-10-21</lastmod>
   </url>
 </urlset>
