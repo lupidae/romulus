@@ -294,6 +294,74 @@ pub enum AuditAction {
     /// An admin published a draft the organization requires a passing test
     /// of while tests could not run, saying why.
     PassingTestOverridden,
+    /// An admin accepted the Terms of Service before paying (billing): the
+    /// version, as a business or a consumer, and a consumer's requests.
+    TermsAccepted,
+    /// The subscription changed as Stripe said (a webhook): its plan,
+    /// interval or status (`billing` in the details).
+    SubscriptionChanged,
+    /// A payment failed: the plan holds for the grace period.
+    PaymentFailed,
+    PaymentSucceeded,
+    /// The grace period after a failed payment ended: the organization is on
+    /// the Free plan (nothing deleted). By romulus itself.
+    PlanDowngraded,
+    /// The organization used the month's playground hours: its running
+    /// playgrounds were stopped. By romulus itself.
+    PlaygroundHoursUsedUp,
+    /// A second subscription started while one was running (two checkouts
+    /// at once): romulus cancelled it at once and refunded what it charged.
+    SubscriptionDuplicateCancelled,
+}
+
+impl AuditAction {
+    /// Billing's own events: kept in the log, not shown in a database's
+    /// activity.
+    pub const BILLING: [Self; 7] = [
+        Self::TermsAccepted,
+        Self::SubscriptionChanged,
+        Self::PaymentFailed,
+        Self::PaymentSucceeded,
+        Self::PlanDowngraded,
+        Self::PlaygroundHoursUsedUp,
+        Self::SubscriptionDuplicateCancelled,
+    ];
+}
+
+/// A hosted plan (`billing_plan`). What each allows is the plan table,
+/// `billing::plans`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    ToSchema,
+)]
+#[sqlx(type_name = "billing_plan", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum Plan {
+    #[default]
+    Free,
+    Starter,
+    Team,
+    Business,
+}
+
+/// How often a subscription is billed (`billing_interval`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, ToSchema)]
+#[sqlx(type_name = "billing_interval", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum Interval {
+    Month,
+    Year,
 }
 
 /// What a password sign-in event records (`auth_event_kind`): the security

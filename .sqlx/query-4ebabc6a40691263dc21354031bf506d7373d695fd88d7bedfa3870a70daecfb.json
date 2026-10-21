@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"count!\" FROM versions v\n           WHERE v.database_id = $1 AND (v.removed_at IS NULL OR $2)\n             AND ($3::timestamptz IS NULL OR v.created_at >= $3 OR version_kept_visible(v.id, v.database_id))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4ebabc6a40691263dc21354031bf506d7373d695fd88d7bedfa3870a70daecfb"
+}

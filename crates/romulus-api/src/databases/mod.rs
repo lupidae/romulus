@@ -318,6 +318,7 @@ async fn list(member: Member, State(db): State<PgPool>) -> ApiResult<Json<Vec<Da
     request_body = CreateDatabase,
     responses(
         (status = 201, body = Database),
+        (status = 402, description = "`plan_limit`: the plan's databases are all used (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 409, description = "`slug_taken`", body = ErrorBody),
         (status = 422, description = "`validation`, `details` names the field; `major_unavailable`: this server has no sandbox for that Postgres major", body = ErrorBody),
@@ -327,12 +328,26 @@ async fn create(
     member: Member<min::Developer>,
     State(db): State<PgPool>,
     State(compiler): State<SqlCompiler>,
+    State(billing): State<crate::billing::Billing>,
     Json(body): Json<CreateDatabase>,
 ) -> ApiResult<(StatusCode, Json<Database>)> {
     let name = checked_name(&body.name)?;
     let slug = checked_slug(&body.slug)?;
     let description = checked_description(&body.description)?;
     compiler.require_served(body.pg_major)?;
+    let mut tx = db.begin().await?;
+    if let Some(plan) = billing.plan(&mut *tx, member.org.id).await? {
+        // Counted under the organization's billing lock: two creates at
+        // once cannot both pass the cap.
+        crate::billing::lock_org(&mut tx, member.org.id).await?;
+        let live = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM databases WHERE org_id = $1 AND deleted_at IS NULL"#,
+            member.org.id,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        crate::billing::caps::databases(plan, live)?;
+    }
     let row = sqlx::query!(
         "INSERT INTO databases (org_id, name, slug, description, created_by, pg_major)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at, updated_at",
@@ -343,9 +358,10 @@ async fn create(
         member.user.id,
         body.pg_major as PgMajor,
     )
-    .fetch_one(&db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(slug_taken(&slug))?;
+    tx.commit().await?;
     tracing::info!(org = %member.org.slug, database = %slug, major = %body.pg_major, "database created");
     Ok((
         StatusCode::CREATED,

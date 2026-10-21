@@ -752,12 +752,12 @@ function Overlays() {
             </MenuContent>
           </Menu>
         </Specimen>
-        <Specimen label="Dialog">
+        <Specimen label="Dialog (fit: scrolls inside once taller than the screen)">
           <Dialog>
             <DialogTrigger asChild>
               <Button variant="primary">Publish v13</Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent fit>
               <DialogHeader>
                 <DialogTitle>Publish v13</DialogTitle>
                 <DialogDescription>
@@ -836,6 +836,12 @@ function Feedback() {
           <div className="grid w-full max-w-md gap-3">
             <Progress aria-label="Import progress" value={7} max={12} />
             <Progress aria-label="Starting" />
+          </div>
+        </Specimen>
+        <Specimen label="Progress as a meter: near the cap (warning), at it (destructive), with words">
+          <div className="grid w-full max-w-md gap-3">
+            <Progress aria-label="Playground hours, 85 % used" value={85} tone="warning" />
+            <Progress aria-label="Databases, all used" value={100} tone="destructive" />
           </div>
         </Specimen>
         <Specimen label="Skeleton: the exact shape of what loads">

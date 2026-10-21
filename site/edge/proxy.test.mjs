@@ -21,8 +21,16 @@ function recorder(response = new Response("ok")) {
 }
 
 test("only the app and the API are proxied", () => {
-  for (const path of ["/app", "/app/", "/app/acme/shop", "/api/health", "/api"]) assert.ok(proxied(path), path);
-  for (const path of ["/", "/apple", "/application", "/api-docs", "/styles.css", "/fonts/x.woff2"])
+  for (const path of ["/app", "/app/", "/app/acme/shop", "/api/health", "/api"])
+    assert.ok(proxied(path), path);
+  for (const path of [
+    "/",
+    "/apple",
+    "/application",
+    "/api-docs",
+    "/styles.css",
+    "/fonts/x.woff2",
+  ])
     assert.ok(!proxied(path), path);
 });
 
@@ -55,6 +63,44 @@ test("a request reaches the origin with its method, body, cookies and Origin, pl
   assert.equal(init.headers.get("host"), null);
 });
 
+test("Stripe's webhook reaches the API with its exact bytes and signature (billing)", async () => {
+  const { calls, fetchImpl } = recorder();
+  // The signature covers the raw bytes: spacing, key order, escapes, a CRLF,
+  // non-ASCII text must all arrive as sent.
+  const raw = new TextEncoder().encode(
+    '{"id": "evt_1",  "type":"invoice.paid",\r\n "name":"Société \\u00e9"}\n',
+  );
+  const signature =
+    "t=1800000000,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd,v0=6ffbb59b";
+  const request = new Request(
+    "https://romulus.lupidae.com/api/billing/webhook",
+    {
+      method: "POST",
+      headers: {
+        "stripe-signature": signature,
+        "content-type": "application/json; charset=utf-8",
+        "user-agent": "Stripe/1.0 (+https://stripe.com/docs/webhooks)",
+        "cf-connecting-ip": "3.18.12.63",
+      },
+      body: raw,
+    },
+  );
+  await proxy(request, env, fetchImpl);
+  const [{ url, init }] = calls;
+  assert.equal(url, "https://romulus-origin.lupidae.com/api/billing/webhook");
+  assert.equal(init.method, "POST");
+  assert.deepEqual(
+    new Uint8Array(await new Response(init.body).arrayBuffer()),
+    raw,
+  );
+  assert.equal(init.headers.get("stripe-signature"), signature);
+  assert.equal(
+    init.headers.get("content-type"),
+    "application/json; charset=utf-8",
+  );
+  assert.equal(init.headers.get(KEY_HEADER), env.ROMULUS_EDGE_KEY);
+});
+
 test("a visitor cannot choose the address the API sees", async () => {
   const { calls, fetchImpl } = recorder();
   const request = new Request("https://romulus.lupidae.com/api/health", {
@@ -66,10 +112,17 @@ test("a visitor cannot choose the address the API sees", async () => {
 });
 
 test("redirects and websocket upgrades come back as the origin sent them", async () => {
-  const redirect = new Response(null, { status: 302, headers: { location: "https://romulus-auth.lupidae.com/oauth/v2/authorize" } });
+  const redirect = new Response(null, {
+    status: 302,
+    headers: {
+      location: "https://romulus-auth.lupidae.com/oauth/v2/authorize",
+    },
+  });
   const { calls, fetchImpl } = recorder(redirect);
   const response = await proxy(
-    new Request("https://romulus.lupidae.com/api/orgs/acme/drafts/1/ws", { headers: { upgrade: "websocket", connection: "Upgrade" } }),
+    new Request("https://romulus.lupidae.com/api/orgs/acme/drafts/1/ws", {
+      headers: { upgrade: "websocket", connection: "Upgrade" },
+    }),
     env,
     fetchImpl,
   );
@@ -79,18 +132,32 @@ test("redirects and websocket upgrades come back as the origin sent them", async
 
 test("other hostnames are sent to the public one", async () => {
   const { calls, fetchImpl } = recorder();
-  const response = await proxy(new Request("https://abc123.romulus-site.pages.dev/app/acme?tab=1"), env, fetchImpl);
+  const response = await proxy(
+    new Request("https://abc123.romulus-site.pages.dev/app/acme?tab=1"),
+    env,
+    fetchImpl,
+  );
   assert.equal(response.status, 308);
-  assert.equal(response.headers.get("location"), "https://romulus.lupidae.com/app/acme?tab=1");
+  assert.equal(
+    response.headers.get("location"),
+    "https://romulus.lupidae.com/app/acme?tab=1",
+  );
   assert.equal(calls.length, 0);
 });
 
 test("without its configuration, or its origin, the proxy answers 503 in the API's format", async () => {
-  const response = await proxy(new Request("https://romulus.lupidae.com/api/health"), { ...env, ROMULUS_EDGE_KEY: "" });
+  const response = await proxy(
+    new Request("https://romulus.lupidae.com/api/health"),
+    { ...env, ROMULUS_EDGE_KEY: "" },
+  );
   assert.equal(response.status, 503);
   assert.equal((await response.json()).code, "unavailable");
-  const down = await proxy(new Request("https://romulus.lupidae.com/api/health"), env, async () => {
-    throw new TypeError("network");
-  });
+  const down = await proxy(
+    new Request("https://romulus.lupidae.com/api/health"),
+    env,
+    async () => {
+      throw new TypeError("network");
+    },
+  );
   assert.equal(down.status, 503);
 });

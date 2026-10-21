@@ -4,6 +4,8 @@ import {
   ActivityIcon,
   ChatLinesIcon,
   CheckCircleIcon,
+  ClockIcon,
+  CreditCardIcon,
   DatabaseIcon,
   DatabaseScriptIcon,
   EyeClosedIcon,
@@ -124,6 +126,14 @@ const icons = {
   passing_test_required_changed: SettingsIcon,
   migration_test_acknowledged: ShieldCheckIcon,
   passing_test_overridden: ShieldCheckIcon,
+  // Billing's (organization-level, kept out of a database's activity by the API).
+  terms_accepted: CreditCardIcon,
+  subscription_changed: CreditCardIcon,
+  payment_failed: WarningTriangleIcon,
+  payment_succeeded: CreditCardIcon,
+  plan_downgraded: WarningTriangleIcon,
+  playground_hours_used_up: ClockIcon,
+  subscription_duplicate_cancelled: CreditCardIcon,
 } as const;
 
 function approvalsCount(n: number | null | undefined): string {
@@ -176,6 +186,20 @@ function sentence(event: AuditEvent): string {
       return `${who} ran a migration on a playground of ${v}${details.outcome ? `: ${details.outcome}` : ""}`;
     case "playground_restarted":
       return `A playground of ${v} restarted to undo a role changed from inside it`;
+    case "terms_accepted":
+      return `${who} accepted the Terms of Service to subscribe`;
+    case "subscription_changed":
+      return "The subscription changed";
+    case "payment_failed":
+      return "A payment failed";
+    case "payment_succeeded":
+      return "A payment went through";
+    case "plan_downgraded":
+      return "The organization moved to the Free plan after an unpaid invoice";
+    case "playground_hours_used_up":
+      return "The organization used its playground hours for the month";
+    case "subscription_duplicate_cancelled":
+      return "A second subscription was cancelled and refunded";
   }
 }
 

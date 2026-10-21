@@ -39,12 +39,19 @@ pub const HEADER: &str = "x-romulus-csrf";
 /// `invalid_token`), which tells a CI script what is missing.
 pub const MACHINE_API: &str = "/api/databases/";
 
+/// Stripe's webhook (`billing::webhook`): no cookie, no browser; its
+/// signature over the raw body authenticates it.
+pub const WEBHOOK: &str = "/api/billing/webhook";
+
 pub async fn guard(
     State(config): State<Arc<Config>>,
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    if request.method().is_safe() || has_bearer(request.headers()) {
+    if request.method().is_safe()
+        || has_bearer(request.headers())
+        || request.uri().path() == WEBHOOK
+    {
         return Ok(next.run(request).await);
     }
     // The machine API only ever takes a token: say that, not "cross-site".

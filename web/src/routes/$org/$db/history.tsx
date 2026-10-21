@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { DraftsSlot } from "@/features/databases/components/drafts-slot";
+import { ExportLink } from "@/features/databases/components/export-card";
 import { OtherMajorAlert } from "@/features/databases/components/postgres";
 import { VersionHistory } from "@/features/databases/components/version-history";
+import { databaseExportUrl } from "@/features/databases/export";
 import { databaseQuery, versionsQuery } from "@/features/databases/queries";
 import { orgQuery } from "@/features/orgs/queries";
 import { canWrite } from "@/features/orgs/roles";
@@ -56,6 +58,10 @@ function History() {
                   Time machine
                 </Link>
               </Button>
+            )}
+            {/* Every member may take everything with them (the settings are developers'). */}
+            {database.latest && (
+              <ExportLink size="sm" href={databaseExportUrl(org, db)} label="Export (ZIP)" />
             )}
             {importLink}
           </div>

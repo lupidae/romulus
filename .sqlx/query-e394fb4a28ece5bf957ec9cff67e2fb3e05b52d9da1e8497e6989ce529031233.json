@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO playground_usage (org_id, month, seconds) VALUES ($1, $2, 7200)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e394fb4a28ece5bf957ec9cff67e2fb3e05b52d9da1e8497e6989ce529031233"
+}

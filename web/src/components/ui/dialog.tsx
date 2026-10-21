@@ -37,13 +37,20 @@ export function DialogOverlay({
  * Describe it with a DialogDescription, which becomes its accessible
  * description. Without one (the title says it all) the dialog references no
  * description at all; Radix only links one that is rendered.
+ *
+ * `fit`: a form that can grow (a notice, errors, a consumer's boxes) scrolls
+ * inside once taller than the screen, so its footer stays reachable.
  */
 export function DialogContent({
   className,
   children,
   hideClose = false,
+  fit = false,
   ...props
-}: React.ComponentProps<typeof DialogPrimitive.Content> & { hideClose?: boolean }) {
+}: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  hideClose?: boolean;
+  fit?: boolean;
+}) {
   return (
     <DialogPrimitive.Portal container={usePortalContainer()}>
       <DialogOverlay />
@@ -54,6 +61,7 @@ export function DialogContent({
           "rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-dialog outline-none",
           "duration-(--duration-base) data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-2 data-[state=open]:zoom-in-[0.97]",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97]",
+          fit && "max-h-[calc(100dvh-min(20vh,10rem)-1rem)] overflow-y-auto",
           className,
         )}
         {...props}

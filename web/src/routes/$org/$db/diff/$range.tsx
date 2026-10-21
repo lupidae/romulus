@@ -3,6 +3,8 @@ import { createFileRoute, Link, notFound, useParams } from "@tanstack/react-rout
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import { ClockIcon, DatabaseScriptIcon, GitCompareIcon, ListIcon } from "@/components/icons";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -193,6 +195,10 @@ function Compare() {
     body =
       diff.error instanceof ApiError && diff.error.status === 404 ? (
         <NoSuchComparison />
+      ) : isPlanLimit(diff.error) ? (
+        <div className="p-4 md:p-6">
+          <PlanLimitNotice error={diff.error} org={org} />
+        </div>
       ) : (
         <div className="p-4 md:p-6">
           <Alert

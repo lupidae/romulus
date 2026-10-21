@@ -9,6 +9,7 @@ import * as React from "react";
 import { api, succeed, unwrap } from "@/api/client";
 import type { components } from "@/api/schema.gen";
 import type { MentionPerson } from "@/components/ui/mention-textarea";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import { membersQuery } from "@/features/orgs/queries";
 import type { DraftSession, Me } from "@/features/draft/session";
 import { usePeers, useSessionState, useYMap } from "@/features/draft/use-session";
@@ -212,7 +213,8 @@ export const versionThreadsQuery = (org: string, db: string, number: number) =>
         }),
       ),
     // No live channel on a version's page: others' comments come in a while.
-    refetchInterval: 20_000,
+    // A version past the plan's history window stays refused: stop asking.
+    refetchInterval: (query) => (isPlanLimit(query.state.error) ? false : 20_000),
   });
 
 function anchorOf(anchor: VersionThread["anchor"]): Anchor {

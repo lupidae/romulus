@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT d.name, count(v.id) AS \"versions!\"\n           FROM databases d LEFT JOIN versions v ON v.database_id = d.id AND v.removed_at IS NULL\n           WHERE d.org_id = $1 AND d.deleted_at IS NULL\n           GROUP BY d.id, d.name ORDER BY count(v.id) DESC, d.name LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "versions!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "a97d98c46898686324b92776bd9565d2262652c44dc7b1b92385bdc729c9cd38"
+}

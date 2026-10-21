@@ -275,6 +275,11 @@ pub(crate) async fn by_number(
     database: &DatabaseRef,
     number: i32,
 ) -> ApiResult<Version> {
+    // Not past the plan's history window.
+    state
+        .billing
+        .shown_number(&state.db, database.id, number)
+        .await?;
     let id = sqlx::query_scalar!(
         "SELECT id FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
         database.id,

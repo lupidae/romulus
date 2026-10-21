@@ -1778,3 +1778,44 @@ async fn a_migration_test_finds_a_rich_schema_at_its_version_s_model() {
     );
     assert!(report.rows > 0);
 }
+
+#[tokio::test]
+async fn a_stop_tells_the_console_why_and_one_without_a_reason_still_works() {
+    let Some(stack) = stack(|_| {}).await else {
+        return;
+    };
+    let id = stack.build().await;
+    let mut console = stack.console(id, Access::Read).await;
+    // The API stopping it at the end of an organization's playground hours.
+    let why = "your organization used its 2 playground hours for October";
+    let body = serde_json::to_vec(&json!({ "reason": why })).unwrap();
+    let stopped = stack
+        .post(&format!("/playgrounds/{id}/stop"), Op::Stop, id, Some(body))
+        .await;
+    assert_eq!(stopped.status(), 200);
+    let events = console
+        .until(|e| matches!(e, ConsoleEvent::Stopped { .. }))
+        .await;
+    let Some(ConsoleEvent::Stopped { reason }) = events.last() else {
+        unreachable!()
+    };
+    assert_eq!(reason, why);
+    assert!(!stack.host.status(id).await.unwrap().running);
+    // A body the signature does not cover is refused.
+    let mut claims = Claims::new(Op::Stop, Some(id), Access::Develop, now()).org(stack.org);
+    claims = claims.body(br#"{"reason":"signed"}"#);
+    let forged = stack
+        .http
+        .post(format!("http://{}/playgrounds/{id}/stop", stack.addr))
+        .header("authorization", claims.sign(KEY))
+        .body(r#"{"reason":"swapped"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged.status(), 401);
+    // Without a body, as before.
+    let plain = stack
+        .post(&format!("/playgrounds/{id}/stop"), Op::Stop, id, None)
+        .await;
+    assert_eq!(plain.status(), 200);
+}

@@ -19,6 +19,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toaster";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import { databaseKeys } from "@/features/databases/queries";
 
 import {
@@ -374,7 +376,10 @@ function Review({
             </div>
           </Alert>
         )}
-        {phase.step === "failed" && (
+        {phase.step === "failed" && isPlanLimit(phase.error) && (
+          <PlanLimitNotice error={phase.error} org={org} />
+        )}
+        {phase.step === "failed" && !isPlanLimit(phase.error) && (
           <Alert
             variant="destructive"
             title={failure ? `${failure.name} does not replay` : "The import stopped"}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO drafts (database_id, name, base_version_id) VALUES ($1, 'from v2', $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f24a07bd026954f865869b950e07a93a6cc40b83d113aec6edf76c2c84a347d6"
+}

@@ -10,7 +10,7 @@
 use std::{
     collections::HashMap,
     hash::Hash,
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -80,6 +80,61 @@ impl<K: Hash + Eq> Limiter<K> {
     }
 }
 
+/// Work running at once (exports streaming): at most `per_key` per key and
+/// `total` together; a slot is held until its guard drops.
+pub struct Slots {
+    per_key: usize,
+    total: usize,
+    running: Arc<Mutex<HashMap<Uuid, usize>>>,
+}
+
+/// A slot of [`Slots`], given back when dropped.
+pub struct Slot {
+    running: Arc<Mutex<HashMap<Uuid, usize>>>,
+    key: Uuid,
+}
+
+impl Slots {
+    pub fn new(per_key: usize, total: usize) -> Self {
+        assert!(per_key > 0 && total > 0, "slots must allow something");
+        Self {
+            per_key,
+            total,
+            running: Arc::default(),
+        }
+    }
+
+    /// A slot for `key`, or 429 `rate_limited` (try again in a little while)
+    /// when `key` or everyone has as many running as allowed.
+    pub fn take(&self, key: Uuid) -> Result<Slot, ApiError> {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        let all: usize = running.values().sum();
+        let mine = running.get(&key).copied().unwrap_or(0);
+        if mine >= self.per_key || all >= self.total {
+            return Err(ApiError::RateLimited {
+                retry_after: Duration::from_secs(15),
+            });
+        }
+        *running.entry(key).or_default() += 1;
+        Ok(Slot {
+            running: Arc::clone(&self.running),
+            key,
+        })
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(n) = running.get_mut(&self.key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                running.remove(&self.key);
+            }
+        }
+    }
+}
+
 /// The limits this instance enforces, in `AppState`.
 pub struct Limits {
     /// Pushes per API token: CI on every commit of a busy repository fits,
@@ -108,6 +163,12 @@ pub struct Limits {
     /// Console runs per person, across playgrounds (each takes a statement
     /// slot on the host and a history row).
     pub playground_console: Limiter<Uuid>,
+    /// Exports per person, and per organization (each reads every version
+    /// and plans every migration of what it exports).
+    pub exports: Limiter<Uuid>,
+    pub org_exports: Limiter<Uuid>,
+    /// Exports streaming at once, per organization and in all.
+    pub export_slots: Slots,
 }
 
 impl Default for Limits {
@@ -122,6 +183,9 @@ impl Default for Limits {
             playgrounds: Limiter::new(5, Duration::from_mins(2)),
             playground_actions: Limiter::new(10, Duration::from_secs(6)),
             playground_console: Limiter::new(20, Duration::from_secs(1)),
+            exports: Limiter::new(5, Duration::from_secs(30)),
+            org_exports: Limiter::new(10, Duration::from_secs(15)),
+            export_slots: Slots::new(2, 6),
         }
     }
 }
@@ -143,6 +207,19 @@ mod tests {
         assert_eq!(retry_after, Duration::from_secs(2));
         assert!(limiter.check_at(1, start + Duration::from_secs(1)).is_err());
         assert!(limiter.check_at(1, start + Duration::from_secs(2)).is_ok());
+    }
+
+    #[test]
+    fn slots_are_held_until_dropped_per_key_and_in_all() {
+        let slots = Slots::new(1, 2);
+        let (a, b, c) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let first = slots.take(a).unwrap();
+        assert!(slots.take(a).is_err(), "one per key");
+        let second = slots.take(b).unwrap();
+        assert!(slots.take(c).is_err(), "two in all");
+        drop(first);
+        assert!(slots.take(a).is_ok());
+        drop(second);
     }
 
     #[test]

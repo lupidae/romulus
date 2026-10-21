@@ -96,6 +96,7 @@ function statusOf(code: string): number {
     )
   )
     return 409;
+  if (code === "plan_limit") return 402;
   if (code === "unavailable" || code === "timeout") return 503;
   if (code === "internal") return 500;
   return 422;

@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.number, t.id, t.anchor, t.frozen, t.created_at, t.resolved_at, t.resolved_by_name,\n                  coalesce(\n                      (SELECT jsonb_agg(jsonb_build_object(\n                                  'id', c.id, 'author', c.author_name, 'body', c.body,\n                                  'created_at', c.created_at, 'edited_at', c.edited_at)\n                              ORDER BY c.created_at)\n                       FROM version_comments c WHERE c.thread_id = t.id),\n                      '[]'::jsonb\n                  ) AS \"comments!\"\n           FROM version_threads t JOIN versions v ON v.id = t.version_id\n           WHERE v.database_id = $1 AND v.removed_at IS NULL\n           ORDER BY v.number, t.created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "number",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "anchor",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "anchor"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "frozen",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "frozen"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "resolved_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "resolved_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "resolved_by_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "version_threads",
+            "name": "resolved_by_name"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "comments!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "669cb58715947fe0cdb3c48c93abb17fc28c6077c4a4eb6e9b5cba17a42fa251"
+}

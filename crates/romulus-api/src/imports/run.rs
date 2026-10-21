@@ -37,7 +37,7 @@ use crate::{
     extract::Json,
     versions::{
         layout::VersionLayout,
-        store::{ImportedVersion, NewImport, store_import},
+        store::{ImportedVersion, NewImport, store_import_capped},
     },
 };
 
@@ -160,6 +160,25 @@ pub async fn start(
     };
     if let Some(refusal) = plan::refusal(&planned, &options) {
         return Err(refusal);
+    }
+    // The plan's caps, before the sandbox: an import that cannot be stored
+    // is refused now (schema sizes are checked again once replayed).
+    if !planned.new.is_empty() && !options.dry_run {
+        let limits = state
+            .billing
+            .version_limits(&state.db, target.database_id)
+            .await?;
+        let live = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM versions WHERE database_id = $1 AND removed_at IS NULL"#,
+            target.database_id,
+        )
+        .fetch_one(&state.db)
+        .await?;
+        limits.check(
+            live,
+            i64::try_from(planned.new.len()).unwrap_or(i64::MAX),
+            0,
+        )?;
     }
     let job = Job {
         state,
@@ -317,23 +336,34 @@ impl Job {
                 .unwrap_or_default(),
             })
             .collect();
-        let stored = store_import(
-            &self.state.db,
-            NewImport {
-                database_id: self.target.database_id,
-                format: planned.format,
-                created_by,
-                created_by_token,
-                append: self.options.append,
-                imported_before: planned.imported,
-                latest_id: planned.latest_id(),
-                last_number: planned.last_number,
-                staging,
-                versions,
-                replayed_on: self.target.major,
-            },
-        )
-        .await;
+        let limits = self
+            .state
+            .billing
+            .version_limits(&self.state.db, self.target.database_id)
+            .await;
+        let stored = match limits {
+            Ok(limits) => {
+                store_import_capped(
+                    &self.state.db,
+                    NewImport {
+                        database_id: self.target.database_id,
+                        format: planned.format,
+                        created_by,
+                        created_by_token,
+                        append: self.options.append,
+                        imported_before: planned.imported,
+                        latest_id: planned.latest_id(),
+                        last_number: planned.last_number,
+                        staging,
+                        versions,
+                        replayed_on: self.target.major,
+                    },
+                    limits,
+                )
+                .await
+            }
+            Err(err) => Err(err.into()),
+        };
         let stored = match stored {
             Ok(stored) => stored,
             Err(err) => {

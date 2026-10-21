@@ -644,7 +644,14 @@ async fn sign_up(
         .await
         .map_err(duplicate_account)?;
     store_password(&mut tx, user_id, &phc).await?;
-    let org = invitations::claim_for(&mut tx, invitation.id, Some(link), user_id, &email)
+    let org = invitations::claim_for(
+        &state.billing,
+        &mut tx,
+        invitation.id,
+        Some(link),
+        user_id,
+        &email,
+    )
         .await?
         .ok_or_else(|| {
             ApiError::not_found(
@@ -844,7 +851,9 @@ async fn finish_sign_up(
     store_password(&mut tx, user_id, &phc).await?;
     // Joined when the invitation still stands; the account exists either way.
     let org = match link.invitation_id {
-        Some(id) => invitations::claim_for(&mut tx, id, None, user_id, &link.email).await?,
+        Some(id) => {
+            invitations::claim_for(&state.billing, &mut tx, id, None, user_id, &link.email).await?
+        }
         None => None,
     };
     if org.is_none() && state.config.signup == SignUpPolicy::Invite {

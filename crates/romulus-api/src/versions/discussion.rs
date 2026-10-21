@@ -133,17 +133,29 @@ pub struct ReadUpTo {
 }
 
 /// The version's id, a live one of a database of the caller's organization.
-async fn version_id(db: &PgPool, member: &Member, slug: &str, number: i32) -> ApiResult<Uuid> {
+/// Past the plan's history window: 402 `plan_limit`.
+async fn version_id(
+    db: &PgPool,
+    billing: &crate::billing::Billing,
+    member: &Member,
+    slug: &str,
+    number: i32,
+) -> ApiResult<Uuid> {
     let database = databases::find(db, member.org.id, slug).await?;
-    match sqlx::query_scalar!(
-        "SELECT id FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
+    match sqlx::query!(
+        "SELECT id, created_at FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
         database.id,
         number,
     )
     .fetch_optional(db)
     .await?
     {
-        Some(id) => Ok(id),
+        Some(row) => {
+            billing
+                .shown(db, member.org.id, database.id, (row.id, number, row.created_at))
+                .await?;
+            Ok(row.id)
+        }
         None => Err(super::missing(db, database.id, Some(number)).await),
     }
 }
@@ -343,9 +355,10 @@ async fn one(db: &PgPool, version: Uuid, user: Uuid, thread: Uuid) -> ApiResult<
 async fn list(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     Path((_, slug, number)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<Vec<VersionThread>>> {
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     Ok(Json(threads(&db, version, member.user.id).await?))
 }
 
@@ -369,6 +382,7 @@ async fn list(
 async fn create(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     State(limits): State<Arc<Limits>>,
     Path((_, slug, number)): Path<(String, String, i32)>,
     Json(body): Json<NewThread>,
@@ -381,7 +395,7 @@ async fn create(
         )
     })?;
     let text = checked_body(&body.body)?;
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     let mentions = members_only(&db, member.org.id, &body.mentions).await?;
     let anchor = serde_json::to_value(&anchor).map_err(ApiError::internal)?;
     let mut tx = db.begin().await?;
@@ -448,13 +462,14 @@ async fn create(
 async fn reply(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     State(limits): State<Arc<Limits>>,
     Path((_, slug, number, thread)): Path<(String, String, i32, Uuid)>,
     Json(body): Json<CommentText>,
 ) -> ApiResult<(StatusCode, Json<VersionThread>)> {
     limits.version_comments.check(member.user.id)?;
     let text = checked_body(&body.body)?;
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     if thread_of(&db, version, thread).await? {
         return Err(frozen());
     }
@@ -555,13 +570,14 @@ fn not_yours(message: &str) -> ApiError {
 async fn edit(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     State(limits): State<Arc<Limits>>,
     Path((_, slug, number, thread, comment)): Path<(String, String, i32, Uuid, Uuid)>,
     Json(body): Json<CommentText>,
 ) -> ApiResult<Json<VersionThread>> {
     limits.version_comments.check(member.user.id)?;
     let text = checked_body(&body.body)?;
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     let written = comment_in(&db, version, thread, comment).await?;
     if written.author != Some(member.user.id) {
         return Err(not_yours("Only its author can change a comment."));
@@ -607,11 +623,12 @@ async fn edit(
 async fn delete(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     State(limits): State<Arc<Limits>>,
     Path((_, slug, number, thread, comment)): Path<(String, String, i32, Uuid, Uuid)>,
 ) -> ApiResult<StatusCode> {
     limits.version_comments.check(member.user.id)?;
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     let written = comment_in(&db, version, thread, comment).await?;
     let theirs = written.author != Some(member.user.id);
     if theirs && !member.role.can_write() {
@@ -680,11 +697,12 @@ async fn delete(
 async fn resolve(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     State(limits): State<Arc<Limits>>,
     Path((_, slug, number, thread)): Path<(String, String, i32, Uuid)>,
 ) -> ApiResult<Json<VersionThread>> {
     limits.version_comments.check(member.user.id)?;
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     if thread_of(&db, version, thread).await? {
         return Err(frozen());
     }
@@ -717,11 +735,12 @@ async fn resolve(
 async fn reopen(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     State(limits): State<Arc<Limits>>,
     Path((_, slug, number, thread)): Path<(String, String, i32, Uuid)>,
 ) -> ApiResult<Json<VersionThread>> {
     limits.version_comments.check(member.user.id)?;
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     if thread_of(&db, version, thread).await? {
         return Err(frozen());
     }
@@ -751,10 +770,11 @@ async fn reopen(
 async fn read(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     Path((_, slug, number, thread)): Path<(String, String, i32, Uuid)>,
     Json(body): Json<ReadUpTo>,
 ) -> ApiResult<StatusCode> {
-    let version = version_id(&db, &member, &slug, number).await?;
+    let version = version_id(&db, &billing, &member, &slug, number).await?;
     thread_of(&db, version, thread).await?;
     let mut tx = db.begin().await?;
     mark_read(&mut tx, thread, member.user.id, body.at.min(Utc::now())).await?;

@@ -32,7 +32,14 @@ password sign-in (ROMULUS_AUTH=password); links print on stdout, run on the serv
   verify-email EMAIL       marks a password account's address verified
   auth-events [--email EMAIL] [--limit N]
                            the sign-in log, newest first, as JSON lines
-  mail-test EMAIL          sends a test message through ROMULUS_SMTP_*";
+  mail-test EMAIL          sends a test message through ROMULUS_SMTP_*
+
+hosted billing (no database needed):
+  stripe-setup [--public-url URL] [--terms-url URL] [--privacy-url URL]
+               [--webhook-url URL [--secret-file PATH]] [--live]
+              products, prices (from the plan table) and the Customer Portal
+              in the account of STRIPE_SECRET_KEY, idempotently; a live key
+              needs --live. The webhook's secret goes to PATH, never stdout";
 
 #[derive(Debug, thiserror::Error)]
 enum MainError {
@@ -50,6 +57,8 @@ enum MainError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Admin(#[from] AdminError),
+    #[error("stripe-setup")]
+    StripeSetup(#[from] romulus_api::billing::setup::SetupError),
 }
 
 impl MainError {
@@ -68,6 +77,7 @@ enum Command {
     Serve,
     Migrate,
     Openapi,
+    StripeSetup(romulus_api::billing::setup::Setup),
     Admin(AdminCommand),
 }
 
@@ -125,6 +135,32 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
         Some("unlock") => Command::Admin(AdminCommand::Unlock(one()?)),
         Some("verify-email") => Command::Admin(AdminCommand::VerifyEmail(one()?)),
         Some("mail-test") => Command::Admin(AdminCommand::MailTest(one()?)),
+        Some("stripe-setup") => {
+            let live = rest.iter().any(|arg| arg == "--live");
+            let rest: Vec<String> = rest
+                .iter()
+                .filter(|arg| *arg != "--live")
+                .cloned()
+                .collect();
+            let mut flags = flags(
+                &rest,
+                &[
+                    "public-url",
+                    "terms-url",
+                    "privacy-url",
+                    "webhook-url",
+                    "secret-file",
+                ],
+            )?;
+            Command::StripeSetup(romulus_api::billing::setup::Setup {
+                public_url: flags.remove("public-url"),
+                terms_url: flags.remove("terms-url"),
+                privacy_url: flags.remove("privacy-url"),
+                webhook_url: flags.remove("webhook-url"),
+                secret_file: flags.remove("secret-file").map(Into::into),
+                live,
+            })
+        }
         Some("auth-events") => {
             let flags = flags(rest, &["email", "limit"])?;
             let limit = match flags.get("limit") {
@@ -148,7 +184,10 @@ fn main() -> ExitCode {
     let command = parse(&args);
     // An admin command talks to a person at a terminal: plain lines, even
     // where the server logs JSON.
-    init_tracing(!matches!(command, Ok(Command::Admin(_))));
+    init_tracing(!matches!(
+        command,
+        Ok(Command::Admin(_) | Command::StripeSetup(_))
+    ));
     let command = match command {
         Ok(command) => command,
         Err(err) => return fail(&err),
@@ -164,6 +203,7 @@ fn main() -> ExitCode {
                     match command {
                         Command::Migrate => migrate().await,
                         Command::Admin(command) => run_admin(command).await,
+                        Command::StripeSetup(setup) => stripe_setup(&setup).await,
                         _ => serve().await,
                     }
                 })
@@ -210,6 +250,17 @@ fn print_openapi() -> Result<(), MainError> {
     let mut stdout = io::stdout().lock();
     serde_json::to_writer_pretty(&mut stdout, &romulus_api::openapi())?;
     writeln!(stdout)?;
+    Ok(())
+}
+
+/// `stripe-setup`: Stripe's products, prices, portal (and webhook) from the
+/// plan table, in the account of `STRIPE_SECRET_KEY`.
+async fn stripe_setup(setup: &romulus_api::billing::setup::Setup) -> Result<(), MainError> {
+    let key = std::env::var("STRIPE_SECRET_KEY")
+        .ok()
+        .filter(|key| !key.is_empty());
+    let mut stdout = io::stdout().lock();
+    romulus_api::billing::setup::run(setup, key, &mut stdout).await?;
     Ok(())
 }
 
@@ -342,6 +393,9 @@ async fn serve() -> Result<(), MainError> {
             romulus_api::auth::password::SWEEP_EVERY,
         )
     });
+    // Billing: playground hours metered every minute, the emails it owes
+    // (renewal reminders, payment notices) every hour.
+    let billing_tasks = romulus_api::billing::tasks(&state);
     // Versions removed more than 30 days ago: now, and every hour.
     let purger = romulus_api::versions::removal::purger(
         state.db.clone(),
@@ -364,6 +418,9 @@ async fn serve() -> Result<(), MainError> {
         password_sweeper.abort();
     }
     playground_sweeper.abort();
+    for task in billing_tasks {
+        task.abort();
+    }
     compiler.close().await;
     tracing::info!("shut down cleanly");
     Ok(())

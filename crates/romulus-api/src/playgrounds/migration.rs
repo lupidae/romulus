@@ -65,6 +65,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
     params(("org" = String, Path), ("db" = String, Path), ("id" = Uuid, Path)),
     responses(
         (status = 200, body = Playground),
+        (status = 402, description = "`plan_limit`: the organization used its playground hours (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`playground_not_ready`, `playground_expired`, `playground_busy`", body = ErrorBody),
@@ -80,6 +81,8 @@ pub(super) async fn reset(
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
     ready(&row)?;
+    // Both start the playground: its organization's hours must remain.
+    crate::billing::hours::check(&state, member.org.id).await?;
     state.limits.playground_actions.check(id)?;
     let backend = state.playgrounds.host.backend()?;
     let by = member.user.name.clone();
@@ -285,6 +288,7 @@ async fn statements(
         (status = 200, description = "The progress, one event per line", content(
             (romulus_playground::protocol::MigrationEvent = "application/x-ndjson"),
         )),
+        (status = 402, description = "`plan_limit`: the organization used its playground hours (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`playground_not_ready`, `playground_expired`, `playground_busy`, `migration_in_progress` (yours, elsewhere), `draft_not_open`, `playground_stale` (the draft moved to another base), `draft_changed`", body = ErrorBody),
@@ -302,6 +306,8 @@ pub(super) async fn run_migration(
     let database = databases::find(&state.db, member.org.id, &db_slug).await?;
     let row = find(&state.db, &database, id).await?;
     ready(&row)?;
+    // Both start the playground: its organization's hours must remain.
+    crate::billing::hours::check(&state, member.org.id).await?;
     let Some(draft) = row.draft_id else {
         return Err(ApiError::Unprocessable {
             code: "no_migration",

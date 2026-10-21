@@ -18,6 +18,8 @@ import { Label } from "@/components/ui/label";
 import { RadioCard, RadioGroup } from "@/components/ui/radio-group";
 import { toast } from "@/components/ui/toaster";
 import { Tooltip } from "@/components/ui/tooltip";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 
 import { useCreatePlayground } from "../mutations";
 import type { PlaygroundProfile, PlaygroundSize } from "../queries";
@@ -73,7 +75,7 @@ export function CreatePlaygroundDialog({
 }: CreatePlaygroundDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent fit className="max-w-lg">
         <DialogHeader>
           <DialogTitle>New playground</DialogTitle>
           <DialogDescription>
@@ -136,6 +138,8 @@ function CreateForm({
             onCancel();
             return;
           }
+          // A size or the month's hours beyond the plan: the notice below says so.
+          if (isPlanLimit(failure)) return;
           setError(
             failure instanceof ApiError ? failure.message : "Something went wrong. Try again.",
           );
@@ -236,6 +240,7 @@ function CreateForm({
           {error}
         </p>
       )}
+      <PlanLimitNotice error={create.error} org={org} />
 
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={onCancel}>

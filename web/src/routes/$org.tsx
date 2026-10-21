@@ -11,7 +11,13 @@ import {
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
-import { DatabaseIcon, GroupIcon, MailOutIcon, SettingsIcon } from "@/components/icons";
+import {
+  CreditCardIcon,
+  DatabaseIcon,
+  GroupIcon,
+  MailOutIcon,
+  SettingsIcon,
+} from "@/components/icons";
 import { AppShell, PageBody } from "@/components/shell/app-shell";
 import { SidebarItem, SidebarNav, SidebarSection } from "@/components/ui/sidebar";
 import { toast } from "@/components/ui/toaster";
@@ -83,6 +89,12 @@ function OrgLayout() {
         {canManageMembers(org.role) && (
           <SidebarItem asChild icon={<MailOutIcon />} label="Invitations">
             <Link to="/$org/settings/invitations" params={params} />
+          </SidebarItem>
+        )}
+        {/* Hosted only: a server without billing has no plans. */}
+        {instance.data?.billing && (
+          <SidebarItem asChild icon={<CreditCardIcon />} label="Billing">
+            <Link to="/$org/settings/billing" params={params} />
           </SidebarItem>
         )}
       </SidebarSection>

@@ -73,6 +73,194 @@ pub struct Config {
     /// limits and the sign-in log key by it). Empty: the TCP peer is the
     /// client, whatever a header says.
     pub trusted_proxies: Vec<ipnet::IpNet>,
+    /// `ROMULUS_BILLING`: hosted billing (plans, caps, Stripe). `None`
+    /// (unset): off, the self-hosted default: no caps, no billing routes.
+    pub billing: Option<BillingConfig>,
+}
+
+/// Hosted billing: Stripe's keys, the Terms the checkout page has people
+/// accept, and the mentions every invoice carries.
+#[derive(Debug, Clone)]
+pub struct BillingConfig {
+    pub stripe: StripeKeys,
+    /// `ROMULUS_TERMS_URL`: the Terms of Service the checkout links to.
+    pub terms_url: Url,
+    /// `ROMULUS_TERMS_VERSION`: which Terms an acceptance was of (kept in
+    /// the audit log), e.g. `2026-11-01`.
+    pub terms_version: String,
+    /// `ROMULUS_INVOICE_FOOTER`: the footer of every invoice (the VAT
+    /// mention), set on each customer.
+    pub invoice_footer: Option<String>,
+    /// `ROMULUS_INVOICE_FIELDS`: up to 4 custom fields on every invoice (the
+    /// seller's name, registration number, address), as
+    /// `Name=value|Name=value`.
+    pub invoice_fields: Vec<(String, String)>,
+}
+
+/// How billing reaches Stripe (`ROMULUS_BILLING`).
+#[derive(Debug, Clone)]
+pub enum StripeKeys {
+    /// `stripe`: `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` (the
+    /// endpoint's signing secret).
+    Stripe {
+        secret_key: Secret,
+        webhook_secret: Secret,
+    },
+    /// `fake`: Stripe in memory, checkouts completed by a local page; for
+    /// end-to-end tests, refused unless the public URL and the listening
+    /// address are loopback (as the dev sign-in). `STRIPE_WEBHOOK_SECRET`
+    /// optional.
+    Fake { webhook_secret: Option<Secret> },
+}
+
+impl StripeKeys {
+    pub fn webhook_secret(&self) -> Option<&Secret> {
+        match self {
+            Self::Stripe { webhook_secret, .. } => Some(webhook_secret),
+            Self::Fake { webhook_secret } => webhook_secret.as_ref(),
+        }
+    }
+}
+
+impl BillingConfig {
+    fn from_lookup(
+        get: &impl Fn(&'static str) -> Option<String>,
+        public_url: &Url,
+        api_addr: SocketAddr,
+    ) -> Result<Option<Self>, ConfigError> {
+        let stripe = match get("ROMULUS_BILLING").as_deref() {
+            None | Some("off") => {
+                for var in ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] {
+                    if get(var).is_some() {
+                        return Err(ConfigError::Invalid {
+                            var,
+                            reason: "set ROMULUS_BILLING=stripe too, or remove it".to_owned(),
+                        });
+                    }
+                }
+                return Ok(None);
+            }
+            Some("stripe") => {
+                let secret_key =
+                    get("STRIPE_SECRET_KEY").ok_or(ConfigError::Missing("STRIPE_SECRET_KEY"))?;
+                if !(secret_key.starts_with("sk_") || secret_key.starts_with("rk_")) {
+                    return Err(ConfigError::Invalid {
+                        var: "STRIPE_SECRET_KEY",
+                        reason: "expected a secret or restricted key (sk_… or rk_…)".to_owned(),
+                    });
+                }
+                let webhook_secret = get("STRIPE_WEBHOOK_SECRET")
+                    .ok_or(ConfigError::Missing("STRIPE_WEBHOOK_SECRET"))?;
+                if !webhook_secret.starts_with("whsec_") {
+                    return Err(ConfigError::Invalid {
+                        var: "STRIPE_WEBHOOK_SECRET",
+                        reason: "expected the endpoint's signing secret (whsec_…)".to_owned(),
+                    });
+                }
+                StripeKeys::Stripe {
+                    secret_key: Secret(secret_key),
+                    webhook_secret: Secret(webhook_secret),
+                }
+            }
+            Some("fake") => {
+                if !is_loopback(public_url) || !api_addr.ip().is_loopback() {
+                    return Err(ConfigError::Invalid {
+                        var: "ROMULUS_BILLING",
+                        reason: "fake is for local tests: the public URL and the listening address must be loopback".to_owned(),
+                    });
+                }
+                StripeKeys::Fake {
+                    webhook_secret: get("STRIPE_WEBHOOK_SECRET").map(Secret),
+                }
+            }
+            Some(other) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_BILLING",
+                    reason: format!("expected stripe or fake, got {other:?}"),
+                });
+            }
+        };
+        let fake = matches!(stripe, StripeKeys::Fake { .. });
+        let terms_url = match get("ROMULUS_TERMS_URL") {
+            Some(terms) => Url::parse(&terms).map_err(|err| ConfigError::Invalid {
+                var: "ROMULUS_TERMS_URL",
+                reason: err.to_string(),
+            })?,
+            None if fake => public_url
+                .join("/terms")
+                .map_err(|err| ConfigError::Invalid {
+                    var: "ROMULUS_PUBLIC_URL",
+                    reason: err.to_string(),
+                })?,
+            None => return Err(ConfigError::Missing("ROMULUS_TERMS_URL")),
+        };
+        let terms_version = match get("ROMULUS_TERMS_VERSION") {
+            Some(version) if version.chars().count() <= 64 => version,
+            Some(_) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_TERMS_VERSION",
+                    reason: "keep it to 64 characters".to_owned(),
+                });
+            }
+            None if fake => "test".to_owned(),
+            None => return Err(ConfigError::Missing("ROMULUS_TERMS_VERSION")),
+        };
+        let invoice_fields = match get("ROMULUS_INVOICE_FIELDS") {
+            None => Vec::new(),
+            Some(list) => invoice_fields(&list)?,
+        };
+        let invoice_footer = get("ROMULUS_INVOICE_FOOTER");
+        if invoice_footer
+            .as_ref()
+            .is_some_and(|f| f.chars().count() > 5000)
+        {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_INVOICE_FOOTER",
+                reason: "Stripe takes at most 5000 characters".to_owned(),
+            });
+        }
+        Ok(Some(Self {
+            stripe,
+            terms_url,
+            terms_version,
+            invoice_footer,
+            invoice_fields,
+        }))
+    }
+}
+
+/// `Name=value|Name=value`: at most 4, names up to 40 characters and values
+/// up to 140 (Stripe's limits for an invoice's custom fields).
+fn invoice_fields(list: &str) -> Result<Vec<(String, String)>, ConfigError> {
+    let invalid = |reason: String| ConfigError::Invalid {
+        var: "ROMULUS_INVOICE_FIELDS",
+        reason,
+    };
+    let fields: Vec<(String, String)> = list
+        .split('|')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+        .map(|field| {
+            let (name, value) = field
+                .split_once('=')
+                .ok_or_else(|| invalid(format!("{field:?} is not Name=value")))?;
+            let (name, value) = (name.trim(), value.trim());
+            if name.is_empty()
+                || name.chars().count() > 40
+                || value.is_empty()
+                || value.chars().count() > 140
+            {
+                return Err(invalid(format!(
+                    "{name:?}: names take 1 to 40 characters, values 1 to 140"
+                )));
+            }
+            Ok((name.to_owned(), value.to_owned()))
+        })
+        .collect::<Result<_, _>>()?;
+    if fields.len() > 4 {
+        return Err(invalid("Stripe takes at most 4 custom fields".to_owned()));
+    }
+    Ok(fields)
 }
 
 /// The sign-in methods `ROMULUS_AUTH` enables.
@@ -299,6 +487,7 @@ impl Config {
             single_org: false,
             mail: None,
             trusted_proxies: Vec::new(),
+            billing: None,
         }
     }
 
@@ -444,6 +633,28 @@ impl Config {
                 .collect::<Result<_, _>>()?,
         };
 
+        let billing = BillingConfig::from_lookup(&get, &public_url, api_addr)?;
+        // The hosted terms promise emails (renewal reminders, payment
+        // notices): real billing does not run without mail.
+        if billing
+            .as_ref()
+            .is_some_and(|b| matches!(b.stripe, StripeKeys::Stripe { .. }))
+            && mail.is_none()
+        {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_BILLING",
+                reason: "stripe needs mail for renewal reminders and payment notices: set ROMULUS_SMTP_HOST and ROMULUS_MAIL_FROM".to_owned(),
+            });
+        }
+        // Self-hosted installs are never capped.
+        if billing.is_some() && single_org {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_BILLING",
+                reason: "a single-organization install is self-hosted: it has no billing"
+                    .to_owned(),
+            });
+        }
+
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             api_addr,
@@ -462,6 +673,7 @@ impl Config {
             single_org,
             mail,
             trusted_proxies,
+            billing,
         })
     }
 }
@@ -575,6 +787,127 @@ mod tests {
         ("DATABASE_URL", "postgres://localhost/romulus"),
         ("ROMULUS_PUBLIC_URL", "http://localhost:41000/"),
     ];
+
+    #[test]
+    fn billing_is_off_unless_configured_and_then_needs_its_keys_and_terms() {
+        assert!(config(&BASE).unwrap().billing.is_none());
+        let with = |extra: &[(&'static str, &str)]| {
+            let mut vars = BASE.to_vec();
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        assert!(matches!(
+            with(&[("STRIPE_SECRET_KEY", "sk_test_x")]),
+            Err(ConfigError::Invalid {
+                var: "STRIPE_SECRET_KEY",
+                ..
+            })
+        ));
+        assert!(matches!(
+            with(&[("ROMULUS_BILLING", "stripe")]),
+            Err(ConfigError::Missing("STRIPE_SECRET_KEY"))
+        ));
+        let keys = [
+            ("ROMULUS_BILLING", "stripe"),
+            ("STRIPE_SECRET_KEY", "sk_test_abc"),
+            ("STRIPE_WEBHOOK_SECRET", "whsec_abc"),
+        ];
+        assert!(matches!(
+            with(&keys),
+            Err(ConfigError::Missing("ROMULUS_TERMS_URL"))
+        ));
+        let mut full = keys.to_vec();
+        full.extend([
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_TERMS_URL", "https://romulus.example/terms"),
+            ("ROMULUS_TERMS_VERSION", "2026-11-01"),
+            ("ROMULUS_INVOICE_FOOTER", "VAT not applicable"),
+            (
+                "ROMULUS_INVOICE_FIELDS",
+                "Seller=Someone EI | Address=1 rue X, 75000 Paris",
+            ),
+        ]);
+        let without_mail: Vec<_> = full
+            .iter()
+            .copied()
+            .filter(|(var, _)| !var.starts_with("ROMULUS_SMTP") && *var != "ROMULUS_MAIL_FROM")
+            .collect();
+        assert!(matches!(
+            with(&without_mail),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_BILLING",
+                ..
+            })
+        ));
+        let billing = with(&full).unwrap().billing.unwrap();
+        assert_eq!(billing.terms_version, "2026-11-01");
+        assert_eq!(
+            billing.invoice_fields,
+            vec![
+                ("Seller".to_owned(), "Someone EI".to_owned()),
+                ("Address".to_owned(), "1 rue X, 75000 Paris".to_owned())
+            ]
+        );
+        assert!(!format!("{billing:?}").contains("sk_test_abc"));
+        assert!(!format!("{billing:?}").contains("whsec_abc"));
+        let mut wrong = full.clone();
+        wrong[1] = ("STRIPE_SECRET_KEY", "pk_test_abc");
+        assert!(matches!(
+            with(&wrong),
+            Err(ConfigError::Invalid {
+                var: "STRIPE_SECRET_KEY",
+                ..
+            })
+        ));
+        let mut too_many = full.clone();
+        for var in &mut too_many {
+            if var.0 == "ROMULUS_INVOICE_FIELDS" {
+                var.1 = "A=1|B=2|C=3|D=4|E=5";
+            }
+        }
+        assert!(matches!(
+            with(&too_many),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_INVOICE_FIELDS",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn self_hosted_installs_have_no_billing_and_the_fake_stays_local() {
+        let mut vars = BASE.to_vec();
+        vars.extend([("ROMULUS_BILLING", "fake"), ("ROMULUS_SINGLE_ORG", "true")]);
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_BILLING",
+                ..
+            })
+        ));
+        let fake = config(&[
+            ("DATABASE_URL", "postgres://localhost/romulus"),
+            ("ROMULUS_PUBLIC_URL", "http://localhost:41000/"),
+            ("ROMULUS_BILLING", "fake"),
+        ])
+        .unwrap()
+        .billing
+        .unwrap();
+        assert_eq!(fake.terms_url.as_str(), "http://localhost:41000/terms");
+        assert!(matches!(fake.stripe, StripeKeys::Fake { .. }));
+        assert!(matches!(
+            config(&[
+                ("DATABASE_URL", "postgres://localhost/romulus"),
+                ("ROMULUS_PUBLIC_URL", "https://romulus.example/"),
+                ("ROMULUS_BILLING", "fake"),
+            ]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_BILLING",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn minimal_environment_is_enough() {

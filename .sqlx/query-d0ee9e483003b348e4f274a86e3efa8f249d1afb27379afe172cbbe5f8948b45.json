@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(*) FROM memberships WHERE org_id = $1)\n                    + (SELECT count(*) FROM invitations\n                       WHERE org_id = $1 AND accepted_at IS NULL AND expires_at > now()\n                         AND lower(email COLLATE pg_unicode_fast) <> lower($2 COLLATE pg_unicode_fast)) AS \"n!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d0ee9e483003b348e4f274a86e3efa8f249d1afb27379afe172cbbe5f8948b45"
+}

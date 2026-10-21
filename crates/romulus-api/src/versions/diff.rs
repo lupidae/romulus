@@ -104,6 +104,7 @@ pub struct DiffSql {
     responses(
         (status = 200, body = VersionDiff),
         (status = 400, description = "`bad_request`: a number that is not one", body = ErrorBody),
+        (status = 402, description = "`plan_limit`: a version past the plan's history window (hosted billing)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such database, or no such version", body = ErrorBody),
         (status = 422, description = "`validation`: a number below 1", body = ErrorBody),
     )
@@ -121,6 +122,18 @@ async fn diff(
     }
     let database = databases::find(&state.db, member.org.id, &slug).await?;
     let (from, to) = summaries(&state.db, database.id, query.from, query.to).await?;
+    // Neither may be past the plan's history window.
+    for version in [&from, &to] {
+        state
+            .billing
+            .shown(
+                &state.db,
+                member.org.id,
+                database.id,
+                (version.id, version.number, version.created_at),
+            )
+            .await?;
+    }
     let key = (from.id, to.id);
     let content = if let Some(content) = state.diffs.get(key) {
         content
@@ -155,7 +168,7 @@ async fn summaries(
     let one = async |number: i32| -> ApiResult<VersionSummary> {
         // The history's query: the newest version below number + 1.
         let rows = match number.checked_add(1) {
-            Some(below) => page(db, database_id, Some(below), 1).await?,
+            Some(below) => page(db, database_id, Some(below), 1, None).await?,
             None => Vec::new(),
         };
         match rows.into_iter().next().filter(|row| row.number == number) {

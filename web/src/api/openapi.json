@@ -624,6 +624,67 @@
         }
       }
     },
+    "/api/billing/webhook": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Stripe's events (see the module docs). Answers 400 `bad_signature` to\nanything not signed with the endpoint's secret.",
+        "operationId": "billing_webhook",
+        "requestBody": {
+          "description": "A Stripe event, as Stripe signed it",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Received"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`bad_signature`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing is off on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`billing_unavailable`: Stripe could not be read; it retries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/databases/{database_id}/imports": {
       "post": {
         "tags": [
@@ -1151,6 +1212,16 @@
               }
             }
           },
+          "402": {
+            "description": "`plan_limit`: the organization's plan has no room for another member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "description": "`wrong_account` or `email_unverified`",
             "content": {
@@ -1380,6 +1451,16 @@
               }
             }
           },
+          "402": {
+            "description": "`plan_limit`: more approvals than the plan allows (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -1400,6 +1481,277 @@
             }
           },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/billing": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "The organization's plan, subscription and usage against every cap. Any\nmember reads it; admins change it.",
+        "operationId": "get_billing",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgBilling"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing is off on this server, or not a member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/billing/checkout": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Starts paying for a plan: the Terms accepted (kept in the audit log, with\na consumer's requests), then a Stripe Checkout Session to send the\nbrowser to. Admins only. An organization already subscribed changes plan\nin the portal.",
+        "operationId": "start_checkout",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartCheckout"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingRedirect"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation`: the Terms (or a consumer's requests) not accepted, or Free",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`billing_unavailable`: Stripe did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/billing/invoices": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "The organization's invoices, newest first. Admins only.",
+        "operationId": "list_invoices",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvoiceSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`billing_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orgs/{org}/billing/portal": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "A Customer Portal session: payment method, invoices, plan changes\n(upgrades now, prorated; downgrades at the period's end) and\ncancelling, straight on the cancel page with `{\"flow\": {\"type\":\n\"cancel\"}}`. Admins only.",
+        "operationId": "open_billing_portal",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenPortal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingRedirect"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`no_customer`: never subscribed; `no_subscription`: nothing to cancel or change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`billing_unavailable`",
             "content": {
               "application/json": {
                 "schema": {
@@ -1487,6 +1839,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Database"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: the plan's databases are all used (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1933,6 +2295,16 @@
           },
           "400": {
             "description": "`bad_request`: a number that is not one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: a version past the plan's history window (hosted billing)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3394,6 +3766,71 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/export": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Every version of the database as SQL, the migrations between them,\ntheir comments and a manifest, in a ZIP streamed as it is written. Any\nmember; on every plan, versions hidden by the plan's history included.",
+        "operationId": "export_database",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A ZIP: `<db>/manifest.json`, `versions/`, `migrations/`, `comments.json`, `drafts/`",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many exports for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/imports": {
       "post": {
         "tags": [
@@ -4058,6 +4495,16 @@
               }
             }
           },
+          "402": {
+            "description": "`plan_limit`: a version past the plan's history window (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "`not_found`: no such database, or no such version",
             "content": {
@@ -4209,6 +4656,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MigrationTest"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: a size or playground hours beyond the plan (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -4573,6 +5030,16 @@
               }
             }
           },
+          "402": {
+            "description": "`plan_limit`: a size or playground hours beyond the plan (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -4799,6 +5266,16 @@
               }
             }
           },
+          "402": {
+            "description": "`plan_limit`: the organization used its playground hours (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Another origin",
             "content": {
@@ -4892,6 +5369,16 @@
               "application/x-ndjson": {
                 "schema": {
                   "$ref": "#/components/schemas/PlaygroundMigrationEvent"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: the organization used its playground hours (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -4996,6 +5483,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Playground"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: the organization used its playground hours (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -5905,6 +6402,16 @@
               }
             }
           },
+          "402": {
+            "description": "`plan_limit`: back over the plan's versions or schema size (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Only admins restore versions",
             "content": {
@@ -6783,6 +7290,71 @@
         }
       }
     },
+    "/api/orgs/{org}/export": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Every live database of the organization, a folder each (as the database\nexport lays it out), and a manifest. Admins only.",
+        "operationId": "export_org",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A ZIP: `manifest.json`, then a folder per database",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`: too many exports for now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/invitations": {
       "get": {
         "tags": [
@@ -6858,6 +7430,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CreatedInvitation"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "`plan_limit`: the plan's members are all there (hosted billing)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -7509,7 +8091,14 @@
           "playground_restarted",
           "passing_test_required_changed",
           "migration_test_acknowledged",
-          "passing_test_overridden"
+          "passing_test_overridden",
+          "terms_accepted",
+          "subscription_changed",
+          "payment_failed",
+          "payment_succeeded",
+          "plan_downgraded",
+          "playground_hours_used_up",
+          "subscription_duplicate_cancelled"
         ]
       },
       "AuditActor": {
@@ -7588,6 +8177,17 @@
               "type": "string"
             },
             "description": "Whose they were, by name as it was (comments deleted)."
+          },
+          "billing": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BillingAudit",
+                "description": "Billing's events: the Terms accepted, a subscription changed, a\npayment, the plan downgraded."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "comments": {
             "type": [
@@ -7825,6 +8425,147 @@
         ],
         "description": "Who made a version: a person (uploads, drafts) or an API token (pushes)."
       },
+      "BillingAudit": {
+        "type": "object",
+        "description": "What a billing event records.",
+        "properties": {
+          "amount_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "buyer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cancel_at_period_end": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from_plan": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Plan",
+                "description": "The plan and status before a change."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "immediate_start": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "A consumer asked for the service to start at once…"
+          },
+          "interval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Interval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invoice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "month": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The month whose playground hours ran out (`2026-10`)."
+          },
+          "plan": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Plan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's subscription status."
+          },
+          "stripe_event": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Stripe event applied (webhooks), and its type."
+          },
+          "subscription": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Stripe subscription it is about, when not the organization's own\n(a duplicate cancelled)."
+          },
+          "terms_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Terms accepted, and as whom (`business`, `consumer`)."
+          },
+          "withdrawal_acknowledged": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "…and acknowledged losing the right of withdrawal once it is fully\nperformed."
+          }
+        }
+      },
+      "BillingRedirect": {
+        "type": "object",
+        "description": "Where to send the browser.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "BuildProgress": {
         "type": "object",
         "description": "Where a build is (while `building`).",
@@ -7853,6 +8594,29 @@
             "minimum": 0
           }
         }
+      },
+      "Buyer": {
+        "type": "string",
+        "description": "Who buys: the checkout page asks a consumer for more.",
+        "enum": [
+          "business",
+          "consumer"
+        ]
+      },
+      "Cap": {
+        "type": "string",
+        "description": "Which cap refused.",
+        "enum": [
+          "members",
+          "databases",
+          "versions",
+          "schema_size",
+          "history",
+          "playground_size",
+          "playground_hours",
+          "approvals",
+          "approvals_override"
+        ]
       },
       "Category": {
         "type": "string",
@@ -10710,6 +11474,46 @@
           }
         }
       },
+      "HoursMeter": {
+        "type": "object",
+        "description": "Playground time this calendar month (UTC).",
+        "required": [
+          "used_seconds",
+          "limit_seconds",
+          "month",
+          "resets_on",
+          "warning",
+          "exhausted"
+        ],
+        "properties": {
+          "exhausted": {
+            "type": "boolean",
+            "description": "All used: new playgrounds and tests are refused, running ones stop."
+          },
+          "limit_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "month": {
+            "type": "string",
+            "format": "date",
+            "description": "The month counted (its first day)."
+          },
+          "resets_on": {
+            "type": "string",
+            "format": "date",
+            "description": "When the count starts again."
+          },
+          "used_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "warning": {
+            "type": "boolean",
+            "description": "80 % used or more."
+          }
+        }
+      },
       "Identity": {
         "type": "string",
         "description": "`pg_attribute.attidentity`, as a word.",
@@ -11194,9 +11998,14 @@
         "required": [
           "single_org",
           "mail",
-          "playgrounds"
+          "playgrounds",
+          "billing"
         ],
         "properties": {
+          "billing": {
+            "type": "boolean",
+            "description": "Plans and billing (the hosted service, `ROMULUS_BILLING`): the app\nshows the billing page and upgrade prompts."
+          },
           "mail": {
             "type": "boolean",
             "description": "romulus sends email (invitations, sign-up and reset links)."
@@ -11210,6 +12019,14 @@
             "description": "One organization per install (`ROMULUS_SINGLE_ORG`): no way to create\nanother."
           }
         }
+      },
+      "Interval": {
+        "type": "string",
+        "description": "How often a subscription is billed (`billing_interval`).",
+        "enum": [
+          "month",
+          "year"
+        ]
       },
       "Invitation": {
         "type": "object",
@@ -11320,6 +12137,58 @@
           "used"
         ]
       },
+      "InvoiceSummary": {
+        "type": "object",
+        "description": "One invoice, as Stripe keeps it.",
+        "required": [
+          "id",
+          "total_cents",
+          "currency",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pdf": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`paid`, `open`, `void`, `uncollectible`, `draft`."
+          },
+          "total_cents": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stripe's page for it (pay, download)."
+          }
+        }
+      },
       "LabelDiff": {
         "type": "object",
         "description": "One enum label. `changed` means moved: its order relative to the labels\npresent on both sides changed, which matters because enums compare by\ndeclaration order.",
@@ -11337,6 +12206,83 @@
           },
           "status": {
             "$ref": "#/components/schemas/Status"
+          }
+        }
+      },
+      "Limits": {
+        "type": "object",
+        "description": "What a plan costs and allows. `None` is unlimited.",
+        "required": [
+          "monthly_cents",
+          "databases",
+          "schema_objects",
+          "playground_size",
+          "playground_hours",
+          "approvals",
+          "approvals_override"
+        ],
+        "properties": {
+          "approvals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most approvals publishing a draft can be made to need (0: the\nsetting is off).",
+            "minimum": 0
+          },
+          "approvals_override": {
+            "type": "boolean",
+            "description": "Admins may publish without the approvals, saying why."
+          },
+          "databases": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "history_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Versions older than this are hidden (never deleted).",
+            "minimum": 0
+          },
+          "members": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Euro cents a month; a year costs [`YEARLY_MONTHS`] of them.",
+            "minimum": 0
+          },
+          "playground_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Running playground time a calendar month (UTC), tests included.",
+            "minimum": 0
+          },
+          "playground_size": {
+            "$ref": "#/components/schemas/PlaygroundSize",
+            "description": "The largest playground (and migration test) it makes."
+          },
+          "schema_objects": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tables and views (materialized and foreign ones too) in one version.",
+            "minimum": 0
+          },
+          "versions_per_database": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -11420,6 +12366,34 @@
               "null"
             ],
             "description": "The SQL compiled, when it does not compile (the errors' lines are\nits): the version's source, or its model as SQL."
+          }
+        }
+      },
+      "Meter": {
+        "type": "object",
+        "description": "What a cap allows and what there is.",
+        "required": [
+          "used"
+        ],
+        "properties": {
+          "database": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The database the figure is about (the one with the most versions, or\nthe largest schema)."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`null`: unlimited."
+          },
+          "used": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -12791,6 +13765,22 @@
           }
         }
       },
+      "OpenPortal": {
+        "type": "object",
+        "properties": {
+          "flow": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PortalChoice",
+                "description": "The portal's home page (payment method, invoices) when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "Org": {
         "type": "object",
         "description": "An organization, as one of its members sees it.",
@@ -12826,6 +13816,55 @@
           "slug": {
             "type": "string",
             "description": "Its address: `/app/<slug>`."
+          }
+        }
+      },
+      "OrgBilling": {
+        "type": "object",
+        "description": "An organization's billing page.",
+        "required": [
+          "plan",
+          "usage",
+          "plans",
+          "can_manage",
+          "terms_url",
+          "terms_version"
+        ],
+        "properties": {
+          "can_manage": {
+            "type": "boolean",
+            "description": "The caller may change billing (admins)."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "The plan in force now: the caps are its."
+          },
+          "plans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanOffer"
+            }
+          },
+          "subscription": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionInfo",
+                "description": "`null` when the organization never subscribed (or its subscription\nended)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terms_url": {
+            "type": "string",
+            "description": "The Terms of Service checkout has people accept."
+          },
+          "terms_version": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
           }
         }
       },
@@ -13237,6 +14276,97 @@
           },
           "status": {
             "$ref": "#/components/schemas/MigrationCheckStatus"
+          }
+        }
+      },
+      "Plan": {
+        "type": "string",
+        "description": "A hosted plan (`billing_plan`). What each allows is the plan table,\n`billing::plans`.",
+        "enum": [
+          "free",
+          "starter",
+          "team",
+          "business"
+        ]
+      },
+      "PlanLimitDetails": {
+        "type": "object",
+        "description": "The `details` of a 402 `plan_limit`.",
+        "required": [
+          "cap",
+          "plan"
+        ],
+        "properties": {
+          "cap": {
+            "$ref": "#/components/schemas/Cap"
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What the plan allows (`null`: not a count, e.g. a playground size)."
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "The organization's plan now."
+          },
+          "upgrade_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Plan",
+                "description": "The cheapest plan that allows it; `null` when none does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What there is now (or what was asked for)."
+          }
+        }
+      },
+      "PlanOffer": {
+        "type": "object",
+        "description": "A plan as the picker shows it.",
+        "required": [
+          "plan",
+          "name",
+          "limits"
+        ],
+        "properties": {
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "monthly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Euro cents; `null` for Free.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "yearly_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -14022,6 +15152,61 @@
           }
         }
       },
+      "PortalChoice": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The subscription's cancel page (it ends at the period's end).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "cancel"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Another plan: straight to confirming it when one is named.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "interval": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Interval"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "plan": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Plan"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "change_plan"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the portal opens on."
+      },
       "Position": {
         "type": "object",
         "description": "A 1-based line and column. Columns count Unicode scalar values, which is\nwhat an editor's \"Ln 3, Col 7\" shows for text without combining marks.",
@@ -14345,6 +15530,17 @@
             "type": "string",
             "format": "date-time",
             "description": "The newest comment the person saw."
+          }
+        }
+      },
+      "Received": {
+        "type": "object",
+        "required": [
+          "received"
+        ],
+        "properties": {
+          "received": {
+            "type": "boolean"
           }
         }
       },
@@ -14707,6 +15903,33 @@
             "items": {
               "$ref": "#/components/schemas/PlaygroundRun"
             }
+          }
+        }
+      },
+      "ScheduledChange": {
+        "type": "object",
+        "description": "A change Stripe will make at the end of the period (a downgrade).",
+        "required": [
+          "plan",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "interval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Interval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
           }
         }
       },
@@ -15447,6 +16670,39 @@
           }
         }
       },
+      "StartCheckout": {
+        "type": "object",
+        "required": [
+          "plan",
+          "interval",
+          "accept_terms",
+          "buyer"
+        ],
+        "properties": {
+          "accept_terms": {
+            "type": "boolean",
+            "description": "The Terms of Service (`terms_url`, `terms_version`) are accepted."
+          },
+          "buyer": {
+            "$ref": "#/components/schemas/Buyer"
+          },
+          "immediate_start": {
+            "type": "boolean",
+            "description": "A consumer asks for the service to start before the withdrawal period\nends…"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/Interval"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "A paid plan."
+          },
+          "withdrawal_acknowledged": {
+            "type": "boolean",
+            "description": "…and acknowledges losing the right of withdrawal once it is fully\nperformed."
+          }
+        }
+      },
       "Status": {
         "type": "string",
         "description": "Where an object, or a part of one, stands between the old and the new\nschema.",
@@ -15553,6 +16809,77 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SubscriptionInfo": {
+        "type": "object",
+        "description": "The subscription, as Stripe last said.",
+        "required": [
+          "plan",
+          "status",
+          "cancel_at_period_end"
+        ],
+        "properties": {
+          "amount_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What a period costs, in cents."
+          },
+          "cancel_at_period_end": {
+            "type": "boolean"
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_period_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The end of the period paid for: the renewal date (or the end, when\ncancelled at the period's end)."
+          },
+          "grace_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "While a payment is overdue: when the plan stops holding."
+          },
+          "interval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Interval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          },
+          "scheduled": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ScheduledChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "Stripe's status: `active`, `past_due`, `canceled`…"
           }
         }
       },
@@ -16222,6 +17549,65 @@
           }
         }
       },
+      "Usage": {
+        "type": "object",
+        "description": "Usage against every cap of the plan in force.",
+        "required": [
+          "members",
+          "databases",
+          "versions",
+          "schema_size",
+          "hidden_versions",
+          "playground_hours",
+          "playground_size",
+          "approvals",
+          "approvals_override"
+        ],
+        "properties": {
+          "approvals": {
+            "$ref": "#/components/schemas/Meter",
+            "description": "The approvals publishing needs, and the most the plan allows."
+          },
+          "approvals_override": {
+            "type": "boolean"
+          },
+          "databases": {
+            "$ref": "#/components/schemas/Meter"
+          },
+          "hidden_versions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Versions kept but hidden by the plan, every database together."
+          },
+          "history_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Versions older than this are hidden; `null`: all are shown.",
+            "minimum": 0
+          },
+          "members": {
+            "$ref": "#/components/schemas/Meter",
+            "description": "Members and pending invitations."
+          },
+          "playground_hours": {
+            "$ref": "#/components/schemas/HoursMeter"
+          },
+          "playground_size": {
+            "$ref": "#/components/schemas/PlaygroundSize"
+          },
+          "schema_size": {
+            "$ref": "#/components/schemas/Meter",
+            "description": "The largest schema (tables and views) among the latest versions."
+          },
+          "versions": {
+            "$ref": "#/components/schemas/Meter",
+            "description": "The database with the most versions."
+          }
+        }
+      },
       "UserTypeKind": {
         "type": "string",
         "enum": [
@@ -16505,9 +17891,15 @@
         "type": "object",
         "description": "A page of versions, newest first.",
         "required": [
-          "versions"
+          "versions",
+          "hidden"
         ],
         "properties": {
+          "hidden": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Older versions kept but not listed: past the plan's history window\n(hosted billing). They come back with a plan that keeps them; an\nexport holds them all."
+          },
           "next_before": {
             "type": [
               "integer",

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seconds FROM playground_usage WHERE org_id = $1 AND month = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "playground_usage",
+            "name": "seconds"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "24d3dff4e9b87062fd15fa044be883f1fbeff47debf86bff323fbeb381d2335c"
+}

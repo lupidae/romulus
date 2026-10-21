@@ -106,6 +106,7 @@ impl FromRequestParts<AppState> for Watch {
     responses(
         (status = 101, description = "Switching to the websocket", body = ConsoleEvent),
         (status = 403, description = "Another origin", body = ErrorBody),
+        (status = 402, description = "`plan_limit`: the organization used its playground hours (hosted billing)", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`playground_not_ready`, `playground_expired`", body = ErrorBody),
         (status = 503, description = "`host_unavailable`", body = ErrorBody),
@@ -125,6 +126,9 @@ pub(super) async fn connect(
     let row = find(&state.db, &database, id).await?;
     ready(&row)?;
     state.playgrounds.host.backend()?;
+    // Connecting starts a stopped playground: not past the organization's
+    // playground hours.
+    crate::billing::hours::check(&state, member.org.id).await?;
     let session = jar
         .get(&state.config.session_cookie)
         .map(|cookie| token::hash(cookie.value()))
@@ -278,6 +282,16 @@ impl Socket {
                                     }
                                     continue;
                                 }
+                                // A run starts a stopped playground: not past the
+                                // organization's playground hours.
+                                if let Err(ApiError::PlanLimit { message, .. }) =
+                                    crate::billing::hours::check(&self.state, self.org).await
+                                {
+                                    if ws.send(refused(id, message)).await.is_err() {
+                                        break None;
+                                    }
+                                    continue;
+                                }
                                 let Some(counted) = playgrounds.start_run(self.person.id) else {
                                     let message = format!("You have {RUNS_PER_PERSON} runs in progress (in this tab or others): wait for one to finish.");
                                     if ws.send(refused(id, message)).await.is_err() {
@@ -286,6 +300,17 @@ impl Socket {
                                     continue;
                                 };
                                 pending.insert(id.clone(), Pending { sql: sql.clone(), explain: *explain, _counted: counted });
+                            }
+                            // `open` starts a stopped playground, as a run does.
+                            if matches!(request, ConsoleRequest::Open)
+                                && let Err(ApiError::PlanLimit { message, .. }) =
+                                    crate::billing::hours::check(&self.state, self.org).await
+                            {
+                                let refusal = ConsoleEvent::Unavailable { code: "plan_limit".into(), reason: message };
+                                if ws.send(text(&refusal)).await.is_err() {
+                                    break None;
+                                }
+                                continue;
                             }
                             let Ok(encoded) = serde_json::to_string(&request) else { continue };
                             if link.to_host.send(encoded).await.is_err() {

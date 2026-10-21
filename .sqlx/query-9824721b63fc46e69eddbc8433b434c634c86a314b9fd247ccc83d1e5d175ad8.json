@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_billing (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9824721b63fc46e69eddbc8433b434c634c86a314b9fd247ccc83d1e5d175ad8"
+}

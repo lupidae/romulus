@@ -43,6 +43,15 @@ It writes `romulus-<time>-manual.dump` and, beside it, a copy of `.env`
 theirs the same way (`pre-upgrade-…`, `pre-restore`). Only daily dumps are
 deleted automatically: remove old manual ones yourself.
 
+## Exporting schemas (not a backup)
+
+Anyone in an organization can download a database as files from its
+settings (**Export database**), and an admin the whole organization from the
+organization's settings: a ZIP with every version's SQL and model, the
+migration between consecutive versions (up and down), the comments and a
+manifest. It is how people take their schemas elsewhere; it does not hold
+drafts, accounts or settings, so keep the dumps above for restoring romulus.
+
 ## Off-host copies
 
 Dumps on the same disk as the database are not a backup: copy them, and

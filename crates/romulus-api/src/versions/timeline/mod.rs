@@ -130,12 +130,20 @@ async fn timeline(
             "Only admins see removed versions.".into(),
         ));
     }
-    let rows = versions(&state.db, database.id, query.removed).await?;
+    // Versions past the plan's history window are not part of it.
+    let cutoff = state
+        .billing
+        .history(&state.db, member.org.id)
+        .await?
+        .cutoff;
+    let rows = versions(&state.db, database.id, query.removed, cutoff).await?;
     let earlier = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "count!" FROM versions
-           WHERE database_id = $1 AND (removed_at IS NULL OR $2)"#,
+        r#"SELECT count(*) AS "count!" FROM versions v
+           WHERE v.database_id = $1 AND (v.removed_at IS NULL OR $2)
+             AND ($3::timestamptz IS NULL OR v.created_at >= $3 OR version_kept_visible(v.id, v.database_id))"#,
         database.id,
         query.removed,
+        cutoff,
     )
     .fetch_one(&state.db)
     .await?
@@ -264,6 +272,7 @@ async fn versions(
     db: &sqlx::PgPool,
     database_id: Uuid,
     removed: bool,
+    cutoff: Option<DateTime<Utc>>,
 ) -> ApiResult<Vec<VersionRow>> {
     let rows = sqlx::query!(
         r#"SELECT v.id, v.number, v.origin AS "origin: VersionOrigin",
@@ -276,10 +285,12 @@ async fn versions(
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
            WHERE v.database_id = $1 AND (v.removed_at IS NULL OR $2)
+             AND ($4::timestamptz IS NULL OR v.created_at >= $4 OR version_kept_visible(v.id, v.database_id))
            ORDER BY v.number DESC LIMIT $3"#,
         database_id,
         removed,
         MAX_VERSIONS,
+        cutoff,
     )
     .fetch_all(db)
     .await?;

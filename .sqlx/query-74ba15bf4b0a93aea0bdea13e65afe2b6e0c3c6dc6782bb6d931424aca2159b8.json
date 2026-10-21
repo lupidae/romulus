@@ -1,27 +1,27 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT migration_sql, message FROM versions WHERE database_id = $1 AND number = $2",
+  "query": "SELECT id, created_at FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "migration_sql",
-        "type_info": "Text",
+        "name": "id",
+        "type_info": "Uuid",
         "origin": {
           "Table": {
             "table": "versions",
-            "name": "migration_sql"
+            "name": "id"
           }
         }
       },
       {
         "ordinal": 1,
-        "name": "message",
-        "type_info": "Text",
+        "name": "created_at",
+        "type_info": "Timestamptz",
         "origin": {
           "Table": {
             "table": "versions",
-            "name": "message"
+            "name": "created_at"
           }
         }
       }
@@ -33,9 +33,9 @@
       ]
     },
     "nullable": [
-      true,
-      true
+      false,
+      false
     ]
   },
-  "hash": "e276da6a2a3fca454c261029c16c0d54cbeca94eda49bba47e6bd9161b714ecf"
+  "hash": "74ba15bf4b0a93aea0bdea13e65afe2b6e0c3c6dc6782bb6d931424aca2159b8"
 }

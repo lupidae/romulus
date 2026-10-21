@@ -16,6 +16,8 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import {
   Menu,
   MenuContent,
@@ -135,7 +137,12 @@ export function VersionView({ org, database, number }: VersionViewProps) {
       />
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1">
-          {failed ? (
+          {isPlanLimit(failed) ? (
+            // Past the plan's history window: kept, shown with a larger plan.
+            <div className="p-4 md:p-6">
+              <PlanLimitNotice error={failed} org={org} />
+            </div>
+          ) : failed ? (
             <div className="p-4 md:p-6">
               <Alert
                 variant="destructive"

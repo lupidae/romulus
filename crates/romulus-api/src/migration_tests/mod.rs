@@ -604,6 +604,7 @@ async fn list(
     request_body = CreateMigrationTest,
     responses(
         (status = 201, body = MigrationTest),
+        (status = 402, description = "`plan_limit`: a size or playground hours beyond the plan (hosted billing)", body = ErrorBody),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`draft_changed` (look at the migration again), `draft_not_open`, `test_queue_full`", body = ErrorBody),
@@ -645,6 +646,10 @@ async fn create(
             seed(request.seed.as_deref())?,
         ),
     };
+    if let Some(plan) = state.billing.plan(&state.db, member.org.id).await? {
+        crate::billing::caps::playground_size(plan, size)?;
+        crate::billing::hours::check(&state, member.org.id).await?;
+    }
     let (data_playground, data_label) = match &data {
         job::Data::Playground { source, label } => (Some(*source), Some(label.clone())),
         job::Data::Generated => (None, None),

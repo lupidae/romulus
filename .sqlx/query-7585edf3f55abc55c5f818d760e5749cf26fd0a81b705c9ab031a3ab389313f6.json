@@ -1,10 +1,32 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT model, source, source_kind AS \"source_kind: SourceKind\"\n           FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
+  "query": "SELECT id, created_at, model, source, source_kind AS \"source_kind: SourceKind\"\n           FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "versions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "model",
         "type_info": "Jsonb",
         "origin": {
@@ -15,7 +37,7 @@
         }
       },
       {
-        "ordinal": 1,
+        "ordinal": 3,
         "name": "source",
         "type_info": "Text",
         "origin": {
@@ -26,7 +48,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 4,
         "name": "source_kind: SourceKind",
         "type_info": {
           "Custom": {
@@ -57,8 +79,10 @@
     "nullable": [
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "d5e46f0d34cb201ab8036e6656ca8da4681f93217e8e9d9493544431ed85f241"
+  "hash": "7585edf3f55abc55c5f818d760e5749cf26fd0a81b705c9ab031a3ab389313f6"
 }

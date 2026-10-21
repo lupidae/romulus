@@ -106,6 +106,10 @@ async fn source(
     }
     let version = match request.version {
         Some(number) => {
+            state
+                .billing
+                .shown_number(&state.db, database.id, number)
+                .await?;
             let id = sqlx::query_scalar!(
                 "SELECT id FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL",
                 database.id,
@@ -269,6 +273,10 @@ pub(super) async fn create(
     let (draft, version) = source(state, database, &request).await?;
     let draft_id = draft.as_ref().map(|(id, _)| *id);
     let size = request.size.unwrap_or(PlaygroundSize::Small);
+    if let Some(plan) = state.billing.plan(&state.db, member.org.id).await? {
+        crate::billing::caps::playground_size(plan, size)?;
+        crate::billing::hours::check(state, member.org.id).await?;
+    }
     let host_size = match size {
         PlaygroundSize::Small => Size::Small,
         PlaygroundSize::Medium => Size::Medium,

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO invitations (org_id, email, role, token_hash, expires_at, created_by)\n         VALUES ($1, 'invitee@romulus.test', 'developer', $2, now() + interval '1 day', $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2722ee0da855959d30faf6c759b745422c09f789f5d1d172cef1efda14ac3541"
+}

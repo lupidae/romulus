@@ -115,6 +115,12 @@ gen-check:
         exit 1
     fi
 
+# Stripe's side of hosted billing from the plan table (crates/romulus-api/src/billing/setup.rs):
+# products, prices, the Customer Portal; idempotent. Reads STRIPE_SECRET_KEY, refuses a live key
+# unless --live. E.g. `just stripe-setup --public-url https://romulus.example --terms-url …`
+stripe-setup *args:
+    cargo run -q -p romulus-api -- stripe-setup {{args}}
+
 # the full gate, as CI runs it (needs DATABASE_URL on a migrated database)
 check:
     cargo +{{nightly}} fmt --all --check

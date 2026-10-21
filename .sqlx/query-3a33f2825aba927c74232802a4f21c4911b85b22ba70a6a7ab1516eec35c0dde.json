@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(jsonb_array_length(model -> 'entities'), 0) AS \"n!\" FROM versions\n               WHERE database_id = $1 AND number = $2 AND removed_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3a33f2825aba927c74232802a4f21c4911b85b22ba70a6a7ab1516eec35c0dde"
+}

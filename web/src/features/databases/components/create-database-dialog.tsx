@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input, Textarea } from "@/components/ui/input";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 
 import { useCreateDatabase } from "../mutations";
 import { DEFAULT_MAJOR, type PgMajor } from "../postgres";
@@ -40,7 +42,7 @@ export function CreateDatabaseDialog({
 }: CreateDatabaseDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent fit className="max-w-lg">
         <DialogHeader>
           <DialogTitle>New database</DialogTitle>
           <DialogDescription>
@@ -77,6 +79,8 @@ function CreateDatabaseForm({
   const [slugEdited, setSlugEdited] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
   const [serverErrors, setServerErrors] = React.useState<Errors>({});
+  // The plan's cap refused it: said where it happened, with the way out.
+  const [refused, setRefused] = React.useState<unknown>(null);
   const nameRef = React.useRef<HTMLInputElement>(null);
   const slugRef = React.useRef<HTMLInputElement>(null);
 
@@ -98,7 +102,9 @@ function CreateDatabaseForm({
       {
         onSuccess: onCreated,
         onError: (error) => {
-          if (error instanceof ApiError && error.code === "slug_taken") {
+          if (isPlanLimit(error)) {
+            setRefused(error);
+          } else if (error instanceof ApiError && error.code === "slug_taken") {
             setServerErrors({ slug: "This organization already has a database at that URL." });
             slugRef.current?.focus();
           } else if (error instanceof ApiError && error.code === "major_unavailable") {
@@ -180,6 +186,7 @@ function CreateDatabaseForm({
           onChange={(e) => setDescription(e.target.value)}
         />
       </Field>
+      <PlanLimitNotice error={refused} org={org} />
       <DialogFooter>
         <Button onClick={onCancel}>Cancel</Button>
         <Button type="submit" variant="primary" loading={create.isPending}>

@@ -76,7 +76,7 @@ use uuid::Uuid;
 
 use self::{
     layout::VersionLayout,
-    store::{NewVersion, Stored, store},
+    store::{NewVersion, Stored, store_capped},
 };
 use crate::{
     ApiError, ApiResult, AppState,
@@ -266,6 +266,10 @@ pub struct VersionPage {
     pub versions: Vec<VersionSummary>,
     /// Pass as `before` for the next page; `null` on the last one.
     pub next_before: Option<i32>,
+    /// Older versions kept but not listed: past the plan's history window
+    /// (hosted billing). They come back with a plan that keeps them; an
+    /// export holds them all.
+    pub hidden: i64,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -352,11 +356,14 @@ impl From<SummaryRow> for VersionSummary {
 
 /// Up to `limit` versions numbered below `before` (any, when `None`), newest
 /// first, as summaries: the history's pages, and a diff's two versions.
+/// With a `cutoff` (the plan's history window), older versions are left
+/// out but the latest and those open drafts are based on.
 async fn page(
     db: &PgPool,
     database_id: Uuid,
     before: Option<i32>,
     limit: i64,
+    cutoff: Option<DateTime<Utc>>,
 ) -> Result<Vec<SummaryRow>, sqlx::Error> {
     sqlx::query_as!(
         SummaryRow,
@@ -369,10 +376,12 @@ async fn page(
            LEFT JOIN users u ON u.id = v.created_by
            LEFT JOIN api_tokens t ON t.id = v.created_by_token
            WHERE v.database_id = $1 AND v.removed_at IS NULL AND ($2::int IS NULL OR v.number < $2)
+             AND ($4::timestamptz IS NULL OR v.created_at >= $4 OR version_kept_visible(v.id, v.database_id))
            ORDER BY v.number DESC LIMIT $3"#,
         database_id,
         before,
         limit,
+        cutoff,
     )
     .fetch_all(db)
     .await
@@ -562,19 +571,43 @@ fn compile_failed(diagnostics: &[Diagnostic]) -> ApiError {
 async fn list(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     Path((_, slug)): Path<(String, String)>,
     Query(query): Query<ListVersions>,
 ) -> ApiResult<Json<VersionPage>> {
     let limit = query.limit.unwrap_or(50).clamp(1, 100);
     let database = databases::find(&db, member.org.id, &slug).await?;
-    let mut rows = page(&db, database.id, query.before, limit + 1).await?;
+    let cutoff = billing.history(&db, member.org.id).await?.cutoff;
+    let mut rows = page(&db, database.id, query.before, limit + 1, cutoff).await?;
     let more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
     rows.truncate(rows.len().min(usize::try_from(limit).unwrap_or(usize::MAX)));
     let next_before = more.then(|| rows.last().map(|r| r.number)).flatten();
+    let hidden = match cutoff {
+        None => 0,
+        Some(cutoff) => hidden_versions(&db, database.id, cutoff).await?,
+    };
     Ok(Json(VersionPage {
         versions: rows.into_iter().map(Into::into).collect(),
         next_before,
+        hidden,
     }))
+}
+
+/// Live versions of a database past the history window `cutoff`.
+pub(crate) async fn hidden_versions(
+    db: &PgPool,
+    database_id: Uuid,
+    cutoff: DateTime<Utc>,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM versions v
+           WHERE v.database_id = $1 AND v.removed_at IS NULL AND v.created_at < $2
+             AND NOT version_kept_visible(v.id, v.database_id)"#,
+        database_id,
+        cutoff,
+    )
+    .fetch_one(db)
+    .await
 }
 
 /// Uploads SQL as the next version. Developers and admins.
@@ -639,9 +672,10 @@ async fn upload(
         discussion: Vec::new(),
         renames: None,
     };
+    let limits = state.billing.version_limits(&state.db, database.id).await?;
     // Uploads always create a version (`skip_unchanged` is false): a person
     // asked for it, and the source may differ even when the model does not.
-    let Stored::Created(version) = store(&state.db, new, false).await? else {
+    let Stored::Created(version) = store_capped(&state.db, new, false, limits).await? else {
         unreachable!("store skips an unchanged model only when asked to");
     };
     // Open drafts of the database learn their base moved.
@@ -747,10 +781,20 @@ pub(crate) fn empty(like: &Schema) -> Schema {
 async fn get(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     Path((_, slug, number)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<VersionDetail>> {
     let database = databases::find(&db, member.org.id, &slug).await?;
-    Ok(Json(detail(&db, database.id, Some(number)).await?))
+    let version = detail(&db, database.id, Some(number)).await?;
+    billing
+        .shown(
+            &db,
+            member.org.id,
+            database.id,
+            (version.id, version.number, version.created_at),
+        )
+        .await?;
+    Ok(Json(version))
 }
 
 /// One version's model as SQL, JSON, DBML and Mermaid.
@@ -772,11 +816,12 @@ async fn get(
 async fn texts(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     Path((_, slug, number)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<VersionTexts>> {
     let database = databases::find(&db, member.org.id, &slug).await?;
     let row = sqlx::query!(
-        r#"SELECT model, source, source_kind AS "source_kind: SourceKind"
+        r#"SELECT id, created_at, model, source, source_kind AS "source_kind: SourceKind"
            FROM versions WHERE database_id = $1 AND number = $2 AND removed_at IS NULL"#,
         database.id,
         number,
@@ -786,6 +831,14 @@ async fn texts(
     let Some(row) = row else {
         return Err(missing(&db, database.id, Some(number)).await);
     };
+    billing
+        .shown(
+            &db,
+            member.org.id,
+            database.id,
+            (row.id, number, row.created_at),
+        )
+        .await?;
     let model = Schema::deserialize(&row.model).map_err(ApiError::internal)?;
     // Rendering a few hundred tables takes milliseconds; off the async
     // workers all the same.
@@ -823,11 +876,12 @@ async fn texts(
 async fn written_migration(
     member: Member,
     State(db): State<PgPool>,
+    State(billing): State<crate::billing::Billing>,
     Path((_, slug, number)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<WrittenMigration>> {
     let database = databases::find(&db, member.org.id, &slug).await?;
     let row = sqlx::query!(
-        "SELECT migration_sql, message FROM versions WHERE database_id = $1 AND number = $2",
+        "SELECT id, created_at, migration_sql, message FROM versions WHERE database_id = $1 AND number = $2",
         database.id,
         number,
     )
@@ -836,6 +890,14 @@ async fn written_migration(
     .ok_or_else(|| {
         ApiError::not_found(format!("There is no version {number} of this database."))
     })?;
+    billing
+        .shown(
+            &db,
+            member.org.id,
+            database.id,
+            (row.id, number, row.created_at),
+        )
+        .await?;
     let sql = row.migration_sql.ok_or_else(|| {
         ApiError::not_found(format!(
             "v{number} was not written as a migration: compare it with v{} for the migration romulus generates.",

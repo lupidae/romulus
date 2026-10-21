@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toaster";
 import { meQuery } from "@/features/auth/queries";
+import { OrgExportCard } from "@/features/databases/components/export-card";
 import { ApprovalsCard } from "@/features/orgs/components/approvals-card";
 import { TestsCard } from "@/features/orgs/components/tests-card";
 import { useLeaveOrg, useUpdateOrg } from "@/features/orgs/mutations";
@@ -43,6 +44,7 @@ function General() {
       <OrgForm key={`${org.id}:${org.name}:${org.slug}`} org={org} editable={admin} />
       <ApprovalsCard org={org} editable={admin} />
       <TestsCard org={org} editable={admin} />
+      {admin && <OrgExportCard org={org.slug} />}
       <LeaveCard org={org} />
     </>
   );

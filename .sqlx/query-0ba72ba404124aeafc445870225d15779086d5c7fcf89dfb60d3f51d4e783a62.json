@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM billing_events WHERE id = $1) AS \"handled!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "handled!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ba72ba404124aeafc445870225d15779086d5c7fcf89dfb60d3f51d4e783a62"
+}

@@ -27,6 +27,8 @@ import {
   PageIcon,
 } from "@/components/icons";
 import { toast } from "@/components/ui/toaster";
+import { PlanLimitNotice } from "@/features/billing/components/upgrade-prompt";
+import { isPlanLimit } from "@/features/billing/plan-limit";
 import { MigrationView, type RenameControl } from "@/features/migration/components/migration-view";
 import { MigrationTestButton, TestedLine } from "@/features/migration-test/components/test-sheet";
 import { type TestSource, testsQuery } from "@/features/migration-test/queries";
@@ -177,6 +179,8 @@ function PublishBody({
         onSuccess: (version) => onPublished(version.number),
         onError: (error) => {
           if (!(error instanceof ApiError)) return setNotice("Could not publish. Try again.");
+          // A cap of the plan (versions, schema size): said with the way out.
+          if (isPlanLimit(error)) return setNotice(null);
           if (
             [
               "draft_changed",
@@ -213,6 +217,7 @@ function PublishBody({
       </DialogHeader>
 
       {notice && <Alert variant="warning" title={notice} />}
+      <PlanLimitNotice error={publish.error} org={org} />
 
       {preview.isPending ? (
         <div aria-busy className="grid gap-3" aria-label="Loading the changes">
