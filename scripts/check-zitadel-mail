@@ -28,11 +28,15 @@ token=${ROMULUS_ZITADEL_TOKEN:-}
 [ -n "$token" ] || fail "no ROMULUS_ZITADEL_TOKEN in $dev_dir/zitadel/oidc.env (run just up)"
 mail="http://localhost:$ROMULUS_MAIL_PORT/api/v1"
 email=$(jq -r '.[0].email' "$dev_dir/zitadel/users.json")
+# The token in a header file, never in curl's arguments (ps shows those).
+headers=$(mktemp)
+trap 'rm -f "$headers"' EXIT
+printf 'Authorization: Bearer %s\n' "$token" > "$headers"
 
 # zitadel METHOD PATH [JSON] → the body; fails on a non-2xx.
 zitadel() {
-    curl -sS --fail-with-body -X "$1" "$issuer$2" -H "Authorization: Bearer $token" \
-        -H 'Content-Type: application/json' ${3:+--data "$3"}
+    printf '%s' "${3:-}" | curl -sS --fail-with-body -X "$1" "$issuer$2" -H @"$headers" \
+        -H 'Content-Type: application/json' ${3:+--data-binary @-}
 }
 # found QUERY → how many messages the catcher has for a Mailpit search.
 found() { curl -sS "$mail/search?query=$(jq -rn --arg q "$1" '$q | @uri')" | jq '.messages_count'; }
@@ -61,6 +65,6 @@ created=$(zitadel POST /v2/users/human "$(jq -cn --arg e "$throwaway" '{
     username: $e, profile: {givenName: "Check", familyName: "Mail"}, email: {email: $e, isVerified: true}
 }')" | jq -r .userId)
 zitadel DELETE "/v2/users/$created" >/dev/null
-status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$issuer/v2/users/$created" -H "Authorization: Bearer $token")
+status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$issuer/v2/users/$created" -H @"$headers")
 [ "$status" = 404 ] || fail "deleting $created again answered $status, not 404"
 ok "the romulus-api token deletes users (a throwaway one, then 404 for it)"

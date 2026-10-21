@@ -1124,17 +1124,26 @@ Policy promise the same. All of it lives in the API's `retention` module.
   `Deleter::delete_account` for the signed-in person.
 - **An account** goes with its sessions, password, devices, links,
   personal access tokens, memberships, approvals and unread markers, and with
-  every organization it is the only member of. Its single sign-on user is deleted at Zitadel first
+  every organization it is the only member of. All of it under the account's
+  row lock, planned and checked again there: a sign-in or a token's use
+  meanwhile waits, and an inactive account used is kept. Its single sign-on
+  user is deleted at Zitadel under that lock, before the rows
   (`ROMULUS_ZITADEL_TOKEN`, a machine user the provisioner makes with
   IAM_USER_MANAGER; without it the command prints the user to delete in the
-  console). What the person wrote in organizations they shared is the
+  console, and the log warns with its id; rows failing after Zitadel's delete
+  are logged as an error with the id: running it again finishes). What the person wrote in organizations they shared is the
   organization's and stays (versions, comments, frozen approvals: by a
   deleted account); the audit log keeps the name it recorded, as for someone
   who left. Requests about those go to the organization, the controller.
 - **An organization** goes in one statement with everything it holds
   (`ON DELETE CASCADE`; the history triggers allow it once the parent row is
-  gone). Refused while a Stripe subscription is live: cancel it first (its
-  invoices stay in Stripe). Its members keep their accounts.
+  gone). Refused unless its Stripe subscription, if any, is over for good
+  (`canceled`, `incomplete_expired`: an `incomplete` one may still be paid, a
+  `paused` one resume): cancel it first (its invoices stay in Stripe). The
+  same holds for an organization going with its only member. Its members
+  keep their accounts.
+- **The commands show the plan first**, `--dry-run` or refused, then the
+  refusal (exit 4).
 - **An organization whose admins all left**: it cannot happen, the invariant
   `organization_needs_an_admin` holds. Deleting on request the only admin of
   an organization others belong to is refused (appoint another admin, or ask
@@ -1145,18 +1154,32 @@ Policy promise the same. All of it lives in the API's `retention` module.
 - **Confirmed by email** (mail on): the deleted address, or the
   organization's admins. Logged in the sign-in log (`account_deleted`,
   `organization_deleted`, kept its 90 days).
-- **Purges**, hourly by one sweeper: deleted databases 30 days after their
-  deletion (audited `database_purged` at the organization's level, kept out
-  of the other databases' activity), invitations nobody accepted 30 days
-  after they expired (revoked ones are deleted at once; accepted ones are the
-  membership's record). Removed versions already purge after 30 days.
+- **Purges**, hourly by one sweeper (one process at a time: an advisory
+  lock): deleted databases 30 days after their deletion, invitations nobody
+  accepted 30 days after they expired (revoked ones are deleted at once;
+  accepted ones are the membership's record). Removed versions already purge
+  after 30 days.
+- **A purged database's audit events stay** the organization's history (who
+  published what, with which approvals): `audit_events.database_id` is
+  `ON DELETE SET NULL`, and `database_name`, recorded with every event about
+  a database, says which; such events never show in another database's
+  activity, and a last one, `database_purged`, says when it went. They go
+  with the organization only.
 - **Inactive accounts** (`ROMULUS_DELETE_INACTIVE_ACCOUNTS`, off by default so
   a self-hosted install never loses an account; the hosted service turns it
-  on; needs mail): `users.last_seen_at` moves at every sign-in and at most
-  hourly with a session's use or an agent's (a personal access token). At 3 years less 30 days the address is emailed
-  the date; the account is deleted 30 days later at the earliest, if unused
-  since (using it clears the notice). An account alone in an organization
-  that still pays is left alone.
+  on; needs mail, and `ROMULUS_ZITADEL_TOKEN` with single sign-on):
+  `users.last_seen_at` moves (`retention::activity::account_used`, at most
+  hourly) at every sign-in and with the use of a session, of a personal
+  access token, or of an API token the account made (CI pushing to its
+  database); OAuth tokens will call the same. The migration counts those
+  already recorded. At 3 years less 30 days the address is emailed the date;
+  the account is deleted 30 days later at the earliest, if unused since
+  (using it clears the notice). The notice goes once: claimed by an
+  `UPDATE … RETURNING` (an hour's lease) before the send, recorded only once
+  the mail server took it, the claim given back if not. A failure (mail
+  refused, Zitadel down) puts that account off, an hour doubling each time
+  up to a week, so failing accounts never hold the others up. An account
+  alone in an organization whose subscription is not over is left alone.
 - **The running API is told** what a deletion ended wherever it ran (the CLI
   is another process): `pg_notify` per database and membership in the
   deletion's transaction, a listener closing those drafts and sockets.
@@ -1169,8 +1192,9 @@ Policy promise the same. All of it lives in the API's `retention` module.
   settings (`ROMULUS_SMTP_*`, `ROMULUS_MAIL_FROM`), so sign-up codes and
   password resets arrive.
 - Deviations from the data model: `users.last_seen_at`,
-  `users.inactivity_notice_at`; `users.updated_at` moves with identity
-  columns only.
+  `users.inactivity_notice_at`, `inactivity_failures`, `inactivity_retry_at`;
+  `audit_events.database_name`, its `database_id` `ON DELETE SET NULL`;
+  `users.updated_at` moves with identity columns only.
 
 ## Decided
 

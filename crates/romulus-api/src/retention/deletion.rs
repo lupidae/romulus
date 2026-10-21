@@ -5,12 +5,14 @@
 //! - **An organization** goes in one statement: its databases, versions,
 //!   drafts, comments, tokens, playgrounds and tests, members, invitations,
 //!   audit log, billing rows and playground hours (`ON DELETE CASCADE`).
-//!   Refused while a subscription is live: cancel it in Stripe first (its
-//!   invoices stay there, as the law requires). Its admins are emailed.
+//!   Refused while it has a Stripe subscription that is not over for good
+//!   (`canceled`, `incomplete_expired`: `billing::state::ENDED_STATUSES`):
+//!   cancel it in Stripe first (its invoices stay there, as the law
+//!   requires). Its admins are emailed.
 //! - **An account** goes with its sessions, password, devices, links,
 //!   personal access tokens, memberships, approvals and unread markers, and
-//!   with every organization
-//!   it is the only member of. What it wrote in the organizations it leaves
+//!   with every organization it is the only member of (refused, as above,
+//!   when one has a subscription). What it wrote in the organizations it leaves
 //!   is theirs and stays (versions, comments, approvals: by a deleted
 //!   account; the audit log keeps the name it recorded); so do invitations
 //!   others sent to its address (they expire). A single sign-on account is
@@ -42,7 +44,7 @@ use crate::{
         events::{self, Event},
         throttle,
     },
-    billing::state::LIVE_STATUSES,
+    billing::state::ENDED_STATUSES,
     domain::{AuditAction, AuthEventKind, Role},
     mail::{Letter, Mailer},
 };
@@ -143,8 +145,9 @@ pub struct OrgPlan {
     pub members: i64,
     pub invitations: i64,
     pub playgrounds: i64,
-    /// A Stripe subscription still runs (`active`, `trialing`, `past_due`,
-    /// `unpaid`): refused until it is cancelled.
+    /// The status of a Stripe subscription that is not over for good
+    /// (anything but `canceled` and `incomplete_expired`: it may still
+    /// charge, or resume): refused until it is.
     pub subscription: Option<String>,
 }
 
@@ -155,8 +158,8 @@ pub enum DeletionError {
     /// On request, the only admin of organizations others belong to.
     #[error("the only admin of {}", slugs(.0))]
     LastAdmin(Vec<OrgRef>),
-    /// An organization that would go still has a live subscription.
-    #[error("{} still has a live subscription", slugs(.0))]
+    /// An organization that would go has a subscription not over for good.
+    #[error("{} still has a subscription", slugs(.0))]
     Paying(Vec<OrgRef>),
     /// An inactive account used again since it was found.
     #[error("the account was used again")]
@@ -241,27 +244,16 @@ impl Deleter {
     }
 
     /// Deletes the account `user_id`: see the module documentation.
+    ///
+    /// Everything happens under the account's row lock, the call to the
+    /// identity provider included: a sign-in or a token's use waits for it
+    /// (they write the row, `retention::activity`), so an inactive account
+    /// used meanwhile is seen used and kept, at Zitadel too.
     pub async fn delete_account(
         &self,
         user_id: Uuid,
         by: By,
     ) -> Result<AccountDeleted, DeletionError> {
-        let plan = self
-            .plan_account(user_id)
-            .await?
-            .ok_or(DeletionError::NotFound)?;
-        refuse(&plan, by)?;
-        if by == By::Inactivity && !still_due(&self.db, user_id).await? {
-            return Err(DeletionError::NoLongerDue);
-        }
-        // The identity provider first: should the rest fail, a run again
-        // finds it gone there and finishes; the other way round, the person
-        // could sign in again into a fresh, empty account.
-        let idp = match plan.subject() {
-            Some(subject) => idp::delete(self.zitadel.as_ref(), subject).await?,
-            None => IdpOutcome::NotThere,
-        };
-
         let mut tx = crate::db::begin_read_committed(&self.db).await?;
         let locked = sqlx::query_scalar!("SELECT id FROM users WHERE id = $1 FOR UPDATE", user_id)
             .fetch_optional(&mut *tx)
@@ -269,7 +261,6 @@ impl Deleter {
         if locked.is_none() {
             return Err(DeletionError::NotFound);
         }
-        // Again under the lock: memberships may have moved meanwhile.
         let plan = plan_account(&mut tx, user_id)
             .await?
             .ok_or(DeletionError::NotFound)?;
@@ -277,59 +268,37 @@ impl Deleter {
         if by == By::Inactivity && !still_due(&mut *tx, user_id).await? {
             return Err(DeletionError::NoLongerDue);
         }
-        let mut appointed = Vec::new();
-        for membership in &plan.memberships {
-            match &membership.fate {
-                Fate::Leaves => {
-                    live::notify(
-                        &mut tx,
-                        Notice::MemberRemoved {
-                            org: membership.org.id,
-                            user: user_id,
-                        },
-                    )
-                    .await?;
-                }
-                Fate::DeletedWith(org) => {
-                    delete_org_rows(&mut tx, org, &format!("with the account {}", plan.email))
-                        .await?;
-                }
-                Fate::LastAdmin { .. } => {
-                    // Only for inactivity: `refuse` stopped a request.
-                    if let Some(successor) = appoint(&mut tx, &membership.org, &plan).await? {
-                        appointed.push((membership.org.clone(), successor));
-                    }
-                    live::notify(
-                        &mut tx,
-                        Notice::MemberRemoved {
-                            org: membership.org.id,
-                            user: user_id,
-                        },
-                    )
-                    .await?;
-                }
-            }
+        // The identity provider before the rows: should they fail, a run
+        // again finds the user gone there and finishes; the other way round,
+        // the person could sign in again into a fresh, empty account.
+        let idp = match plan.subject() {
+            Some(subject) => idp::delete(self.zitadel.as_ref(), subject).await?,
+            None => IdpOutcome::NotThere,
+        };
+        if let IdpOutcome::Manual {
+            user_id: zitadel_user,
+        } = &idp
+        {
+            tracing::warn!(
+                account = %user_id,
+                zitadel_user = %zitadel_user,
+                "deleting an account: delete this user in Zitadel's console too (ROMULUS_ZITADEL_TOKEN is not set)"
+            );
         }
-        throttle::clear(&mut *tx, &plan.email).await?;
-        sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
-            .execute(&mut *tx)
-            .await?;
-        events::record(
-            &mut *tx,
-            Event::new(AuthEventKind::AccountDeleted)
-                .email(&plan.email)
-                .details(json!({
-                    "by": by.as_str(),
-                    "account": user_id,
-                    "left": plan.memberships.iter()
-                        .filter(|m| !matches!(m.fate, Fate::DeletedWith(_)))
-                        .map(|m| &m.org.slug).collect::<Vec<_>>(),
-                    "organizations_deleted": plan.deletes().iter().map(|o| &o.org.slug).collect::<Vec<_>>(),
-                    "identity_provider": idp_word(&idp),
-                })),
-        )
-        .await?;
-        tx.commit().await?;
+        let appointed = match delete_rows(tx, &plan, by, &idp).await {
+            Ok(appointed) => appointed,
+            Err(err) => {
+                if idp == IdpOutcome::Deleted {
+                    tracing::error!(
+                        account = %user_id,
+                        zitadel_user = plan.subject().unwrap_or_default(),
+                        error = %crate::error::Chain(&err),
+                        "deleting an account: its Zitadel user is deleted but the account is not; run the deletion again (Zitadel now answers that user gone)"
+                    );
+                }
+                return Err(err.into());
+            }
+        };
         tracing::info!(account = %user_id, by = by.as_str(), "account deleted");
 
         let emailed = self.tell_account(&plan, by).await;
@@ -597,11 +566,12 @@ async fn plan_org(db: impl PgExecutor<'_>, org_id: Uuid) -> Result<Option<OrgPla
                   (SELECT count(*) FROM memberships m WHERE m.org_id = o.id) AS "members!",
                   (SELECT count(*) FROM invitations i WHERE i.org_id = o.id AND i.accepted_at IS NULL) AS "invitations!",
                   (SELECT count(*) FROM playgrounds p WHERE p.org_id = o.id) AS "playgrounds!",
-                  (SELECT b.status FROM org_billing b
-                   WHERE b.org_id = o.id AND b.subscription_id IS NOT NULL AND b.status = ANY($2)) AS subscription
+                  (SELECT coalesce(b.status, 'unknown') FROM org_billing b
+                   WHERE b.org_id = o.id AND b.subscription_id IS NOT NULL
+                     AND (b.status IS NULL OR NOT (b.status = ANY($2)))) AS subscription
            FROM organizations o WHERE o.id = $1"#,
         org_id,
-        &LIVE_STATUSES.map(str::to_owned) as &[String],
+        &ENDED_STATUSES.map(str::to_owned) as &[String],
     )
     .fetch_optional(db)
     .await?;
@@ -670,6 +640,71 @@ async fn delete_org_rows(
     )
     .await?;
     Ok(())
+}
+
+/// The account's rows, in `tx` (holding its row lock), then the commit:
+/// the organizations it alone holds, the admins appointed, the sign-in
+/// log's event, the notices for the running API.
+async fn delete_rows(
+    mut tx: sqlx::Transaction<'static, sqlx::Postgres>,
+    plan: &AccountPlan,
+    by: By,
+    idp: &IdpOutcome,
+) -> Result<Vec<(OrgRef, Successor)>, sqlx::Error> {
+    let user_id = plan.user_id;
+    let mut appointed = Vec::new();
+    for membership in &plan.memberships {
+        match &membership.fate {
+            Fate::Leaves => {
+                live::notify(
+                    &mut tx,
+                    Notice::MemberRemoved {
+                        org: membership.org.id,
+                        user: user_id,
+                    },
+                )
+                .await?;
+            }
+            Fate::DeletedWith(org) => {
+                delete_org_rows(&mut tx, org, &format!("with the account {}", plan.email)).await?;
+            }
+            Fate::LastAdmin { .. } => {
+                // Only for inactivity: `refuse` stopped a request.
+                if let Some(successor) = appoint(&mut tx, &membership.org, plan).await? {
+                    appointed.push((membership.org.clone(), successor));
+                }
+                live::notify(
+                    &mut tx,
+                    Notice::MemberRemoved {
+                        org: membership.org.id,
+                        user: user_id,
+                    },
+                )
+                .await?;
+            }
+        }
+    }
+    throttle::clear(&mut *tx, &plan.email).await?;
+    sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
+        .execute(&mut *tx)
+        .await?;
+    events::record(
+        &mut *tx,
+        Event::new(AuthEventKind::AccountDeleted)
+            .email(&plan.email)
+            .details(json!({
+                "by": by.as_str(),
+                "account": user_id,
+                "left": plan.memberships.iter()
+                    .filter(|m| !matches!(m.fate, Fate::DeletedWith(_)))
+                    .map(|m| &m.org.slug).collect::<Vec<_>>(),
+                "organizations_deleted": plan.deletes().iter().map(|o| &o.org.slug).collect::<Vec<_>>(),
+                "identity_provider": idp_word(idp),
+            })),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(appointed)
 }
 
 /// Who becomes an admin.

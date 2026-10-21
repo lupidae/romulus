@@ -359,11 +359,15 @@ async fn run_admin(command: AdminCommand) -> Result<(), MainError> {
                 writeln!(stdout)?;
             }
         }
+        // The plan first, refused or not; then the refusal (exit 4).
         AdminCommand::DeleteUser { email, dry_run } => {
             let mailer = romulus_api::mail::Mailer::from_config(&config);
             let done = admin::delete_user(&pool, &config, mailer, &email, dry_run).await?;
             for line in done.report() {
                 writeln!(stdout, "{line}")?;
+            }
+            if let Some(refused) = done.refused() {
+                return Err(AdminError::Refused(refused.to_owned()).into());
             }
         }
         AdminCommand::DeleteOrg { slug, dry_run } => {
@@ -371,6 +375,9 @@ async fn run_admin(command: AdminCommand) -> Result<(), MainError> {
             let done = admin::delete_org(&pool, &config, mailer, &slug, dry_run).await?;
             for line in done.report() {
                 writeln!(stdout, "{line}")?;
+            }
+            if let Some(refused) = done.refused() {
+                return Err(AdminError::Refused(refused.to_owned()).into());
             }
         }
         AdminCommand::MailTest(_) => unreachable!("handled above"),
@@ -517,4 +524,43 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutting down: finishing in-flight requests");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(line: &str) -> Vec<String> {
+        line.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn deletions_take_one_target_and_a_dry_run_anywhere() {
+        for line in [
+            "delete-user ada@acme.io --dry-run",
+            "delete-user --dry-run ada@acme.io",
+        ] {
+            assert!(matches!(
+                parse(&args(line)),
+                Ok(Command::Admin(AdminCommand::DeleteUser { ref email, dry_run: true })) if email == "ada@acme.io"
+            ));
+        }
+        assert!(matches!(
+            parse(&args("delete-org acme")),
+            Ok(Command::Admin(AdminCommand::DeleteOrg { ref slug, dry_run: false })) if slug == "acme"
+        ));
+        for wrong in ["delete-user", "delete-org a b", "delete-org --force acme"] {
+            assert!(
+                matches!(parse(&args(wrong)), Err(MainError::Usage)),
+                "{wrong}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_deletion_exits_4() {
+        let refused = MainError::Admin(AdminError::Refused("cancel it first".to_owned()));
+        assert_eq!(refused.exit_code(), 4);
+        assert_eq!(MainError::Usage.exit_code(), 1);
+    }
 }

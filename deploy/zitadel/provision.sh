@@ -68,18 +68,26 @@ log() { echo "zitadel-provision: $*" >&2; }
 # the container reports healthy; the wait only covers a slow volume.
 for _ in $(seq 1 30); do [ -s "$PAT_FILE" ] && break; sleep 1; done
 [ -s "$PAT_FILE" ] || { log "no PAT at $PAT_FILE (was the zitadel-bootstrap volume recreated without the database?)"; exit 1; }
-pat=$(tr -d '\n' < "$PAT_FILE")
+# Secrets never travel in a command's arguments (anyone on the host can read
+# those, in ps): tokens go to curl in header files only this script reads,
+# request bodies on its standard input, passwords to jq through its
+# environment ($ENV).
+headers=$(mktemp)
+token_headers=$(mktemp)
+trap 'rm -f "$headers" "$token_headers"' EXIT
+printf 'Authorization: Bearer %s\n' "$(tr -d '\n' < "$PAT_FILE")" > "$headers"
 
 # api METHOD PATH [JSON] → response body on stdout. A non-2xx is fatal, with
 # Zitadel's message, unless the body carries the error id in $TOLERATE.
 api() {
     local method=$1 path=$2 body=${3:-} response status
-    response=$(curl -sS -X "$method" "$ZITADEL_URL$path" \
-        -H "Host: $ZITADEL_HOST" \
-        -H "Authorization: Bearer $pat" \
-        -H 'Content-Type: application/json' \
-        ${body:+--data "$body"} \
-        -w '\n%{http_code}')
+    local curl=(curl -sS -X "$method" "$ZITADEL_URL$path" -H "Host: $ZITADEL_HOST" -H @"$headers"
+        -H 'Content-Type: application/json' -w '\n%{http_code}')
+    if [ -n "$body" ]; then
+        response=$(printf '%s' "$body" | "${curl[@]}" --data-binary @-)
+    else
+        response=$("${curl[@]}")
+    fi
     status=${response##*$'\n'}
     response=${response%$'\n'*}
     if [ "${status:0:1}" != 2 ] && { [ -z "${TOLERATE:-}" ] || [[ $response != *"$TOLERATE"* ]]; }; then
@@ -118,11 +126,11 @@ ensure_account() {
         log "deleted the unverified account $(jq -r --arg id "$stale" '.[] | select(.userId == $id) | .preferredLoginName' <<<"$found") ($stale): anyone could have made it"
     done
     password="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')Aa1!" # every character class the policy asks for
-    body=$(jq -cn --arg u "$email" --arg g "$given" --arg f "$family" --arg p "$password" '{
+    body=$(PASSWORD=$password jq -cn --arg u "$email" --arg g "$given" --arg f "$family" '{
         username: $u,
         profile: {givenName: $g, familyName: $f, displayName: ($g + " " + $f)},
         email: {email: $u, isVerified: true},
-        password: {password: $p, changeRequired: true}
+        password: {password: $ENV.PASSWORD, changeRequired: true}
     }')
     user_id=$(api POST /v2/users/human "$body" | jq -r .userId)
     mkdir -p "$OUT"
@@ -210,20 +218,20 @@ ensure_user() {
         "$(jq -cn --arg u "$email" '{queries: [{userNameQuery: {userName: $u, method: "TEXT_QUERY_METHOD_EQUALS"}}]}')" \
         | jq -r '.result[0].userId // empty')
     if [ -z "$user_id" ]; then
-        body=$(jq -cn --arg u "$email" --arg g "$given" --arg f "$family" --arg p "$DEV_PASSWORD" '{
+        body=$(PASSWORD=$DEV_PASSWORD jq -cn --arg u "$email" --arg g "$given" --arg f "$family" '{
             username: $u,
             profile: {givenName: $g, familyName: $f, displayName: ($g + " " + $f)},
             email: {email: $u, isVerified: true},
-            password: {password: $p, changeRequired: false}
+            password: {password: $ENV.PASSWORD, changeRequired: false}
         }')
         user_id=$(api POST /v2/users/human "$body" | jq -r .userId)
         log "created user $email ($user_id)"
     else
         api POST "/v2/users/$user_id/password" \
-            "$(jq -cn --arg p "$DEV_PASSWORD" '{newPassword: {password: $p, changeRequired: false}}')" >/dev/null
+            "$(PASSWORD=$DEV_PASSWORD jq -cn '{newPassword: {password: $ENV.PASSWORD, changeRequired: false}}')" >/dev/null
     fi
-    users=$(jq -c --arg e "$email" --arg p "$DEV_PASSWORD" --arg n "$given $family" \
-        '. + [{email: $e, password: $p, name: $n}]' <<<"$users")
+    users=$(PASSWORD=$DEV_PASSWORD jq -c --arg e "$email" --arg n "$given $family" \
+        '. + [{email: $e, password: $ENV.PASSWORD, name: $n}]' <<<"$users")
 }
 if [ "$TEST_USERS" = true ]; then
     ensure_user alice@romulus.test Alice Martin
@@ -267,7 +275,7 @@ TOLERATE=INSTANCE-28fHe api PUT /admin/v1/policies/label "$label_policy" >/dev/n
 upload() {
     local response status
     response=$(curl -sS -X POST "$ZITADEL_URL/assets/v1/instance/policy/label/$2" \
-        -H "Host: $ZITADEL_HOST" -H "Authorization: Bearer $pat" \
+        -H "Host: $ZITADEL_HOST" -H @"$headers" \
         -F "file=@$ASSETS/$1" -w '\n%{http_code}')
     status=${response##*$'\n'}
     [ "${status:0:1}" = 2 ] || { log "upload $1 → $status: ${response%$'\n'*}"; return 1; }
@@ -358,6 +366,10 @@ log "login branded as romulus"
 # description and its settings put again on every run.
 if [ -n "$SMTP_HOST" ]; then
     [ -n "$MAIL_FROM" ] || { log "ROMULUS_SMTP_HOST needs ROMULUS_MAIL_FROM"; exit 1; }
+    if [[ -n $SMTP_USERNAME && -z $SMTP_PASSWORD || -z $SMTP_USERNAME && -n $SMTP_PASSWORD ]]; then
+        log "ROMULUS_SMTP_USERNAME and ROMULUS_SMTP_PASSWORD: both or neither"
+        exit 1
+    fi
     # "romulus <romulus@example.com>" or a bare address.
     if [[ $MAIL_FROM =~ ^(.*)\<([^\<\>]+)\>[[:space:]]*$ ]]; then
         sender_address=${BASH_REMATCH[2]}
@@ -375,16 +387,16 @@ if [ -n "$SMTP_HOST" ]; then
     smtp_id=$(api POST /admin/v1/email/_search '{}' \
         | jq -r '.result[]? | select(.description == "romulus" or .description == "romulus dev mail") | .id' | head -1)
     if [ -z "$smtp_id" ]; then
-        smtp_id=$(api POST /admin/v1/email/smtp "$(jq -c --arg password "$SMTP_PASSWORD" '. + {password: $password}' <<<"$smtp")" \
+        smtp_id=$(api POST /admin/v1/email/smtp "$(PASSWORD=$SMTP_PASSWORD jq -c '. + {password: $ENV.PASSWORD}' <<<"$smtp")" \
             | jq -r .id)
         log "added SMTP $SMTP_HOST:$SMTP_PORT ($smtp_id)"
     else
         # COMMAND-1m88i is "No changes".
         TOLERATE=COMMAND-1m88i api PUT "/admin/v1/email/smtp/$smtp_id" "$smtp" >/dev/null
-        if [ -n "$SMTP_PASSWORD" ]; then
-            TOLERATE=COMMAND-1m88i api PUT "/admin/v1/email/smtp/$smtp_id/password" \
-                "$(jq -cn --arg p "$SMTP_PASSWORD" '{password: $p}')" >/dev/null
-        fi
+        # The password is put on every run, an empty one too: credentials
+        # removed from the settings leave none behind in Zitadel.
+        TOLERATE=COMMAND-1m88i api PUT "/admin/v1/email/smtp/$smtp_id/password" \
+            "$(PASSWORD=$SMTP_PASSWORD jq -cn '{password: $ENV.PASSWORD}')" >/dev/null
     fi
     # COMMAND-vUHBSmBzaw is "already active": nothing to do.
     TOLERATE=COMMAND-vUHBSmBzaw api POST "/admin/v1/email/$smtp_id/_activate" '{}' >/dev/null
@@ -413,9 +425,20 @@ zitadel_token=
 if [ -f "$OUT/oidc.env" ]; then
     zitadel_token=$(sed -n 's/^ROMULUS_ZITADEL_TOKEN=//p' "$OUT/oidc.env")
 fi
-if [ -n "$zitadel_token" ] && [ "$(curl -sS -o /dev/null -w '%{http_code}' "$ZITADEL_URL/auth/v1/users/me" \
-        -H "Host: $ZITADEL_HOST" -H "Authorization: Bearer $zitadel_token")" != 200 ]; then
-    zitadel_token=
+# Replaced only when Zitadel says it is no good (401): a check that fails
+# otherwise (Zitadel restarting, the network) keeps the token in use.
+if [ -n "$zitadel_token" ]; then
+    printf 'Authorization: Bearer %s\n' "$zitadel_token" > "$token_headers"
+    token_status=$(curl -sS -o /dev/null -w '%{http_code}' "$ZITADEL_URL/auth/v1/users/me" \
+        -H "Host: $ZITADEL_HOST" -H @"$token_headers" || true)
+    case "$token_status" in
+    200) ;;
+    401)
+        log "the romulus-api token is no longer valid: a new one replaces it"
+        zitadel_token=
+        ;;
+    *) log "could not check the romulus-api token (HTTP ${token_status:-none}): kept" ;;
+    esac
 fi
 if [ -z "$zitadel_token" ]; then
     for old in $(api POST "/management/v1/users/$api_user/pats/_search" '{}' | jq -r '.result[]?.id'); do

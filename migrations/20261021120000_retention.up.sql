@@ -11,18 +11,27 @@ CREATE TRIGGER users_set_updated_at BEFORE UPDATE OF oidc_subject, email, email_
 
 ALTER TABLE users
     ADD COLUMN last_seen_at timestamptz NOT NULL DEFAULT now(),
-    ADD COLUMN inactivity_notice_at timestamptz;
--- Accounts that exist: their latest sign-in or session use known (a session
--- outlives its last use by a week at most; updated_at moves at each OIDC
--- sign-in).
+    ADD COLUMN inactivity_notice_at timestamptz,
+    ADD COLUMN inactivity_failures integer NOT NULL DEFAULT 0
+        CONSTRAINT users_inactivity_failures_positive CHECK (inactivity_failures >= 0),
+    ADD COLUMN inactivity_retry_at timestamptz;
+-- Accounts that exist: their latest use known. A session outlives its last
+-- use by a week at most; updated_at moves at each OIDC sign-in; tokens used
+-- by the person's agent or by the CI of a database they made count as use.
 UPDATE users u SET last_seen_at = greatest(
     u.created_at, u.updated_at,
-    (SELECT max(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id)
+    (SELECT max(s.last_seen_at) FROM sessions s WHERE s.user_id = u.id),
+    (SELECT max(t.last_used_at) FROM personal_access_tokens t WHERE t.user_id = u.id),
+    (SELECT max(t.last_used_at) FROM api_tokens t WHERE t.created_by = u.id)
 );
 COMMENT ON COLUMN users.last_seen_at IS
-    'When the account was last used: at each sign-in, and at most once an hour on a session''s or a personal access token''s use (auth::session, auth::access_tokens). With ROMULUS_DELETE_INACTIVE_ACCOUNTS, an account unused for 3 years is deleted (retention::inactive).';
+    'When the account was last used (retention::activity): at each sign-in, and at most once an hour on the use of a session, of a personal access token, or of an API token the account made. With ROMULUS_DELETE_INACTIVE_ACCOUNTS, an account unused for 3 years is deleted (retention::inactive).';
 COMMENT ON COLUMN users.inactivity_notice_at IS
-    'When the email saying the account is about to be deleted for inactivity was sent (deleted 30 days later at the earliest); cleared when it is used again.';
+    'When the mail server took the email saying the account is about to be deleted for inactivity (deleted 30 days later at the earliest); cleared when it is used again.';
+COMMENT ON COLUMN users.inactivity_failures IS
+    'Inactivity notices or deletions of this account that failed in a row (mail refused, identity provider down): each doubles the wait before the next try.';
+COMMENT ON COLUMN users.inactivity_retry_at IS
+    'No inactivity notice or deletion of this account is tried before then: a notice being sent (a claim), or a failure''s back-off. NULL: whenever due.';
 CREATE INDEX users_last_seen_at_idx ON users (last_seen_at);
 
 -- The purges (retention::purge): deleted databases 30 days on, pending

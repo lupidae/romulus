@@ -4,10 +4,12 @@
 //! A deleted database (`databases.deleted_at`, `DELETE /orgs/{org}/
 //! databases/{db}`) has been hidden since, its tokens revoked, its drafts
 //! closed and its playgrounds destroyed (`playgrounds::sweeper`); the purge
-//! deletes its row and, with it, every version, draft, comment, token,
-//! test and activity event it held (`ON DELETE CASCADE`: the history
-//! triggers let it go once the row is gone). The organization's audit log
-//! keeps one `database_purged` event, its name as it was.
+//! deletes its row and, with it, every version, draft, comment, token and
+//! test it held (`ON DELETE CASCADE`: the history triggers let it go once
+//! the row is gone). Its audit events stay the organization's history (who
+//! published what, with which approvals): their `database_id` becomes NULL,
+//! their `database_name` says which database it was, and a last one,
+//! `database_purged`, says when it went.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -57,14 +59,13 @@ async fn purge_database(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
     else {
         return Ok(false);
     };
-    sqlx::query!("DELETE FROM databases WHERE id = $1", id)
-        .execute(&mut *tx)
-        .await?;
+    // About the database, before it goes: the purge sets its database_id
+    // to NULL like the others', its name stays.
     audit::record(
         &mut *tx,
         &audit::Entry {
             org_id: database.org_id,
-            database_id: None,
+            database_id: Some(id),
             action: AuditAction::DatabasePurged,
             actor_id: None,
             actor_name: None,
@@ -78,6 +79,9 @@ async fn purge_database(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
         },
     )
     .await?;
+    sqlx::query!("DELETE FROM databases WHERE id = $1", id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     tracing::info!(database = %id, slug = %database.slug, versions = database.versions, "deleted database purged");
     Ok(true)

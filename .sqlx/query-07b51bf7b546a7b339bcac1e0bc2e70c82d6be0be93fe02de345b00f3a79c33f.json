@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE api_tokens SET last_used_at = now()\n             WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')\n             RETURNING created_by",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_by",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "api_tokens",
+            "name": "created_by"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "07b51bf7b546a7b339bcac1e0bc2e70c82d6be0be93fe02de345b00f3a79c33f"
+}

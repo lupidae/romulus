@@ -26,6 +26,12 @@ pub fn is_live(status: &str) -> bool {
     LIVE_STATUSES.contains(&status)
 }
 
+/// The statuses of a subscription that is over for good: neither charging
+/// nor able to resume. Anything else (`incomplete` may still be paid,
+/// `paused` resumed) keeps an organization from being deleted
+/// (`retention::deletion`).
+pub const ENDED_STATUSES: [&str; 2] = ["canceled", "incomplete_expired"];
+
 fn is_past_due(status: &str) -> bool {
     matches!(status, "past_due" | "unpaid")
 }

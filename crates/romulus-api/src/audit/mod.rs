@@ -9,8 +9,10 @@
 //!   required), newest first (its settings page).
 //!
 //! Table: `audit_events` (no update, delete or truncate but with the
-//! organization or database). Written by `versions::removal` (a version
-//! removed, restored, purged), `drafts::approvals` (a draft published, with
+//! organization; a purged database's events stay, `database_id` NULL and
+//! `database_name` saying which, out of the other databases' activity).
+//! Written by `versions::removal` (a version removed, restored, purged),
+//! `drafts::approvals` (a draft published, with
 //! who approved it, or without the approvals it needed), `orgs` (the
 //! approvals required changed), `collab` (someone else's comments deleted
 //! in a draft, by its room's writer), `playgrounds` (one created,
@@ -196,12 +198,13 @@ pub struct Entry {
     pub details: AuditDetails,
 }
 
-/// Records `entry`, in the caller's transaction.
+/// Records `entry`, in the caller's transaction, with its database's name
+/// as it is now (it stays when the database is purged).
 pub async fn record(db: impl PgExecutor<'_>, entry: &Entry) -> Result<(), sqlx::Error> {
     let details = serde_json::to_value(&entry.details).unwrap_or_default();
     sqlx::query!(
-        "INSERT INTO audit_events (org_id, database_id, action, actor_id, actor_name, version_number, reason, details)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "INSERT INTO audit_events (org_id, database_id, database_name, action, actor_id, actor_name, version_number, reason, details)
+         VALUES ($1, $2, (SELECT name FROM databases WHERE id = $2), $3, $4, $5, $6, $7, $8)",
         entry.org_id,
         entry.database_id,
         entry.action as AuditAction,
@@ -277,7 +280,7 @@ async fn activity(
                   e.created_at, u.id AS "actor_id?", coalesce(u.name, e.actor_name) AS actor_name
            FROM audit_events e
            LEFT JOIN users u ON u.id = e.actor_id
-           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.org_id = $4))
+           WHERE (e.database_id = $1 OR (e.database_id IS NULL AND e.database_name IS NULL AND e.org_id = $4))
              AND ($2::uuid IS NULL OR e.id < $2)
              AND NOT (e.action = ANY($5))
            ORDER BY e.id DESC LIMIT $3"#,

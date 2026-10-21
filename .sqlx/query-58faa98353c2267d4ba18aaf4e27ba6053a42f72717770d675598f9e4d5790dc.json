@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inactivity_failures,\n                  extract(epoch FROM inactivity_retry_at - now())::float8 / 60 AS minutes\n           FROM users WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inactivity_failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "inactivity_failures"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "minutes",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "58faa98353c2267d4ba18aaf4e27ba6053a42f72717770d675598f9e4d5790dc"
+}

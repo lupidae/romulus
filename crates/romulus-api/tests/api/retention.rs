@@ -8,17 +8,24 @@ use std::time::Duration;
 use romulus_api::{
     AppState, Config,
     admin::{self, AdminError, OrgDeletion, UserDeletion},
-    domain::Role,
+    domain::{Role, TokenScope},
     mail::{Mailer, Outbox},
     orgs::events::MembershipChange,
-    retention::{self, deletion::Fate, idp::IdpOutcome, purge},
+    retention::{
+        self,
+        deletion::{By, Deleter, DeletionError, Fate},
+        idp::IdpOutcome,
+        inactive, purge,
+    },
 };
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    harness::{Team, TestApp, database, member, org, session, signed_in, user},
+    harness::{
+        Team, TestApp, api_token, database, member, model_json, org, session, signed_in, user,
+    },
     idp::{FakeIdp, Tamper},
     live::version,
 };
@@ -101,10 +108,10 @@ async fn filled(db: &PgPool, org: Uuid, slug: &str, author: Uuid) -> Uuid {
     .execute(db)
     .await
     .unwrap();
-    super::harness::api_token(db, shop, romulus_api::domain::TokenScope::Push).await;
+    api_token(db, shop, TokenScope::Push).await;
     sqlx::query!(
-        "INSERT INTO audit_events (org_id, database_id, action, actor_id, actor_name, version_number, reason)
-         VALUES ($1, $2, 'version_removed', $3, 'Author', 1, 'test')",
+        "INSERT INTO audit_events (org_id, database_id, database_name, action, actor_id, actor_name, version_number, reason)
+         VALUES ($1, $2, (SELECT name FROM databases WHERE id = $2), 'version_removed', $3, 'Author', 1, 'test')",
         org,
         shop,
         author,
@@ -170,7 +177,10 @@ async fn delete_org_says_first_then_deletes_everything_it_holds(db: PgPool) {
     let config = Config::for_tests();
 
     let (mail, outbox) = mailer();
-    let OrgDeletion::Planned(plan) = admin::delete_org(&db, &config, mail.clone(), "acme", true)
+    let OrgDeletion::Planned {
+        plan,
+        refused: None,
+    } = admin::delete_org(&db, &config, mail.clone(), "acme", true)
         .await
         .unwrap()
     else {
@@ -250,26 +260,62 @@ async fn an_organization_still_paying_is_not_deleted(db: PgPool) {
     .await
     .unwrap();
     let config = Config::for_tests();
-    for dry_run in [true, false] {
-        let refused = admin::delete_org(&db, &config, Mailer::off(), "acme", dry_run).await;
-        assert!(
-            matches!(&refused, Err(AdminError::Refused(message)) if message.contains("Stripe")),
-            "{dry_run}"
-        );
+    // Any status but the two that are over for good: it may still charge,
+    // or resume. A dry run or not, the plan comes back with the refusal.
+    for status in [
+        Some("active"),
+        Some("trialing"),
+        Some("past_due"),
+        Some("unpaid"),
+        Some("incomplete"),
+        Some("paused"),
+        None,
+    ] {
+        sqlx::query!(
+            "UPDATE org_billing SET status = $2 WHERE org_id = $1",
+            team.org,
+            status
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        for dry_run in [true, false] {
+            let done = admin::delete_org(&db, &config, Mailer::off(), "acme", dry_run)
+                .await
+                .unwrap();
+            let refused = done.refused().unwrap_or_default().to_owned();
+            assert!(
+                refused.contains("Stripe"),
+                "{status:?} {dry_run}: {refused}"
+            );
+            let report = done.report();
+            assert!(
+                report[0].starts_with("refused, nothing deleted: would delete acme")
+                    && report[0].contains(&format!("subscription {}", status.unwrap_or("unknown"))),
+                "{report:?}"
+            );
+        }
     }
     assert_eq!(count(&db, "SELECT count(*) FROM organizations").await, 1);
 
-    sqlx::query!(
-        "UPDATE org_billing SET status = 'canceled' WHERE org_id = $1",
-        team.org
-    )
-    .execute(&db)
-    .await
-    .unwrap();
-    admin::delete_org(&db, &config, Mailer::off(), "acme", false)
+    for (slug, status) in [("ended", "canceled"), ("expired", "incomplete_expired")] {
+        let org = org(&db, slug).await;
+        sqlx::query!(
+            "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, status)
+             VALUES ($1, $2, $2, 'team', $3)",
+            org,
+            format!("sub_{status}"),
+            status,
+        )
+        .execute(&db)
         .await
         .unwrap();
-    assert_eq!(count(&db, "SELECT count(*) FROM organizations").await, 0);
+        let done = admin::delete_org(&db, &config, Mailer::off(), slug, false)
+            .await
+            .unwrap();
+        assert!(matches!(done, OrgDeletion::Deleted(_)), "{status}");
+    }
+    assert_eq!(count(&db, "SELECT count(*) FROM organizations").await, 1);
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -289,7 +335,11 @@ async fn delete_user_takes_what_the_account_alone_holds_and_leaves_the_rest(db: 
     let config = Config::for_tests();
 
     let (mail, outbox) = mailer();
-    let UserDeletion::Planned { plans, zitadel } = admin::delete_user(
+    let UserDeletion::Planned {
+        plans,
+        zitadel,
+        refused: None,
+    } = admin::delete_user(
         &db,
         &config,
         mail.clone(),
@@ -297,7 +347,8 @@ async fn delete_user_takes_what_the_account_alone_holds_and_leaves_the_rest(db: 
         true,
     )
     .await
-    .unwrap() else {
+    .unwrap()
+    else {
         panic!("a dry run plans");
     };
     assert_eq!(plans.len(), 1);
@@ -401,12 +452,27 @@ async fn the_only_admin_of_an_organization_others_share_is_not_deleted(db: PgPoo
     let team = Team::new(&db, "acme").await;
     let config = Config::for_tests();
     let email = "admin-acme@romulus.test";
+    // The plan first, even refused (the CLI prints it, then the refusal,
+    // and exits 4), a dry run or not.
     for dry_run in [true, false] {
-        let refused = admin::delete_user(&db, &config, Mailer::off(), email, dry_run).await;
+        let done = admin::delete_user(&db, &config, Mailer::off(), email, dry_run)
+            .await
+            .unwrap();
+        let refused = done.refused().unwrap_or_default().to_owned();
         assert!(
-            matches!(&refused, Err(AdminError::Refused(message))
-                if message.contains("only admin of acme") && message.contains("delete-org acme")),
-            "{dry_run}"
+            refused.contains("only admin of acme") && refused.contains("delete-org acme"),
+            "{dry_run}: {refused}"
+        );
+        let report = done.report();
+        assert!(
+            report[0].starts_with("refused, nothing deleted: 1 account would go"),
+            "{report:?}"
+        );
+        assert!(
+            report
+                .iter()
+                .any(|line| line == "  leaves acme, whose only admin it is (2 other members)"),
+            "{report:?}"
         );
     }
     assert_eq!(count(&db, "SELECT count(*) FROM users").await, 4);
@@ -505,31 +571,55 @@ async fn deleted_databases_are_purged_30_days_on_and_audited(db: PgPool) {
     assert_eq!(left, [live, recent]);
     assert_eq!(versions(&db, old).await, (0, 0));
     let purged = sqlx::query!(
-        r#"SELECT database_id, actor_id, details FROM audit_events WHERE action = 'database_purged'"#
+        r#"SELECT database_id, database_name, actor_id, details FROM audit_events WHERE action = 'database_purged'"#
     )
     .fetch_one(&db)
     .await
     .unwrap();
     assert_eq!((purged.database_id, purged.actor_id), (None, None));
+    assert_eq!(purged.database_name.as_deref(), Some("old"));
     assert_eq!(purged.details["database_slug"], "old");
-    assert_eq!(purged.details["database_name"], "old");
     assert_eq!(purge::databases(&db).await.unwrap(), 0);
+    // Its history stays the organization's: the events it had, by name.
+    let history: Vec<(String, Option<Uuid>, Option<String>)> = sqlx::query!(
+        r#"SELECT action::text AS "action!", database_id, database_name FROM audit_events
+           WHERE database_name = 'old' ORDER BY id"#
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|r| (r.action, r.database_id, r.database_name))
+    .collect();
+    assert_eq!(
+        history,
+        [
+            ("version_removed".to_owned(), None, Some("old".to_owned())),
+            ("database_purged".to_owned(), None, Some("old".to_owned())),
+        ]
+    );
 
-    // Kept out of the other databases' activity.
+    // Kept out of the other databases' activity, which keeps its own.
     let app = TestApp::new(db.clone());
     let activity = app
         .as_user(&team.developer)
         .get(&team.path("/databases/live/activity"))
         .await
         .json();
-    assert!(
-        activity["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|event| event["action"] != "database_purged"),
-        "{activity}"
-    );
+    let actions: Vec<&str> = activity["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["version_removed"], "{activity}");
+
+    // Gone only with the organization.
+    sqlx::query!("DELETE FROM organizations WHERE id = $1", team.org)
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(count(&db, "SELECT count(*) FROM audit_events").await, 0);
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -816,6 +906,37 @@ async fn an_inactive_account_alone_in_a_paying_organization_is_kept(db: PgPool) 
     let (state, outbox) = sweeping(&db, true);
     assert_eq!(retention::sweep(&state).await, retention::Swept::default());
     assert_eq!(outbox.all().len(), 0);
+
+    // Paused (it may resume), or incomplete (it may be paid), and already
+    // warned: not deleted either, and not a failure to put off.
+    for status in ["paused", "incomplete"] {
+        sqlx::query!(
+            "UPDATE org_billing SET status = $2 WHERE org_id = $1",
+            solo,
+            status
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        due_for_deletion(&db, payer).await;
+        assert_eq!(
+            retention::sweep(&state).await,
+            retention::Swept::default(),
+            "{status}"
+        );
+        assert!(exists(&db, payer).await, "{status}");
+        assert_eq!(put_off(&db, payer).await, (0, None), "{status}");
+    }
+    // Over for good: the account and its organization go.
+    sqlx::query!(
+        "UPDATE org_billing SET status = 'canceled' WHERE org_id = $1",
+        solo
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    assert_eq!(retention::sweep(&state).await.accounts, 1);
+    assert_eq!(count(&db, "SELECT count(*) FROM organizations").await, 0);
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -869,4 +990,306 @@ async fn the_running_api_hears_what_a_deletion_ended(db: PgPool) {
     members.sort();
     assert_eq!(removed, members);
     listener.abort();
+}
+
+/// `user` unused for over 3 years, warned 31 days ago: due for deletion.
+async fn due_for_deletion(db: &PgPool, user: Uuid) {
+    sqlx::query!(
+        "UPDATE users SET last_seen_at = now() - interval '3 years 1 day',
+                          inactivity_notice_at = now() - interval '31 days',
+                          inactivity_failures = 0, inactivity_retry_at = NULL
+         WHERE id = $1",
+        user
+    )
+    .execute(db)
+    .await
+    .unwrap();
+}
+
+/// `user`'s `(inactivity_failures, inactivity_retry_at - now() in minutes)`.
+async fn put_off(db: &PgPool, user: Uuid) -> (i32, Option<f64>) {
+    let row = sqlx::query!(
+        r#"SELECT inactivity_failures,
+                  extract(epoch FROM inactivity_retry_at - now())::float8 / 60 AS minutes
+           FROM users WHERE id = $1"#,
+        user
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    (row.inactivity_failures, row.minutes)
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_sign_in_during_an_inactive_deletion_keeps_the_account_and_its_zitadel_user(db: PgPool) {
+    let idp = FakeIdp::start().await;
+    let config = idp.config_with_user_api();
+    let ada = user(&db, "Ada").await;
+    due_for_deletion(&db, ada).await;
+
+    // A sign-in under way: it writes the account's row (last_seen_at, the
+    // notice cleared) and holds it until it commits.
+    let mut signing_in = db.begin().await.unwrap();
+    retention::activity::account_used(&mut *signing_in, ada)
+        .await
+        .unwrap();
+    let deleter = Deleter::new(db.clone(), &config, Mailer::off());
+    let deletion = tokio::spawn(async move { deleter.delete_account(ada, By::Inactivity).await });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !deletion.is_finished(),
+        "the deletion waits for the sign-in"
+    );
+    assert_eq!(idp.deleted_users(), Vec::<String>::new());
+    signing_in.commit().await.unwrap();
+
+    // Seen used under the lock: nothing deleted, at Zitadel either.
+    let outcome = deletion.await.unwrap();
+    assert!(
+        matches!(outcome, Err(DeletionError::NoLongerDue)),
+        "{outcome:?}"
+    );
+    assert_eq!(idp.deleted_users(), Vec::<String>::new());
+    assert!(exists(&db, ada).await);
+
+    // Unused, it goes: its Zitadel user first.
+    due_for_deletion(&db, ada).await;
+    Deleter::new(db.clone(), &config, Mailer::off())
+        .delete_account(ada, By::Inactivity)
+        .await
+        .unwrap();
+    assert_eq!(idp.deleted_users(), ["sub-Ada"]);
+    assert!(!exists(&db, ada).await);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn ci_pushing_with_an_api_token_keeps_its_makers_account_in_use(db: PgPool) {
+    let team = Team::new(&db, "acme").await;
+    let shop = database(&db, team.org, "shop").await;
+    let secret = api_token(&db, shop, TokenScope::Push).await;
+    sqlx::query!("UPDATE api_tokens SET created_by = $1", team.developer.user)
+        .execute(&db)
+        .await
+        .unwrap();
+    last_seen_ago(&db, team.developer.user, "2 years", false).await;
+
+    let app = TestApp::new(db.clone());
+    let pushed = app.push(shop, &secret, None, model_json(&["users"])).await;
+    assert!(pushed.status.is_success(), "{}", pushed.json());
+    assert!(!seen(&db, team.developer.user).await.0);
+    let notice = sqlx::query_scalar!(
+        "SELECT inactivity_notice_at FROM users WHERE id = $1",
+        team.developer.user
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(notice, None);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn the_migration_counts_what_was_used_before_it(db: PgPool) {
+    // Back to before the retention migrations, with an account used only
+    // by its tokens lately.
+    let migrator = &romulus_api::db::MIGRATOR;
+    migrator.undo(&db, 20_261_020_220_606).await.unwrap();
+    let agent_user = made_years_ago(&db, "agent", 5).await;
+    let ci_user = made_years_ago(&db, "ci", 6).await;
+    let idle = made_years_ago(&db, "idle", 4).await;
+    let acme = org(&db, "acme").await;
+    let shop = database(&db, acme, "shop").await;
+    let alice = session(&db, agent_user).await;
+    super::mcp::pat(&db, &alice, romulus_api::domain::AccessTokenScope::Read).await;
+    sqlx::query!(
+        "UPDATE sessions SET last_seen_at = now() - interval '5 years' WHERE user_id = $1",
+        agent_user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!("UPDATE personal_access_tokens SET last_used_at = now() - interval '10 days'")
+        .execute(&db)
+        .await
+        .unwrap();
+    api_token(&db, shop, TokenScope::Push).await;
+    sqlx::query!(
+        "UPDATE api_tokens SET created_by = $1, last_used_at = now() - interval '3 days'",
+        ci_user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    migrator.run(&db).await.unwrap();
+    assert_eq!(days_unused(&db, agent_user).await, 10);
+    assert_eq!(days_unused(&db, ci_user).await, 3);
+    assert!(days_unused(&db, idle).await > 1000);
+}
+
+/// An account made, and last changed, `years` ago (the users columns every
+/// migration has).
+async fn made_years_ago(db: &PgPool, name: &str, years: i32) -> Uuid {
+    sqlx::query_scalar!(
+        "INSERT INTO users (oidc_subject, email, email_verified, name, created_at, updated_at)
+         VALUES ('sub-' || $1, $1 || '@romulus.test', true, $1,
+                 now() - make_interval(years => $2), now() - make_interval(years => $2))
+         RETURNING id",
+        name,
+        years,
+    )
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+/// Whole days since `user`'s account was last used.
+async fn days_unused(db: &PgPool, user: Uuid) -> i32 {
+    sqlx::query_scalar!(
+        r#"SELECT (extract(epoch FROM now() - last_seen_at) / 86400)::int AS "days!" FROM users WHERE id = $1"#,
+        user
+    )
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_notice_the_mail_server_refuses_is_put_off_not_recorded(db: PgPool) {
+    let ada = user(&db, "Ada").await;
+    unused_for(&db, ada, "3 years").await;
+    let mut config = Config::for_tests();
+    config.delete_inactive_accounts = true;
+    // Every send fails.
+    let state = AppState::new(db.clone(), config).with_mailer(Mailer::off());
+
+    assert_eq!(retention::sweep(&state).await.notices, 0);
+    let notice = sqlx::query_scalar!("SELECT inactivity_notice_at FROM users WHERE id = $1", ada)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(notice, None, "no notice recorded unsent");
+    let (failures, minutes) = put_off(&db, ada).await;
+    assert_eq!(failures, 1);
+    assert!((50.0..70.0).contains(&minutes.unwrap()), "{minutes:?}");
+    // Put off: not tried again at once.
+    retention::sweep(&state).await;
+    assert_eq!(put_off(&db, ada).await.0, 1);
+    // Tried again when its time comes, and put off twice as long.
+    sqlx::query!(
+        "UPDATE users SET inactivity_retry_at = now() - interval '1 second' WHERE id = $1",
+        ada
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    retention::sweep(&state).await;
+    let (failures, minutes) = put_off(&db, ada).await;
+    assert_eq!(failures, 2);
+    assert!((110.0..130.0).contains(&minutes.unwrap()), "{minutes:?}");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn accounts_put_off_never_hold_the_others_up(db: PgPool) {
+    // A hundred accounts whose notices failed, put off, unused for longer
+    // than the one that works: the sweep's hundred would be theirs.
+    sqlx::query!(
+        "INSERT INTO users (oidc_subject, email, email_verified, name, last_seen_at,
+                            inactivity_failures, inactivity_retry_at)
+         SELECT 'stuck-' || i, 'stuck' || i || '@romulus.test', true, 'Stuck',
+                now() - interval '3 years 2 months', 1, now() + interval '1 hour'
+         FROM generate_series(1, 100) i"
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let fine = user(&db, "Fine").await;
+    unused_for(&db, fine, "3 years 1 month").await;
+    let (state, outbox) = sweeping(&db, true);
+    assert_eq!(retention::sweep(&state).await.notices, 1);
+    assert_eq!(outbox.to("fine@romulus.test").len(), 1);
+    assert_eq!(outbox.all().len(), 1);
+
+    // A deletion the identity provider refuses is put off the same way,
+    // and the others still go.
+    let idp = FakeIdp::start().await;
+    let mut config = idp.config_with_user_api();
+    config.delete_inactive_accounts = true;
+    let (mail, _) = mailer();
+    let state = AppState::new(db.clone(), config).with_mailer(mail);
+    idp.tamper(Tamper {
+        refuse_deletions: true,
+        ..Tamper::default()
+    });
+    let sso = user(&db, "Sso").await;
+    due_for_deletion(&db, sso).await;
+    let password = sqlx::query_scalar!(
+        "INSERT INTO users (oidc_subject, email, email_verified, name)
+         VALUES ('password|' || gen_random_uuid(), 'pw@romulus.test', true, 'Pw') RETURNING id"
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    due_for_deletion(&db, password).await;
+    assert_eq!(inactive::delete_due(&state).await.unwrap(), 1);
+    assert!(!exists(&db, password).await);
+    assert!(exists(&db, sso).await);
+    let (failures, minutes) = put_off(&db, sso).await;
+    assert_eq!(failures, 1);
+    assert!(minutes.unwrap() > 50.0, "{minutes:?}");
+    assert_eq!(inactive::delete_due(&state).await.unwrap(), 0);
+    assert_eq!(idp.deleted_users(), Vec::<String>::new());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_notice_goes_once_a_claim_and_a_sweep_at_a_time(db: PgPool) {
+    let ada = user(&db, "Ada").await;
+    unused_for(&db, ada, "3 years").await;
+    let (state, outbox) = sweeping(&db, true);
+
+    // Another process sweeping holds the lock: this one skips.
+    let mut other = db.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(hashtext($1))")
+        .bind(retention::SWEEP_LOCK)
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    assert_eq!(retention::sweep(&state).await, retention::Swept::default());
+    assert_eq!(outbox.all().len(), 0);
+    sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+        .bind(retention::SWEEP_LOCK)
+        .execute(&mut *other)
+        .await
+        .unwrap();
+
+    // A notice claimed (being sent elsewhere) is claimed once, and a sweep
+    // meanwhile sends nothing.
+    let last_seen = sqlx::query_scalar!("SELECT last_seen_at FROM users WHERE id = $1", ada)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert!(
+        inactive::claim(&state, ada, last_seen)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        inactive::claim(&state, ada, last_seen)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(retention::sweep(&state).await.notices, 0);
+    assert_eq!(outbox.all().len(), 0);
+    // The claim run out (its sender died mid-send): sent, once.
+    sqlx::query!(
+        "UPDATE users SET inactivity_retry_at = now() - interval '1 second' WHERE id = $1",
+        ada
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    assert_eq!(retention::sweep(&state).await.notices, 1);
+    assert_eq!(retention::sweep(&state).await.notices, 0);
+    assert_eq!(outbox.to("ada@romulus.test").len(), 1);
 }

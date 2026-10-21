@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (oidc_subject, email, email_verified, name, created_at, updated_at)\n         VALUES ('sub-' || $1, $1 || '@romulus.test', true, $1,\n                 now() - make_interval(years => $2), now() - make_interval(years => $2))\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4922bbd4137dccf91bb83c79d73b7a48a98ce80e2a0f7d1f6c6e1e07140c19e4"
+}

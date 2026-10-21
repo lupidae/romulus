@@ -664,8 +664,11 @@ docs/MVP.md "Review round 1" items 3 and 4 have the decisions.
   as a count. Restorable for `RESTORE_DAYS`, purged by `removal::purger`.
 - **Audit log** (`audit`): `audit::record(tx, &Entry)` in the transaction
   of what it records, with the actor's name as it is (kept);
-  `audit_events` refuses updates, deletes and truncates. Org-level events
-  (`database_id` NULL) show in every database's Activity. A draft's room
+  `audit_events` refuses updates, deletes and truncates (but the `SET NULL`s
+  of a deleted account and a purged database); it records the database's
+  name (`database_name`), which stays when the database is purged.
+  Org-level events (`database_id` and `database_name` NULL) show in every
+  database's Activity; a purged database's never do. A draft's room
   writes its own (`store::Job::Audit`: someone else's comments deleted,
   `comment_deleted`, with the draft's name filled in then).
 - **Approvals** (`drafts::approvals`, `collab::review`): the room tracks
@@ -1227,30 +1230,40 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
 docs/MVP.md "Retention and deletion" has the decisions.
 
 - **Deleting** goes through `retention::deletion::Deleter` (`delete_account(user,
-  By::Request | By::Inactivity)`, `delete_org`): plan first (`AccountPlan`,
-  `OrgPlan`: what goes, `Fate` per membership), the Zitadel user next
-  (`retention::idp`, `ROMULUS_ZITADEL_TOKEN`; `Manual` without it), then one
-  READ COMMITTED transaction that plans again under the row lock, deletes
-  (cascades: never delete children by hand, the history triggers allow a
-  cascade only), logs `account_deleted`/`organization_deleted` in
-  `auth_events` and queues `retention::live::Notice`s; mail after commit.
-  Refusals are `DeletionError`s (`LastAdmin`, `Paying`): the admin commands
-  answer them with exit 4, a later endpoint with 409s. Keep the CLI
-  (`admin::delete_user`/`delete_org`, `--dry-run`) a thin layer over it.
+  By::Request | By::Inactivity)`, `delete_org`), in one READ COMMITTED
+  transaction: the row locked `FOR UPDATE` first, then the plan
+  (`AccountPlan`, `OrgPlan`: what goes, `Fate` per membership), `refuse` and
+  `still_due` under the lock, the Zitadel user (`retention::idp`,
+  `ROMULUS_ZITADEL_TOKEN`; `Manual` without it, warned with its id) still
+  under it, then the rows (cascades: never delete children by hand, the
+  history triggers allow a cascade only), `account_deleted`/
+  `organization_deleted` in `auth_events`, `retention::live::Notice`s, the
+  commit (failing after Zitadel's delete: an error log with the id); mail
+  after. Refusals are `DeletionError`s (`LastAdmin`, `Paying`: a
+  subscription not in `billing::state::ENDED_STATUSES`): the admin commands
+  print the plan, then answer them with exit 4; a later endpoint with 409s.
+  Keep the CLI (`admin::delete_user`/`delete_org`, `--dry-run`) a thin layer
+  over it.
 - **Anything that ends memberships or databases outside a request** (the
   CLI, a sweeper) notifies with `live::notify` in its transaction;
   `live::listen` (started by `serve`) closes the drafts and publishes the
   membership changes. In process, the endpoints keep calling the Hub and
   `MembershipEvents` directly.
-- **Sweeps** (`retention::sweeper`, hourly): `purge::databases` (deleted 30
-  days ago; `database_purged` at the org's level, in
-  `AuditAction::NOT_IN_DATABASE_ACTIVITY`), `purge::invitations` (pending,
-  expired 30 days ago), and with `ROMULUS_DELETE_INACTIVE_ACCOUNTS` (off by
-  default, needs mail) `inactive::send_notices` / `delete_due`.
-- **`users.last_seen_at`**: `auth::session` sets it at every sign-in
-  (`session::create`) and at most every `ACCOUNT_TOUCH_EVERY` on use, as
-  `access_tokens::Agent::touch` does for an agent's token, clearing
-  `inactivity_notice_at`; `users.updated_at` moves with identity columns only.
+- **Sweeps** (`retention::sweep`, hourly, under the `SWEEP_LOCK` advisory
+  lock on a detached connection: one process at a time): `purge::databases`
+  (deleted 30 days ago; their audit events stay, `database_id` NULL by the
+  FK, a last `database_purged`), `purge::invitations` (pending, expired 30
+  days ago), and with `ROMULUS_DELETE_INACTIVE_ACCOUNTS` (off by default,
+  needs mail, and the Zitadel token with OIDC) `inactive::send_notices`
+  (`claim` before the send, notice recorded after it) / `delete_due`. Both
+  leave out paying accounts in SQL and accounts put off
+  (`inactivity_retry_at`); a failure goes through `inactive::failed` (the
+  back-off), never stops the batch.
+- **What counts as use** is `retention::activity::account_used` (hourly at
+  most, clears the notice and the back-off): `session::create` and a
+  session's touch, `access_tokens::Agent::touch`, `databases::tokens::Bearer`
+  (the token's maker). A new way in (OAuth tokens) calls it where its use is
+  recorded. `users.updated_at` moves with identity columns only.
 - **Source and commit**: `config::COMMIT` (`ROMULUS_COMMIT` at build time, the
   Dockerfile's build argument from images.yml), `Config::source_url`
   (`ROMULUS_SOURCE_URL`, the build's repository by default),
@@ -1261,8 +1274,12 @@ docs/MVP.md "Retention and deletion" has the decisions.
   address), and makes the `romulus-api` machine user (IAM_USER_MANAGER) whose
   token it writes to `oidc.env` as `ROMULUS_ZITADEL_TOKEN`.
 - **Tests**: `tests/api/retention.rs` (the commands with dry runs, refusals,
-  the fake IdP's `DELETE /v2/users/{id}`, purges, `last_seen_at`, inactive
-  accounts on and off, the listener), `user-menu.test.tsx`.
+  the fake IdP's `DELETE /v2/users/{id}`, a sign-in during a deletion,
+  purges, every use, the migration's backfill (`MIGRATOR.undo` then `run`),
+  inactive accounts on and off, back-off, claims, the sweep lock, the
+  listener), `main.rs` unit tests (parsing, exit 4), `user-menu.test.tsx`,
+  `deploy/zitadel/test/provision-test.sh` (dev stack: no secret in argv,
+  SMTP credentials put and taken away, the token kept or replaced on a 401).
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 

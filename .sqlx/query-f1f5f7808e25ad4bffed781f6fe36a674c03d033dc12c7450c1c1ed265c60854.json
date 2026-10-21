@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE personal_access_tokens SET last_used_at = now() - interval '10 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "f1f5f7808e25ad4bffed781f6fe36a674c03d033dc12c7450c1c1ed265c60854"
+}

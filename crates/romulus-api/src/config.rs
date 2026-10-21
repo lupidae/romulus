@@ -78,8 +78,9 @@ pub struct Config {
     pub billing: Option<BillingConfig>,
     /// `ROMULUS_DELETE_INACTIVE_ACCOUNTS=true`: an account unused for 3
     /// years is deleted, after an email 30 days before (`retention::
-    /// inactive`; needs mail). Off by default: a self-hosted install never
-    /// loses an account it did not choose to.
+    /// inactive`; needs mail, and `ROMULUS_ZITADEL_TOKEN` with the OIDC
+    /// client). Off by default: a self-hosted install never loses an
+    /// account it did not choose to.
     pub delete_inactive_accounts: bool,
     /// `ROMULUS_ZITADEL_TOKEN`: a Zitadel personal access token allowed to
     /// delete users (the provisioner's `romulus-api` machine user): deleting
@@ -691,6 +692,14 @@ impl Config {
         let zitadel_token = get("ROMULUS_ZITADEL_TOKEN")
             .map(Secret)
             .filter(|_| oidc.is_some());
+        // Deleting a single sign-on account on its own would leave its
+        // Zitadel user behind, with nobody told to delete it.
+        if delete_inactive_accounts && oidc.is_some() && zitadel_token.is_none() {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_DELETE_INACTIVE_ACCOUNTS",
+                reason: "with single sign-on, an inactive account is deleted at Zitadel too: set ROMULUS_ZITADEL_TOKEN".to_owned(),
+            });
+        }
         let source_url = url(
             "ROMULUS_SOURCE_URL",
             &get("ROMULUS_SOURCE_URL").unwrap_or_else(|| DEFAULT_SOURCE_URL.to_owned()),
@@ -1306,6 +1315,40 @@ mod tests {
         vars.push(("ROMULUS_SMTP_HOST", "smtp.example.com"));
         vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
         assert!(config(&vars).unwrap().delete_inactive_accounts);
+    }
+
+    #[test]
+    fn deleting_inactive_accounts_with_single_sign_on_needs_the_zitadel_token() {
+        let mut vars = BASE.to_vec();
+        vars.extend([
+            ("ROMULUS_DELETE_INACTIVE_ACCOUNTS", "true"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_OIDC_ISSUER", "http://localhost:41004"),
+            ("ROMULUS_OIDC_CLIENT_ID", "client"),
+            ("ROMULUS_OIDC_CLIENT_SECRET", "secret"),
+        ]);
+        assert!(matches!(
+            config(&vars),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_DELETE_INACTIVE_ACCOUNTS",
+                ..
+            })
+        ));
+        vars.push(("ROMULUS_ZITADEL_TOKEN", "pat"));
+        assert!(config(&vars).unwrap().delete_inactive_accounts);
+        // Password sign-in only: no identity provider to delete from.
+        let mut password = BASE.to_vec();
+        password.extend([
+            ("ROMULUS_AUTH", "password"),
+            ("ROMULUS_DELETE_INACTIVE_ACCOUNTS", "true"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_OIDC_ISSUER", "http://localhost:41004"),
+            ("ROMULUS_OIDC_CLIENT_ID", "client"),
+            ("ROMULUS_OIDC_CLIENT_SECRET", "secret"),
+        ]);
+        assert!(config(&password).unwrap().delete_inactive_accounts);
     }
 
     #[test]

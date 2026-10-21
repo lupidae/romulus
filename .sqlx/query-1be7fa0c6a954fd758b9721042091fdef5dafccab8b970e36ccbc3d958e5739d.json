@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT database_id, actor_id, details FROM audit_events WHERE action = 'database_purged'",
+  "query": "SELECT database_id, database_name, actor_id, details FROM audit_events WHERE action = 'database_purged'",
   "describe": {
     "columns": [
       {
@@ -16,6 +16,17 @@
       },
       {
         "ordinal": 1,
+        "name": "database_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_events",
+            "name": "database_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
         "name": "actor_id",
         "type_info": "Uuid",
         "origin": {
@@ -26,7 +37,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "details",
         "type_info": "Jsonb",
         "origin": {
@@ -43,8 +54,9 @@
     "nullable": [
       true,
       true,
+      true,
       false
     ]
   },
-  "hash": "b917f34eb72b1036c26f9c7e8fd3cc272513cb94196701f1727fe7b4e177b576"
+  "hash": "1be7fa0c6a954fd758b9721042091fdef5dafccab8b970e36ccbc3d958e5739d"
 }

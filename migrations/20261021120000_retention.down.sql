@@ -25,7 +25,11 @@ COMMENT ON TABLE databases IS 'A schema kept in romulus. Soft-deleted: deleted_a
 DROP INDEX invitations_pending_expires_at_idx;
 DROP INDEX databases_deleted_at_idx;
 DROP INDEX users_last_seen_at_idx;
-ALTER TABLE users DROP COLUMN inactivity_notice_at, DROP COLUMN last_seen_at;
+ALTER TABLE users
+    DROP COLUMN inactivity_retry_at,
+    DROP COLUMN inactivity_failures,
+    DROP COLUMN inactivity_notice_at,
+    DROP COLUMN last_seen_at;
 
 DROP TRIGGER users_set_updated_at ON users;
 CREATE TRIGGER users_set_updated_at BEFORE UPDATE ON users

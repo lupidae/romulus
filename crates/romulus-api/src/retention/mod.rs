@@ -9,7 +9,7 @@
 //!   account; the audit log keeps the name it recorded). A single sign-on
 //!   account is deleted at the identity provider too ([`idp`]).
 //! - **Deleted databases** are purged 30 days after their deletion, with
-//!   everything they held ([`purge::databases`]).
+//!   everything they held but their audit events ([`purge::databases`]).
 //! - **Invitations** nobody accepted are deleted 30 days after they expired
 //!   ([`purge::invitations`]); a revoked one is deleted at once, an accepted
 //!   one stays with the membership.
@@ -18,9 +18,10 @@
 //!   days before, then deleted as on request.
 //!
 //! [`sweeper`] runs the purges and the inactive accounts now and every
-//! [`SWEEP_EVERY`] (one API instance, one sweeper). A deletion changes what
-//! the running API holds in memory (open drafts, websockets) wherever it
-//! ran, the CLI included: [`live`] tells the API.
+//! [`SWEEP_EVERY`], one process at a time ([`SWEEP_LOCK`]). A deletion
+//! changes what the running API holds in memory (open drafts, websockets)
+//! wherever it ran, the CLI included: [`live`] tells the API. What counts
+//! as using an account is [`activity`]'s.
 //!
 //! Kept elsewhere, by their own rules: invoices (in Stripe), the sign-in log
 //! (`auth_events`, 90 days: it records the deletions too), backups (the
@@ -31,6 +32,7 @@
 //! answering its [`deletion::DeletionError`]s (the last admin, an
 //! organization that pays) as 409s.
 
+pub mod activity;
 pub mod deletion;
 pub mod idp;
 pub mod inactive;
@@ -53,9 +55,50 @@ pub struct Swept {
     pub accounts: u64,
 }
 
-/// Sweeps once: the purges, then (when on) the inactive accounts' notices
-/// and deletions. Each step logs its own failure and lets the others run.
+/// The advisory lock one sweep holds (`hashtext` of it): a second process
+/// (another API started by mistake, a deploy's overlap) skips its sweep
+/// rather than send a notice twice.
+pub const SWEEP_LOCK: &str = "romulus.retention";
+
+/// Sweeps once, unless another process is sweeping: the purges, then (when
+/// on) the inactive accounts' notices and deletions. Each step logs its own
+/// failure and lets the others run.
 pub async fn sweep(state: &AppState) -> Swept {
+    // A connection of its own, out of the pool: the lock is the session's,
+    // and goes with the connection whatever happens.
+    let mut lock = match state.db.acquire().await {
+        Ok(conn) => conn.detach(),
+        Err(err) => {
+            tracing::warn!(error = %err, "retention: no connection to sweep with");
+            return Swept::default();
+        }
+    };
+    let locked = sqlx::query_scalar!(
+        r#"SELECT pg_try_advisory_lock(hashtext($1)) AS "locked!""#,
+        SWEEP_LOCK
+    )
+    .fetch_one(&mut lock)
+    .await;
+    match locked {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::info!("retention: another process is sweeping, skipped");
+            return Swept::default();
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "retention: cannot take the sweep's lock");
+            return Swept::default();
+        }
+    }
+    let swept = sweep_locked(state).await;
+    // Closing the connection releases the lock too.
+    if let Err(err) = sqlx::Connection::close(lock).await {
+        tracing::debug!(error = %err, "retention: closing the lock's connection");
+    }
+    swept
+}
+
+async fn sweep_locked(state: &AppState) -> Swept {
     let mut swept = Swept::default();
     match purge::databases(&state.db).await {
         Ok(n) => swept.databases = n,

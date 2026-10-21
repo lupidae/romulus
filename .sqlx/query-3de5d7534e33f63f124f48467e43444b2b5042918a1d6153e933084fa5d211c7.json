@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO audit_events (org_id, database_id, database_name, action, actor_id, actor_name, version_number, reason)\n         VALUES ($1, $2, (SELECT name FROM databases WHERE id = $2), 'version_removed', $3, 'Author', 1, 'test')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3de5d7534e33f63f124f48467e43444b2b5042918a1d6153e933084fa5d211c7"
+}

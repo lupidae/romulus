@@ -54,24 +54,9 @@ pub enum AdminError {
 impl From<DeletionError> for AdminError {
     fn from(err: DeletionError) -> Self {
         match err {
-            DeletionError::LastAdmin(orgs) => Self::Refused(format!(
-                "the only admin of {}: make another member an admin first, or delete the organization too ({})",
-                orgs.iter()
-                    .map(|o| o.slug.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                orgs.iter()
-                    .map(|o| format!("romulus-api delete-org {}", o.slug))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )),
-            DeletionError::Paying(orgs) => Self::Refused(format!(
-                "{} still has a live subscription: cancel it in Stripe first (at once, refunding what is owed), then run this again",
-                orgs.iter()
-                    .map(|o| o.slug.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            )),
+            DeletionError::LastAdmin(_) | DeletionError::Paying(_) => {
+                Self::Refused(refusal(&err).unwrap_or_default())
+            }
             DeletionError::NotFound | DeletionError::NoLongerDue => {
                 Self::Invalid("it is gone already".to_owned())
             }
@@ -79,6 +64,31 @@ impl From<DeletionError> for AdminError {
             DeletionError::Database(err) => Self::Database(err),
         }
     }
+}
+
+/// What to do first, for a deletion refused until something is done.
+fn refusal(err: &DeletionError) -> Option<String> {
+    Some(match err {
+        DeletionError::LastAdmin(orgs) => format!(
+            "the only admin of {}: make another member an admin first, or delete the organization too ({})",
+            orgs.iter()
+                .map(|o| o.slug.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            orgs.iter()
+                .map(|o| format!("romulus-api delete-org {}", o.slug))
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+        DeletionError::Paying(orgs) => format!(
+            "{} still has a Stripe subscription that is not over (only canceled or incomplete_expired are): cancel it in Stripe first (at once, refunding what is owed), then run this again",
+            orgs.iter()
+                .map(|o| o.slug.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => return None,
+    })
 }
 
 /// `romulus-api setup`'s input.
@@ -388,24 +398,33 @@ pub async fn mail_test(config: &Config, to: &str) -> Result<(), AdminError> {
 
 /// What `delete-user` did, or would do (`--dry-run`).
 pub enum UserDeletion {
+    /// A dry run, or a deletion refused (nothing deleted either way).
     Planned {
         plans: Vec<AccountPlan>,
         /// `ROMULUS_ZITADEL_TOKEN` is set: single sign-on users go too.
         zitadel: bool,
+        /// Why it would not go (exit 4), after the plan is printed.
+        refused: Option<String>,
     },
     Deleted(Vec<AccountDeleted>),
 }
 
 /// What `delete-org` did, or would do.
 pub enum OrgDeletion {
-    Planned(OrgPlan),
+    /// A dry run, or a deletion refused.
+    Planned {
+        plan: OrgPlan,
+        refused: Option<String>,
+    },
     Deleted(OrgDeleted),
 }
 
 /// Deletes every account with the address `email`, with what each alone
 /// holds (`retention::deletion`), or with `dry_run` says what it would.
 /// Refused, before anything goes, when one is the only admin of an
-/// organization others belong to, or would take a paying organization.
+/// organization others belong to, or would take an organization with a
+/// subscription: then the plan comes back with why
+/// ([`UserDeletion::refused`]).
 pub async fn delete_user(
     db: &PgPool,
     config: &Config,
@@ -428,13 +447,15 @@ pub async fn delete_user(
         }
     }
     // All or none: every refusal is said before one account goes.
-    for plan in &plans {
-        deletion::refuse(plan, By::Request)?;
-    }
-    if dry_run {
+    let refused = plans
+        .iter()
+        .find_map(|plan| deletion::refuse(plan, By::Request).err())
+        .and_then(|err| refusal(&err));
+    if dry_run || refused.is_some() {
         return Ok(UserDeletion::Planned {
             plans,
             zitadel: deleter.zitadel.is_some(),
+            refused,
         });
     }
     let mut done = Vec::with_capacity(plans.len());
@@ -445,7 +466,8 @@ pub async fn delete_user(
 }
 
 /// Deletes the organization `slug` with everything it holds, or with
-/// `dry_run` says what that is. Refused while its subscription is live.
+/// `dry_run` says what that is. Refused while it has a subscription not
+/// over for good: then the plan comes back with why.
 pub async fn delete_org(
     db: &PgPool,
     config: &Config,
@@ -462,23 +484,42 @@ pub async fn delete_org(
         .plan_org(id)
         .await?
         .ok_or_else(|| AdminError::Invalid(format!("no organization has the slug {slug}")))?;
-    if plan.subscription.is_some() {
-        return Err(DeletionError::Paying(vec![plan.org]).into());
-    }
-    if dry_run {
-        return Ok(OrgDeletion::Planned(plan));
+    let refused = plan
+        .subscription
+        .is_some()
+        .then(|| refusal(&DeletionError::Paying(vec![plan.org.clone()])))
+        .flatten();
+    if dry_run || refused.is_some() {
+        return Ok(OrgDeletion::Planned { plan, refused });
     }
     Ok(OrgDeletion::Deleted(deleter.delete_org(id).await?))
 }
 
 impl UserDeletion {
+    /// Why it was refused, if it was: print the report, then this (exit 4).
+    pub fn refused(&self) -> Option<&str> {
+        match self {
+            Self::Planned { refused, .. } => refused.as_deref(),
+            Self::Deleted(_) => None,
+        }
+    }
+
     /// What to print, a line each.
     pub fn report(&self) -> Vec<String> {
         let mut lines = Vec::new();
         match self {
-            Self::Planned { plans, zitadel } => {
+            Self::Planned {
+                plans,
+                zitadel,
+                refused,
+            } => {
                 lines.push(format!(
-                    "dry run, nothing deleted: {} would go",
+                    "{}, nothing deleted: {} would go",
+                    if refused.is_some() {
+                        "refused"
+                    } else {
+                        "dry run"
+                    },
                     plural(plans.len(), "account")
                 ));
                 for plan in plans {
@@ -522,14 +563,21 @@ fn account_lines(
     for membership in &plan.memberships {
         let role = format!("{:?}", membership.role).to_lowercase();
         match &membership.fate {
-            Fate::Leaves | Fate::LastAdmin { .. } => {
+            Fate::Leaves => {
                 lines.push(format!("  leaves {} ({role})", membership.org.slug));
             }
+            Fate::LastAdmin { members } => lines.push(format!(
+                "  leaves {}, whose only admin it is ({} other {})",
+                membership.org.slug,
+                members,
+                if *members == 1 { "member" } else { "members" }
+            )),
             Fate::DeletedWith(org) => {
                 lines.push(format!(
-                    "  {verb} {}, its only member: {}",
+                    "  {verb} {}, its only member: {}{}",
                     org.org.slug,
-                    org_counts(org)
+                    org_counts(org),
+                    subscription(org)
                 ));
             }
         }
@@ -571,6 +619,13 @@ fn org_counts(plan: &OrgPlan) -> String {
     )
 }
 
+/// ", subscription active": a subscription still keeping it (refused).
+fn subscription(plan: &OrgPlan) -> String {
+    plan.subscription
+        .as_ref()
+        .map_or_else(String::new, |status| format!(", subscription {status}"))
+}
+
 /// "1 version", "2 versions".
 fn plural(n: usize, what: &str) -> String {
     if n == 1 {
@@ -581,15 +636,29 @@ fn plural(n: usize, what: &str) -> String {
 }
 
 impl OrgDeletion {
+    /// Why it was refused, if it was: print the report, then this (exit 4).
+    pub fn refused(&self) -> Option<&str> {
+        match self {
+            Self::Planned { refused, .. } => refused.as_deref(),
+            Self::Deleted(_) => None,
+        }
+    }
+
     /// What to print, a line each.
     pub fn report(&self) -> Vec<String> {
         match self {
-            Self::Planned(plan) => vec![
+            Self::Planned { plan, refused } => vec![
                 format!(
-                    "dry run, nothing deleted: would delete {} ({}), {}",
+                    "{}, nothing deleted: would delete {} ({}), {}{}",
+                    if refused.is_some() {
+                        "refused"
+                    } else {
+                        "dry run"
+                    },
                     plan.org.slug,
                     plan.org.name,
-                    org_counts(plan)
+                    org_counts(plan),
+                    subscription(plan)
                 ),
                 "its members keep their accounts; invoices stay in Stripe".to_owned(),
             ],
