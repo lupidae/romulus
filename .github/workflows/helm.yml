@@ -200,5 +200,6 @@ jobs:
           REGISTRY: ${{ steps.meta.outputs.registry }}
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          set -o pipefail
           helm push "dist/romulus-$VERSION.tgz" "oci://$REGISTRY/charts" | tee push.log
           echo "Pushed \`oci://$REGISTRY/charts/romulus:$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
