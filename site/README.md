@@ -12,7 +12,7 @@ from `web/` and `crates/romulus-wasm` into `public/hero/`, and committed.
 
 ```
 public/            what Cloudflare Pages serves
-  index.html       the page; the hero's static window is HTML, CSS and SVG
+  index.html       the page; the hero's static window is HTML, CSS and SVG; the plans' JSON (#plans-data)
   styles.css       layout and the marketing type scale (colors only from tokens)
   tokens.css       generated from web/src/styles/globals.css: do not edit
   app.js           header hairline, hero playback, loading the live hero, copy button, theme switch
@@ -22,6 +22,7 @@ public/            what Cloudflare Pages serves
 tools/sync.mjs     copies tokens and fonts from web/ (--check for CI)
 tools/hero.mjs     builds public/hero/ (--check: is it built from the current sources?)
 tools/assets.mjs   renders og.png (tools/og.html + the hero window) and the icons
+tools/pricing.mjs  renders the plan cards from the page's #plans-data (--check: do they match?)
 serve.mjs          a local server that behaves like Pages (_headers, 404, compression)
 e2e/               Playwright + axe
 wrangler.toml      the Cloudflare Pages project
@@ -78,11 +79,25 @@ from the API.
 - Hosting: Cloudflare Pages. Canonical URL `https://romulus.lupidae.com/`
   (in the head of `index.html`, `robots.txt`, `sitemap.xml`; the custom
   domain is attached in the Pages dashboard).
-- "Request access" opens `mailto:romulus@lupidae.com`.
+- One way in: "Start free" (header, hero, closing, the plans) goes to the
+  plans' `signup` (`/app/signin`); "Talk to us" opens
+  `mailto:romulus@lupidae.com`. The returning visitor's "Sign in" is in the
+  header and, quietest (a ghost button), third in the hero's row.
 - The push snippet follows the spec: `POST /api/databases/<id>/versions` with
   the database's bearer token, remus JSON as the body.
 - Fonts are self-hosted (Inter with its optical-size axis, so large headings
   get Inter Display's shapes; JetBrains Mono for code), preloaded, `swap`.
+- Pricing: the plans live in one place, the JSON block `#plans-data` in
+  `index.html` (prices, limits, the buttons' target). Change it, then
+  `npm --prefix site run pricing` rewrites the cards between the `plans`
+  markers; the e2e test fails until the two agree. Yearly is
+  `yearly_months` (10) times the monthly price. The cards are static HTML
+  holding both periods' prices, and the Monthly/Yearly switch is native
+  radios and CSS (`:has()`), no script. Every plan's button goes to
+  `signup` (`/app/signin`: Zitadel's login creates the account) while paid
+  checkout is not open. No legal links yet: the footer keeps a hidden,
+  empty `nav.footer-legal` for terms and privacy once counsel has
+  reviewed them.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows
   are plain radial gradients) and no layout reads during load. Those three
   cost ~2.5 s of main thread on Lighthouse's throttled phone.

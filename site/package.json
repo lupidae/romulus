@@ -13,6 +13,8 @@
     "sync": "node tools/sync.mjs",
     "sync:check": "node tools/sync.mjs --check",
     "assets": "node tools/assets.mjs",
+    "pricing": "node tools/pricing.mjs",
+    "pricing:check": "node tools/pricing.mjs --check",
     "e2e": "playwright test",
     "test:edge": "node --test \"edge/*.test.mjs\""
   },

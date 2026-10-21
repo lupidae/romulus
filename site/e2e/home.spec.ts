@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+import { price, readPlans, withPlans } from "../tools/pricing.mjs";
+
 const publicFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../public/${name}`, import.meta.url)), "utf8");
 
@@ -23,7 +25,7 @@ function watchErrors(page: Page, allow?: RegExp) {
   return errors;
 }
 
-test("the hero says what romulus is and offers both ways in", async ({ page }) => {
+test("the hero says what romulus is and how to start", async ({ page }) => {
   // The live hero's requests are refused on purpose.
   const errors = watchErrors(page, /Failed to load resource/);
   await withoutLiveHero(page);
@@ -38,11 +40,14 @@ test("the hero says what romulus is and offers both ways in", async ({ page }) =
   await expect(page.getByRole("contentinfo")).toBeVisible();
 
   const hero = page.locator(".hero");
-  await expect(hero.getByRole("link", { name: "Request access" })).toHaveAttribute(
+  await expect(hero.getByRole("link", { name: "Start free" })).toHaveAttribute("href", "/app/signin");
+  await expect(hero.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
     "href",
-    /^mailto:romulus@lupidae\.com\?subject=/,
+    "mailto:romulus@lupidae.com",
   );
-  await expect(hero.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/app/signin");
+  for (const region of [page.getByRole("banner"), hero]) {
+    await expect(region.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/app/signin");
+  }
   await expect(page.getByRole("img", { name: /romulus draft of a billing schema/ })).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -76,6 +81,8 @@ test("the page covers what ships, section by section", async ({ page }) => {
     "Push the real schema from CI.",
     "Postgres, down to the last policy.",
     "Roles that match how teams review.",
+    "Flat plans. Bring the whole team.",
+    "Run it on your own servers.",
   ])
     await expect(page.getByRole("heading", { level: 2, name })).toHaveCount(1);
   // Each database targets one of these majors (docs/MVP.md, "Several Postgres majors").
@@ -87,6 +94,121 @@ test("the page covers what ships, section by section", async ({ page }) => {
   await expect(row("Approve drafts others edited").getByRole("img", { name: "Yes" })).toHaveCount(3);
   await expect(row("Remove and restore versions").getByRole("img", { name: "Yes" })).toHaveCount(1);
   await expect(row("Create playgrounds").getByRole("img", { name: "No" })).toHaveCount(1);
+});
+
+test("the header and the pricing card lead to pricing and self-hosting", async ({ page }) => {
+  await page.goto("/");
+  const nav = page.getByRole("navigation", { name: "Sections" });
+  await nav.getByRole("link", { name: "Pricing" }).click();
+  await expect(page).toHaveURL(/#pricing$/);
+  const pricingTitle = page.getByRole("heading", { level: 2, name: "Flat plans. Bring the whole team." });
+  await expect(pricingTitle).toBeInViewport();
+
+  await page.getByRole("link", { name: "How to self-host" }).click();
+  await expect(page).toHaveURL(/#self-host$/);
+  await expect(page.getByRole("heading", { level: 2, name: "Run it on your own servers." })).toBeInViewport();
+
+  await page.goto("/");
+  await nav.getByRole("link", { name: "Self-host" }).click();
+  await expect(page).toHaveURL(/#self-host$/);
+  await expect(page.getByRole("heading", { level: 2, name: "Run it on your own servers." })).toBeInViewport();
+
+  await expect(page.getByRole("banner").getByRole("link", { name: "romulus on GitHub" })).toHaveAttribute(
+    "href",
+    "https://github.com/lupidae/romulus",
+  );
+});
+
+test("one way in: every Start free goes where the plans do, Talk to us is a mail", async ({ page }) => {
+  const { signup } = readPlans(publicFile("index.html"));
+  await page.goto("/");
+  await expect(page.getByText("Request access")).toHaveCount(0);
+  const regions = [
+    page.getByRole("banner"),
+    page.locator(".hero .cta-row"),
+    page.locator(".closing .cta-row"),
+  ];
+  for (const region of regions) {
+    await expect(region.getByRole("link", { name: "Start free", exact: true })).toHaveAttribute(
+      "href",
+      signup,
+    );
+  }
+  // The hero and the closing lead with Start free; Talk to us is the quieter
+  // one, and the hero's Sign in, for whoever has an account, the quietest.
+  const [, heroRow, closingRow] = regions;
+  await expect(heroRow.getByRole("link")).toHaveText(["Start free", "Talk to us", "Sign in"]);
+  await expect(heroRow.getByRole("link", { name: "Sign in" })).toHaveClass(/\bghost\b/);
+  await expect(closingRow.getByRole("link")).toHaveText(["Start free", "Talk to us"]);
+  for (const row of [heroRow, closingRow]) {
+    await expect(row.getByRole("link", { name: "Start free" })).toHaveClass(/\bprimary\b/);
+    await expect(row.getByRole("link", { name: "Talk to us" })).toHaveClass(/\bsecondary\b/);
+    await expect(row.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
+      "href",
+      "mailto:romulus@lupidae.com",
+    );
+  }
+});
+
+test("the plan cards are the page's own JSON, rendered", async () => {
+  // site/tools/pricing.mjs writes them from #plans-data: run it after a change.
+  const html = publicFile("index.html");
+  expect(withPlans(html) === html, "run `npm --prefix site run pricing`").toBe(true);
+  // Yearly is ten months: two months free, as the switch says.
+  expect(readPlans(html).yearly_months).toBe(10);
+});
+
+test("the billing switch shows monthly or yearly prices", async ({ page }) => {
+  const plans = readPlans(publicFile("index.html"));
+  await page.goto("/#pricing");
+  const pricing = page.locator("#pricing");
+  const period = pricing.getByRole("group", { name: "Billing period" });
+  // Both periods' prices are in each card: innerText is the one shown.
+  const shown = async (plan: string, part = ".plan-price") => {
+    const text = await pricing.getByRole("article", { name: plan, exact: true }).locator(part).innerText();
+    return text.replace(/\s+/g, " ").trim();
+  };
+  const amount = (n: number) => price(n, plans.currency).replace(/\s/g, " ");
+
+  await expect(period.getByRole("radio", { name: "Monthly" })).toBeChecked();
+  for (const plan of plans.plans) expect(await shown(plan.name)).toBe(`${amount(plan.monthly)} per month`);
+  expect(await shown("Starter")).toBe("19 € per month");
+  expect(await shown("Starter", ".plan-alt")).toBe("or 190 € a year");
+
+  // From the keyboard, as a radio group.
+  await period.getByRole("radio", { name: "Monthly" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(period.getByRole("radio", { name: /^Yearly/ })).toBeChecked();
+  for (const plan of plans.plans)
+    expect(await shown(plan.name)).toBe(`${amount(plan.monthly * plans.yearly_months)} per year`);
+  expect(await shown("Business")).toBe("1,490 € per year");
+  expect(await shown("Business", ".plan-alt")).toBe("or 149 € a month");
+
+  await period.getByText("Monthly").click();
+  expect(await shown("Team")).toBe("49 € per month");
+});
+
+test("every plan starts with a free sign-up, Team is the one recommended", async ({ page }) => {
+  const plans = readPlans(publicFile("index.html"));
+  await page.goto("/#pricing");
+  const pricing = page.locator("#pricing");
+  for (const plan of plans.plans) {
+    const card = pricing.getByRole("article", { name: plan.name, exact: true });
+    await expect(card.getByRole("link", { name: plan.action })).toHaveAttribute("href", plans.signup);
+    // Same fields, same order, in every card.
+    await expect(card.locator("dt")).toHaveText(plans.limits.map((l: { label: string }) => l.label));
+  }
+  await expect(pricing.getByRole("link", { name: "Start free", exact: true })).toHaveCount(1);
+  await expect(pricing.getByRole("link", { name: "Start free, upgrade anytime" })).toHaveCount(3);
+  await expect(pricing.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
+    "href",
+    /^mailto:romulus@lupidae\.com\?subject=/,
+  );
+  await expect(pricing.locator(".plan.is-recommended")).toHaveCount(1);
+  await expect(pricing.locator(".plan.is-recommended h3")).toHaveText("Team");
+  // No fake urgency, no popularity claims.
+  await expect(pricing).not.toContainText(/popular|limited time|only \d+ left/i);
+  await expect(pricing.getByText("TVA non applicable, art. 293 B du CGI.")).toHaveAttribute("lang", "fr");
 });
 
 test("the push command copies to the clipboard", async ({ page, context }) => {
@@ -111,18 +233,84 @@ test("the push command copies to the clipboard", async ({ page, context }) => {
   await expect(button).toContainText("Copy", { timeout: 4000 });
 });
 
+test("each way to self-host copies its commands", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/#self-host");
+  const ways: [string, string[]][] = [
+    [
+      "Copy the Docker install commands",
+      ["git clone https://github.com/lupidae/romulus.git", "cd romulus/deploy/self-host", "./install.sh"],
+    ],
+    [
+      "Copy the Helm install command",
+      [
+        "helm install romulus oci://ghcr.io/lupidae/charts/romulus \\",
+        "  --namespace romulus --create-namespace \\",
+        "  --set host=romulus.example.com",
+      ],
+    ],
+    [
+      "Copy the build commands",
+      [
+        "git clone https://github.com/lupidae/romulus.git && cd romulus",
+        "docker build -t local/romulus-api:dev .",
+        "docker build -t local/romulus-sandbox:dev deploy/sandbox",
+        "cd deploy/self-host",
+        "./install.sh --registry local --version dev --no-pull",
+      ],
+    ],
+  ];
+  for (const [name, lines] of ways) {
+    const button = page.getByRole("button", { name });
+    await button.click();
+    await expect(button).toContainText("Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe([...lines, ""].join("\n"));
+  }
+  await expect(page.getByRole("link", { name: "the Kubernetes guide" })).toHaveAttribute(
+    "href",
+    "https://github.com/lupidae/romulus/blob/main/docs/self-host/kubernetes.md",
+  );
+  await expect(page.getByRole("link", { name: "Read the self-host docs" })).toHaveAttribute(
+    "href",
+    "https://github.com/lupidae/romulus/tree/main/docs/self-host",
+  );
+});
+
 for (const width of [360, 390]) {
-  test(`the push command wraps instead of clipping at ${width}px`, async ({ page }) => {
+  test(`the commands wrap instead of clipping at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/#ci");
-    const pre = page.locator(".terminal-body");
-    const { scroll, client } = await pre.evaluate((el) => ({
-      scroll: el.scrollWidth,
-      client: el.clientWidth,
-    }));
-    expect(scroll).toBeLessThanOrEqual(client);
+    const blocks = page.locator(".terminal-body");
+    expect(await blocks.count()).toBe(4);
+    for (const pre of await blocks.all()) {
+      const { scroll, client } = await pre.evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+      }));
+      expect(scroll).toBeLessThanOrEqual(client);
+    }
   });
 }
+
+test("the footer links the project, its docs, its security policy and a contact", async ({ page }) => {
+  await page.goto("/");
+  const footer = page.getByRole("navigation", { name: "Footer" });
+  const href = (name: string) => footer.getByRole("link", { name, exact: true });
+  await expect(href("GitHub")).toHaveAttribute("href", "https://github.com/lupidae/romulus");
+  await expect(href("Self-host docs")).toHaveAttribute(
+    "href",
+    "https://github.com/lupidae/romulus/tree/main/docs/self-host",
+  );
+  await expect(href("Security policy")).toHaveAttribute(
+    "href",
+    "https://github.com/lupidae/romulus/blob/main/SECURITY.md",
+  );
+  await expect(href("Contact")).toHaveAttribute("href", "mailto:romulus@lupidae.com");
+  // Terms and privacy wait for counsel: their place is kept, hidden and empty.
+  const legal = page.locator(".footer-legal");
+  await expect(legal).toBeHidden();
+  await expect(legal.locator("a")).toHaveCount(0);
+});
 
 test("the theme choice applies at once and is shared with the app", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });

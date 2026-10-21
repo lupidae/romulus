@@ -47,6 +47,12 @@ sandboxed Postgres of the version you run (15, 16, 17 or 18).
 
 ## Quick start
 
+### Use the hosted service
+
+[romulus.lupidae.com](https://romulus.lupidae.com/) runs it for you: a free
+plan for one person, and [flat plans for teams](https://romulus.lupidae.com/#pricing)
+with unlimited members.
+
 ### Run it on your own server
 
 One Linux host with Docker and 4 GB of memory:
