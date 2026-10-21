@@ -29,10 +29,6 @@ node_modules/
 .vscode/*
 !.vscode/extensions.json
 
-# The preview's host-only files (deploy/preview/deploy.sh writes them there)
-/deploy/preview/.env
-/deploy/preview/.host
-/deploy/preview/state/
 
 # Python bytecode (the exporter scripts are run in place)
 __pycache__/

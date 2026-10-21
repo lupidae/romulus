@@ -68,8 +68,8 @@ domains tab (Pages has no wrangler.toml setting for it).
 `/api/…` wherever they appear): one origin. The Pages Function
 (`functions/_middleware.js`, logic and tests in `edge/`) proxies `/app` and
 `/api` to the API, websockets included, and `public/_routes.json` keeps it off
-every other path, so the homepage stays static. The API's origin, its edge
-key and the rest of the preview are in `deploy/preview/README.md`. `_headers`
+every other path, so the homepage stays static. The API's origin and its edge
+key are set in the Pages project's settings. `_headers`
 applies to static files only (Pages never applies it to a Function's
 responses): the homepage's CSP does not reach the app, whose headers come
 from the API.

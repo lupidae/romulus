@@ -3,7 +3,7 @@
 # web app's production build, which the API serves at /app (ROMULUS_WEB_DIR,
 # crates/romulus-api/src/web.rs) beside itself at /api. Target `play`:
 # ghcr.io/lupidae/romulus-play, the playground runner and service. Built and pushed by
-# CI (.github/workflows/images.yml), run by deploy/preview/compose.yaml.
+# CI (.github/workflows/images.yml), run by deploy/self-host/compose.yaml.
 # Context: the repository root (.dockerignore keeps local state out).
 
 # --- the web app: Vite with base /app/ (web/vite.config.ts) -----------------
@@ -43,8 +43,7 @@ ENV SQLX_OFFLINE=true
 RUN cargo build --release --locked --package romulus-api
 
 # --- the playground runner and service (crates/romulus-play-runner, -playground)
-# One image for both: `docker build --target play` (deploy/preview/deploy.sh
-# build). The runner also runs it, privileged and for a moment, for
+# One image for both: `docker build --target play`. The runner also runs it, privileged and for a moment, for
 # `xfs_quota` (docs/playground.md): hence xfsprogs.
 FROM build AS play-build
 RUN cargo build --release --locked --package romulus-play-runner --package romulus-playground

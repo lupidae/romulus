@@ -4,8 +4,7 @@ One cluster per playground (docs/playground.md), started by the runner
 (`crates/romulus-play-runner`) as `romulus-play-<id>`, with gVisor in the
 preview (`runsc-uds`), `--network none`, a read-only root filesystem, no
 capabilities, `no-new-privileges`, 128 pids, 512 MB and one CPU. Built as
-`ghcr.io/lupidae/romulus-playground:<sha>` by `deploy/preview/deploy.sh build`
-and `.github/workflows/images.yml`, and as `romulus-playground:dev` by
+`ghcr.io/lupidae/romulus-playground:<sha>` by `.github/workflows/images.yml`, and as `romulus-playground:dev` by
 `just up` / `just playground-image`.
 
 | file | what |

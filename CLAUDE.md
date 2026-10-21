@@ -31,7 +31,6 @@ site/                 the static homepage (tokens copied from web/; see site/REA
                       Function (functions/, edge/proxy.js) proxies /app and /api to the API; its
                       live hero (public/hero/, committed) is built from web/src/hero by `just site-hero`
 deploy/zitadel/       the provisioner that sets Zitadel up on `just up` (and on deploys), and the login's brand assets
-deploy/preview/       lupidae's hosted preview (romulus.lupidae.com): compose, deploy.sh, cloudflare.sh; README = runbook
 deploy/self-host/     the self-host bundle: compose.yaml (published images), install.sh (install, upgrade,
                       backup, restore, admin-link), Caddyfile, test/install-test.sh (CI: self-host.yml);
                       docs in docs/self-host/
@@ -40,7 +39,6 @@ deploy/helm/          the Kubernetes chart (romulus/: the same images and settin
                       test/e2e.sh (k3d, by hand); docs/self-host/kubernetes.md; published to ghcr.io/<owner>/charts on vX.Y.Z tags
                       (its version = the release's; RELEASING.md)
 ee/                   the future separately licensed (commercial) features: empty, ee/LICENSE a placeholder
-docs/oss/             going open source: the history's secret scan, what is lupidae's own
 Dockerfile            the API image (web build + release API), pushed to ghcr.io by .github/workflows/images.yml
 RELEASING.md          cutting a release: bump the chart, tag vX.Y.Z; the images and the chart publish from the tag
 scripts/dev-env       per-worktree ports and .env;  scripts/check-oidc  proves SSO works
@@ -121,7 +119,7 @@ copy-link invitations…). Change one with a reason, in MVP.md first.
 Made in the skeleton (S0):
 
 - **One origin.** Production: the homepage at `/`, the SPA at `/app`, the API
-  at `/api`. The preview (deploy/preview) serves `/` from Cloudflare Pages and
+  at `/api`. The hosted service serves `/` from Cloudflare Pages and
   proxies `/app` and `/api` with a Pages Function to the API, which serves the
   SPA build itself (`ROMULUS_WEB_DIR`, the `web` module) and refuses requests
   without the Function's edge key (`ROMULUS_EDGE_KEY`, the `edge` module).
@@ -956,8 +954,8 @@ statement; replies, @mentions, resolve; never `COMMENT ON`.
 
 ## Playgrounds (`playgrounds`, `romulus-playground`, `romulus-play-runner`)
 
-docs/playground.md (its decisions block first) has the design; deploy/preview/README.md
-"Playground host" the operations and how each threat is handled.
+docs/playground.md (its decisions block first) has the design and how each threat is
+handled; docs/self-host/playgrounds.md the host setup.
 
 - **Three processes.** The API owns durable state and who may do what (`playgrounds`:
   tables `playgrounds`, `playground_runs`; caps on playgrounds existing; audit events;
@@ -990,7 +988,7 @@ docs/playground.md (its decisions block first) has the design; deploy/preview/RE
   insert's transaction under an advisory lock (`playgrounds::build::CREATE_LOCK`). Roles changed
   from inside are put back by a restart (the entrypoint resets them on every start).
 - **Local development** runs playgrounds with `runc` and reaches Postgres by TCP on
-  loopback (`ROMULUS_PLAY_TCP`, refused with gVisor); the preview with `runsc-uds` and the
+  loopback (`ROMULUS_PLAY_TCP`, refused with gVisor); production with `runsc-uds` and the
   socket. The runner keeps playgrounds' files in a named volume (`<project>_play`) through
   `play-files` helper containers. `just down` stops this worktree's playgrounds,
   `just nuke` removes them.

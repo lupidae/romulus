@@ -9,14 +9,14 @@
 #   $OUT/accounts.txt  "email password" of each account it created
 #                      ($ACCOUNTS, add-account: deployments), mode 600
 #
-# The dev stack (docker-compose.yml) runs it on every `up`; the preview
-# (deploy/preview) on every deploy. Every step finds what exists before
+# The dev stack (docker-compose.yml) runs it on every `up`; a deployment
+# on every deploy. Every step finds what exists before
 # creating anything. Zitadel never shows a client secret twice: when the app
 # exists but oidc.env is gone (or names another client), the secret is
 # regenerated rather than guessed.
 #
 #   provision.sh                                provision (the default)
-#   provision.sh add-account EMAIL GIVEN FAMILY an operator-made account (no SMTP: deploy/preview/README.md)
+#   provision.sh add-account EMAIL GIVEN FAMILY an operator-made account (when there is no SMTP)
 #   provision.sh unlock EMAIL                   unlock an account locked by failed attempts
 set -euo pipefail
 

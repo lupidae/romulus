@@ -13,8 +13,8 @@ name: Images
 #   romulus-playground  deploy/playground: a playground's Postgres (17)
 # Each is tagged with the full sha of the commit it was built from, and
 # `main` on main. A pull request from this repository pushes its head's sha
-# as well, so a branch can be deployed to the preview before it merges
-# (deploy/preview/README.md); `main` only ever moves with main.
+# as well, so a branch can be deployed before it merges; `main` only ever
+# moves with main.
 # A release tag vX.Y.Z (RELEASING.md) also pushes X.Y.Z, then X.Y and
 # `latest` when it is the newest release of its line and of all (a fix to
 # an older line never moves them back); a prerelease (vX.Y.Z-rc.1) only its
