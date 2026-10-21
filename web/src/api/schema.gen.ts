@@ -4670,6 +4670,7 @@ export interface components {
        *     chosen on the page the emailed link opens.
        */
       password?: string | null;
+      terms?: components["schemas"]["AcceptTerms"] | null;
     };
     Person: {
       /** Format: uuid */
@@ -6425,8 +6426,14 @@ export interface components {
      */
     WithdrawalInfo: {
       /**
+       * Format: date
+       * @description The last day it can be used, in Paris.
+       */
+      last_day?: string | null;
+      /**
        * Format: date-time
-       * @description The end of the withdrawal period while it runs.
+       * @description The end of the withdrawal period while it runs (midnight in Paris
+       *     after `last_day`).
        */
       until?: string | null;
       withdrawn?: components["schemas"]["Withdrawn"] | null;
@@ -8609,7 +8616,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `billing_unavailable`: Stripe could not be read; nothing was recorded */
+      /** @description `billing_unavailable`: Stripe could not be read; `withdrawal_by_email`: a payment romulus cannot refund itself (withdraw by email). Nothing was recorded */
       503: {
         headers: {
           [name: string]: unknown;

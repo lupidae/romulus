@@ -119,6 +119,9 @@ pub struct LegalConfig {
     /// edition of the Terms, the business-or-consumer choice at checkout,
     /// withdrawal). Off (the default): romulus is sold to businesses only,
     /// under the professional edition, and everyone attests professional use.
+    /// On only with `ROMULUS_TERMS_EDITION=full` and a version of the Terms
+    /// other than `1.0` (published for businesses only): never by a single
+    /// switch.
     pub consumer_sales: bool,
 }
 
@@ -163,6 +166,38 @@ impl LegalConfig {
             None => None,
         };
         let consumer_sales = flag(get, "ROMULUS_CONSUMER_SALES")?;
+        let full = match get("ROMULUS_TERMS_EDITION").as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some("professional") => Some(false),
+            Some("full") => Some(true),
+            Some(_) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_TERMS_EDITION",
+                    reason: "professional or full".to_owned(),
+                });
+            }
+        };
+        match (consumer_sales, full) {
+            (true, Some(true)) | (false, None | Some(false)) => {}
+            (true, _) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_CONSUMER_SALES",
+                    reason: "consumer sales need the full edition of the Terms: set ROMULUS_TERMS_EDITION=full too, with the version that opens them".to_owned(),
+                });
+            }
+            (false, Some(true)) => {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_TERMS_EDITION",
+                    reason: "the full edition is the one for consumer sales: set ROMULUS_CONSUMER_SALES=true too".to_owned(),
+                });
+            }
+        }
+        if consumer_sales && version.as_deref() == Some("1.0") {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_TERMS_VERSION",
+                reason: "version 1.0 was published for businesses only: consumer sales open with a new version of the Terms".to_owned(),
+            });
+        }
         let contact = get("ROMULUS_LEGAL_CONTACT").map(|c| c.trim().to_owned());
         if contact.as_deref().is_some_and(|c| {
             c.len() > 254
@@ -1115,9 +1150,6 @@ mod tests {
         // Businesses only until consumer sales are switched on.
         assert!(!legal.consumer_sales);
         assert_eq!(legal.edition(), crate::domain::TermsEdition::Professional);
-        full.push(("ROMULUS_CONSUMER_SALES", "true"));
-        let legal = with(&full).unwrap().legal.unwrap();
-        assert_eq!(legal.edition(), crate::domain::TermsEdition::Full);
         assert_eq!(legal.terms_version, "1.0");
         assert_eq!(
             legal.url("/fr/legal/conditions"),
@@ -1149,6 +1181,75 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn consumer_sales_open_only_with_the_full_edition_and_a_new_version() {
+        let with = |extra: &[(&'static str, &str)]| {
+            let mut vars = BASE.to_vec();
+            vars.extend_from_slice(&[
+                ("ROMULUS_LEGAL_URL", "https://romulus.example"),
+                ("ROMULUS_LEGAL_CONTACT", "legal@romulus.example"),
+            ]);
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        let refused = |extra: &[(&'static str, &str)], var: &str| {
+            assert!(
+                matches!(with(extra), Err(ConfigError::Invalid { var: v, .. }) if v == var),
+                "{extra:?}"
+            );
+        };
+        // The switch alone, or with the edition but version 1.0: refused.
+        refused(
+            &[
+                ("ROMULUS_TERMS_VERSION", "2.0"),
+                ("ROMULUS_CONSUMER_SALES", "true"),
+            ],
+            "ROMULUS_CONSUMER_SALES",
+        );
+        refused(
+            &[
+                ("ROMULUS_TERMS_VERSION", "1.0"),
+                ("ROMULUS_CONSUMER_SALES", "true"),
+                ("ROMULUS_TERMS_EDITION", "full"),
+            ],
+            "ROMULUS_TERMS_VERSION",
+        );
+        // The full edition without consumer sales, or a made-up edition.
+        refused(
+            &[
+                ("ROMULUS_TERMS_VERSION", "2.0"),
+                ("ROMULUS_TERMS_EDITION", "full"),
+            ],
+            "ROMULUS_TERMS_EDITION",
+        );
+        refused(
+            &[
+                ("ROMULUS_TERMS_VERSION", "1.0"),
+                ("ROMULUS_TERMS_EDITION", "consumers"),
+            ],
+            "ROMULUS_TERMS_EDITION",
+        );
+        // All three: the full edition.
+        let legal = with(&[
+            ("ROMULUS_TERMS_VERSION", "2.0"),
+            ("ROMULUS_CONSUMER_SALES", "true"),
+            ("ROMULUS_TERMS_EDITION", "full"),
+        ])
+        .unwrap()
+        .legal
+        .unwrap();
+        assert_eq!(legal.edition(), crate::domain::TermsEdition::Full);
+        // Saying the professional edition is saying what is already so.
+        let legal = with(&[
+            ("ROMULUS_TERMS_VERSION", "1.0"),
+            ("ROMULUS_TERMS_EDITION", "professional"),
+        ])
+        .unwrap()
+        .legal
+        .unwrap();
+        assert_eq!(legal.edition(), crate::domain::TermsEdition::Professional);
     }
 
     #[test]

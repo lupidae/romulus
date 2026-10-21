@@ -52,7 +52,7 @@ b) **Free plan.** On your first sign-in, you read these Terms and accept them by
 
 c) **Paid Plan.** An administrator of the Organization chooses a Plan and a Billing Period in the billing settings. A summary shows the Plan, its price, the Billing Period and the renewal terms. You state whether you are buying as a business or as a Consumer, and tick the boxes described in Sections 3.5 and 9.3. You then click "Continue to payment".
 
-d) **Payment page.** You are taken to a secure payment page operated by Stripe. It shows the order summary and the total price, and lets you enter or correct your billing details and payment method. Until you confirm, you can go back and change the Plan, the Billing Period or your answers. **Clicking the "Subscribe" button places an order with an obligation to pay.** The contract for the paid Plan is concluded when the payment is accepted.
+d) **Payment page.** You are taken to a secure payment page operated by Stripe. It shows the order summary and the total price, and lets you enter or correct your billing details and payment method. Until you confirm, you can go back and change the Plan, the Billing Period or your answers. **Clicking the payment button on this page ("Subscribe" or "Pay and subscribe") places an order with an obligation to pay.** The contract for the paid Plan is concluded when the payment is accepted.
 
 e) **Confirmation.** We confirm the subscription by email without undue delay. The confirmation includes the main terms of the order and a copy of these Terms, and, for Consumers, the confirmation of the request described in Section 9.3. Stripe also sends the receipt or invoice.
 

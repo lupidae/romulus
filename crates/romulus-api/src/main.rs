@@ -55,10 +55,13 @@ hosted billing (no database needed):
 
 the hosted service's notices (ROMULUS_TERMS_VERSION; they need mail):
   legal-notice --document terms|privacy|dpa --version V --effective YYYY-MM-DD
-               --summary-en FILE --summary-fr FILE [--required-by-law] [--dry-run]
+               --url-en URL [--url-fr URL] --summary-en FILE --summary-fr FILE
+               [--required-by-law] [--dry-run]
               emails a change to a legal document 30 days ahead at least: the
               Terms and the Privacy Policy to every user, the DPA to every
-              admin; once per person and version, in their language
+              admin; once per person and version, in their language, linking
+              the new version's page (published first: --url-fr too for the
+              Terms and the Privacy Policy)
   price-change [--plan PLAN] [--from YYYY-MM-DD] [--dry-run]
               after a price changed in the plan table (and stripe-setup): tells
               each subscription still on its old price of the new one, from its
@@ -272,10 +275,13 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
                     "document",
                     "version",
                     "effective",
+                    "url-en",
+                    "url-fr",
                     "summary-en",
                     "summary-fr",
                 ],
             )?;
+            let url_fr = flags.remove("url-fr");
             let mut take = |name| flags.remove(name).ok_or(MainError::Usage);
             let document = match take("document")?.as_str() {
                 "terms" => LegalDocument::Terms,
@@ -285,6 +291,7 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
             };
             let version = take("version")?;
             let effective = date_flag(&take("effective")?)?;
+            let url_en = take("url-en")?;
             let summary_en = std::fs::read_to_string(take("summary-en")?)?;
             let summary_fr = std::fs::read_to_string(take("summary-fr")?)?;
             Command::Admin(AdminCommand::LegalNotice(
@@ -292,6 +299,8 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
                     document,
                     version,
                     effective,
+                    url_en,
+                    url_fr,
                     summary_en,
                     summary_fr,
                     required_by_law: on.contains(&"required-by-law"),
@@ -525,13 +534,16 @@ async fn legal_notice(
             "legal-notice: dry run, nothing sent"
         );
     } else {
+        // Sent now, each once the mail server took it; what it did not take
+        // yet, the API's outbox sends later.
+        let delivered = romulus_api::mail::outbox::deliver(pool, &mailer).await?;
         tracing::info!(
-            sent = sent.sent,
+            queued = sent.sent,
             told_before = sent.already,
-            "legal-notice: sent (the mailer sends in the background: wait for it)"
+            sent = delivered.sent,
+            retrying = delivered.retrying,
+            "legal-notice: done"
         );
-        // Messages go out from their own tasks: give them time.
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
     Ok(())
 }
@@ -565,7 +577,14 @@ async fn price_change(
             },
         )?;
     }
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    if !dry_run {
+        let delivered = romulus_api::mail::outbox::deliver(&state.db, &state.mailer).await?;
+        tracing::info!(
+            sent = delivered.sent,
+            retrying = delivered.retrying,
+            "price-change: letters sent; what the mail server did not take yet, the API sends later"
+        );
+    }
     Ok(())
 }
 
@@ -639,8 +658,10 @@ async fn serve() -> Result<(), MainError> {
     // Billing: playground hours metered every minute, the emails it owes
     // (renewal reminders, payment notices) every hour.
     let billing_tasks = romulus_api::billing::tasks(&state);
-    // The Terms' records past their retention: now, and every day.
+    // The Terms' records past their retention: now, and every day. Contract
+    // and billing letters: sent once the mail server takes them.
     let legal_tasks = romulus_api::legal::tasks(&state);
+    let outbox = romulus_api::mail::outbox::tasks(&state.db, &state.mailer);
     // Versions removed more than 30 days ago: now, and every hour.
     let purger = romulus_api::versions::removal::purger(
         state.db.clone(),
@@ -680,7 +701,7 @@ async fn serve() -> Result<(), MainError> {
         password_sweeper.abort();
     }
     playground_sweeper.abort();
-    for task in billing_tasks.into_iter().chain(legal_tasks) {
+    for task in billing_tasks.into_iter().chain(legal_tasks).chain(outbox) {
         task.abort();
     }
     compiler.close().await;

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM legal_acceptances a\n         WHERE (kind = 'terms' AND account_deleted_at < now() - interval '5 years')\n            OR (kind = 'checkout' AND contract_ended_at IS NOT NULL\n                AND greatest(contract_ended_at, account_deleted_at) < now() - interval '5 years'\n                AND (edition = 'professional' OR accepted_at < now() - interval '10 years'))\n            OR (kind = 'checkout' AND contract_ended_at IS NULL\n                AND accepted_at < now() - interval '5 years'\n                AND (edition = 'professional' OR accepted_at < now() - interval '10 years')\n                AND NOT EXISTS (SELECT 1 FROM org_billing b WHERE b.acceptance_id = a.id)\n                AND NOT EXISTS (SELECT 1 FROM withdrawals w WHERE w.acceptance_id = a.id))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "67105908f38b58481f8cf0a27544fa2e2106571979f38b3cfb8f0ac757877dfc"
+}

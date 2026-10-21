@@ -121,6 +121,51 @@ pub struct PlannedRefund {
     pub invoice: String,
     pub payment_intent: String,
     pub amount: i64,
+    /// What the invoice was paid: no refund of it ever gives back more,
+    /// with the ones made before.
+    pub paid: i64,
+}
+
+/// A refund made on a payment already, as Stripe lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MadeRefund {
+    pub amount: i64,
+    /// `succeeded`, `pending`, `requires_action`, `failed`, `canceled`.
+    pub status: String,
+    /// The withdrawal it was made for (`metadata[withdrawal]`).
+    pub withdrawal: Option<String>,
+}
+
+/// What `planned` still gives back, given the refunds made on its payment:
+/// nothing when this withdrawal made one already (an attempt that ended
+/// before romulus heard back); otherwise its amount, at most what was paid
+/// less what was refunded (by hand in the Dashboard, say). A failed or
+/// canceled refund gave nothing back.
+pub fn still_due(planned: &PlannedRefund, withdrawal: Uuid, made: &[MadeRefund]) -> i64 {
+    let gave_back = |r: &&MadeRefund| !matches!(r.status.as_str(), "failed" | "canceled");
+    let ours = withdrawal.to_string();
+    if made
+        .iter()
+        .filter(gave_back)
+        .any(|r| r.withdrawal.as_deref() == Some(ours.as_str()))
+    {
+        return 0;
+    }
+    let refunded: i64 = made.iter().filter(gave_back).map(|r| r.amount).sum();
+    planned.amount.min(planned.paid - refunded).max(0)
+}
+
+fn parse_refunds(list: &Value) -> Vec<MadeRefund> {
+    list["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| MadeRefund {
+            amount: r["amount"].as_i64().unwrap_or(0),
+            status: text(&r["status"]).unwrap_or_default(),
+            withdrawal: text(&r["metadata"]["withdrawal"]),
+        })
+        .collect()
 }
 
 /// A Customer Portal session, at its home page or straight in one flow.
@@ -853,18 +898,37 @@ impl StripeApi for Http {
                 .await?;
             }
             for refund in refunds.into_iter().filter(|r| r.amount > 0) {
+                // What its payment had refunded already: this withdrawal's
+                // own refund (made by an attempt that ended before romulus
+                // heard back) is not made again, and no refund gives back
+                // more than what is left of the payment.
+                let made = parse_refunds(
+                    &self
+                        .get(
+                            "refunds",
+                            &[
+                                ("payment_intent".into(), refund.payment_intent.clone()),
+                                ("limit".into(), "100".into()),
+                            ],
+                        )
+                        .await?,
+                );
+                let amount = still_due(&refund, withdrawal, &made);
+                if amount <= 0 {
+                    continue;
+                }
                 let made = self
                     .create(
                         "refunds",
                         Form::new()
                             .set("payment_intent", &refund.payment_intent)
-                            .set("amount", refund.amount.to_string())
+                            .set("amount", amount.to_string())
                             .set("reason", "requested_by_customer")
                             .set("metadata[withdrawal]", withdrawal.to_string())
                             .set("metadata[invoice]", &refund.invoice)
                             .set("metadata[subscription]", &subscription)
                             .pairs(),
-                        &format!("romulus-withdrawal-refund-{}", refund.invoice),
+                        &format!("romulus-withdrawal-refund-{}-{amount}", refund.invoice),
                     )
                     .await;
                 match made {
@@ -970,8 +1034,15 @@ pub struct FakeState {
     pub refunds: Vec<(String, i64)>,
     /// Withdrawals' refunds: invoice, amount.
     pub withdrawal_refunds: Vec<(String, i64)>,
+    /// Every refund made on a payment intent (withdrawals' and others',
+    /// e.g. by hand in the Dashboard: tests add them).
+    pub payment_refunds: HashMap<String, Vec<MadeRefund>>,
+    /// Paid invoices with no payment intent (paid from the balance).
+    pub without_payment: Vec<String>,
     /// The next withdrawal fails (tests: Stripe down midway).
     pub fail_withdrawal: bool,
+    /// Every withdrawal fails (tests: Stripe down for good).
+    pub withdrawals_down: bool,
     /// Subscriptions read so far (tests: a webhook reading again).
     pub reads: usize,
     /// The next subscription read signals the first, then waits for the
@@ -1262,7 +1333,8 @@ impl StripeApi for Fake {
                 })
                 .map(|i| PaidInvoice {
                     id: i.id.clone(),
-                    payment_intent: Some(format!("pi_for_{}", i.id)),
+                    payment_intent: (!state.without_payment.contains(&i.id))
+                        .then(|| format!("pi_for_{}", i.id)),
                     amount_paid: i.total,
                     currency: i.currency.clone(),
                     period_start: i.created,
@@ -1275,12 +1347,12 @@ impl StripeApi for Fake {
     fn withdraw(
         &self,
         subscription: String,
-        _withdrawal: Uuid,
+        withdrawal: Uuid,
         refunds: Vec<PlannedRefund>,
     ) -> BoxFuture<'_, Result<(), StripeError>> {
         Box::pin(async move {
             let mut state = self.state();
-            if std::mem::take(&mut state.fail_withdrawal) {
+            if std::mem::take(&mut state.fail_withdrawal) || state.withdrawals_down {
                 return Err(StripeError::Unreachable("the fake is down".into()));
             }
             if let Some(read) = state.subscriptions.get_mut(&subscription) {
@@ -1288,15 +1360,25 @@ impl StripeApi for Fake {
                 read.cancel_at_period_end = false;
             }
             for refund in refunds.into_iter().filter(|r| r.amount > 0) {
-                if !state
-                    .withdrawal_refunds
-                    .iter()
-                    .any(|(invoice, _)| *invoice == refund.invoice)
-                {
-                    state
-                        .withdrawal_refunds
-                        .push((refund.invoice, refund.amount));
+                let made = state
+                    .payment_refunds
+                    .get(&refund.payment_intent)
+                    .cloned()
+                    .unwrap_or_default();
+                let amount = still_due(&refund, withdrawal, &made);
+                if amount <= 0 {
+                    continue;
                 }
+                state
+                    .payment_refunds
+                    .entry(refund.payment_intent.clone())
+                    .or_default()
+                    .push(MadeRefund {
+                        amount,
+                        status: "succeeded".into(),
+                        withdrawal: Some(withdrawal.to_string()),
+                    });
+                state.withdrawal_refunds.push((refund.invoice, amount));
             }
             Ok(())
         })
@@ -1373,6 +1455,56 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_withdrawal_refund_is_made_once_and_never_more_than_is_left() {
+        let ours = Uuid::from_u128(7);
+        let planned = PlannedRefund {
+            invoice: "in_1".into(),
+            payment_intent: "pi_1".into(),
+            amount: 1_700,
+            paid: 1_900,
+        };
+        let made = |amount: i64, status: &str, withdrawal: Option<Uuid>| MadeRefund {
+            amount,
+            status: status.into(),
+            withdrawal: withdrawal.map(|w| w.to_string()),
+        };
+        assert_eq!(still_due(&planned, ours, &[]), 1_700);
+        // Made by an earlier attempt of this withdrawal: not again.
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_700, "succeeded", Some(ours))]),
+            0
+        );
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_700, "pending", Some(ours))]),
+            0
+        );
+        // That attempt's refund failed: it is made again.
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_700, "failed", Some(ours))]),
+            1_700
+        );
+        // 500 refunded by hand: at most the 1,400 left.
+        assert_eq!(
+            still_due(&planned, ours, &[made(500, "succeeded", None)]),
+            1_400
+        );
+        // All of it refunded already: nothing.
+        assert_eq!(
+            still_due(&planned, ours, &[made(1_900, "succeeded", None)]),
+            0
+        );
+        // Another withdrawal's refund counts as refunded, not as ours.
+        assert_eq!(
+            still_due(
+                &planned,
+                ours,
+                &[made(100, "succeeded", Some(Uuid::from_u128(8)))]
+            ),
+            1_700
+        );
+    }
 
     #[test]
     fn a_subscription_reads_its_period_from_its_item_or_itself() {

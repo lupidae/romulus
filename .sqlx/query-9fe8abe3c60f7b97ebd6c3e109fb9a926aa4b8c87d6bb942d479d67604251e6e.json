@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legal_acceptances\n             (kind, user_email, user_name, terms_version, edition, locale, professional_use, org_id,\n              org_name, plan, interval, buyer, company_name, company_country, business_confirmed,\n              copy_version, checkout_session_id)\n         VALUES ('checkout', 'x@y.z', 'X', '1.0', 'professional', 'en', true, $1, 'acme', 'team',\n                 'month', 'business', 'Acme SAS', 'FR', true, 'v', 'cs_org')\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9fe8abe3c60f7b97ebd6c3e109fb9a926aa4b8c87d6bb942d479d67604251e6e"
+}

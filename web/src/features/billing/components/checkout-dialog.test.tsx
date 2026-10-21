@@ -119,7 +119,11 @@ describe("CheckoutDialog, businesses only (consumer sales off)", () => {
     expect(screen.getByRole("dialog", { name: "Upgrade to Starter" })).toHaveAccessibleDescription(
       /€190 a year, renewed every year until you cancel/,
     );
-    expect(screen.getByText("For professional use only.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "For professional use only. On the payment page, add the name of your business and, if it has one, its VAT number.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /start now/ })).not.toBeInTheDocument();
     const terms = screen.getByRole("link", { name: /Terms of Service/ });
@@ -230,7 +234,10 @@ describe("CheckoutDialog in French", () => {
   it("speaks French and links the French Terms", async () => {
     const { user } = setup({ locale: "fr" });
     expect(screen.getByRole("dialog", { name: "Passer à l'offre Starter" })).toBeInTheDocument();
-    expect(screen.getByText("Réservé aux professionnels.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/^Réservé aux professionnels\. Sur la page de paiement/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Nom ou dénomination de l'entreprise")).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /Conditions générales d'utilisation et de vente/ }),
     ).toHaveAttribute("href", "https://romulus.example/fr/legal/conditions");

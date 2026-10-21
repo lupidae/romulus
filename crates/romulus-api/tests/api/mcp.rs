@@ -1335,3 +1335,35 @@ async fn prompts_and_resources_are_offered(db: PgPool) {
         "romulus://{org}/{database}/v{version}"
     );
 }
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_agent_of_someone_who_never_accepted_the_terms_is_told_to_sign_in(db: PgPool) {
+    let mut config = romulus_api::Config::for_tests();
+    config.legal = Some(billing::legal_config(false));
+    let app = TestApp::with_config(db.clone(), config);
+    // An account from before the Terms: a member, never asked.
+    let team = Team::new(&db, "acme").await;
+    let agent = Mcp::new(
+        &app,
+        pat(&db, &team.developer, AccessTokenScope::Write).await,
+    );
+    let refused = agent.refused("list_databases", json!({})).await;
+    assert!(refused.contains("(terms_required)"), "{refused}");
+    assert!(
+        refused.contains("sign in to romulus once in their browser"),
+        "{refused}"
+    );
+    // The agent cannot accept for them; once they did, it goes on.
+    let accept = json!({
+        "version": "1.0", "locale": "en", "professional_use": true,
+        "copy_version": romulus_api::billing::copy::version(
+            romulus_api::domain::TermsEdition::Professional
+        ),
+    });
+    let accepted = app
+        .as_user(&team.developer)
+        .post("/api/me/terms", &accept)
+        .await;
+    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.json());
+    agent.ok("list_databases", json!({})).await;
+}

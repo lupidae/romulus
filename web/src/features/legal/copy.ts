@@ -1,9 +1,9 @@
 // The words of the Terms screen at sign-in (Terms 3.1 and 3.4 b: the boxes
-// ticked there conclude the Free plan's contract; 21.4: a new version is
-// accepted again), in English and in French. While romulus is sold to
-// professionals only (the professional edition, CHECKOUT-PRO.md), the screen
-// also has the professional-use box. The boxes say what checkout-boxes.json
-// says (copy.test.ts checks it).
+// ticked there conclude the Free plan's contract; 21.3 and 21.4: a new
+// version), in English and in French. While romulus is sold to professionals
+// only (the professional edition), the screen also has the professional-use
+// box, and a new version follows the professional edition's rule (21.3). The
+// boxes say what checkout-boxes.json says (copy.test.ts checks it).
 
 import boxes from "@/features/billing/checkout-boxes.json";
 
@@ -24,6 +24,9 @@ export interface TermsCopy {
   changedTitle: string;
   changedBody: (version: string, accepted: string) => string;
   changedRefuse: (contact: string) => string;
+  /** The professional edition's rule for a new version (Terms 21.2, 21.3). */
+  proChangedBody: (version: string, accepted: string) => string;
+  proChangedRefuse: (contact: string) => string;
   termsBefore: string;
   termsLink: string;
   termsAfter: (version: string) => string;
@@ -58,13 +61,17 @@ export const termsCopy: Record<Locale, TermsCopy> = {
       `Version ${version} is in force. Read it, then accept it to keep using romulus. Until you do, the version you accepted (${accepted}) applies until the end of your billing period.`,
     changedRefuse: (contact) =>
       `If you do not accept the new version, you can end your contract at no cost: cancel your subscription in your organization's billing settings, or write to ${contact}.`,
+    proChangedBody: (version, accepted) =>
+      `Version ${version} of the Terms of Service replaces the version you accepted (${accepted}). As our email announced, it applies to everyone who keeps using romulus after it takes effect. Read it, then accept it to continue.`,
+    proChangedRefuse: (contact) =>
+      `If you do not accept it, you can terminate the contract free of charge before it takes effect: cancel your subscription in your organization's billing settings, or write to ${contact}. The prepaid fees for the unused part of the billing period are refunded.`,
     termsBefore: "I have read and accept the",
     termsLink: "Terms of Service",
     termsAfter: (version) => `(version ${version}).`,
     privacyBefore: "How we handle your personal data:",
     privacyLink: "Privacy Policy",
     newTab: "(opens in a new tab)",
-    missing: "Tick the box to accept the Terms of Service, or sign out.",
+    missing: "Accept the Terms of Service to continue.",
     submit: "Continue to romulus",
     later: "Not now",
     signOut: "Sign out",
@@ -77,7 +84,7 @@ export const termsCopy: Record<Locale, TermsCopy> = {
   fr: {
     firstTitle: "Acceptez les Conditions générales",
     firstBody:
-      "Pour utiliser romulus, avec l'offre gratuite ou une offre payante souscrite plus tard, acceptez ses Conditions générales d'utilisation et de vente. Elles forment le contrat entre vous et romulus.",
+      "Pour utiliser romulus, avec l'offre gratuite (Free) ou une offre payante souscrite plus tard, acceptez ses Conditions générales d'utilisation et de vente. Elles forment le contrat entre vous et romulus.",
     proTitle: "Avant de continuer",
     proIntro: "romulus est réservé à un usage professionnel.",
     professionalUse: boxes.professional.fr.professional_use,
@@ -91,13 +98,17 @@ export const termsCopy: Record<Locale, TermsCopy> = {
       `La version ${version} est en vigueur. Lisez-la, puis acceptez-la pour continuer à utiliser romulus. D'ici là, la version que vous avez acceptée (${accepted}) s'applique jusqu'à la fin de votre période de facturation.`,
     changedRefuse: (contact) =>
       `Si vous n'acceptez pas la nouvelle version, vous pouvez mettre fin au contrat sans frais : résiliez votre abonnement dans les paramètres de facturation de votre organisation, ou écrivez à ${contact}.`,
+    proChangedBody: (version, accepted) =>
+      `La version ${version} des Conditions générales remplace celle que vous avez acceptée (${accepted}). Comme annoncé par e-mail, elle s'applique à toute personne qui continue d'utiliser romulus après son entrée en vigueur. Lisez-la, puis acceptez-la pour continuer.`,
+    proChangedRefuse: (contact) =>
+      `Si vous ne l'acceptez pas, vous pouvez résilier le contrat sans frais avant son entrée en vigueur : résiliez votre abonnement dans les paramètres de facturation de votre organisation, ou écrivez à ${contact}. Les sommes payées d'avance pour la partie non écoulée de la période de facturation vous sont remboursées.`,
     termsBefore: "J'ai lu et j'accepte les",
     termsLink: "Conditions générales d'utilisation et de vente",
     termsAfter: (version) => `(version ${version}).`,
     privacyBefore: "Le traitement de vos données personnelles est décrit dans notre",
     privacyLink: "Politique de confidentialité",
     newTab: "(s'ouvre dans un nouvel onglet)",
-    missing: "Cochez la case pour accepter les Conditions générales, ou déconnectez-vous.",
+    missing: "Acceptez les Conditions générales pour continuer.",
     submit: "Continuer vers romulus",
     later: "Plus tard",
     signOut: "Se déconnecter",
@@ -176,6 +187,6 @@ export const contractCopy: Record<Locale, ContractCopy> = {
     adminsCancel: (org) => `Seuls les administrateurs de ${org} peuvent résilier son abonnement.`,
     noOrg: "Vous n'êtes dans aucune organisation.",
     account: (contact) =>
-      `Votre compte lui-même, sur l'offre Free, ne coûte rien et n'est jamais reconduit. Pour y mettre fin entièrement, demandez-nous la suppression de votre compte en écrivant à ${contact}.`,
+      `Votre compte lui-même, sur l'offre gratuite (Free), ne coûte rien et n'est jamais reconduit. Pour y mettre fin entièrement, demandez-nous la suppression de votre compte en écrivant à ${contact}.`,
   },
 };

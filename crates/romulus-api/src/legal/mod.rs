@@ -11,14 +11,19 @@
 //! - **The Terms at the first sign-in** (Terms 3.1, 3.4 b): the app asks
 //!   before anything else, and creating an organization or joining one is
 //!   refused (403 `terms_required`, [`require_accepted`]) until the person
-//!   has accepted a version. A new version (or edition) is asked for again
-//!   at the next sign-in (Terms 21.4: consumers must agree to it); until
-//!   then the one accepted applies.
+//!   has accepted a version; so is everything in an organization
+//!   (`auth::Member`), from the browser or an agent. A password sign-up
+//!   accepts them on its form ([`record_sign_up`]). A new version (or
+//!   edition) is asked for again at the next sign-in; until then the one
+//!   accepted applies (Terms 21.3: a business accepts a new version by
+//!   using the Service after it takes effect; 21.4 of the full edition: a
+//!   consumer must agree to it).
 //! - **Records** (`legal_acceptances`): who, when, which version, which
-//!   language; checkouts add what the buyer stated (`billing::api`). They
-//!   outlive the organization and the account, and are purged by [`purge`]:
-//!   a checkout's 10 years after (Article L213-1 of the French Consumer
-//!   Code), a sign-in's 5 years after the account ends.
+//!   language; checkouts add what the buyer stated (`billing::api`), the
+//!   business Stripe's page named, and when the contract ended. They outlive
+//!   the organization and the account, and are purged by [`purge`]: a
+//!   sign-in's 5 years after the account ends, a checkout's 5 years after
+//!   its contract ended (Privacy Policy 6).
 //! - **The language** (`users.locale`) of a person's contract and billing
 //!   emails: chosen when accepting, changed in account settings.
 //! - **Change notices** ([`notice`], `romulus-api legal-notice`).
@@ -168,7 +173,7 @@ pub struct TermsStatus {
     pub documents: Option<LegalLinks>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct AcceptTerms {
     /// The version shown, which must be the one in force.
     pub version: String,
@@ -394,6 +399,109 @@ async fn preferences(
     Ok(Json(status(&state, &user).await?))
 }
 
+/// The Terms a password sign-up's form accepted, checked
+/// ([`sign_up_terms`]): kept with an emailed sign-up until the account
+/// exists (`auth_links.accepted_terms`), then recorded ([`record_sign_up`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignUpTerms {
+    pub version: String,
+    pub edition: TermsEdition,
+    pub locale: Locale,
+    pub professional_use: bool,
+    pub copy_version: String,
+}
+
+/// Checks what a sign-up form accepted (`terms`), where the Terms are on:
+/// required then (422 `terms`, or `professional_use` for the professional
+/// edition's attestation), and of the version and wording in force (409
+/// `terms_changed`). `None` where the Terms are off.
+pub fn sign_up_terms(
+    config: &crate::Config,
+    terms: Option<&AcceptTerms>,
+) -> ApiResult<Option<SignUpTerms>> {
+    let Some(legal) = &config.legal else {
+        return Ok(None);
+    };
+    let Some(terms) = terms else {
+        return Err(crate::orgs::invalid(
+            "terms",
+            "Accept the Terms of Service to continue.",
+        ));
+    };
+    let edition = legal.edition();
+    if edition == TermsEdition::Professional && !terms.professional_use {
+        return Err(crate::orgs::invalid(
+            "professional_use",
+            "Confirm that you will use romulus for professional purposes.",
+        ));
+    }
+    let copy_version = crate::billing::copy::version(edition);
+    if terms.version != legal.terms_version || terms.copy_version != copy_version {
+        return Err(ApiError::Conflict {
+            code: "terms_changed",
+            message: format!(
+                "Version {} of the Terms is in force now: read it, then accept it.",
+                legal.terms_version
+            ),
+        });
+    }
+    Ok(Some(SignUpTerms {
+        version: legal.terms_version.clone(),
+        edition,
+        locale: terms.locale,
+        professional_use: edition == TermsEdition::Professional,
+        copy_version: copy_version.to_owned(),
+    }))
+}
+
+/// Records the Terms a sign-up accepted for the account just created, in
+/// its transaction (Terms 3.4 b: the Free plan's contract), and the
+/// language. False when they are no longer the ones in force (the link
+/// waited across a new version): the first sign-in asks again.
+pub async fn record_sign_up(
+    conn: &mut sqlx::PgConnection,
+    config: &crate::Config,
+    user: Uuid,
+    email: &str,
+    name: &str,
+    terms: &SignUpTerms,
+) -> Result<bool, sqlx::Error> {
+    let Some(legal) = &config.legal else {
+        return Ok(false);
+    };
+    let edition = legal.edition();
+    if terms.version != legal.terms_version
+        || terms.edition != edition
+        || terms.copy_version != crate::billing::copy::version(edition)
+    {
+        return Ok(false);
+    }
+    sqlx::query!(
+        "INSERT INTO legal_acceptances (kind, user_id, user_email, user_name, terms_version, edition,
+                                        locale, professional_use, copy_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        AcceptanceKind::Terms as AcceptanceKind,
+        user,
+        email,
+        name,
+        terms.version,
+        edition as TermsEdition,
+        terms.locale as Locale,
+        (edition == TermsEdition::Professional).then_some(terms.professional_use),
+        terms.copy_version,
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "UPDATE users SET locale = $2 WHERE id = $1",
+        user,
+        terms.locale as Locale
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(true)
+}
+
 /// 403 `terms_required` unless the person accepted the Terms (a version,
 /// not necessarily the latest): creating or joining an organization is
 /// using the Service, whose contract the box at sign-in concludes.
@@ -414,21 +522,33 @@ pub async fn require_accepted(
     if accepted {
         Ok(())
     } else {
-        Err(ApiError::Denied {
-            code: "terms_required",
-            message: "Accept the Terms of Service first: sign in again to read them.".into(),
-        })
+        Err(terms_required())
+    }
+}
+
+/// 403 `terms_required`: the person has not accepted the Terms yet.
+pub fn terms_required() -> ApiError {
+    ApiError::Denied {
+        code: "terms_required",
+        message:
+            "Accept the Terms of Service first: sign in to romulus in your browser to read them."
+                .into(),
     }
 }
 
 /// How often [`purge`] runs.
 pub const PURGE_EVERY: Duration = Duration::from_hours(24);
 
-/// Records past their retention (the Privacy Policy, section 6): under the
-/// professional edition, the contract and 5 years after it ends (the
-/// account deleted); under the full one, a checkout's and a withdrawal's 10
-/// years after (Article L213-1), a sign-in's 5 years after the account
-/// ends. How many went.
+/// Records past their retention (the Privacy Policy, section 6: the
+/// contract, and 5 years after it ends). How many went:
+///
+/// - a sign-in's: the Free plan's contract, which ends with the account;
+/// - a checkout's: the paid plan's contract, which ends with its
+///   subscription (`contract_ended_at`); counted from the account's
+///   deletion instead when that came later. One never concluded (a
+///   checkout left unpaid) goes 5 years after. Under the full edition, 10
+///   years after it was concluded at least (Article L213-1 of the Consumer
+///   Code), as a withdrawal's record.
 pub async fn purge(db: &PgPool) -> Result<u64, sqlx::Error> {
     let withdrawals =
         sqlx::query!("DELETE FROM withdrawals WHERE requested_at < now() - interval '10 years'")
@@ -436,10 +556,16 @@ pub async fn purge(db: &PgPool) -> Result<u64, sqlx::Error> {
             .await?
             .rows_affected();
     let acceptances = sqlx::query!(
-        "DELETE FROM legal_acceptances
-         WHERE (edition = 'full' AND kind = 'checkout' AND accepted_at < now() - interval '10 years')
-            OR ((edition = 'professional' OR kind = 'terms')
-                AND account_deleted_at < now() - interval '5 years')"
+        "DELETE FROM legal_acceptances a
+         WHERE (kind = 'terms' AND account_deleted_at < now() - interval '5 years')
+            OR (kind = 'checkout' AND contract_ended_at IS NOT NULL
+                AND greatest(contract_ended_at, account_deleted_at) < now() - interval '5 years'
+                AND (edition = 'professional' OR accepted_at < now() - interval '10 years'))
+            OR (kind = 'checkout' AND contract_ended_at IS NULL
+                AND accepted_at < now() - interval '5 years'
+                AND (edition = 'professional' OR accepted_at < now() - interval '10 years')
+                AND NOT EXISTS (SELECT 1 FROM org_billing b WHERE b.acceptance_id = a.id)
+                AND NOT EXISTS (SELECT 1 FROM withdrawals w WHERE w.acceptance_id = a.id))"
     )
     .execute(db)
     .await?

@@ -2713,7 +2713,7 @@
             }
           },
           "503": {
-            "description": "`billing_unavailable`: Stripe could not be read; nothing was recorded",
+            "description": "`billing_unavailable`: Stripe could not be read; `withdrawal_by_email`: a payment romulus cannot refund itself (withdraw by email). Nothing was recorded",
             "content": {
               "application/json": {
                 "schema": {
@@ -16272,6 +16272,17 @@
               "null"
             ],
             "description": "Only when the server sends no email (`mail` false in\n`GET /api/instance`): the password, set now. Otherwise ignored: it is\nchosen on the page the emailed link opens."
+          },
+          "terms": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AcceptTerms",
+                "description": "The hosted service's Terms, accepted on the form (`instance.legal`):\nrequired there (422 `terms`, `professional_use`; 409\n`terms_changed`), recorded when the account is created. Ignored on\na server without Terms."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -20707,13 +20718,21 @@
         "type": "object",
         "description": "The withdrawal right of the subscription, for a consumer's: until when\nit can be used, or the withdrawal made. `null` for a business.",
         "properties": {
+          "last_day": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "The last day it can be used, in Paris."
+          },
           "until": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time",
-            "description": "The end of the withdrawal period while it runs."
+            "description": "The end of the withdrawal period while it runs (midnight in Paris\nafter `last_day`)."
           },
           "withdrawn": {
             "oneOf": [

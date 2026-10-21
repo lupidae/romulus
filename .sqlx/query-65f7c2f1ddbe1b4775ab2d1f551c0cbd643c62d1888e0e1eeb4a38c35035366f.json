@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT stripe_business_name, contract_ended_at FROM legal_acceptances\n             WHERE checkout_session_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stripe_business_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "stripe_business_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "contract_ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "contract_ended_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "65f7c2f1ddbe1b4775ab2d1f551c0cbd643c62d1888e0e1eeb4a38c35035366f"
+}

@@ -3,6 +3,7 @@ import {
   direction,
   duration,
   euros,
+  formatDay,
   formatLongDate,
   historyLabel,
   isLive,
@@ -173,4 +174,10 @@ describe("the last day to withdraw", () => {
     expect(formatLongDate("2026-11-04T23:59:59Z", "en", "UTC")).toBe("November 4, 2026");
     expect(formatLongDate("2026-11-04T23:59:59Z", "fr", "UTC")).toBe("4 novembre 2026");
   });
+});
+
+it("says a calendar day as written, whatever the reader's time zone", () => {
+  // The withdrawal's last day, as the API counts it in Paris.
+  expect(formatDay("2026-11-04", "en")).toBe("November 4, 2026");
+  expect(formatDay("2026-11-04", "fr")).toBe("4 novembre 2026");
 });

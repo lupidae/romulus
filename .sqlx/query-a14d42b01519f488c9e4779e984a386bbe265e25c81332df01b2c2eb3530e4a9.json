@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, subscription_id, refunds FROM withdrawals\n         WHERE completed_at IS NULL AND requested_at < now() - interval '2 minutes'\n         ORDER BY requested_at LIMIT 20",
+  "query": "SELECT id, subscription_id, refunds FROM withdrawals\n         WHERE completed_at IS NULL AND failed_at IS NULL\n           AND requested_at < now() - interval '2 minutes'\n         ORDER BY requested_at LIMIT 20",
   "describe": {
     "columns": [
       {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "d3eb9b0df712d080b0c2b9305f3aa19c58f442abfeec085d064fb1e1cc68ecfd"
+  "hash": "a14d42b01519f488c9e4779e984a386bbe265e25c81332df01b2c2eb3530e4a9"
 }

@@ -1,5 +1,6 @@
 import { browserLocale } from "./locale";
 import { needsTerms, postponeTerms, type TermsStatus } from "./queries";
+import { NO_TICKS, termsTicked } from "./ticks";
 
 const status = (over: Partial<TermsStatus>): TermsStatus => ({
   required: true,
@@ -45,4 +46,14 @@ describe("browserLocale", () => {
     expect(browserLocale(["de"])).toBe("en");
     expect(browserLocale([])).toBe("en");
   });
+});
+
+it("asks the professional edition for both boxes, the full one for the Terms alone", () => {
+  const pro = status({}).documents!;
+  const full = { ...pro, edition: "full" as const, consumer_sales: true };
+  expect(termsTicked(pro, NO_TICKS)).toBe(false);
+  expect(termsTicked(pro, { terms: true, professional: false })).toBe(false);
+  expect(termsTicked(pro, { terms: true, professional: true })).toBe(true);
+  expect(termsTicked(full, { terms: true, professional: false })).toBe(true);
+  expect(termsTicked(full, { terms: false, professional: true })).toBe(false);
 });

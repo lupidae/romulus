@@ -45,6 +45,7 @@
 pub mod api;
 pub mod caps;
 pub mod copy;
+pub mod countries;
 pub mod hours;
 pub mod notices;
 pub mod plans;

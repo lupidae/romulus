@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE mail_outbox SET next_attempt_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "182e052aaa38290419f2483766ab57756f4b798d591bb656874182e0f7aa1e6e"
+}

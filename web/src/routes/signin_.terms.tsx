@@ -9,17 +9,12 @@ import { toast } from "@/components/ui/toaster";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { AuthForm, AuthPage } from "@/features/auth/components/auth-page";
 import { afterSignIn, signedIn, signOut } from "@/features/auth/session";
-import { Consent, DocumentLink } from "@/features/legal/components/consent";
+import { TermsBoxes } from "@/features/legal/components/terms-boxes";
+import { NO_TICKS, termsTicked, type TermsTicks } from "@/features/legal/ticks";
 import { copyVersions } from "@/features/billing/copy";
 import { termsCopy } from "@/features/legal/copy";
 import { browserLocale, type Locale } from "@/features/legal/locale";
-import {
-  documentsFor,
-  needsTerms,
-  postponeTerms,
-  termsQuery,
-  useAcceptTerms,
-} from "@/features/legal/queries";
+import { needsTerms, postponeTerms, termsQuery, useAcceptTerms } from "@/features/legal/queries";
 import { safePath } from "@/lib/safe-path";
 
 interface TermsSearch {
@@ -52,14 +47,12 @@ function AcceptTermsPage() {
   const accept = useAcceptTerms();
   const id = React.useId();
   const [locale, setLocale] = React.useState<Locale>(() => terms.locale ?? browserLocale());
-  const [checked, setChecked] = React.useState(false);
-  const [professional, setProfessional] = React.useState(false);
+  const [ticks, setTicks] = React.useState<TermsTicks>(NO_TICKS);
   const [submitted, setSubmitted] = React.useState(false);
   const [failure, setFailure] = React.useState<string>();
   const t = termsCopy[locale];
   const links = terms.documents;
   if (!links) return null;
-  const docs = documentsFor(links, locale);
   const version = links.terms_version;
   // Accepted an earlier version: the one accepted applies meanwhile.
   const changed = terms.accepted_version != null;
@@ -71,20 +64,19 @@ function AcceptTermsPage() {
     event.preventDefault();
     setSubmitted(true);
     setFailure(undefined);
-    if (!checked || (pro && !professional)) return;
+    if (!termsTicked(links, ticks)) return;
     accept.mutate(
       {
         version,
         locale,
-        professional_use: pro && professional,
+        professional_use: pro && ticks.professional,
         copy_version: copyVersions[links.edition],
       },
       {
         onSuccess: leave,
         onError: (error) => {
           if (error instanceof ApiError && error.code === "terms_changed") {
-            setChecked(false);
-            setProfessional(false);
+            setTicks(NO_TICKS);
             setSubmitted(false);
             setFailure(t.versionChanged);
             void queryClient.invalidateQueries({ queryKey: termsQuery.queryKey });
@@ -103,7 +95,7 @@ function AcceptTermsPage() {
         title={changed ? t.changedTitle : pro ? t.proTitle : t.firstTitle}
         description={
           changed
-            ? t.changedBody(version, terms.accepted_version ?? "")
+            ? (pro ? t.proChangedBody : t.changedBody)(version, terms.accepted_version ?? "")
             : pro
               ? t.proIntro
               : t.firstBody
@@ -126,47 +118,18 @@ function AcceptTermsPage() {
           </ToggleGroup>
 
           <AuthForm onSubmit={submit}>
-            <Consent
-              id={`${id}-terms`}
-              checked={checked}
-              onCheckedChange={setChecked}
-              error={submitted && !checked ? t.missing : undefined}
-            >
-              {t.termsBefore}{" "}
-              <DocumentLink href={docs.terms} newTab={t.newTab}>
-                {t.termsLink}
-              </DocumentLink>{" "}
-              {t.termsAfter(version)}
-            </Consent>
-            <p className="pl-6.5 text-sm text-muted-foreground">
-              {t.privacyBefore}{" "}
-              <DocumentLink href={docs.privacy} newTab={t.newTab}>
-                {t.privacyLink}
-              </DocumentLink>
-              .
-            </p>
-            {pro && (
-              <div className="grid gap-1">
-                <Consent
-                  id={`${id}-pro`}
-                  checked={professional}
-                  onCheckedChange={setProfessional}
-                  error={submitted && !professional ? t.proMissing : undefined}
-                >
-                  {t.professionalUse}
-                </Consent>
-                <p className="pl-6.5 text-sm text-muted-foreground">
-                  {t.personalBefore}{" "}
-                  <DocumentLink href="https://github.com/lupidae/romulus" newTab={t.newTab}>
-                    {t.personalLink}
-                  </DocumentLink>
-                  {locale === "fr" ? "" : " "}
-                  {t.personalAfter}
-                </p>
-              </div>
-            )}
+            <TermsBoxes
+              id={id}
+              links={links}
+              locale={locale}
+              ticks={ticks}
+              onChange={setTicks}
+              showErrors={submitted}
+            />
             {changed && (
-              <p className="text-sm text-muted-foreground">{t.changedRefuse(links.contact)}</p>
+              <p className="text-sm text-muted-foreground">
+                {(pro ? t.proChangedRefuse : t.changedRefuse)(links.contact)}
+              </p>
             )}
             {failure && (
               <Alert variant="destructive" title={failure}>

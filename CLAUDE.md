@@ -1204,14 +1204,20 @@ documents are `site/legal/*.md` (published by `site/tools/legal.mjs`).
 - **Config** (`Config::legal`, `LegalConfig`): `ROMULUS_TERMS_VERSION`
   (`1.0` hosted), `ROMULUS_LEGAL_URL` (the site), `ROMULUS_LEGAL_CONTACT`,
   `ROMULUS_CONSUMER_SALES` (off: the professional edition, businesses only;
-  `edition()`). Billing needs it; `ROMULUS_BILLING=fake` defaults it (the
+  `edition()`; on only with `ROMULUS_TERMS_EDITION=full` and a version other
+  than `1.0`). Billing needs it; `ROMULUS_BILLING=fake` defaults it (the
   public origin, version `test`, no PDF). Off: no gate, no records.
 - **The gate**: `legal::require_accepted` in what joins the Service
-  (creating an organization, accepting an invitation: 403
-  `terms_required`); the web's `requireUser` sends to `/signin/terms`
-  (`needsTerms`). `GET/POST /me/terms`, `PATCH /me/preferences` (the
-  language); `in_person` refuses access tokens. A new acceptance is asked
-  when the version or the edition changes.
+  (creating an organization, accepting an invitation) and `auth::Member`
+  (everything in an organization, browser or agent): 403 `terms_required`
+  for someone who never accepted; the web's `requireUser` (and any 403
+  `terms_required`, `main.tsx`) sends to `/signin/terms` (`needsTerms`).
+  A password sign-up ticks the boxes on its form (`PasswordSignUp::terms`,
+  `features/legal/components/terms-boxes.tsx`, kept on the emailed link:
+  `auth_links.accepted_terms`), recorded with the account
+  (`legal::record_sign_up`). `GET/POST /me/terms`, `PATCH /me/preferences`
+  (the language); `in_person` refuses access tokens. A new acceptance is
+  asked when the version or the edition changes.
 - **The words people tick** live in `web/src/features/billing/checkout-boxes.json`
   (per edition, per language, with a version), read by the web (`copy.ts`,
   `features/legal/copy.ts`; `copy.test.ts` keeps them identical) and the API
@@ -1224,22 +1230,40 @@ documents are `site/legal/*.md` (published by `site/tools/legal.mjs`).
   The rest of the app is English.
 - **Mail**: `Letter::email_with(Extras { lang, framed, attachments })`; the
   Terms PDFs are embedded (`legal::pdf`, `crates/romulus-api/legal/`,
-  printed by `just site-legal`; `just check` verifies them).
+  printed by `just site-legal`; `just check` verifies them). Every contract
+  and billing letter goes through the outbox (`mail::outbox`, `mail_outbox`):
+  queued in the transaction that decides it (`billing::notices::decide`,
+  `Decided`; `legal_notices`; a withdrawal), keyed so it never goes twice,
+  marked sent only once the mail server accepted it, retried, given up
+  with an error log. Tests read letters after `outbox::deliver` (`Billed::mail`);
+  `Outbox::refuse_next` plays a server down.
 - **Withdrawal** (`billing::withdrawal`): eligibility from the checkout
-  record (`org_billing.acceptance_id`, a consumer's) and `deadline`;
-  recorded, then Stripe (`StripeApi::paid_invoices`, `withdraw`, idempotent),
-  `complete_pending` from the notices task. `Stored::is_live` and
-  `effective` treat a withdrawn subscription as gone.
-- **Tests**: `tests/api/legal.rs` (the gate, records and their retention,
-  editions, locale, the notice commands), `tests/api/withdrawal.rs`
-  (confirmation and cancellation emails, withdrawal, languages),
+  record (`org_billing.acceptance_id`, a consumer's) and `deadline` (the
+  14th day in Paris, `chrono-tz`, pushed past weekends and French public
+  holidays: `last_day`); a paid invoice without a payment intent refuses it
+  (503 `withdrawal_by_email`); recorded and acknowledged (to the buyer too
+  when another admin withdrew), then Stripe (`StripeApi::paid_invoices`,
+  `withdraw`: each refund skipped when made already, `stripe::still_due`,
+  never more than is left of the payment), `complete_pending` from the
+  notices task until `MAX_ATTEMPTS` or a week (`withdrawals.failed_at`, an
+  error for the operator). `Stored::is_live` and `effective` treat a
+  withdrawn subscription as gone.
+- **Records' ends**: a checkout's `contract_ended_at` (the subscription over
+  for good or replaced, a withdrawal, the organization deleted: a trigger)
+  and `stripe_business_name` (`checkout.session.completed`) are the only
+  writes a record takes, once each; `legal::purge` counts from them.
+- **Tests**: `tests/api/legal.rs` (the gate, organizations' routes,
+  password sign-ups, records and their retention, editions, locale, the
+  notice commands), `tests/api/withdrawal.rs` (confirmation and
+  cancellation emails, withdrawal, refunds made once, giving up, languages),
   `tests/api/billing.rs` (checkout statements per edition: `billed_with`,
   `business_checkout`, `consumer_checkout`), unit tests per module;
   web: `features/legal/*.test.ts`, `features/billing/*.test.ts`;
   `e2e/billing/legal.spec.ts` (businesses only: the Terms screen, checkout,
-  the confirmation email, French) and `e2e/billing-consumers/` (its own API
-  with `ROMULUS_CONSUMER_SALES=true` on `ROMULUS_E2E_CONSUMERS_PORT`: the
-  buyer's choice, withdrawal).
+  the confirmation email, French, a password sign-up's boxes) and
+  `e2e/billing-consumers/` (its own API with consumer sales on, the full
+  edition and a test version, on `ROMULUS_E2E_CONSUMERS_PORT`: the buyer's
+  choice, withdrawal).
 
 ## Agents over MCP (`mcp`, `auth::access_tokens`)
 

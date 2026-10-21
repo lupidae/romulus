@@ -102,19 +102,20 @@ export const checkoutCopy: Record<Locale, CheckoutCopy> = {
     businessAfter: "applies.",
     businessMissing: "Confirm that you are buying for your business.",
     pro: {
-      intro: "For professional use only.",
+      intro:
+        "For professional use only. On the payment page, add the name of your business and, if it has one, its VAT number.",
       businessBefore:
         "I am subscribing for the purposes of my trade, business or profession, on behalf of the business named on the payment page, which I am authorised to bind. I am not subscribing as a consumer. The",
       businessLink: "Data Processing Agreement",
       businessAfter: "applies.",
       missing: "Confirm that you are subscribing for your business.",
-      next: 'You will enter your payment details on Stripe\'s secure page. On that page, the "Subscribe" button places an order with an obligation to pay. Prices in euros, excluding taxes; VAT not applicable (art. 293 B du CGI).',
+      next: 'You will enter your payment details on Stripe\'s secure page. Clicking the payment button on that page ("Subscribe" or "Pay and subscribe") places an order with an obligation to pay. Prices in euros, excluding taxes; VAT not applicable (art. 293 B du CGI).',
     },
     immediateStart: boxes.full.en.immediate_start,
     withdrawal: boxes.full.en.withdrawal,
     consumerMissing:
       "To subscribe now, tick both boxes. If you would rather not, you can stay on the Free plan.",
-    next: 'You will enter your payment details on Stripe\'s secure page. On that page, the "Subscribe" button places an order with an obligation to pay. Prices are in euros, VAT not applicable (art. 293 B du CGI).',
+    next: 'You will enter your payment details on Stripe\'s secure page. Clicking the payment button on that page ("Subscribe" or "Pay and subscribe") places an order with an obligation to pay. Prices are in euros, VAT not applicable (art. 293 B du CGI).',
     commitment: (interval) =>
       interval === "month"
         ? "renewed every month until you cancel. Cancel any time in Billing: the plan stays until the end of the month."
@@ -139,8 +140,8 @@ export const checkoutCopy: Record<Locale, CheckoutCopy> = {
       description:
         "Pour un usage personnel, en tant que consommateur. Vous disposez d'un droit de rétractation de 14 jours.",
     },
-    companyName: "Raison sociale",
-    companyNameMissing: "Indiquez la raison sociale de l'entreprise.",
+    companyName: "Nom ou dénomination de l'entreprise",
+    companyNameMissing: "Indiquez le nom ou la dénomination de l'entreprise.",
     country: "Pays",
     countryPlaceholder: "Rechercher un pays",
     countryMissing: "Choisissez le pays de l'entreprise.",
@@ -160,19 +161,20 @@ export const checkoutCopy: Record<Locale, CheckoutCopy> = {
     businessAfter: "s'applique.",
     businessMissing: "Confirmez que vous achetez pour votre activité professionnelle.",
     pro: {
-      intro: "Réservé aux professionnels.",
+      intro:
+        "Réservé aux professionnels. Sur la page de paiement, indiquez la dénomination de votre entreprise et, le cas échéant, son numéro de TVA.",
       businessBefore:
         "Je souscris pour les besoins de mon activité professionnelle, au nom de l'entreprise indiquée sur la page de paiement, que je suis habilité(e) à engager. Je ne souscris pas en tant que consommateur. L'",
       businessLink: "accord de traitement des données",
       businessAfter: "s'applique.",
       missing: "Confirmez que vous souscrivez pour votre activité professionnelle.",
-      next: "Vous saisirez vos informations de paiement sur la page sécurisée de Stripe. Sur cette page, le bouton « S'abonner » vaut commande avec obligation de paiement. Prix en euros hors taxes ; TVA non applicable (art. 293 B du CGI).",
+      next: "Vous saisirez vos informations de paiement sur la page sécurisée de Stripe. Le clic sur le bouton de paiement de cette page (« S'abonner » ou « Payer et s'abonner ») vaut commande avec obligation de paiement. Prix en euros hors taxes ; TVA non applicable (art. 293 B du CGI).",
     },
     immediateStart: boxes.full.fr.immediate_start,
     withdrawal: boxes.full.fr.withdrawal,
     consumerMissing:
-      "Pour souscrire maintenant, cochez les deux cases. Sinon, vous pouvez rester sur l'offre gratuite.",
-    next: "Vous saisirez vos informations de paiement sur la page sécurisée de Stripe. Sur cette page, le bouton « S'abonner » vaut commande avec obligation de paiement. Prix en euros, TVA non applicable (art. 293 B du CGI).",
+      "Pour souscrire maintenant, cochez les deux cases. Sinon, vous pouvez rester sur l'offre gratuite (Free).",
+    next: "Vous saisirez vos informations de paiement sur la page sécurisée de Stripe. Le clic sur le bouton de paiement de cette page (« S'abonner » ou « Payer et s'abonner ») vaut commande avec obligation de paiement. Prix en euros, TVA non applicable (art. 293 B du CGI).",
     commitment: (interval) =>
       interval === "month"
         ? "renouvelé chaque mois jusqu'à résiliation. Résiliable à tout moment dans la facturation : l'offre reste active jusqu'à la fin du mois."
@@ -505,7 +507,7 @@ export const billingCopy: Record<Locale, BillingCopy> = {
       retry: "Réessayer",
       nothingToCancel: "Aucune offre payante à résilier",
       nothingToCancelBody: (org, contact) =>
-        `${org} est sur l'offre Free : rien n'est prélevé et rien n'est reconduit. Pour mettre fin entièrement au contrat, demandez-nous la suppression de votre compte ou de votre organisation en écrivant à ${contact}.`,
+        `${org} est sur l'offre gratuite (Free) : rien n'est prélevé et rien n'est reconduit. Pour mettre fin entièrement au contrat, demandez-nous la suppression de votre compte ou de votre organisation en écrivant à ${contact}.`,
       notAdmin: (org) => `Seuls les administrateurs de ${org} peuvent résilier son abonnement.`,
     },
     summary: {
@@ -514,13 +516,13 @@ export const billingCopy: Record<Locale, BillingCopy> = {
       nothingToPay: "Rien à payer. Choisissez une offre ci-dessous pour relever ses limites.",
       price: (amount, interval) => `${amount} par ${interval === "month" ? "mois" : "an"}`,
       ends: (date) =>
-        `Prend fin le ${date}, puis l'organisation passe à l'offre Free. Rien n'est supprimé.`,
+        `Prend fin le ${date}, puis l'organisation passe à l'offre gratuite (Free). Rien n'est supprimé.`,
       renews: (date) => `Reconduite le ${date}`,
       switches: (plan, interval, date) =>
         `Passe à l'offre ${plan}${interval ? ` (${interval === "year" ? "annuelle" : "mensuelle"})` : ""} le ${date}.`,
       overdue: "Paiement en retard",
       overdueBody: (plan, date) =>
-        `L'offre ${plan} reste active jusqu'au ${date}. Ensuite, l'organisation passe à l'offre Free : rien n'est supprimé, mais créer au-delà de ses limites attend.`,
+        `L'offre ${plan} reste active jusqu'au ${date}. Ensuite, l'organisation passe à l'offre gratuite (Free) : rien n'est supprimé, mais créer au-delà de ses limites attend.`,
       updatePayment: "Mettre à jour le moyen de paiement",
       renewHint: "Pour garder l'offre après cette date, reprenez-la depuis Gérer la facturation.",
       cancelHint: "Résilier garde l'offre jusqu'à la fin de la période payée.",
@@ -540,11 +542,11 @@ export const billingCopy: Record<Locale, BillingCopy> = {
     withdrawal: {
       title: "Droit de rétractation",
       body: (date) =>
-        `Vous avez souscrit en tant que consommateur : jusqu'au ${date}, vous pouvez vous rétracter du contrat. Vous ne payez alors que les jours utilisés, le reste est remboursé sous 14 jours, et l'organisation passe à l'offre Free. Rien n'est supprimé.`,
+        `Vous avez souscrit en tant que consommateur : jusqu'au ${date}, vous pouvez vous rétracter du contrat. Vous ne payez alors que les jours utilisés, le reste est remboursé sous 14 jours, et l'organisation passe à l'offre gratuite (Free). Rien n'est supprimé.`,
       button: "Renoncer au contrat ici",
       confirmTitle: (plan) => `Vous rétracter de l'offre ${plan} ?`,
       confirmBody: (org) =>
-        `L'abonnement prend fin maintenant et ${org} passe à l'offre Free ; rien n'est supprimé. Nous remboursons les jours non utilisés sur votre moyen de paiement sous 14 jours, et vous envoyons un accusé de réception par e-mail.`,
+        `L'abonnement prend fin maintenant et ${org} passe à l'offre gratuite (Free) ; rien n'est supprimé. Nous remboursons les jours non utilisés sur votre moyen de paiement sous 14 jours, et vous envoyons un accusé de réception par e-mail.`,
       confirm: "Confirmer la rétractation",
       keep: "Garder l'offre",
       done: "Rétractation reçue",
@@ -554,8 +556,8 @@ export const billingCopy: Record<Locale, BillingCopy> = {
       withdrawnTitle: (when) => `Rétractation reçue le ${when}`,
       withdrawnBody: (refund, completed) =>
         completed
-          ? `${refund} ont été remboursés sur votre moyen de paiement ; ils apparaîtront sur votre relevé sous quelques jours. L'organisation est sur l'offre Free, et rien n'a été supprimé.`
-          : `${refund} sont en cours de remboursement sur votre moyen de paiement, sous 14 jours. L'organisation est sur l'offre Free, et rien n'a été supprimé.`,
+          ? `${refund} ont été remboursés sur votre moyen de paiement ; ils apparaîtront sur votre relevé sous quelques jours. L'organisation est sur l'offre gratuite (Free), et rien n'a été supprimé.`
+          : `${refund} sont en cours de remboursement sur votre moyen de paiement, sous 14 jours. L'organisation est sur l'offre gratuite (Free), et rien n'a été supprimé.`,
     },
     usage: {
       title: "Consommation",

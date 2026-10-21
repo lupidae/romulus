@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO invitations (org_id, email, role, token_hash, expires_at, created_by)\n         VALUES ($1, $2, 'developer', $3, now() + interval '7 days', $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "77a3a6b6ef2f77092ff84b7bf5e86df97c0b655605ff0892bc9106141b124fde"
+}

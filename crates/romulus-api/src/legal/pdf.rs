@@ -66,6 +66,19 @@ pub fn terms(version: &str, edition: TermsEdition, locale: Locale) -> Option<Att
         })
 }
 
+/// The embedded file named `filename` (a letter in the outbox names what it
+/// carries).
+pub fn by_filename(filename: &str) -> Option<Attachment> {
+    TERMS
+        .iter()
+        .find(|(.., name, _)| *name == filename)
+        .map(|(_, _, _, filename, bytes)| Attachment {
+            filename: (*filename).to_owned(),
+            content_type: "application/pdf",
+            bytes,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +93,13 @@ mod tests {
             }
         }
         assert!(terms("test", TermsEdition::Full, Locale::En).is_none());
+    }
+
+    #[test]
+    fn every_embedded_file_is_found_by_its_name() {
+        for (version, edition, locale, filename, _) in TERMS {
+            assert_eq!(by_filename(filename), terms(version, edition, locale));
+        }
+        assert!(by_filename("other.pdf").is_none());
     }
 }

@@ -132,6 +132,17 @@ pub(super) async fn billed_with(db: &PgPool, consumer_sales: bool) -> Billed {
     }
 }
 
+impl Billed {
+    /// What was sent: the outbox delivered first (billing's letters wait
+    /// there until a worker sends them).
+    pub(super) async fn mail(&self) -> Outbox {
+        romulus_api::mail::outbox::deliver(&self.app.state.db, &self.app.state.mailer)
+            .await
+            .expect("the outbox delivers");
+        self.outbox.clone()
+    }
+}
+
 /// A signed delivery of `body`, as Stripe sends it.
 async fn post_event(app: &TestApp, body: &str, signature: Option<String>) -> TestResponse {
     let mut request =
@@ -847,7 +858,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     assert_eq!(create_database(&b, "two").await.status, StatusCode::CREATED);
     let admin_mail = "admin-acme@romulus.test";
     let failed: Vec<_> = b
-        .outbox
+        .mail()
+        .await
         .to(admin_mail)
         .into_iter()
         .filter(|m| m.kind == "billing_payment_failed")
@@ -857,7 +869,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     // Stripe retries and fails again: the same invoice, no second email.
     deliver(&b, "invoice.payment_failed", invoice("in_1", 3)).await;
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_payment_failed")
@@ -876,7 +889,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     .unwrap();
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_grace_ending")
@@ -902,7 +916,8 @@ async fn a_failed_payment_holds_the_plan_fourteen_days_from_the_due_date_then_fr
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert_eq!(audits(&db, "plan_downgraded").await, 1);
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_downgraded")
@@ -948,7 +963,8 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     let admin_mail = "admin-acme@romulus.test";
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .all(|m| m.kind != "billing_renewal"),
@@ -966,7 +982,8 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     let reminders: Vec<_> = b
-        .outbox
+        .mail()
+        .await
         .to(admin_mail)
         .into_iter()
         .filter(|m| m.kind == "billing_renewal")
@@ -986,7 +1003,7 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     assert!(reminders[0].html.contains("border:2px solid"));
     assert!(!text.contains("L215-1"), "{text}");
     // Only admins get it.
-    assert_eq!(b.outbox.to("developer-acme@romulus.test"), Vec::new());
+    assert_eq!(b.mail().await.to("developer-acme@romulus.test"), Vec::new());
     // Cancelled: no reminder for the next period.
     b.stripe.update(&subscription, |s| {
         s.cancel_at_period_end = true;
@@ -1000,7 +1017,8 @@ async fn a_yearly_renewal_is_reminded_once_a_period_with_the_date_amount_and_can
     .await;
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_renewal")
@@ -1470,7 +1488,8 @@ async fn playground_sizes_and_hours_follow_the_plan_and_used_hours_stop_running_
         .unwrap();
     let admin_mail = "admin-acme@romulus.test";
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_hours_warning")
@@ -1503,7 +1522,8 @@ async fn playground_sizes_and_hours_follow_the_plan_and_used_hours_stop_running_
     assert!(stops[0].1.contains("playground hours"), "{}", stops[0].1);
     assert_eq!(audits(&db, "playground_hours_used_up").await, 1);
     assert_eq!(
-        b.outbox
+        b.mail()
+            .await
             .to(admin_mail)
             .iter()
             .filter(|m| m.kind == "billing_hours_used_up")
@@ -1716,7 +1736,8 @@ async fn a_second_live_subscription_is_cancelled_refunded_and_the_first_kept(db:
     );
     assert_eq!(audits(&db, "subscription_duplicate_cancelled").await, 1);
     let mails: Vec<_> = b
-        .outbox
+        .mail()
+        .await
         .to("admin-acme@romulus.test")
         .into_iter()
         .filter(|m| m.kind == "billing_duplicate_cancelled")
@@ -1858,7 +1879,8 @@ async fn a_late_payment_failure_for_an_invoice_paid_since_says_nothing(db: PgPoo
     .await;
     assert_eq!(audits(&db, "payment_failed").await, 0);
     assert!(
-        b.outbox
+        b.mail()
+            .await
             .to("admin-acme@romulus.test")
             .iter()
             .all(|m| m.kind != "billing_payment_failed")
@@ -1892,7 +1914,8 @@ async fn the_renewal_reminder_states_the_change_scheduled_for_the_renewal(db: Pg
     .await;
     notices::due(&b.app.state, Utc::now()).await.unwrap();
     let reminder = b
-        .outbox
+        .mail()
+        .await
         .to("admin-acme@romulus.test")
         .into_iter()
         .find(|m| m.kind == "billing_renewal")
@@ -2089,4 +2112,141 @@ async fn a_console_past_the_hours_neither_connects_nor_opens(db: PgPool) {
     // And a new connection is refused before the upgrade.
     let refused = super::playgrounds::console(addr, &url, Some(&b.team.developer), ORIGIN).await;
     assert_eq!(refused.err(), Some(402));
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_checkout_keeps_the_business_stripe_named_and_ends_with_its_subscription(db: PgPool) {
+    let b = billed(&db).await;
+    let started = b
+        .app
+        .as_user(&b.team.admin)
+        .post(
+            &b.team.path("/billing/checkout"),
+            &business_checkout("team", "month", false),
+        )
+        .await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.json());
+    let (session, _) = b.stripe.last_checkout().unwrap();
+    let subscription = b.stripe.complete_checkout(&session).unwrap();
+    let completed = json!({"id": session, "object": "checkout.session", "subscription": subscription,
+                           "client_reference_id": b.team.org,
+                           "collected_information": {"business_name": "  Acme SAS (Stripe)  "}});
+    deliver(&b, "checkout.session.completed", completed.clone()).await;
+    let record = || async {
+        sqlx::query!(
+            "SELECT stripe_business_name, contract_ended_at FROM legal_acceptances
+             WHERE checkout_session_id = $1",
+            session
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap()
+    };
+    let noted = record().await;
+    assert_eq!(
+        noted.stripe_business_name.as_deref(),
+        Some("Acme SAS (Stripe)")
+    );
+    assert!(noted.contract_ended_at.is_none(), "running");
+    // The same event again changes nothing (written once).
+    deliver(&b, "checkout.session.completed", completed).await;
+    // Over for good: the contract it concluded ended then.
+    b.stripe
+        .state()
+        .subscriptions
+        .get_mut(&subscription)
+        .unwrap()
+        .status = "canceled".into();
+    deliver(
+        &b,
+        "customer.subscription.deleted",
+        subscription_object(&subscription),
+    )
+    .await;
+    assert!(record().await.contract_ended_at.is_some());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_country_is_one_of_iso_3166(db: PgPool) {
+    let b = billed(&db).await;
+    let mut body = business_checkout("team", "month", false);
+    body["company_country"] = json!("UK");
+    let refused = b
+        .app
+        .as_user(&b.team.admin)
+        .post(&b.team.path("/billing/checkout"), &body)
+        .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(refused.json().to_string().contains("company_country"));
+    body["company_country"] = json!("gb");
+    let gb = b
+        .app
+        .as_user(&b.team.admin)
+        .post(&b.team.path("/billing/checkout"), &body)
+        .await;
+    assert_eq!(gb.status, StatusCode::OK, "{}", gb.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_letter_the_mail_server_refused_is_sent_later_and_only_once(db: PgPool) {
+    let b = billed(&db).await;
+    // The server is down for the confirmation.
+    b.outbox.refuse_next(1);
+    let subscription = subscribe(&b, "team", "month").await;
+    let delivered = romulus_api::mail::outbox::deliver(&b.app.state.db, &b.app.state.mailer)
+        .await
+        .unwrap();
+    assert_eq!((delivered.sent, delivered.retrying), (0, 1));
+    assert_eq!(b.outbox.all(), Vec::new(), "nothing marked sent");
+    let waiting = sqlx::query!("SELECT attempts, sent_at, last_error FROM mail_outbox")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(waiting.attempts, 1);
+    assert!(waiting.sent_at.is_none() && waiting.last_error.is_some());
+    // Not before its time; then once.
+    assert_eq!(b.mail().await.all(), Vec::new());
+    sqlx::query!("UPDATE mail_outbox SET next_attempt_at = now()")
+        .execute(&db)
+        .await
+        .unwrap();
+    let confirmations = |outbox: romulus_api::mail::Outbox| {
+        outbox
+            .all()
+            .into_iter()
+            .filter(|m| m.kind == "billing_subscription_confirmed")
+            .count()
+    };
+    assert_eq!(confirmations(b.mail().await), 1);
+    // Another event about the subscription: decided once, sent once.
+    deliver(
+        &b,
+        "customer.subscription.updated",
+        subscription_object(&subscription),
+    )
+    .await;
+    sqlx::query!("UPDATE mail_outbox SET next_attempt_at = now()")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(confirmations(b.mail().await), 1);
+    // Given up after its attempts: logged, and never sent.
+    b.outbox.refuse_next(100);
+    sqlx::query!(
+        "INSERT INTO mail_outbox (key, kind, recipient, subject, text_body, html_body, attempts)
+         VALUES ('test:down', 'test', 'x@y.z', 's', 't', 'h', $1)",
+        romulus_api::mail::outbox::MAX_ATTEMPTS - 1
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let delivered = romulus_api::mail::outbox::deliver(&b.app.state.db, &b.app.state.mailer)
+        .await
+        .unwrap();
+    assert_eq!(delivered.given_up, 1);
+    let failed = sqlx::query_scalar!("SELECT failed_at FROM mail_outbox WHERE key = 'test:down'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert!(failed.is_some());
 }

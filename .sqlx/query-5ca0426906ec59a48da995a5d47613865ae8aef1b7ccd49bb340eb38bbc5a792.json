@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE withdrawals SET requested_at = requested_at - interval '3 minutes'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "5ca0426906ec59a48da995a5d47613865ae8aef1b7ccd49bb340eb38bbc5a792"
+}

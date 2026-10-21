@@ -261,7 +261,7 @@ impl StartCheckout {
                     .company_country
                     .as_deref()
                     .map(|c| c.trim().to_ascii_uppercase())
-                    .filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()))
+                    .filter(|c| super::countries::is_country(c))
                     .ok_or_else(|| invalid("company_country", "Choose your business's country."))?;
                 let tax_id = self
                     .company_tax_id

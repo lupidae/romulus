@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mail_outbox (key, kind, recipient, subject, text_body, html_body, attempts)\n         VALUES ('test:down', 'test', 'x@y.z', 's', 't', 'h', $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cd67b3033cca2197b62e3756794f2155b9c3ccb33d4616ac738baca81a131eae"
+}

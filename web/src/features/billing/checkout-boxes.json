@@ -1,34 +1,34 @@
 {
   "professional": {
-    "version": "2026-10-21-pro",
+    "version": "2026-10-21.2-pro",
     "en": {
       "terms": "I have read and accept the Terms of Service (version {version}).",
       "professional_use": "I will use romulus only for professional purposes: for my own business (as a company, a sole trader, a freelancer or a liberal profession), or on behalf of my employer or another organization, which I am authorised to commit to the Terms. I am not signing up as a consumer.",
       "business": "I am subscribing for the purposes of my trade, business or profession, on behalf of the business named on the payment page, which I am authorised to bind. I am not subscribing as a consumer. The Data Processing Agreement applies.",
-      "submit": "The \"Subscribe\" button places an order with an obligation to pay. Prices in euros, excluding taxes; VAT not applicable (art. 293 B du CGI)."
+      "submit": "Clicking the payment button on this page (\"Subscribe\" or \"Pay and subscribe\") places an order with an obligation to pay. Prices in euros, excluding taxes; VAT not applicable (art. 293 B du CGI)."
     },
     "fr": {
       "terms": "J'ai lu et j'accepte les Conditions générales d'utilisation et de vente (version {version}).",
       "professional_use": "J'utiliserai romulus exclusivement à des fins professionnelles : pour les besoins de ma propre activité (société, entreprise individuelle, activité indépendante ou libérale), ou pour le compte de mon employeur ou d'une autre organisation, que je suis habilité(e) à engager au titre des Conditions. Je ne m'inscris pas en tant que consommateur.",
       "business": "Je souscris pour les besoins de mon activité professionnelle, au nom de l'entreprise indiquée sur la page de paiement, que je suis habilité(e) à engager. Je ne souscris pas en tant que consommateur. L'accord de traitement des données s'applique.",
-      "submit": "Le bouton « S'abonner » vaut commande avec obligation de paiement. Prix en euros hors taxes ; TVA non applicable (art. 293 B du CGI)."
+      "submit": "Le clic sur le bouton de paiement de cette page (« S'abonner » ou « Payer et s'abonner ») vaut commande avec obligation de paiement. Prix en euros hors taxes ; TVA non applicable (art. 293 B du CGI)."
     }
   },
   "full": {
-    "version": "2026-10-21",
+    "version": "2026-10-21.2",
     "en": {
       "terms": "I have read and accept the Terms of Service (version {version}).",
       "business": "I am subscribing for the purposes of my trade, business or profession, on behalf of the business named on the payment page, which I am authorised to bind. The Data Processing Agreement applies.",
       "immediate_start": "I expressly ask for my plan to start now, before the end of the 14-day withdrawal period.",
       "withdrawal": "I acknowledge that if I withdraw within these 14 days, I will pay for the service provided until I withdraw, and that I will lose my right of withdrawal once the service has been fully provided.",
-      "submit": "The \"Subscribe\" button places an order with an obligation to pay. Prices are in euros, VAT not applicable (art. 293 B du CGI)."
+      "submit": "Clicking the payment button on this page (\"Subscribe\" or \"Pay and subscribe\") places an order with an obligation to pay. Prices are in euros, VAT not applicable (art. 293 B du CGI)."
     },
     "fr": {
       "terms": "J'ai lu et j'accepte les Conditions générales d'utilisation et de vente (version {version}).",
       "business": "Je souscris pour les besoins de mon activité professionnelle, au nom de l'entreprise indiquée sur la page de paiement, que je suis habilité(e) à engager. L'accord de traitement des données s'applique.",
       "immediate_start": "Je demande expressément que mon offre commence dès maintenant, avant la fin du délai de rétractation de 14 jours.",
       "withdrawal": "Je reconnais que, si je me rétracte dans ces 14 jours, je paierai le service fourni jusqu'à ma rétractation, et que je perdrai mon droit de rétractation une fois le service pleinement exécuté.",
-      "submit": "Le bouton « S'abonner » vaut commande avec obligation de paiement. Prix en euros, TVA non applicable (art. 293 B du CGI)."
+      "submit": "Le clic sur le bouton de paiement de cette page (« S'abonner » ou « Payer et s'abonner ») vaut commande avec obligation de paiement. Prix en euros, TVA non applicable (art. 293 B du CGI)."
     }
   }
 }

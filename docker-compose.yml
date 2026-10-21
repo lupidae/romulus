@@ -181,8 +181,7 @@ services:
     build: deploy/zitadel
     command: [/provision.sh]
     environment:
-      # The hosted service's Terms and Privacy Policy in the login; unset in dev.
-      ROMULUS_LEGAL_URL: ${ROMULUS_LEGAL_URL:-}
+      # The hosted service's contact in the login; unset in dev.
       ROMULUS_LEGAL_CONTACT: ${ROMULUS_LEGAL_CONTACT:-}
       ZITADEL_URL: http://zitadel:8080
       ZITADEL_HOST: localhost:${ROMULUS_ZITADEL_PORT}

@@ -179,7 +179,11 @@ export default defineConfig({
       ? [
           billingServer(consumersPort, consumersOrigin, {
             ROMULUS_SANDBOX_PREFIX: "romulus_e2e_consumers",
+            // Consumer sales open only with the full edition and a version
+            // of their own (1.0 was for businesses): this one has no PDF.
             ROMULUS_CONSUMER_SALES: "true",
+            ROMULUS_TERMS_EDITION: "full",
+            ROMULUS_TERMS_VERSION: "2.0-test",
           }),
         ]
       : []),

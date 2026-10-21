@@ -2,25 +2,37 @@
 //! L221-18, L221-21, L221-24 and L221-25 of the French Consumer Code).
 //!
 //! - **Who**: an admin of an organization whose subscription was bought as
-//!   a consumer (its checkout record, `org_billing.acceptance_id`), within
-//!   [`deadline`]: the 14th day after the day it began, to midnight (UTC,
-//!   which is later than Paris), pushed past a weekend. A business never
-//!   sees the button and is refused (403 `not_a_consumer`).
+//!   a consumer (its checkout record, `org_billing.acceptance_id`), until
+//!   [`deadline`]: the end of the 14th day after the day it began, in Paris,
+//!   pushed past a weekend or a public holiday ([`last_day`]). A business
+//!   never sees the button and is refused (403 `not_a_consumer`).
 //! - **Recorded first** (`withdrawals`, audited `contract_withdrawn`): from
 //!   that moment the organization is on Free (`org_billing.withdrawn_at`,
-//!   whatever Stripe still says), and the acknowledgement goes out with the
-//!   time it was received (a durable medium).
+//!   whatever Stripe still says), its contract ended (the checkout record's
+//!   `contract_ended_at`), and the acknowledgement is queued with it, with
+//!   the time it was received (a durable medium): to whoever withdrew, and
+//!   to the buyer when another admin did.
 //! - **Then Stripe**: the subscription cancelled at once (no proration, no
 //!   final invoice) and each paid invoice refunded for the days not used
 //!   ([`refund_of`]: the price × the days left / the days of its period;
-//!   whole days elapsed are charged, a day begun is not), with idempotency
-//!   keys by invoice. When Stripe fails midway, the notices task finishes
-//!   it ([`complete_pending`]), well within the 14 days the law allows.
+//!   whole days elapsed are charged, a day begun is not). Each refund is made
+//!   once: one already made for this withdrawal is skipped (its
+//!   `metadata[withdrawal]`), and none gives back more than was paid less
+//!   what was refunded already. When Stripe fails midway, the notices task
+//!   finishes it ([`complete_pending`]), well within the 14 days the law
+//!   allows; after [`MAX_ATTEMPTS`] or [`GIVE_UP_AFTER`] it stops and logs an
+//!   error for the operator (`withdrawals.failed_at`).
+//! - **A paid invoice without a payment** (paid from the customer's
+//!   balance, or out of band) cannot be refunded here: the withdrawal is
+//!   refused (503 `withdrawal_by_email`, logged as an error), so no
+//!   acknowledgement ever states an amount romulus cannot refund. The
+//!   consumer withdraws by email, which counts as well.
 //!
 //! Nothing is deleted: the organization keeps everything, on Free's caps.
 
 use axum::extract::State;
-use chrono::{DateTime, Datelike, Days, Utc, Weekday};
+use chrono::{DateTime, Datelike, Days, NaiveDate, TimeZone, Utc, Weekday};
+use chrono_tz::Europe::Paris;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -45,21 +57,80 @@ use crate::{
 /// The days a consumer has to withdraw (Article L221-18).
 pub const WITHDRAWAL_DAYS: u64 = 14;
 
+/// Stripe failures a withdrawal survives before romulus stops asking.
+pub const MAX_ATTEMPTS: i32 = 8;
+/// How long romulus keeps asking Stripe, at most.
+pub const GIVE_UP_AFTER: chrono::TimeDelta = chrono::TimeDelta::days(7);
+
+/// Easter Sunday of `year` (the Gregorian computus).
+#[allow(
+    clippy::many_single_char_names,
+    reason = "the computus's own letters, as it is always written"
+)]
+fn easter(year: i32) -> NaiveDate {
+    let a = year % 19;
+    let b = year / 100;
+    let c = year % 100;
+    let d = b / 4;
+    let e = b % 4;
+    let f = (b + 8) / 25;
+    let g = (b - f + 1) / 3;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let i = c / 4;
+    let k = c % 4;
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let month = (h + l - 7 * m + 114) / 31;
+    let day = (h + l - 7 * m + 114) % 31 + 1;
+    NaiveDate::from_ymd_opt(year, month.unsigned_abs(), day.unsigned_abs())
+        .unwrap_or(NaiveDate::MIN)
+}
+
+/// A public holiday in France (Article L3133-1 of the Labour Code): New
+/// Year's Day, Easter Monday, 1 and 8 May, Ascension Day, Whit Monday, 14
+/// July, 15 August, 1 and 11 November, Christmas Day.
+pub fn is_public_holiday(day: NaiveDate) -> bool {
+    let fixed = [
+        (1, 1),
+        (5, 1),
+        (5, 8),
+        (7, 14),
+        (8, 15),
+        (11, 1),
+        (11, 11),
+        (12, 25),
+    ];
+    if fixed.contains(&(day.month(), day.day())) {
+        return true;
+    }
+    let easter = easter(day.year());
+    [1, 39, 50]
+        .iter()
+        .any(|after| easter + Days::new(*after) == day)
+}
+
+/// The last day to withdraw from a contract concluded at `started`: the day
+/// of conclusion (in Paris) does not count, the 14th day after it is the
+/// last, and one that is a Saturday, a Sunday or a public holiday gives way
+/// to the next working day (Article L221-19 of the Consumer Code, Articles
+/// 641 and 642 of the Code of Civil Procedure, Regulation 1182/71).
+pub fn last_day(started: DateTime<Utc>) -> NaiveDate {
+    let mut last = started.with_timezone(&Paris).date_naive() + Days::new(WITHDRAWAL_DAYS);
+    while matches!(last.weekday(), Weekday::Sat | Weekday::Sun) || is_public_holiday(last) {
+        last = last + Days::new(1);
+    }
+    last
+}
+
 /// When the withdrawal period of a contract concluded at `started` ends:
-/// the day of conclusion does not count, the period ends at the end of its
-/// 14th day, and one ending on a Saturday or a Sunday runs to the end of
-/// the Monday (Article L221-19, Articles 641 and 642 of the Code of Civil
-/// Procedure). Midnight UTC: an hour or two after midnight in Paris.
+/// midnight in Paris at the end of its [`last_day`].
 pub fn deadline(started: DateTime<Utc>) -> DateTime<Utc> {
-    let mut last = started.date_naive() + Days::new(WITHDRAWAL_DAYS);
-    last = match last.weekday() {
-        Weekday::Sat => last + Days::new(2),
-        Weekday::Sun => last + Days::new(1),
-        _ => last,
-    };
-    (last + Days::new(1))
-        .and_hms_opt(0, 0, 0)
-        .map_or(started, |midnight| midnight.and_utc())
+    let end = (last_day(started) + Days::new(1)).and_time(chrono::NaiveTime::MIN);
+    // Paris never changes its clocks at midnight: the hour always exists.
+    Paris
+        .from_local_datetime(&end)
+        .earliest()
+        .map_or(started, |midnight| midnight.with_timezone(&Utc))
 }
 
 /// Whole days between `from` and `to` (never negative).
@@ -94,8 +165,11 @@ pub struct Withdrawn {
 /// it can be used, or the withdrawal made. `null` for a business.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct WithdrawalInfo {
-    /// The end of the withdrawal period while it runs.
+    /// The end of the withdrawal period while it runs (midnight in Paris
+    /// after `last_day`).
     pub until: Option<DateTime<Utc>>,
+    /// The last day it can be used, in Paris.
+    pub last_day: Option<NaiveDate>,
     pub withdrawn: Option<Withdrawn>,
 }
 
@@ -148,17 +222,21 @@ pub async fn info(
     if stored.withdrawn_at.is_some() {
         return Ok(Some(WithdrawalInfo {
             until: None,
+            last_day: None,
             withdrawn: withdrawn(&state.db, subscription).await?,
         }));
     }
-    let until = stored
-        .started_at
-        .map(deadline)
-        .filter(|until| stored.has_live_subscription() && now < *until);
-    Ok(until.map(|until| WithdrawalInfo {
-        until: Some(until),
-        withdrawn: None,
-    }))
+    let Some(started) = stored.started_at else {
+        return Ok(None);
+    };
+    let until = deadline(started);
+    Ok(
+        (stored.has_live_subscription() && now < until).then(|| WithdrawalInfo {
+            until: Some(until),
+            last_day: Some(last_day(started)),
+            withdrawn: None,
+        }),
+    )
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -249,7 +327,7 @@ fn unavailable(err: &StripeError) -> ApiError {
         (status = 403, description = "`not_a_consumer`: a business's plan is cancelled instead; `not_for_agents`", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`no_subscription`, `already_withdrawn`, `withdrawal_period_over`", body = ErrorBody),
-        (status = 503, description = "`billing_unavailable`: Stripe could not be read; nothing was recorded", body = ErrorBody),
+        (status = 503, description = "`billing_unavailable`: Stripe could not be read; `withdrawal_by_email`: a payment romulus cannot refund itself (withdraw by email). Nothing was recorded", body = ErrorBody),
     )
 )]
 #[allow(
@@ -279,6 +357,25 @@ pub(super) async fn withdraw(
         .paid_invoices(found.subscription.clone())
         .await
         .map_err(|err| unavailable(&err))?;
+    // A payment Stripe cannot refund (no payment intent: the customer's
+    // balance, out of band): no amount romulus states could be honoured.
+    if let Some(unrefundable) = invoices
+        .iter()
+        .find(|i| i.payment_intent.is_none() && i.amount_paid > 0)
+    {
+        tracing::error!(
+            org = %member.org.slug,
+            invoice = %unrefundable.id,
+            "billing: a consumer's withdrawal was refused: a paid invoice has no payment to refund; handle it by hand"
+        );
+        return Err(ApiError::Down {
+            code: "withdrawal_by_email",
+            message: format!(
+                "A payment of this subscription cannot be refunded from here. Withdraw by email to {}: your withdrawal counts from the moment you write.",
+                inner.legal.contact
+            ),
+        });
+    }
     let paid: i64 = invoices.iter().map(|i| i.amount_paid).sum();
     let currency = invoices
         .first()
@@ -290,6 +387,7 @@ pub(super) async fn withdraw(
                 invoice: invoice.id.clone(),
                 payment_intent: invoice.payment_intent.clone()?,
                 amount: refund_of(invoice, now),
+                paid: invoice.amount_paid,
             })
         })
         .collect();
@@ -346,6 +444,14 @@ pub(super) async fn withdraw(
     )
     .fetch_one(&mut *tx)
     .await?;
+    // The contract it concluded ends now (the record is kept from then).
+    sqlx::query!(
+        "UPDATE legal_acceptances SET contract_ended_at = now()
+         WHERE id = $1 AND contract_ended_at IS NULL",
+        found.acceptance
+    )
+    .execute(&mut *tx)
+    .await?;
     audit::record(
         &mut *tx,
         &audit::Entry {
@@ -371,9 +477,6 @@ pub(super) async fn withdraw(
         },
     )
     .await?;
-    tx.commit().await?;
-    tracing::info!(org = %member.org.slug, plan = ?found.plan, "billing: a consumer withdrew");
-
     let ack = Acknowledged {
         org: member.org.name.clone(),
         slug: member.org.slug.clone(),
@@ -386,7 +489,30 @@ pub(super) async fn withdraw(
         refund,
         currency: currency.clone(),
     };
-    acknowledge(&state, &inner.legal, locale, &ack);
+    // To whoever withdrew, and to the buyer when another admin did.
+    let mut readers = vec![Recipient {
+        email: member.user.email.clone(),
+        locale,
+    }];
+    if let Some(buyer) = buyer(&mut tx, found.acceptance).await?
+        && crate::email::key(&buyer.email) != crate::email::key(&member.user.email)
+    {
+        readers.push(buyer);
+    }
+    for reader in &readers {
+        notices::queue(
+            &mut tx,
+            &format!("withdrawal:{id}"),
+            "billing_withdrawal_acknowledged",
+            reader,
+            acknowledgement(&state, &inner.legal, reader.locale, &ack),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    state.mailer.wake();
+    tracing::info!(org = %member.org.slug, plan = ?found.plan, "billing: a consumer withdrew");
+
     let completed = complete(&state, id, &found.subscription, refunds).await;
     Ok(Json(Withdrawn {
         requested_at,
@@ -397,8 +523,29 @@ pub(super) async fn withdraw(
     }))
 }
 
+/// The buyer of a checkout record, where they are now, in the record's
+/// language.
+async fn buyer(
+    conn: &mut sqlx::PgConnection,
+    acceptance: Uuid,
+) -> Result<Option<Recipient>, sqlx::Error> {
+    Ok(sqlx::query!(
+        r#"SELECT coalesce(u.email, a.user_email) AS "email!", a.locale AS "locale: Locale"
+           FROM legal_acceptances a LEFT JOIN users u ON u.id = a.user_id
+           WHERE a.id = $1"#,
+        acceptance
+    )
+    .fetch_optional(conn)
+    .await?
+    .map(|r| Recipient {
+        email: r.email,
+        locale: r.locale,
+    }))
+}
+
 /// Cancels and refunds in Stripe, then marks the withdrawal completed;
-/// false when Stripe failed (the notices task tries again).
+/// false when Stripe failed (the notices task tries again, until it gives
+/// up: `failed_at`, an error for the operator).
 async fn complete(
     state: &AppState,
     id: Uuid,
@@ -407,6 +554,19 @@ async fn complete(
 ) -> bool {
     let Some(inner) = state.billing.inner() else {
         return false;
+    };
+    let attempt = sqlx::query!(
+        "UPDATE withdrawals SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts, requested_at",
+        id
+    )
+    .fetch_one(&state.db)
+    .await;
+    let attempt = match attempt {
+        Ok(attempt) => attempt,
+        Err(err) => {
+            tracing::warn!(error = %err, withdrawal = %id, "billing: a withdrawal could not be counted");
+            return false;
+        }
     };
     match inner
         .stripe
@@ -427,7 +587,32 @@ async fn complete(
             true
         }
         Err(err) => {
-            tracing::warn!(error = %err, withdrawal = %id, "billing: a withdrawal waits for Stripe (retried by the notices task)");
+            let give_up = attempt.attempts >= MAX_ATTEMPTS
+                || Utc::now() - attempt.requested_at >= GIVE_UP_AFTER;
+            let error: String = err.to_string().chars().take(2000).collect();
+            let noted = sqlx::query!(
+                "UPDATE withdrawals SET last_error = $2, failed_at = CASE WHEN $3 THEN now() END
+                 WHERE id = $1",
+                id,
+                error,
+                give_up,
+            )
+            .execute(&state.db)
+            .await;
+            if let Err(err) = noted {
+                tracing::warn!(error = %err, withdrawal = %id, "billing: a withdrawal's failure could not be noted");
+            }
+            if give_up {
+                tracing::error!(
+                    error = %err,
+                    withdrawal = %id,
+                    subscription,
+                    attempts = attempt.attempts,
+                    "billing: a withdrawal could not be completed in Stripe and is no longer retried: cancel the subscription and make the refunds by hand, then set withdrawals.completed_at"
+                );
+            } else {
+                tracing::warn!(error = %err, withdrawal = %id, attempts = attempt.attempts, "billing: a withdrawal waits for Stripe (retried by the notices task)");
+            }
             false
         }
     }
@@ -438,7 +623,8 @@ async fn complete(
 pub async fn complete_pending(state: &AppState) -> ApiResult<()> {
     let pending = sqlx::query!(
         "SELECT id, subscription_id, refunds FROM withdrawals
-         WHERE completed_at IS NULL AND requested_at < now() - interval '2 minutes'
+         WHERE completed_at IS NULL AND failed_at IS NULL
+           AND requested_at < now() - interval '2 minutes'
          ORDER BY requested_at LIMIT 20"
     )
     .fetch_all(&state.db)
@@ -464,14 +650,14 @@ struct Acknowledged {
     currency: String,
 }
 
-/// The acknowledgement of receipt (Article L221-21), timestamped, to whoever
-/// withdrew, in the page's language.
-fn acknowledge(
+/// The acknowledgement of receipt (Article L221-21), timestamped, in
+/// `locale`.
+fn acknowledgement(
     state: &AppState,
     legal: &crate::config::LegalConfig,
     locale: Locale,
     ack: &Acknowledged,
-) {
+) -> Draft {
     let contact = LegalLinks::of(legal).contact;
     let money = |cents| words::money(locale, cents, &ack.currency);
     let days = days_between(ack.started, ack.requested_at);
@@ -519,7 +705,7 @@ fn acknowledge(
                     ack.name,
                     ack.email,
                 ),
-                format!("L'abonnement est résilié immédiatement, et {} est sur l'offre gratuite. Rien n'est supprimé.", ack.org),
+                format!("L'abonnement est résilié immédiatement, et {} est sur l'offre gratuite (Free). Rien n'est supprimé.", ack.org),
                 if kept > 0 {
                     format!(
                         "Vous avez payé {}. Pour {days} jour{} de service jusqu'à votre rétractation, vous payez {} ; nous vous remboursons {} sur le moyen de paiement utilisé, sous 14 jours (en général sous quelques jours).",
@@ -543,22 +729,14 @@ fn acknowledge(
         Locale::En => "Billing settings",
         Locale::Fr => "Paramètres de facturation",
     };
-    notices::send(
-        state,
-        "billing_withdrawal_acknowledged",
-        &Recipient {
-            email: ack.email.clone(),
-            locale,
-        },
-        Draft {
-            subject,
-            paragraphs,
-            action: Some((label, notices::billing_link(state, &ack.slug, ""))),
-            footer,
-            framed: None,
-            attachments: Vec::new(),
-        },
-    );
+    Draft {
+        subject,
+        paragraphs,
+        action: Some((label, notices::billing_link(state, &ack.slug, ""))),
+        footer,
+        framed: None,
+        attachments: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -604,26 +782,84 @@ mod tests {
         assert_eq!(refund_of(&month, start + chrono::Duration::days(60)), 0);
     }
 
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
     #[test]
-    fn the_period_ends_with_the_fourteenth_day_after_and_skips_a_weekend() {
-        // Wednesday 21 October 2026: the 14th day after is Wednesday 4
-        // November, open until its end.
+    fn easter_and_the_holidays_that_follow_it_are_known() {
+        assert_eq!(easter(2024), day(2024, 3, 31));
+        assert_eq!(easter(2025), day(2025, 4, 20));
+        assert_eq!(easter(2026), day(2026, 4, 5));
+        assert_eq!(easter(2027), day(2027, 3, 28));
+        for holiday in [
+            day(2027, 1, 1),
+            day(2027, 3, 29),
+            day(2027, 5, 1),
+            day(2027, 5, 6),
+            day(2027, 5, 8),
+            day(2027, 5, 17),
+            day(2027, 7, 14),
+            day(2027, 8, 15),
+            day(2027, 11, 1),
+            day(2027, 11, 11),
+            day(2027, 12, 25),
+        ] {
+            assert!(is_public_holiday(holiday), "{holiday}");
+        }
+        assert!(
+            !is_public_holiday(day(2027, 3, 28)),
+            "Easter Sunday is a Sunday"
+        );
+        assert!(!is_public_holiday(day(2027, 12, 26)));
+        assert!(
+            !is_public_holiday(day(2027, 3, 26)),
+            "Good Friday: Alsace-Moselle only"
+        );
+    }
+
+    #[test]
+    fn the_period_ends_with_the_fourteenth_day_after_in_paris() {
+        // Wednesday 21 October 2026, 20:30 in Paris: the 14th day after is
+        // Wednesday 4 November, open until midnight in Paris (23:00 UTC,
+        // winter time by then).
         let wednesday = Utc.with_ymd_and_hms(2026, 10, 21, 18, 30, 0).unwrap();
+        assert_eq!(last_day(wednesday), day(2026, 11, 4));
         assert_eq!(
             deadline(wednesday),
-            Utc.with_ymd_and_hms(2026, 11, 5, 0, 0, 0).unwrap()
+            Utc.with_ymd_and_hms(2026, 11, 4, 23, 0, 0).unwrap()
         );
-        // Saturday 24 October: the 14th day after is Saturday 7 November,
-        // pushed to Monday the 9th.
-        let saturday = Utc.with_ymd_and_hms(2026, 10, 24, 9, 0, 0).unwrap();
+        // 22:30 UTC is already the next day in Paris: concluded on the 22nd.
+        let late = Utc.with_ymd_and_hms(2026, 10, 21, 22, 30, 0).unwrap();
+        assert_eq!(last_day(late), day(2026, 11, 5));
         assert_eq!(
-            deadline(saturday),
-            Utc.with_ymd_and_hms(2026, 11, 10, 0, 0, 0).unwrap()
+            deadline(late),
+            Utc.with_ymd_and_hms(2026, 11, 5, 23, 0, 0).unwrap()
         );
-        let sunday = Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap();
+    }
+
+    #[test]
+    fn a_period_ending_on_a_weekend_or_a_holiday_runs_to_the_next_working_day() {
+        let at = |m, d| Utc.with_ymd_and_hms(2026, m, d, 9, 0, 0).unwrap();
+        // Saturday 7 and Sunday 8 November: Monday the 9th.
+        assert_eq!(last_day(at(10, 24)), day(2026, 11, 9));
+        assert_eq!(last_day(at(10, 25)), day(2026, 11, 9));
+        // Wednesday 11 November (Armistice Day): Thursday the 12th.
+        assert_eq!(last_day(at(10, 28)), day(2026, 11, 12));
+        // Sunday 1 November, All Saints' Day too: Monday the 2nd.
+        assert_eq!(last_day(at(10, 18)), day(2026, 11, 2));
+        // Friday 25 December, then a weekend: Monday the 28th.
+        assert_eq!(last_day(at(12, 11)), day(2026, 12, 28));
+        // Easter Monday 29 March 2027: Tuesday the 30th, at midnight in
+        // Paris on summer time (22:00 UTC).
+        let march = Utc.with_ymd_and_hms(2027, 3, 15, 9, 0, 0).unwrap();
+        assert_eq!(last_day(march), day(2027, 3, 30));
         assert_eq!(
-            deadline(sunday),
-            Utc.with_ymd_and_hms(2026, 11, 10, 0, 0, 0).unwrap()
+            deadline(march),
+            Utc.with_ymd_and_hms(2027, 3, 30, 22, 0, 0).unwrap()
         );
+        // Ascension Day, Thursday 6 May 2027: Friday the 7th.
+        let april = Utc.with_ymd_and_hms(2027, 4, 22, 9, 0, 0).unwrap();
+        assert_eq!(last_day(april), day(2027, 5, 7));
     }
 }

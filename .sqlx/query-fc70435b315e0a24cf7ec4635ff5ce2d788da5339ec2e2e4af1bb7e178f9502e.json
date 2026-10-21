@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT purpose AS \"purpose: LinkPurpose\", user_id, email, name, invitation_id, expires_at,\n                  NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)\n                    AS \"first_password!\"\n           FROM auth_links l\n           WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()",
+  "query": "SELECT purpose AS \"purpose: LinkPurpose\", user_id, email, name, invitation_id, expires_at,\n                  NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)\n                    AS \"first_password!\",\n                  accepted_terms\n           FROM auth_links l\n           WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()",
   "describe": {
     "columns": [
       {
@@ -84,6 +84,17 @@
         "name": "first_password!",
         "type_info": "Bool",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "accepted_terms",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "accepted_terms"
+          }
+        }
       }
     ],
     "parameters": {
@@ -109,8 +120,9 @@
       true,
       true,
       false,
-      null
+      null,
+      true
     ]
   },
-  "hash": "4958afd10a90ea619bf25080b662d5d47da336cab49dc6821d543cfdbbf5b26e"
+  "hash": "fc70435b315e0a24cf7ec4635ff5ce2d788da5339ec2e2e4af1bb7e178f9502e"
 }

@@ -22,13 +22,16 @@
 //! - **a price change** ([`price_change`], Terms 7.6), sent by `romulus-api
 //!   price-change` to the subscriptions not on the plan table's price.
 //!
-//! [`run`] looks for what is due every [`NOTICES_EVERY`] (and completes
-//! withdrawals Stripe had not finished).
+//! Each is decided once ([`decide`]: its `billing_notices` row) and queued in
+//! the same transaction (`mail::outbox`): a letter is never lost to a mail
+//! server that was down, and never sent twice. [`run`] looks for what is due
+//! every [`NOTICES_EVERY`] (and completes withdrawals Stripe had not
+//! finished).
 
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as Span, NaiveDate, Utc};
-use sqlx::PgExecutor;
+use sqlx::{PgConnection, PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
@@ -117,12 +120,16 @@ pub(super) struct Org {
 }
 
 pub(super) async fn org(state: &AppState, id: Uuid) -> Result<Option<Org>, sqlx::Error> {
+    org_in(&state.db, id).await
+}
+
+async fn org_in(db: impl PgExecutor<'_>, id: Uuid) -> Result<Option<Org>, sqlx::Error> {
     sqlx::query_as!(
         Org,
         "SELECT name, slug FROM organizations WHERE id = $1",
         id
     )
-    .fetch_optional(&state.db)
+    .fetch_optional(db)
     .await
 }
 
@@ -167,25 +174,101 @@ impl Draft {
     }
 }
 
-pub(super) fn send(state: &AppState, kind: &'static str, to: &Recipient, draft: Draft) {
-    state.mailer.send(
-        Letter {
-            kind,
-            to: &to.email,
-            subject: draft.subject,
-            paragraphs: draft.paragraphs,
-            action: draft
-                .action
-                .as_ref()
-                .map(|(label, url)| (*label, url.as_str())),
-            footer: draft.footer,
+/// Queues one letter in `conn`'s transaction, under `key` and the reader's
+/// address (`mail::outbox`; wake the mailer once committed).
+pub(super) async fn queue(
+    conn: &mut PgConnection,
+    key: &str,
+    kind: &'static str,
+    to: &Recipient,
+    draft: Draft,
+) -> Result<(), sqlx::Error> {
+    let email = Letter {
+        kind,
+        to: &to.email,
+        subject: draft.subject,
+        paragraphs: draft.paragraphs,
+        action: draft
+            .action
+            .as_ref()
+            .map(|(label, url)| (*label, url.as_str())),
+        footer: draft.footer,
+    }
+    .email_with(Extras {
+        lang: to.locale.tag(),
+        framed: draft.framed,
+        attachments: draft.attachments,
+    });
+    let key = format!("{key}:{}", crate::email::key(&to.email));
+    crate::mail::outbox::queue(conn, &key, &email).await?;
+    Ok(())
+}
+
+/// A notice decided now, for the first time: its letters are queued in its
+/// transaction, and go once it commits ([`Decided::commit`]).
+pub struct Decided {
+    tx: Transaction<'static, Postgres>,
+    key: String,
+}
+
+/// Decides notice `kind` about `about` for `org` (`billing_notices`): `None`
+/// when it was decided before.
+pub async fn decide(
+    state: &AppState,
+    org: Uuid,
+    kind: &str,
+    about: &str,
+) -> Result<Option<Decided>, sqlx::Error> {
+    let mut tx = state.db.begin().await?;
+    if !once(&mut *tx, org, kind, about).await? {
+        return Ok(None);
+    }
+    Ok(Some(Decided {
+        tx,
+        key: format!("billing:{org}:{kind}:{about}"),
+    }))
+}
+
+impl Decided {
+    /// The transaction, for what is recorded with the notice (an audit event).
+    pub fn conn(&mut self) -> &mut PgConnection {
+        &mut self.tx
+    }
+
+    /// Queues one letter to `to`.
+    pub(super) async fn send(
+        &mut self,
+        kind: &'static str,
+        to: &Recipient,
+        draft: Draft,
+    ) -> Result<(), sqlx::Error> {
+        queue(&mut self.tx, &self.key, kind, to, draft).await
+    }
+
+    /// Queues one letter to every admin of `org_id`, written for each one's
+    /// language.
+    async fn queue_to_admins(
+        &mut self,
+        org_id: Uuid,
+        kind: &'static str,
+        letter: impl Fn(Locale, &Org) -> Draft,
+    ) -> Result<(), sqlx::Error> {
+        let Some(org) = org_in(&mut *self.tx, org_id).await? else {
+            return Ok(());
+        };
+        for admin in admins(&mut *self.tx, org_id).await? {
+            let draft = letter(admin.locale, &org);
+            self.send(kind, &admin, draft).await?;
         }
-        .email_with(Extras {
-            lang: to.locale.tag(),
-            framed: draft.framed,
-            attachments: draft.attachments,
-        }),
-    );
+        Ok(())
+    }
+
+    /// Records the notice and its letters, and wakes the mailer.
+    pub async fn commit(self, state: &AppState) -> Result<(), sqlx::Error> {
+        self.tx.commit().await?;
+        state.mailer.wake();
+        Ok(())
+    }
 }
 
 /// The admins of `org`, each in their language.
@@ -204,24 +287,6 @@ async fn admins(db: impl PgExecutor<'_>, org: Uuid) -> Result<Vec<Recipient>, sq
         locale: r.locale.unwrap_or_default(),
     })
     .collect())
-}
-
-/// Sends one letter to every admin of `org`, written for each one's
-/// language.
-async fn to_admins(
-    state: &AppState,
-    org_id: Uuid,
-    kind: &'static str,
-    letter: impl Fn(Locale, &Org) -> Draft,
-) -> Result<(), sqlx::Error> {
-    let Some(org) = org(state, org_id).await? else {
-        return Ok(());
-    };
-    for admin in admins(&state.db, org_id).await? {
-        let draft = letter(admin.locale, &org);
-        send(state, kind, &admin, draft);
-    }
-    Ok(())
 }
 
 /// Consumers may buy: the letters cite the consumer law that then applies
@@ -369,10 +434,14 @@ pub async fn renewal(
     current: Plan,
     period_end: DateTime<Utc>,
     renewing: &Renewing,
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
+    let Some(mut decided) = decide(state, org_id, "renewal", &period_end.to_rfc3339()).await?
+    else {
+        return Ok(false);
+    };
     let last_day = last_day_to_cancel(period_end);
     let consumers = consumer_sales(state);
-    to_admins(state, org_id, "billing_renewal", |locale, org| {
+    decided.queue_to_admins(org_id, "billing_renewal", |locale, org| {
         let cancel = billing_link(state, &org.slug, "action=cancel");
         let end = date(locale, period_end);
         let (subject, paragraphs, framed, why) = match locale {
@@ -400,7 +469,7 @@ pub async fn renewal(
                     renewing.sentence(locale, current, &org.name, period_end),
                     "Si vous souhaitez la reconduire, vous n'avez rien à faire.".to_owned(),
                     format!(
-                        "Sinon, résiliez-la au plus tard le {} : dans les paramètres de facturation de l'organisation, « Résilier l'abonnement ». L'offre reste active jusqu'au {end}, puis {} passe à l'offre gratuite. Rien n'est supprimé.",
+                        "Sinon, résiliez-la au plus tard le {} : dans les paramètres de facturation de l'organisation, « Résilier l'abonnement ». L'offre reste active jusqu'au {end}, puis {} passe à l'offre gratuite (Free). Rien n'est supprimé.",
                         words::day(locale, last_day),
                         org.name,
                     ),
@@ -423,7 +492,9 @@ pub async fn renewal(
             )
         }
     })
-    .await
+    .await?;
+    decided.commit(state).await?;
+    Ok(true)
 }
 
 /// What a checkout's record says, for the confirmation.
@@ -476,9 +547,10 @@ pub async fn subscription_confirmed(
     let Some(interval) = stored.interval else {
         return Ok(());
     };
-    if !once(&state.db, org_id, "subscription_confirmed", subscription).await? {
+    let Some(mut decided) = decide(state, org_id, "subscription_confirmed", subscription).await?
+    else {
         return Ok(());
-    }
+    };
     let Some(org) = org(state, org_id).await? else {
         return Ok(());
     };
@@ -516,8 +588,11 @@ pub async fn subscription_confirmed(
             &links,
             locale,
         );
-        send(state, "billing_subscription_confirmed", &to, draft);
+        decided
+            .send("billing_subscription_confirmed", &to, draft)
+            .await?;
     }
+    decided.commit(state).await?;
     Ok(())
 }
 
@@ -539,6 +614,11 @@ fn confirmation(
 ) -> Draft {
     let plan = stored.plan.name();
     let per = period(locale, interval);
+    // « chaque mois », « chaque année » (never « chaque an »).
+    let each = match interval {
+        Interval::Month => "chaque mois",
+        Interval::Year => "chaque année",
+    };
     let price = stored
         .amount_cents
         .zip(stored.currency.as_deref())
@@ -599,10 +679,10 @@ fn confirmation(
                 Some(price) => format!(
                     "Offre : {plan}, {price} par {per}, payable d'avance. Prix en euros, TVA non applicable (art. 293 B du CGI)."
                 ),
-                None => format!("Offre : {plan}, facturée chaque {per}, payable d'avance."),
+                None => format!("Offre : {plan}, facturée {each}, payable d'avance."),
             });
             paragraphs.push(format!(
-                "Reconduction : elle est reconduite automatiquement chaque {per}{}, au prix en vigueur, jusqu'à résiliation.{}",
+                "Reconduction : elle est reconduite automatiquement {each}{}, au prix en vigueur, jusqu'à résiliation.{}",
                 stored
                     .current_period_end
                     .map_or_else(String::new, |end| format!(", la prochaine fois le {}", date(locale, end))),
@@ -613,7 +693,7 @@ fn confirmation(
                 },
             ));
             paragraphs.push(format!(
-                "Pour résilier : à tout moment, dans les paramètres de facturation de l'organisation, avec « Résilier l'abonnement », ou par e-mail à {contact}. L'offre reste active jusqu'à la fin de la période payée, puis {} passe à l'offre gratuite. Rien n'est supprimé.",
+                "Pour résilier : à tout moment, dans les paramètres de facturation de l'organisation, avec « Résilier l'abonnement », ou par e-mail à {contact}. L'offre reste active jusqu'à la fin de la période payée, puis {} passe à l'offre gratuite (Free). Rien n'est supprimé.",
                 org.name
             ));
             paragraphs.push(if attachment.is_some() {
@@ -626,10 +706,8 @@ fn confirmation(
     if let Some(b) = bought.filter(|b| b.buyer == Buyer::Consumer) {
         let boxes = super::copy::boxes(b.edition, locale);
         let quote = |text: &Option<String>| text.clone().unwrap_or_default();
-        let until = words::date(
-            locale,
-            super::withdrawal::deadline(started) - Span::seconds(1),
-        );
+        // The last day in Paris (the period runs to its midnight there).
+        let until = words::day(locale, super::withdrawal::last_day(started));
         match locale {
             Locale::En => {
                 paragraphs.push(format!(
@@ -640,7 +718,7 @@ fn confirmation(
                 paragraphs.push(format!("“{}”", quote(&boxes.immediate_start)));
                 paragraphs.push(format!("“{}”", quote(&boxes.withdrawal)));
                 paragraphs.push(format!(
-                    "You can withdraw until {until} (14 days): in the billing settings, Withdraw from contract here, then Confirm withdrawal; or by email to {contact}; or with the model form in section 9.4 of the Terms. You then pay only for the days of service until you withdraw, and we refund the rest within 14 days, with the payment method you used. {} then moves to the Free plan; nothing is deleted.",
+                    "You can withdraw until the end of {until} (14 days): in the billing settings, Withdraw from contract here, then Confirm withdrawal; or by email to {contact}; or with the model form in section 9.4 of the Terms. You then pay only for the days of service until you withdraw, and we refund the rest within 14 days, with the payment method you used. {} then moves to the Free plan; nothing is deleted.",
                     org.name
                 ));
             }
@@ -653,7 +731,7 @@ fn confirmation(
                 paragraphs.push(format!("« {} »", quote(&boxes.immediate_start)));
                 paragraphs.push(format!("« {} »", quote(&boxes.withdrawal)));
                 paragraphs.push(format!(
-                    "Vous pouvez vous rétracter jusqu'au {until} (14 jours) : dans les paramètres de facturation, « Renoncer au contrat ici », puis « Confirmer la rétractation » ; ou par e-mail à {contact} ; ou avec le formulaire type de l'article 9.4 des Conditions. Vous ne payez alors que les jours de service jusqu'à votre rétractation, et nous vous remboursons le reste sous 14 jours, avec le moyen de paiement utilisé. {} passe ensuite à l'offre gratuite ; rien n'est supprimé.",
+                    "Vous pouvez vous rétracter jusqu'au {until} inclus (14 jours) : dans les paramètres de facturation, « Renoncer au contrat ici », puis « Confirmer la rétractation » ; ou par e-mail à {contact} ; ou avec le formulaire type de l'article 9.4 des Conditions. Vous ne payez alors que les jours de service jusqu'à votre rétractation, et nous vous remboursons le reste sous 14 jours, avec le moyen de paiement utilisé. {} passe ensuite à l'offre gratuite (Free) ; rien n'est supprimé.",
                     org.name
                 ));
             }
@@ -698,19 +776,19 @@ pub async fn cancellation_confirmed(
     else {
         return Ok(());
     };
-    if !once(
-        &state.db,
+    let Some(mut decided) = decide(
+        state,
         org_id,
         "cancellation_confirmed",
         &format!("{subscription}:{}", ends.timestamp()),
     )
     .await?
-    {
+    else {
         return Ok(());
-    }
+    };
     let plan = stored.plan;
     let consumers = consumer_sales(state);
-    to_admins(state, org_id, "billing_cancellation_confirmed", |locale, org| {
+    decided.queue_to_admins(org_id, "billing_cancellation_confirmed", |locale, org| {
         let end = date(locale, ends);
         let (subject, paragraphs, why) = match locale {
             Locale::En => (
@@ -736,7 +814,7 @@ pub async fn cancellation_confirmed(
                     format!("Ce message confirme la résiliation de l'abonnement {} de {}.", plan.name(), org.name),
                     format!("Il prend fin le {end}. D'ici là, vous gardez les fonctionnalités payantes, et rien de plus n'est prélevé."),
                     format!(
-                        "{} passe ensuite à l'offre gratuite. Rien n'est supprimé : ce qui dépasse les limites de l'offre gratuite reste consultable, et créer davantage attend le retour d'une offre payante. Les versions au-delà de l'historique de l'offre gratuite sont masquées, pas supprimées.",
+                        "{} passe ensuite à l'offre gratuite (Free). Rien n'est supprimé : ce qui dépasse les limites de l'offre gratuite reste consultable, et créer davantage attend le retour d'une offre payante. Les versions au-delà de l'historique de l'offre gratuite sont masquées, pas supprimées.",
                         org.name
                     ),
                     format!("Vous changez d'avis ? Reprenez l'abonnement depuis « Gérer la facturation » dans les paramètres de facturation avant le {end}."),
@@ -756,6 +834,7 @@ pub async fn cancellation_confirmed(
         )
     })
     .await?;
+    decided.commit(state).await?;
     Ok(())
 }
 
@@ -767,10 +846,11 @@ pub async fn duplicate_cancelled(
     subscription: &str,
     refund: Option<&super::stripe::Refund>,
 ) -> ApiResult<()> {
-    if !once(&state.db, org_id, "duplicate_cancelled", subscription).await? {
+    let Some(mut decided) = decide(state, org_id, "duplicate_cancelled", subscription).await?
+    else {
         return Ok(());
-    }
-    to_admins(state, org_id, "billing_duplicate_cancelled", |locale, org| {
+    };
+    decided.queue_to_admins(org_id, "billing_duplicate_cancelled", |locale, org| {
         let refunded = match (locale, refund) {
             (Locale::En, None) => "Nothing had been charged for it.".to_owned(),
             (Locale::En, Some(r)) => format!(
@@ -807,6 +887,7 @@ pub async fn duplicate_cancelled(
         )
     })
     .await?;
+    decided.commit(state).await?;
     Ok(())
 }
 
@@ -817,10 +898,10 @@ pub async fn payment_failed(
     invoice: &Invoice,
     grace_until: Option<DateTime<Utc>>,
 ) -> ApiResult<()> {
-    if !once(&state.db, org_id, "payment_failed", &invoice.id).await? {
+    let Some(mut decided) = decide(state, org_id, "payment_failed", &invoice.id).await? else {
         return Ok(());
-    }
-    to_admins(state, org_id, "billing_payment_failed", |locale, org| {
+    };
+    decided.queue_to_admins(org_id, "billing_payment_failed", |locale, org| {
         let amount = money(locale, invoice.total, &invoice.currency);
         let (subject, paragraphs) = match locale {
             Locale::En => {
@@ -849,7 +930,7 @@ pub async fn payment_failed(
                     vec![
                         format!("Le paiement de {amount} pour {} n'a pas abouti. Stripe va réessayer.", org.name),
                         format!(
-                            "L'offre reste active {until}. Pour la garder au-delà, mettez à jour le moyen de paiement ; sinon {} passe à l'offre gratuite. Rien n'est supprimé.",
+                            "L'offre reste active {until}. Pour la garder au-delà, mettez à jour le moyen de paiement ; sinon {} passe à l'offre gratuite (Free). Rien n'est supprimé.",
                             org.name
                         ),
                     ],
@@ -864,6 +945,7 @@ pub async fn payment_failed(
         )
     })
     .await?;
+    decided.commit(state).await?;
     Ok(())
 }
 
@@ -877,12 +959,12 @@ pub async fn hours_warning(
     next: NaiveDate,
 ) -> ApiResult<()> {
     let key = month.format("%Y-%m").to_string();
-    if !once(&state.db, org_id, "hours_80", &key).await? {
+    let Some(mut decided) = decide(state, org_id, "hours_80", &key).await? else {
         return Ok(());
-    }
+    };
     let hours = plan.limits().playground_hours;
     let used = used_seconds / 3600;
-    to_admins(state, org_id, "billing_hours_warning", |locale, org| {
+    decided.queue_to_admins(org_id, "billing_hours_warning", |locale, org| {
         let back = words::day_of_year(locale, next);
         let (subject, paragraphs) = match locale {
             Locale::En => (
@@ -916,18 +998,21 @@ pub async fn hours_warning(
         )
     })
     .await?;
+    decided.commit(state).await?;
     Ok(())
 }
 
-/// Playground hours all used (the caller records it once a month).
+/// Playground hours all used: queued with the caller's decision (once a
+/// month).
 pub async fn hours_used_up(
     state: &AppState,
+    decided: &mut Decided,
     org_id: Uuid,
     plan: Plan,
     month: NaiveDate,
     next: NaiveDate,
-) {
-    let sent = to_admins(state, org_id, "billing_hours_used_up", |locale, org| {
+) -> Result<(), sqlx::Error> {
+    decided.queue_to_admins(org_id, "billing_hours_used_up", |locale, org| {
         let back = words::day_of_year(locale, next);
         let name = words::month_name(locale, month);
         let hours = plan.limits().playground_hours;
@@ -962,10 +1047,7 @@ pub async fn hours_used_up(
             footer(locale, org),
         )
     })
-    .await;
-    if let Err(err) = sent {
-        tracing::warn!(error = %err, "billing: cannot email about playground hours");
-    }
+    .await
 }
 
 /// A plan's price changes at a renewal (Terms 7.6: 30 days ahead at least).
@@ -980,11 +1062,11 @@ pub async fn price_change(
     new_cents: i64,
     from: DateTime<Utc>,
 ) -> ApiResult<bool> {
-    if !once(&state.db, org_id, "price_change", change).await? {
+    let Some(mut decided) = decide(state, org_id, "price_change", change).await? else {
         return Ok(false);
-    }
+    };
     let last_day = last_day_to_cancel(from);
-    to_admins(state, org_id, "billing_price_change", |locale, org| {
+    decided.queue_to_admins(org_id, "billing_price_change", |locale, org| {
         let per = period(locale, interval);
         let price = money(locale, new_cents, "eur");
         let when = date(locale, from);
@@ -1017,6 +1099,7 @@ pub async fn price_change(
         }
     })
     .await?;
+    decided.commit(state).await?;
     Ok(true)
 }
 
@@ -1034,7 +1117,10 @@ pub struct PriceNotice {
 }
 
 /// The first renewal of a period ending at `period_end` that is at least
-/// `threshold`: the period's end, or one period after another.
+/// `threshold`: the period's end, or a whole number of periods after it,
+/// each counted from `period_end` itself (a period ending on the 31st
+/// renews on the last day of February, then on 31 March again, as Stripe
+/// does: never drifting to the 28th).
 pub fn first_renewal_after(
     period_end: DateTime<Utc>,
     interval: Interval,
@@ -1045,8 +1131,10 @@ pub fn first_renewal_after(
         Interval::Year => 12,
     };
     let mut renewal = period_end;
+    let mut periods = 0;
     while renewal < threshold {
-        match renewal.checked_add_months(chrono::Months::new(months)) {
+        periods += months;
+        match period_end.checked_add_months(chrono::Months::new(periods)) {
             Some(next) => renewal = next,
             None => break,
         }
@@ -1151,19 +1239,18 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
         if !renewal_due(r.period_end, now) {
             continue;
         }
-        if once(&state.db, r.org_id, "renewal", &r.period_end.to_rfc3339()).await? {
-            if r.period_end - now < Span::days(30) {
-                tracing::warn!(org = %r.org_id, "billing: a renewal reminder sent less than 30 days ahead");
-            }
-            let renewing = Renewing::of(
-                r.plan,
-                r.amount_cents.zip(r.currency),
-                r.period_end,
-                r.scheduled_plan
-                    .zip(r.scheduled_at)
-                    .map(|(plan, at)| (plan, r.scheduled_interval, at)),
-            );
-            renewal(state, r.org_id, r.plan, r.period_end, &renewing).await?;
+        let renewing = Renewing::of(
+            r.plan,
+            r.amount_cents.zip(r.currency),
+            r.period_end,
+            r.scheduled_plan
+                .zip(r.scheduled_at)
+                .map(|(plan, at)| (plan, r.scheduled_interval, at)),
+        );
+        if renewal(state, r.org_id, r.plan, r.period_end, &renewing).await?
+            && r.period_end - now < Span::days(30)
+        {
+            tracing::warn!(org = %r.org_id, "billing: a renewal reminder sent less than 30 days ahead");
         }
     }
 
@@ -1177,13 +1264,13 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
         let until = r.since + Span::days(GRACE_DAYS);
         let key = r.since.to_rfc3339();
         if now >= until {
-            if once(&state.db, r.org_id, "downgraded", &key).await? {
-                downgraded(state, r.org_id, r.plan).await?;
+            if let Some(decided) = decide(state, r.org_id, "downgraded", &key).await? {
+                downgraded(state, decided, r.org_id, r.plan).await?;
             }
         } else if now >= until - Span::days(GRACE_WARNING)
-            && once(&state.db, r.org_id, "grace_ending", &key).await?
+            && let Some(mut decided) = decide(state, r.org_id, "grace_ending", &key).await?
         {
-            to_admins(state, r.org_id, "billing_grace_ending", |locale, org| {
+            decided.queue_to_admins(r.org_id, "billing_grace_ending", |locale, org| {
                 let when = date(locale, until);
                 let (subject, paragraphs) = match locale {
                     Locale::En => (
@@ -1198,10 +1285,10 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
                         ],
                     ),
                     Locale::Fr => (
-                        format!("{} passe à l'offre gratuite le {when}", org.name),
+                        format!("{} passe à l'offre gratuite (Free) le {when}", org.name),
                         vec![
                             format!(
-                                "Un paiement de l'offre {} de {} reste dû. S'il n'est pas réglé d'ici le {when}, l'organisation passe à l'offre gratuite.",
+                                "Un paiement de l'offre {} de {} reste dû. S'il n'est pas réglé d'ici le {when}, l'organisation passe à l'offre gratuite (Free).",
                                 r.plan.name(),
                                 org.name,
                             ),
@@ -1217,15 +1304,21 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
                 )
             })
             .await?;
+            decided.commit(state).await?;
         }
     }
     Ok(())
 }
 
 /// The grace period ended: audited, and the admins told.
-async fn downgraded(state: &AppState, org_id: Uuid, plan: Plan) -> ApiResult<()> {
+async fn downgraded(
+    state: &AppState,
+    mut decided: Decided,
+    org_id: Uuid,
+    plan: Plan,
+) -> ApiResult<()> {
     audit::record(
-        &state.db,
+        decided.conn(),
         &audit::Entry {
             org_id,
             database_id: None,
@@ -1245,7 +1338,7 @@ async fn downgraded(state: &AppState, org_id: Uuid, plan: Plan) -> ApiResult<()>
         },
     )
     .await?;
-    to_admins(state, org_id, "billing_downgraded", |locale, org| {
+    decided.queue_to_admins(org_id, "billing_downgraded", |locale, org| {
         let (subject, paragraphs) = match locale {
             Locale::En => (
                 format!("{} is on the Free plan", org.name),
@@ -1259,10 +1352,10 @@ async fn downgraded(state: &AppState, org_id: Uuid, plan: Plan) -> ApiResult<()>
                 ],
             ),
             Locale::Fr => (
-                format!("{} est passée à l'offre gratuite", org.name),
+                format!("{} est passée à l'offre gratuite (Free)", org.name),
                 vec![
                     format!(
-                        "Le paiement de l'offre {} de {} n'a pas été effectué dans les {GRACE_DAYS} jours : l'organisation est désormais sur l'offre gratuite.",
+                        "Le paiement de l'offre {} de {} n'a pas été effectué dans les {GRACE_DAYS} jours : l'organisation est désormais sur l'offre gratuite (Free).",
                         plan.name(),
                         org.name,
                     ),
@@ -1278,6 +1371,7 @@ async fn downgraded(state: &AppState, org_id: Uuid, plan: Plan) -> ApiResult<()>
         )
     })
     .await?;
+    decided.commit(state).await?;
     Ok(())
 }
 
@@ -1364,6 +1458,20 @@ mod tests {
             Utc.with_ymd_and_hms(2027, 11, 5, 8, 0, 0).unwrap()
         );
         assert_eq!(first_renewal_after(end, Interval::Month, end), end);
+        // Anchored on the 31st: February's last day, then the 31st again.
+        let jan = Utc.with_ymd_and_hms(2027, 1, 31, 8, 0, 0).unwrap();
+        assert_eq!(
+            first_renewal_after(jan, Interval::Month, jan + Span::days(1)),
+            Utc.with_ymd_and_hms(2027, 2, 28, 8, 0, 0).unwrap()
+        );
+        assert_eq!(
+            first_renewal_after(jan, Interval::Month, jan + Span::days(40)),
+            Utc.with_ymd_and_hms(2027, 3, 31, 8, 0, 0).unwrap()
+        );
+        assert_eq!(
+            first_renewal_after(jan, Interval::Month, jan + Span::days(100)),
+            Utc.with_ymd_and_hms(2027, 5, 31, 8, 0, 0).unwrap()
+        );
     }
 
     #[test]

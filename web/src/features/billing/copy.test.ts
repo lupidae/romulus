@@ -36,11 +36,23 @@ describe.each(["en", "fr"] as const)("the %s boxes", (locale) => {
   });
 });
 
-it("names the order button on Stripe's page in both languages and editions", () => {
-  expect(checkoutCopy.en.next).toContain(
-    '"Subscribe" button places an order with an obligation to pay',
-  );
-  expect(checkoutCopy.fr.next).toContain("« S'abonner » vaut commande avec obligation de paiement");
+it("names the order button on Stripe's page in both languages and editions, whatever its label", () => {
+  // Stripe labels it "Subscribe" or "Pay and subscribe" depending on the page.
+  for (const next of [checkoutCopy.en.next, checkoutCopy.en.pro.next]) {
+    expect(next).toContain(
+      'Clicking the payment button on that page ("Subscribe" or "Pay and subscribe") places an order with an obligation to pay',
+    );
+  }
+  for (const next of [checkoutCopy.fr.next, checkoutCopy.fr.pro.next]) {
+    expect(next).toContain(
+      "Le clic sur le bouton de paiement de cette page (« S'abonner » ou « Payer et s'abonner ») vaut commande avec obligation de paiement",
+    );
+  }
+  // Stripe's own message under the button, the same rule in its words.
+  for (const edition of [boxes.professional, boxes.full]) {
+    expect(edition.en.submit).toContain('("Subscribe" or "Pay and subscribe")');
+    expect(edition.fr.submit).toContain("(« S'abonner » ou « Payer et s'abonner »)");
+  }
   expect(checkoutCopy.en.pro.next).toContain("excluding taxes");
   expect(checkoutCopy.fr.pro.next).toContain("hors taxes");
   expect(boxes.professional.version).not.toBe(boxes.full.version);

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE legal_acceptances SET contract_ended_at = now()\n                 WHERE id = ANY($1) AND kind = 'checkout' AND contract_ended_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6ecb5812a4e0e42caaf2f7f986851613459497b9bf0bd0e96537006a61d4016a"
+}

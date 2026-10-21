@@ -29,6 +29,11 @@ export function formatLongDate(iso: string, locale: Locale = "en", timeZone?: st
   );
 }
 
+/** A calendar day ("2026-11-04", the API's dates): "November 4, 2026", "4 novembre 2026". */
+export function formatDay(day: string, locale: Locale = "en"): string {
+  return formatLongDate(`${day}T12:00:00Z`, locale, "UTC");
+}
+
 /** "Nov 20, 2026", "20 nov. 2026": a date in a table. */
 export function formatShortDate(iso: string, locale: Locale = "en"): string {
   return new Intl.DateTimeFormat(intlLocale(locale), { dateStyle: "medium" }).format(new Date(iso));

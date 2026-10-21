@@ -13,7 +13,11 @@
 //!
 //! Someone who is not a member gets 404 (an organization's existence is not
 //! public); a member below the minimum gets 403 `forbidden` with a sentence
-//! saying who can.
+//! saying who can. Where the hosted Terms are on (`Config::legal`), a member
+//! who never accepted them (an account from before them) gets 403
+//! `terms_required`, from the browser or through an agent alike, until they
+//! sign in and accept: the organization's data is the Service, which the
+//! Terms govern. `/me`, `/me/terms` and signing out never need it.
 
 use std::marker::PhantomData;
 
@@ -108,7 +112,8 @@ impl<R: MinRole> FromRequestParts<AppState> for Member<R> {
 
         let membership = sqlx::query!(
             r#"SELECT o.id, o.slug, o.name, o.approvals_required, o.require_passing_test,
-                      m.role AS "role: Role"
+                      m.role AS "role: Role",
+                      EXISTS (SELECT 1 FROM legal_acceptances a WHERE a.user_id = $2) AS "accepted!"
                FROM organizations o
                JOIN memberships m ON m.org_id = o.id AND m.user_id = $2
                WHERE o.slug = $1"#,
@@ -119,6 +124,9 @@ impl<R: MinRole> FromRequestParts<AppState> for Member<R> {
         .await?
         .ok_or_else(|| ApiError::not_found("No such organization."))?;
 
+        if state.config.legal.is_some() && !membership.accepted {
+            return Err(crate::legal::terms_required());
+        }
         if !membership.role.at_least(R::ROLE) {
             return Err(ApiError::Forbidden(R::DENIED.to_owned()));
         }

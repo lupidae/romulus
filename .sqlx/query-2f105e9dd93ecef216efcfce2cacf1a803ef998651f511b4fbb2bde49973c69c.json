@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.contract_ended_at FROM legal_acceptances a JOIN withdrawals w ON w.acceptance_id = a.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "contract_ended_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "contract_ended_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "2f105e9dd93ecef216efcfce2cacf1a803ef998651f511b4fbb2bde49973c69c"
+}

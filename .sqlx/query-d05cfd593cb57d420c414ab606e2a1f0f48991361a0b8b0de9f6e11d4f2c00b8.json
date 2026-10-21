@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT failed_at FROM mail_outbox WHERE key = 'test:down'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "failed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mail_outbox",
+            "name": "failed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d05cfd593cb57d420c414ab606e2a1f0f48991361a0b8b0de9f6e11d4f2c00b8"
+}

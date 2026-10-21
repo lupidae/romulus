@@ -16,7 +16,10 @@
 //!   `invoice.paid`, `invoice.payment_failed`. Every change is audited; a
 //!   failed payment emails the organization's admins (once per invoice); a
 //!   subscription starting confirms it to its buyer, a cancellation to the
-//!   admins (`notices`, once each).
+//!   admins (`notices`, once each). A completed checkout notes the business
+//!   Stripe's page named on its record (`legal_acceptances.stripe_business_name`);
+//!   a subscription over for good ends the contract its record concluded
+//!   (`contract_ended_at`).
 //!
 //! An event for an organization this server does not know (another
 //! environment sharing the Stripe account) is acknowledged and ignored.
@@ -214,6 +217,9 @@ pub(super) async fn receive(
     }
     let event: Event = serde_json::from_slice(&body)
         .map_err(|err| ApiError::BadRequest(format!("Not a Stripe event: {err}")))?;
+    if event.kind == "checkout.session.completed" {
+        note_business(&state, &event.data.object).await?;
+    }
     match subject(&event.kind, &event.data.object) {
         Some((subscription, invoice)) => {
             apply_subscription(&state, &event.id, &event.kind, &subscription, invoice).await?;
@@ -221,6 +227,30 @@ pub(super) async fn receive(
         None => record_only(&state, &event.id, &event.kind).await?,
     }
     Ok((StatusCode::OK, Json(Received { received: true })))
+}
+
+/// The business a completed checkout's payment page named (Terms 3.5 c:
+/// the Customer), kept with the checkout's record, once.
+async fn note_business(state: &AppState, session: &Value) -> ApiResult<()> {
+    let name = [
+        &session["collected_information"]["business_name"],
+        &session["customer_details"]["business_name"],
+    ]
+    .into_iter()
+    .find_map(|v| v.as_str().map(str::trim).filter(|n| !n.is_empty()))
+    .map(|n| n.chars().take(500).collect::<String>());
+    let (Some(name), Some(id)) = (name, session["id"].as_str()) else {
+        return Ok(());
+    };
+    sqlx::query!(
+        "UPDATE legal_acceptances SET stripe_business_name = $2
+         WHERE checkout_session_id = $1 AND kind = 'checkout' AND stripe_business_name IS NULL",
+        id,
+        name,
+    )
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 /// An event romulus does not act on: remembered, so a redelivery is cheap.
@@ -643,6 +673,28 @@ impl Applied<'_> {
         )
         .execute(&mut *tx)
         .await?;
+        // The contract a checkout concluded ends with its subscription (over
+        // for good, or replaced by another): its record is kept from then.
+        let mut over = Vec::new();
+        if next
+            .status
+            .as_deref()
+            .is_some_and(|s| super::state::ENDED_STATUSES.contains(&s))
+        {
+            over.extend(next.acceptance_id);
+        }
+        if before.acceptance_id != next.acceptance_id {
+            over.extend(before.acceptance_id);
+        }
+        if !over.is_empty() {
+            sqlx::query!(
+                "UPDATE legal_acceptances SET contract_ended_at = now()
+                 WHERE id = ANY($1) AND kind = 'checkout' AND contract_ended_at IS NULL",
+                &over,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
         let changed = (
             before.plan,
             before.interval,

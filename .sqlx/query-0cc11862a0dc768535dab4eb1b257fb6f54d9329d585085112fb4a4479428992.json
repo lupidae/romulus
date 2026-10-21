@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE auth_links l SET used_at = now()\n           WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()\n           RETURNING purpose AS \"purpose: LinkPurpose\", user_id, email, name, invitation_id, expires_at,\n                     NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)\n                       AS \"first_password!\"",
+  "query": "UPDATE auth_links l SET used_at = now()\n           WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()\n           RETURNING purpose AS \"purpose: LinkPurpose\", user_id, email, name, invitation_id, expires_at,\n                     NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)\n                       AS \"first_password!\",\n                     accepted_terms",
   "describe": {
     "columns": [
       {
@@ -84,6 +84,17 @@
         "name": "first_password!",
         "type_info": "Bool",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "accepted_terms",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "accepted_terms"
+          }
+        }
       }
     ],
     "parameters": {
@@ -109,8 +120,9 @@
       true,
       true,
       false,
-      null
+      null,
+      true
     ]
   },
-  "hash": "b7a4b08efcfc66c748f8f183a3d70d9d32b5af704dba019719b0009f81f168c0"
+  "hash": "0cc11862a0dc768535dab4eb1b257fb6f54d9329d585085112fb4a4479428992"
 }

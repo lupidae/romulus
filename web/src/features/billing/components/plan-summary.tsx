@@ -11,7 +11,15 @@ import { toast } from "@/components/ui/toaster";
 import { type Locale, useLocale } from "@/features/legal/locale";
 
 import { billingCopy } from "../copy";
-import { formatLongDate, formatMoment, isLive, money, planNames, statusOf } from "../format";
+import {
+  formatDay,
+  formatLongDate,
+  formatMoment,
+  isLive,
+  money,
+  planNames,
+  statusOf,
+} from "../format";
 import { goTo, useOpenPortal, useWithdraw } from "../mutations";
 import type { OrgBilling } from "../queries";
 
@@ -174,9 +182,9 @@ function Withdrawal({
       </Alert>
     );
   }
-  if (!info.until || !billing.can_manage) return null;
-  // The last day it can be used: the period ends at midnight after it.
-  const lastDay = new Date(new Date(info.until).getTime() - 1000).toISOString();
+  if (!info.until || !info.last_day || !billing.can_manage) return null;
+  // The last day it can be used, in Paris: the period ends at midnight there.
+  const lastDay = info.last_day;
   const plan = planNames[billing.subscription?.plan ?? billing.plan];
 
   return (
@@ -188,9 +196,7 @@ function Withdrawal({
         <h3 id="withdrawal-title" className="text-base font-semibold text-foreground">
           {t.title}
         </h3>
-        <p className="text-sm text-muted-foreground">
-          {t.body(formatLongDate(lastDay, locale, "UTC"))}
-        </p>
+        <p className="text-sm text-muted-foreground">{t.body(formatDay(lastDay, locale))}</p>
       </div>
       <div>
         <Button onClick={() => setConfirming(true)}>{t.button}</Button>

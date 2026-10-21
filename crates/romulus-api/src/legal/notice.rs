@@ -2,20 +2,27 @@
 //! document, at least 30 days before it takes effect (Terms 21.2; Privacy
 //! Policy 11; DPA 6.2): the Terms and the Privacy Policy to everyone, the
 //! DPA to every organization's admins. Once per person and version
-//! (`legal_notices`), each in their language, with what changes (a summary
-//! per language, given by the operator) and what they may do. A new version
-//! of the Terms is then accepted again at the next sign-in (`ROMULUS_TERMS_VERSION`
-//! moves to it when it takes effect): until then the one accepted applies.
+//! (`legal_notices`, queued with the letter: `mail::outbox`), each in their
+//! language, with what changes (a summary per language, given by the
+//! operator), what they may do (the edition in force's rule: Terms 21.3 for
+//! businesses, 21.4 of the full edition for consumers), and a link to the
+//! new version, published beforehand: the command refuses a page that does
+//! not answer, or the one in force. A new version of the Terms is then
+//! accepted again at the next sign-in (`ROMULUS_TERMS_VERSION` moves to it
+//! when it takes effect).
+
+use std::time::Duration;
 
 use chrono::{NaiveDate, Utc};
 use sqlx::PgPool;
+use url::Url;
 use uuid::Uuid;
 
 use super::{LegalLinks, words};
 use crate::{
     Config,
-    domain::{LegalDocument, Locale},
-    mail::{Extras, Letter, Mailer},
+    domain::{LegalDocument, Locale, TermsEdition},
+    mail::{Extras, Letter, Mailer, outbox},
 };
 
 /// The notice period the documents promise.
@@ -32,6 +39,10 @@ pub struct Change {
     /// What changes, in a few sentences, per language.
     pub summary_en: String,
     pub summary_fr: String,
+    /// Where the new version is published (already): in English, and in
+    /// French for the Terms and the Privacy Policy (the DPA is English only).
+    pub url_en: String,
+    pub url_fr: Option<String>,
     /// A change the law requires, which may take effect sooner than 30
     /// days (Terms 21.2).
     pub required_by_law: bool,
@@ -51,6 +62,16 @@ pub enum NoticeError {
     TooSoon,
     #[error("a summary is needed in both languages (--summary-en, --summary-fr)")]
     NoSummary,
+    #[error(
+        "the new version's published page is needed: --url-en, and --url-fr for the Terms and the Privacy Policy"
+    )]
+    NoUrl,
+    #[error("{0}: not an http(s) URL")]
+    BadUrl(String),
+    #[error("{0} is the version in force: link the new version's page")]
+    InForce(String),
+    #[error("{0} does not answer (status {1}): publish the new version first")]
+    NotPublished(String, String),
     #[error("database")]
     Database(#[from] sqlx::Error),
 }
@@ -119,6 +140,11 @@ pub async fn send(
         return Err(NoticeError::TooSoon);
     }
     let links = LegalLinks::of(legal);
+    let pages = pages(change, &links)?;
+    for page in [&pages.en, &pages.fr] {
+        published(page).await?;
+    }
+    let edition = legal.edition();
     let mut sent = Sent::default();
     for reader in readers(db, change.document).await? {
         if change.dry_run {
@@ -137,6 +163,8 @@ pub async fn send(
             }
             continue;
         }
+        // Recorded and queued together: told once, and the letter never lost.
+        let mut tx = db.begin().await?;
         let first = sqlx::query_scalar!(
             "INSERT INTO legal_notices (document, version, user_id) VALUES ($1, $2, $3)
              ON CONFLICT DO NOTHING RETURNING user_id",
@@ -144,35 +172,121 @@ pub async fn send(
             change.version,
             reader.id,
         )
-        .fetch_optional(db)
+        .fetch_optional(&mut *tx)
         .await?
         .is_some();
         if !first {
             sent.already += 1;
             continue;
         }
-        mailer.send(letter(change, &links, &reader.email, reader.locale));
+        let email = letter(
+            change,
+            &links,
+            &pages,
+            edition,
+            &reader.email,
+            reader.locale,
+        );
+        let document = match change.document {
+            LegalDocument::Terms => "terms",
+            LegalDocument::Privacy => "privacy",
+            LegalDocument::Dpa => "dpa",
+        };
+        let key = format!("legal_notice:{document}:{}:{}", change.version, reader.id);
+        outbox::queue(&mut tx, &key, &email).await?;
+        tx.commit().await?;
         sent.sent += 1;
     }
+    mailer.wake();
     Ok(sent)
+}
+
+/// The new version's pages, per language.
+struct Pages {
+    en: String,
+    fr: String,
+}
+
+/// Checks the pages given for the new version: http(s), and not the
+/// version in force's.
+fn pages(change: &Change, links: &LegalLinks) -> Result<Pages, NoticeError> {
+    let en = change.url_en.trim();
+    let fr = match change.document {
+        LegalDocument::Dpa => change.url_fr.as_deref().map_or(en, str::trim),
+        LegalDocument::Terms | LegalDocument::Privacy => change
+            .url_fr
+            .as_deref()
+            .map(str::trim)
+            .ok_or(NoticeError::NoUrl)?,
+    };
+    if en.is_empty() || fr.is_empty() {
+        return Err(NoticeError::NoUrl);
+    }
+    let in_force = |docs: &super::DocumentLinks| match change.document {
+        LegalDocument::Terms => docs.terms.clone(),
+        LegalDocument::Privacy => docs.privacy.clone(),
+        LegalDocument::Dpa => docs.dpa.clone(),
+    };
+    let current = [in_force(&links.en), in_force(&links.fr)];
+    for page in [en, fr] {
+        let url = Url::parse(page).map_err(|_| NoticeError::BadUrl(page.to_owned()))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(NoticeError::BadUrl(page.to_owned()));
+        }
+        if current
+            .iter()
+            .any(|c| c.trim_end_matches('/') == url.as_str().trim_end_matches('/'))
+        {
+            return Err(NoticeError::InForce(page.to_owned()));
+        }
+    }
+    Ok(Pages {
+        en: en.to_owned(),
+        fr: fr.to_owned(),
+    })
+}
+
+/// The page answers (2xx): the new version is published.
+async fn published(page: &str) -> Result<(), NoticeError> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|err| NoticeError::NotPublished(page.to_owned(), err.to_string()))?;
+    match client.get(page).send().await {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(NoticeError::NotPublished(
+            page.to_owned(),
+            response.status().as_u16().to_string(),
+        )),
+        Err(err) => Err(NoticeError::NotPublished(page.to_owned(), err.to_string())),
+    }
 }
 
 #[allow(
     clippy::too_many_lines,
     reason = "one letter per document, in both languages"
 )]
-fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crate::mail::Email {
-    let docs = links.of_locale(locale);
+fn letter(
+    change: &Change,
+    links: &LegalLinks,
+    pages: &Pages,
+    edition: TermsEdition,
+    to: &str,
+    locale: Locale,
+) -> crate::mail::Email {
+    let url = match locale {
+        Locale::En => &pages.en,
+        Locale::Fr => &pages.fr,
+    };
     let when = words::day(locale, change.effective);
     let contact = &links.contact;
     let v = &change.version;
-    let (subject, mut paragraphs, url, footer) = match (locale, change.document) {
+    let (subject, mut paragraphs, footer) = match (locale, change.document) {
         (Locale::En, LegalDocument::Terms) => (
             format!("romulus's Terms of Service change on {when}"),
             vec![format!(
                 "We are changing the Terms of Service of romulus. Version {v} takes effect on {when}."
             )],
-            &docs.terms,
             "You get this because you have a romulus account: changes to the Terms are announced at least 30 days ahead (Terms 21).",
         ),
         (Locale::Fr, LegalDocument::Terms) => (
@@ -180,7 +294,6 @@ fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crat
             vec![format!(
                 "Nous modifions les Conditions générales d'utilisation et de vente de romulus. La version {v} s'applique à partir du {when}."
             )],
-            &docs.terms,
             "Vous recevez ce message parce que vous avez un compte romulus : toute modification des Conditions est annoncée au moins 30 jours à l'avance (article 21 des Conditions).",
         ),
         (Locale::En, LegalDocument::Privacy) => (
@@ -188,7 +301,6 @@ fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crat
             vec![format!(
                 "We are updating the Privacy Policy of romulus. Version {v} applies from {when}."
             )],
-            &docs.privacy,
             "You get this because you have a romulus account.",
         ),
         (Locale::Fr, LegalDocument::Privacy) => (
@@ -196,7 +308,6 @@ fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crat
             vec![format!(
                 "Nous mettons à jour la Politique de confidentialité de romulus. La version {v} s'applique à partir du {when}."
             )],
-            &docs.privacy,
             "Vous recevez ce message parce que vous avez un compte romulus.",
         ),
         (Locale::En, LegalDocument::Dpa) => (
@@ -204,7 +315,6 @@ fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crat
             vec![format!(
                 "We are changing the Data Processing Agreement of romulus. Version {v} applies from {when}."
             )],
-            &docs.dpa,
             "You get this because you are an admin of an organization on romulus: changes to the DPA, its subprocessors included, are announced to admins at least 30 days ahead (DPA 6.2).",
         ),
         (Locale::Fr, LegalDocument::Dpa) => (
@@ -212,7 +322,6 @@ fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crat
             vec![format!(
                 "Nous modifions l'accord de traitement des données (DPA) de romulus. La version {v} s'applique à partir du {when}. Ce document est rédigé en anglais."
             )],
-            &docs.dpa,
             "Vous recevez ce message parce que vous administrez une organisation sur romulus : toute modification du DPA, sous-traitants compris, est annoncée aux administrateurs au moins 30 jours à l'avance (DPA 6.2).",
         ),
     };
@@ -228,6 +337,17 @@ fn letter(change: &Change, links: &LegalLinks, to: &str, locale: Locale) -> crat
             .map(str::to_owned),
     );
     paragraphs.push(match change.document {
+        // The professional edition (Terms 21.2 and 21.3): the new Terms
+        // apply to whoever keeps using the Service; refusing is terminating
+        // before they take effect.
+        LegalDocument::Terms if edition == TermsEdition::Professional => match locale {
+            Locale::En => format!(
+                "If you do not accept the change, you can terminate the contract free of charge before {when}: cancel your subscription in your organization's billing settings, or write to {contact}. The prepaid fees for the unused part of the billing period are then refunded. If you keep using romulus after {when}, the new Terms apply to you (Terms 21.3)."
+            ),
+            Locale::Fr => format!(
+                "Si vous n'acceptez pas la modification, vous pouvez résilier le contrat sans frais avant le {when} : résiliez votre abonnement dans les paramètres de facturation de votre organisation, ou écrivez à {contact}. Les sommes payées d'avance pour la partie non écoulée de la période de facturation vous sont alors remboursées. Si vous continuez à utiliser romulus après le {when}, les nouvelles Conditions vous sont applicables (article 21.3 des Conditions)."
+            ),
+        },
         LegalDocument::Terms => match locale {
             Locale::En => format!(
                 "If you use romulus as a consumer, we will ask you to accept the new version when you next sign in; until you do, the current Terms apply until the end of your billing period. If you do not accept the change, you can end your contract at no cost: cancel your subscription in your organization's billing settings, or write to {contact}, and the prepaid fees for the unused part of the period are refunded. If you use romulus for your business, you can terminate before {when}; using romulus after that date means you accept the new Terms."

@@ -63,8 +63,9 @@ async fn started_days_ago(b: &Billed, db: &PgPool, days: i64) {
     }
 }
 
-fn mails(b: &Billed, to: &str, kind: &str) -> Vec<romulus_api::mail::Email> {
-    b.outbox
+async fn mails(b: &Billed, to: &str, kind: &str) -> Vec<romulus_api::mail::Email> {
+    b.mail()
+        .await
         .to(to)
         .into_iter()
         .filter(|m| m.kind == kind)
@@ -82,7 +83,7 @@ async fn withdraw(b: &Billed, body: &Value) -> super::harness::TestResponse {
 async fn a_business_subscription_is_confirmed_with_the_terms_and_its_cancellation_too(db: PgPool) {
     let b = billed(&db).await;
     let subscription = subscribe(&b, "team", "month").await;
-    let confirmed = mails(&b, ADMIN, "billing_subscription_confirmed");
+    let confirmed = mails(&b, ADMIN, "billing_subscription_confirmed").await;
     assert_eq!(confirmed.len(), 1, "to the buyer, once");
     let letter = &confirmed[0];
     assert!(
@@ -122,7 +123,8 @@ async fn a_business_subscription_is_confirmed_with_the_terms_and_its_cancellatio
             &b,
             "developer-acme@romulus.test",
             "billing_subscription_confirmed"
-        ),
+        )
+        .await,
         Vec::new()
     );
     // Another event about it confirms nothing more.
@@ -132,7 +134,12 @@ async fn a_business_subscription_is_confirmed_with_the_terms_and_its_cancellatio
         subscription_object(&subscription),
     )
     .await;
-    assert_eq!(mails(&b, ADMIN, "billing_subscription_confirmed").len(), 1);
+    assert_eq!(
+        mails(&b, ADMIN, "billing_subscription_confirmed")
+            .await
+            .len(),
+        1
+    );
     // A business never sees a withdrawal.
     let page = b
         .app
@@ -165,7 +172,7 @@ async fn a_business_subscription_is_confirmed_with_the_terms_and_its_cancellatio
         subscription_object(&subscription),
     )
     .await;
-    let cancelled = mails(&b, ADMIN, "billing_cancellation_confirmed");
+    let cancelled = mails(&b, ADMIN, "billing_cancellation_confirmed").await;
     assert_eq!(cancelled.len(), 1);
     let text = &cancelled[0].text;
     assert!(
@@ -210,7 +217,7 @@ async fn billing_emails_speak_each_readers_language(db: PgPool) {
         json!({"id": session, "subscription": subscription}),
     )
     .await;
-    let letter = &mails(&b, ADMIN, "billing_subscription_confirmed")[0];
+    let letter = &mails(&b, ADMIN, "billing_subscription_confirmed").await[0];
     assert!(
         letter.subject.contains("Votre offre romulus Team"),
         "{}",
@@ -240,7 +247,7 @@ async fn billing_emails_speak_each_readers_language(db: PgPool) {
         subscription_object(&subscription),
     )
     .await;
-    let cancelled = &mails(&b, ADMIN, "billing_cancellation_confirmed")[0];
+    let cancelled = &mails(&b, ADMIN, "billing_cancellation_confirmed").await[0];
     assert!(
         cancelled.subject.contains("est résiliée"),
         "{}",
@@ -256,7 +263,7 @@ async fn a_consumer_withdraws_within_fourteen_days_refunded_pro_rata_and_on_free
     let b = billed_with(&db, true).await;
     let subscription = subscribe_as_consumer(&b, "team", "year").await;
     // The confirmation carries the requests and the way to withdraw.
-    let confirmed = &mails(&b, ADMIN, "billing_subscription_confirmed")[0];
+    let confirmed = &mails(&b, ADMIN, "billing_subscription_confirmed").await[0];
     assert!(
         confirmed
             .text
@@ -347,7 +354,7 @@ async fn a_consumer_withdraws_within_fourteen_days_refunded_pro_rata_and_on_free
     assert!(record.completed_at.is_some());
     assert!(record.acceptance_id.is_some());
     // The acknowledgement, in the page's language, timestamped.
-    let ack = &mails(&b, ADMIN, "billing_withdrawal_acknowledged")[0];
+    let ack = &mails(&b, ADMIN, "billing_withdrawal_acknowledged").await[0];
     assert!(ack.subject.contains("rétractation"), "{}", ack.subject);
     assert!(ack.text.contains("Reçue le "), "{}", ack.text);
     assert!(ack.text.contains(" UTC"), "{}", ack.text);
@@ -410,7 +417,12 @@ async fn a_withdrawal_stripe_could_not_finish_is_finished_by_the_notices_task(db
     assert_eq!(done.status, StatusCode::OK, "{}", done.json());
     assert_eq!(done.json()["completed"], false);
     // Recorded and acknowledged anyway: the withdrawal counts from the ask.
-    assert_eq!(mails(&b, ADMIN, "billing_withdrawal_acknowledged").len(), 1);
+    assert_eq!(
+        mails(&b, ADMIN, "billing_withdrawal_acknowledged")
+            .await
+            .len(),
+        1
+    );
     let page = b
         .app
         .as_user(&b.team.admin)
@@ -452,4 +464,221 @@ async fn a_withdrawal_stripe_could_not_finish_is_finished_by_the_notices_task(db
         )
         .await;
     assert_eq!(again.status, StatusCode::OK, "{}", again.json());
+}
+
+/// The withdrawal's id and Stripe payment of the subscription's invoice.
+async fn withdrawal_and_payment(b: &Billed, db: &PgPool) -> (uuid::Uuid, String) {
+    let id = sqlx::query_scalar!("SELECT id FROM withdrawals")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    let invoice = b.stripe.state().invoices[0].id.clone();
+    (id, format!("pi_for_{invoice}"))
+}
+
+/// The notices task's next pass, a few minutes on.
+async fn retry(b: &Billed, db: &PgPool) {
+    sqlx::query!("UPDATE withdrawals SET requested_at = requested_at - interval '3 minutes'")
+        .execute(db)
+        .await
+        .unwrap();
+    romulus_api::billing::withdrawal::complete_pending(&b.app.state)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_refund_already_made_is_not_made_again(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    subscribe_as_consumer(&b, "starter", "month").await;
+    b.stripe.state().fail_withdrawal = true;
+    assert_eq!(withdraw(&b, &json!({})).await.json()["completed"], false);
+    // Stripe made the refund after all; its answer was lost.
+    let (id, payment) = withdrawal_and_payment(&b, &db).await;
+    b.stripe.state().payment_refunds.insert(
+        payment,
+        vec![romulus_api::billing::stripe::MadeRefund {
+            amount: 1_900,
+            status: "succeeded".into(),
+            withdrawal: Some(id.to_string()),
+        }],
+    );
+    retry(&b, &db).await;
+    assert_eq!(b.stripe.state().withdrawal_refunds, Vec::new(), "not twice");
+    let done = sqlx::query!("SELECT completed_at, attempts FROM withdrawals")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert!(done.completed_at.is_some());
+    assert_eq!(done.attempts, 2);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_refund_never_gives_back_more_than_is_left_of_the_payment(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    subscribe_as_consumer(&b, "starter", "month").await;
+    // 5 € refunded by hand in the Dashboard before the withdrawal.
+    let invoice = b.stripe.state().invoices[0].id.clone();
+    b.stripe.state().payment_refunds.insert(
+        format!("pi_for_{invoice}"),
+        vec![romulus_api::billing::stripe::MadeRefund {
+            amount: 500,
+            status: "succeeded".into(),
+            withdrawal: None,
+        }],
+    );
+    let done = withdraw(&b, &json!({})).await;
+    assert_eq!(done.json()["completed"], true);
+    assert_eq!(
+        b.stripe.state().withdrawal_refunds,
+        [(invoice, 1_900 - 500)],
+        "what is left of 19 €"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_withdrawal_stripe_keeps_refusing_is_left_to_the_operator(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    subscribe_as_consumer(&b, "starter", "month").await;
+    b.stripe.state().withdrawals_down = true;
+    assert_eq!(withdraw(&b, &json!({})).await.json()["completed"], false);
+    for _ in 0..10 {
+        retry(&b, &db).await;
+    }
+    let given_up =
+        sqlx::query!("SELECT attempts, failed_at, last_error, completed_at FROM withdrawals")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        given_up.attempts,
+        romulus_api::billing::withdrawal::MAX_ATTEMPTS,
+        "no attempt after giving up"
+    );
+    assert!(given_up.failed_at.is_some());
+    assert!(given_up.last_error.is_some_and(|e| e.contains("down")));
+    assert!(given_up.completed_at.is_none());
+    // The organization stays on Free all along: the withdrawal counts.
+    let page = b
+        .app
+        .as_user(&b.team.admin)
+        .get(&b.team.path("/billing"))
+        .await
+        .json();
+    assert_eq!(page["plan"], "free");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_withdrawal_a_week_old_is_left_to_the_operator(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    subscribe_as_consumer(&b, "starter", "month").await;
+    b.stripe.state().withdrawals_down = true;
+    withdraw(&b, &json!({})).await;
+    sqlx::query!("UPDATE withdrawals SET requested_at = now() - interval '8 days'")
+        .execute(&db)
+        .await
+        .unwrap();
+    romulus_api::billing::withdrawal::complete_pending(&b.app.state)
+        .await
+        .unwrap();
+    let given_up = sqlx::query!("SELECT attempts, failed_at FROM withdrawals")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(given_up.attempts, 2);
+    assert!(given_up.failed_at.is_some());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_co_admins_withdrawal_is_acknowledged_to_the_buyer_too(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    subscribe_as_consumer(&b, "starter", "month").await;
+    let page = b
+        .app
+        .as_user(&b.team.admin)
+        .get(&b.team.path("/billing"))
+        .await
+        .json();
+    // The last day, as Paris counts it.
+    let last_day = page["withdrawal"]["last_day"].as_str().unwrap().to_owned();
+    assert_eq!(last_day.len(), "2026-11-04".len(), "{page}");
+    sqlx::query!(
+        "UPDATE memberships SET role = 'admin' WHERE user_id = $1",
+        b.team.developer.user
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let done = b
+        .app
+        .as_user(&b.team.developer)
+        .post(
+            &b.team.path("/billing/withdrawal"),
+            &json!({"locale": "fr"}),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.json());
+    let theirs = &mails(
+        &b,
+        "developer-acme@romulus.test",
+        "billing_withdrawal_acknowledged",
+    )
+    .await[0];
+    assert!(
+        theirs.subject.contains("rétractation"),
+        "{}",
+        theirs.subject
+    );
+    // The buyer hears of it, in their language, and who withdrew.
+    let buyers = mails(&b, ADMIN, "billing_withdrawal_acknowledged").await;
+    assert_eq!(buyers.len(), 1);
+    assert!(
+        buyers[0].subject.contains("withdrawal"),
+        "{}",
+        buyers[0].subject
+    );
+    assert!(
+        buyers[0].text.contains("developer-acme@romulus.test"),
+        "{}",
+        buyers[0].text
+    );
+    // The contract the checkout concluded ended now.
+    let ended = sqlx::query_scalar!(
+        "SELECT a.contract_ended_at FROM legal_acceptances a JOIN withdrawals w ON w.acceptance_id = a.id"
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(ended.is_some());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_payment_romulus_cannot_refund_sends_the_consumer_to_email(db: PgPool) {
+    let b = billed_with(&db, true).await;
+    subscribe_as_consumer(&b, "starter", "month").await;
+    let invoice = b.stripe.state().invoices[0].id.clone();
+    b.stripe.state().without_payment.push(invoice);
+    let refused = withdraw(&b, &json!({})).await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "withdrawal_by_email")
+    );
+    assert!(
+        refused.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("legal@romulus.example")
+    );
+    // Nothing recorded, nothing acknowledged with an amount it cannot keep.
+    assert_eq!(
+        sqlx::query_scalar!(r#"SELECT count(*) AS "n!" FROM withdrawals"#)
+            .fetch_one(&db)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        mails(&b, ADMIN, "billing_withdrawal_acknowledged").await,
+        Vec::new()
+    );
 }

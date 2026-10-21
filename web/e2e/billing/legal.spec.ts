@@ -1,7 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 import { fillBusinessCheckout, paid, signedInOrg } from "../billing-flows";
-import { createOrg, devSignIn, emailed, unique } from "../helpers";
+import {
+  acceptTerms,
+  createOrg,
+  devSignIn,
+  emailed,
+  emailedLink,
+  inviteLink,
+  unique,
+} from "../helpers";
 
 // The hosted service sold to businesses only (this project's API: billing
 // faked, ROMULUS_CONSUMER_SALES off): the Terms and the professional-use
@@ -27,9 +35,7 @@ test("a new account accepts the Terms and attests professional use before anythi
 
   // Nothing goes through without both boxes.
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(
-    page.getByText("Tick the box to accept the Terms of Service, or sign out."),
-  ).toBeVisible();
+  await expect(page.getByText("Accept the Terms of Service to continue.")).toBeVisible();
   await expect(
     page.getByText("Confirm that you will use romulus for professional purposes."),
   ).toBeVisible();
@@ -67,7 +73,11 @@ test("checkout is for businesses only, checks every statement, and confirms with
     .getByRole("button", { name: "Upgrade to Team" })
     .click();
   const checkout = page.getByRole("dialog", { name: "Upgrade to Team" });
-  await expect(checkout.getByText("For professional use only.")).toBeVisible();
+  await expect(
+    checkout.getByText(
+      "For professional use only. On the payment page, add the name of your business and, if it has one, its VAT number.",
+    ),
+  ).toBeVisible();
   await expect(checkout.getByRole("radio")).toHaveCount(0);
   await expect(checkout.getByRole("checkbox", { name: /start now/ })).toHaveCount(0);
   await expect(checkout).toContainText("excluding taxes");
@@ -126,7 +136,12 @@ test("the billing page and the checkout speak French to a French account", async
   await plans.getByRole("button", { name: "Passer à l'offre Starter" }).click();
   const checkout = page.getByRole("dialog", { name: "Passer à l'offre Starter" });
   await expect(checkout).toContainText("19 € par mois");
-  await expect(checkout.getByText("Réservé aux professionnels.")).toBeVisible();
+  await expect(
+    checkout.getByText(/^Réservé aux professionnels\. Sur la page de paiement/),
+  ).toBeVisible();
+  await expect(
+    checkout.getByRole("textbox", { name: "Nom ou dénomination de l'entreprise" }),
+  ).toBeVisible();
   await expect(
     checkout.getByRole("link", { name: /^Conditions générales d'utilisation et de vente/ }),
   ).toHaveAttribute("href", /\/fr\/legal\/conditions$/);
@@ -141,4 +156,64 @@ test("the billing page and the checkout speak French to a French account", async
       .getByRole("navigation", { name: "Informations légales" })
       .getByRole("link", { name: "Résilier votre contrat" }),
   ).toBeVisible();
+});
+
+test("an invitee's password sign-up accepts the Terms on its form, then is never asked again", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const admin = await (await browser.newContext()).newPage();
+  await devSignIn(admin, `terms-host-${Date.now().toString(36)}@romulus.test`, "/app/new");
+  await acceptTerms(admin);
+  const orgName = unique("Sign-up terms");
+  const slug = await createOrg(admin, orgName);
+  // The Free plan has one member: a paid one invites.
+  await admin.goto(`./${slug}/settings/billing`);
+  await admin
+    .getByRole("region", { name: "Plans" })
+    .getByRole("button", { name: "Upgrade to Starter" })
+    .click();
+  const checkout = admin.getByRole("dialog", { name: "Upgrade to Starter" });
+  await fillBusinessCheckout(checkout);
+  await checkout.getByRole("button", { name: "Continue to payment" }).click();
+  await paid(admin, slug, "Starter");
+  await admin.goto(`./${slug}/settings/members`);
+  await admin.getByRole("button", { name: "Invite" }).click();
+  const email = `terms-invitee-${Date.now().toString(36)}@romulus.test`;
+  const link = await inviteLink(admin, email);
+
+  // A French browser reads the boxes, and who romulus is for, in French.
+  const french = await (await browser.newContext({ locale: "fr-FR" })).newPage();
+  await french.goto(link);
+  await french.getByRole("link", { name: "Create your account" }).click();
+  await expect(french.getByText("romulus est réservé à un usage professionnel.")).toBeVisible();
+  await expect(
+    french.getByRole("link", { name: /^Conditions générales d'utilisation et de vente/ }),
+  ).toHaveAttribute("href", /\/fr\/legal\/conditions$/);
+
+  // In English: nothing goes without both boxes.
+  const invitee = await (await browser.newContext({ locale: "en-US" })).newPage();
+  await invitee.goto(link);
+  await invitee.getByRole("link", { name: "Create your account" }).click();
+  await expect(invitee.getByText("romulus is for professional use only.")).toBeVisible();
+  for (const box of await invitee.getByRole("checkbox").all()) await expect(box).not.toBeChecked();
+  await invitee.getByLabel("Name").fill("Terry Terms");
+  await invitee.getByRole("button", { name: "Email me a link" }).click();
+  await expect(invitee.getByText("Accept the Terms of Service to continue.")).toBeVisible();
+  await expect(
+    invitee.getByText("Confirm that you will use romulus for professional purposes."),
+  ).toBeVisible();
+  await invitee.getByRole("checkbox", { name: /I have read and accept the/ }).check();
+  await invitee.getByRole("checkbox", { name: /only for professional purposes/ }).check();
+  await invitee.getByRole("button", { name: "Email me a link" }).click();
+  await expect(invitee.getByRole("heading", { name: "Check your email" })).toBeVisible();
+
+  // The account is made from the emailed link, the Terms accepted with it:
+  // straight into the organization, no Terms screen.
+  await invitee.goto(await emailedLink(email, "welcome"));
+  await invitee.getByLabel("Password", { exact: true }).fill("violet tractor mango");
+  await invitee.getByRole("button", { name: `Create account and join ${orgName}` }).click();
+  await expect(invitee).toHaveURL(new RegExp(`/app/${slug}$`));
+  await invitee.reload();
+  await expect(invitee).toHaveURL(new RegExp(`/app/${slug}$`));
 });
