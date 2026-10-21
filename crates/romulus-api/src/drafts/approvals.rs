@@ -205,15 +205,19 @@ pub(super) async fn approve(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    state.collab.approved(
-        id,
-        Approval {
-            user_id: member.user.id,
-            name: member.user.name.clone(),
-            sha256,
-            at,
-        },
-    );
+    // Answered once the room counts it: the review below has it.
+    state
+        .collab
+        .approved(
+            id,
+            Approval {
+                user_id: member.user.id,
+                name: member.user.name.clone(),
+                sha256,
+                at,
+            },
+        )
+        .await;
     tracing::info!(draft = %id, user = %member.user.id, "draft approved");
     Ok(Json(review_of(&state, member.org.id, id).await?))
 }
@@ -248,7 +252,7 @@ pub(super) async fn withdraw(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    state.collab.withdrawn(id, member.user.id);
+    state.collab.withdrawn(id, member.user.id).await;
     Ok(Json(review_of(&state, member.org.id, id).await?))
 }
 
