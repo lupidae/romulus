@@ -14,21 +14,38 @@ import { billingCopy } from "../copy";
 import { direction, euros, isLive, planFeatures } from "../format";
 import { goTo, useOpenPortal } from "../mutations";
 import type { Interval, OrgBilling, PlanOffer } from "../queries";
+import type { Subscribe } from "../subscribe";
 import { CheckoutDialog } from "./checkout-dialog";
 
 /**
  * Every plan, monthly or yearly (a year at ten months). The current one is
  * marked; admins move: a Free organization through checkout (the Terms
  * first), a subscribed one through Stripe's portal (upgrades now, prorated;
- * downgrades at the end of the period). Members read it.
+ * downgrades at the end of the period). Members read it. A plan `asked` for
+ * (the homepage's buttons) shows its period, and opens its checkout when an
+ * admin of a Free organization arrives.
  */
-export function PlanPicker({ org, billing }: { org: string; billing: OrgBilling }) {
+export function PlanPicker({
+  org,
+  billing,
+  asked,
+}: {
+  org: string;
+  billing: OrgBilling;
+  asked?: Subscribe;
+}) {
   const locale = useLocale();
   const words = billingCopy[locale];
   const t = words.plans;
   const subscription = isLive(billing.subscription) ? billing.subscription : null;
-  const [interval, setPeriod] = React.useState<Interval>(subscription?.interval ?? "month");
-  const [buying, setBuying] = React.useState<PlanOffer | null>(null);
+  const [interval, setPeriod] = React.useState<Interval>(
+    asked?.interval ?? subscription?.interval ?? "month",
+  );
+  const [buying, setBuying] = React.useState<PlanOffer | null>(() =>
+    asked && billing.can_manage && !subscription
+      ? (billing.plans.find((offer) => offer.plan === asked.plan) ?? null)
+      : null,
+  );
   const portal = useOpenPortal(org);
   const [switching, setSwitching] = React.useState<string | null>(null);
 

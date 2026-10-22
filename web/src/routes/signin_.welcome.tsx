@@ -23,6 +23,7 @@ import {
   signUpLinkQuery,
   useFinishSignUp,
 } from "@/features/auth/password";
+import { afterSignIn, takeSignUpNext } from "@/features/auth/session";
 
 // Where an emailed sign-up link lands (`/app/signin/welcome#token=…`):
 // receiving it proved the address; choose a password and the account exists.
@@ -111,7 +112,7 @@ function Finish({
                   void navigate({ to: "/$org", params: { org: result.org.slug }, replace: true });
                 } else {
                   toast.success("Welcome to romulus");
-                  void navigate({ to: "/", replace: true });
+                  void navigate({ href: afterSignIn(takeSignUpNext()), replace: true });
                 }
               },
             },

@@ -6,6 +6,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { documents as rendered, slug } from "../tools/legal.mjs";
 
+const repoFile = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8");
+
 // The legal notice (LCEN), in French and in English: static pages, linked
 // from the footer and from each other.
 const pages = [
@@ -79,6 +81,9 @@ const legalLinks = {
 // edition (consumers included), published under /legal/full/ for later.
 const terms = { meta: ["Version: 1.0", "Effective date: 21 October 2026"] };
 const conditions = { meta: ["Version\u00a0: 1.0", "Date d'entrée en vigueur\u00a0: 21 octobre 2026"] };
+// The privacy policy's own version: 1.1 added the emails' retention.
+const privacy = { meta: ["Version: 1.1", "Effective date: 22 October 2026"] };
+const confidentialite = { meta: ["Version\u00a0: 1.1", "Date d'entrée en vigueur\u00a0: 22 octobre 2026"] };
 const documents = [
   {
     path: "/legal/terms",
@@ -111,7 +116,7 @@ const documents = [
     inForce: true,
     h1: "romulus Privacy Policy",
     current: "Privacy",
-    meta: terms.meta,
+    meta: privacy.meta,
     other: { path: "/fr/legal/confidentialite", link: "Lire en français", lang: "fr" },
     heading: { id: "8-cookies-and-similar-technologies", text: "8. Cookies and similar technologies" },
     table: "Table: Cookies",
@@ -123,7 +128,7 @@ const documents = [
     inForce: true,
     h1: "Politique de confidentialité de romulus",
     current: "Confidentialité",
-    meta: conditions.meta,
+    meta: confidentialite.meta,
     other: { path: "/legal/privacy", link: "Read in English", lang: "en" },
     heading: { id: "5-transferts-hors-de-l-union-europeenne", text: "5. Transferts hors de l'Union européenne" },
     table: "Tableau\u00a0: Cookies",
@@ -171,7 +176,7 @@ const documents = [
     inForce: false,
     h1: "romulus Privacy Policy",
     current: null,
-    meta: terms.meta,
+    meta: privacy.meta,
     other: { path: "/fr/legal/full/confidentialite", link: "Lire en français", lang: "fr" },
     heading: { id: "8-cookies-and-similar-technologies", text: "8. Cookies and similar technologies" },
     table: "Table: Cookies",
@@ -183,7 +188,7 @@ const documents = [
     inForce: false,
     h1: "Politique de confidentialité de romulus",
     current: null,
-    meta: conditions.meta,
+    meta: confidentialite.meta,
     other: { path: "/legal/full/privacy", link: "Read in English", lang: "en" },
     heading: { id: "5-transferts-hors-de-l-union-europeenne", text: "5. Transferts hors de l'Union européenne" },
     table: "Tableau\u00a0: Cookies",
@@ -460,6 +465,25 @@ test("what the notice says about data holds: no cookies, nothing from another or
   }
   expect(elsewhere).toEqual([]);
   expect(await context.cookies()).toEqual([]);
+});
+
+test("every privacy policy says how long the emails sent are kept (1.1)", async ({ page }) => {
+  const rows = [
+    ["/legal/privacy", "Emails the Service sends", "30 days after it is sent; 90 days after delivery is given up"],
+    ["/legal/full/privacy", "Emails the Service sends", "30 days after it is sent; 90 days after delivery is given up"],
+    ["/fr/legal/confidentialite", "E-mails envoyés par le Service", "30 jours après son envoi ; 90 jours après l'abandon de sa remise"],
+    ["/fr/legal/full/confidentialite", "E-mails envoyés par le Service", "30 jours après son envoi ; 90 jours après l'abandon de sa remise"],
+  ];
+  for (const [path, data, period] of rows) {
+    await page.goto(path);
+    // mail::outbox::purge: sent letters after 30 days, given-up ones after 90.
+    const row = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: data, exact: true }) });
+    await expect(row, path).toHaveCount(1);
+    await expect(row.getByRole("cell"), path).toContainText(period);
+  }
+  expect(repoFile("crates/romulus-api/src/mail/outbox.rs")).toContain(
+    "WHERE sent_at < now() - interval '30 days' OR failed_at < now() - interval '90 days'",
+  );
 });
 
 test("the sitemap lists the notices and the documents in force, never the full edition", async ({ request }) => {

@@ -1731,6 +1731,37 @@ async fn a_second_checkout_expires_the_first_so_two_cannot_both_be_paid(db: PgPo
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_cancelled_checkout_goes_back_to_the_billing_page_on_free(db: PgPool) {
+    let b = billed(&db).await;
+    let admin = b.app.as_user(&b.team.admin);
+    let body = business_checkout("team", "year", false);
+    let started = admin.post(&b.team.path("/billing/checkout"), &body).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.json());
+    let (session, checkout) = b.stripe.last_checkout().unwrap();
+    assert!(
+        checkout
+            .cancel_url
+            .ends_with("/app/acme/settings/billing?checkout=cancelled")
+    );
+
+    // Stripe's back link: nothing paid, back where the billing page says so.
+    let back = b
+        .app
+        .get(&format!("/api/billing/fake/checkout/{session}?cancel=true"))
+        .await;
+    assert!(back.status.is_redirection(), "{}", back.status);
+    assert_eq!(back.location(), checkout.cancel_url);
+    let billing = admin.get(&b.team.path("/billing")).await;
+    assert_eq!(billing.status, StatusCode::OK);
+    assert_eq!(billing.json()["plan"], "free");
+    assert_eq!(billing.json()["subscription"], Value::Null);
+
+    // Nothing holds the organization: it can check out again.
+    let again = admin.post(&b.team.path("/billing/checkout"), &body).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.json());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn a_checkout_retried_after_a_timeout_gets_the_same_session(db: PgPool) {
     let b = billed(&db).await;
     let body = business_checkout("team", "year", false);

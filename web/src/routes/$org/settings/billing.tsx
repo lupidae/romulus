@@ -16,8 +16,9 @@ import { PlanPicker } from "@/features/billing/components/plan-picker";
 import { PlanSummary } from "@/features/billing/components/plan-summary";
 import { UsageCard } from "@/features/billing/components/usage-card";
 import { billingCopy } from "@/features/billing/copy";
-import { isLive } from "@/features/billing/format";
+import { isLive, planNames } from "@/features/billing/format";
 import { billingKeys, billingQuery } from "@/features/billing/queries";
+import { readSubscribe, type Subscribe } from "@/features/billing/subscribe";
 import { useLocale } from "@/features/legal/locale";
 import { orgQuery } from "@/features/orgs/queries";
 
@@ -26,18 +27,26 @@ interface BillingSearch {
   checkout?: "success" | "cancelled";
   /** The renewal reminder's link, the footer's "Cancel your contract": straight to the Cancel button. */
   action?: "cancel";
+  /** A paid plan chosen on the homepage (/app/signup): its checkout opens here. */
+  subscribe?: Subscribe["plan"];
+  interval?: Subscribe["interval"];
 }
 
 // The plan, usage against every cap, the plans, invoices. Every member reads
 // it; admins pay, change plans and cancel (Stripe's pages).
 export const Route = createFileRoute("/$org/settings/billing")({
-  validateSearch: (search: Record<string, unknown>): BillingSearch => ({
-    checkout:
-      search.checkout === "success" || search.checkout === "cancelled"
-        ? search.checkout
-        : undefined,
-    action: search.action === "cancel" ? "cancel" : undefined,
-  }),
+  validateSearch: (search: Record<string, unknown>): BillingSearch => {
+    const asked = readSubscribe({ plan: search.subscribe, interval: search.interval });
+    return {
+      checkout:
+        search.checkout === "success" || search.checkout === "cancelled"
+          ? search.checkout
+          : undefined,
+      action: search.action === "cancel" ? "cancel" : undefined,
+      subscribe: asked?.plan,
+      interval: asked?.interval,
+    };
+  },
   head: () => ({ meta: [{ title: "Billing – romulus" }] }),
   component: Billing,
 });
@@ -58,8 +67,13 @@ function Billing() {
   const { org } = Route.useParams();
   const { data: current } = useSuspenseQuery(orgQuery(org));
   const locale = useLocale();
-  const t = billingCopy[locale].page;
-  const { checkout, action } = Route.useSearch();
+  const words = billingCopy[locale];
+  const t = words.page;
+  const { checkout, action, subscribe, interval } = Route.useSearch();
+  // The plan chosen on the homepage, kept once the URL forgets it (below).
+  const [asked] = React.useState<Subscribe | undefined>(
+    subscribe && interval ? { plan: subscribe, interval } : undefined,
+  );
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   // Back from checkout, the webhook may land a moment after: look again for a while.
@@ -83,6 +97,11 @@ function Billing() {
     void navigate({ to: ".", search: { action }, replace: true });
   }, [checkout, action, navigate, t]);
 
+  // The choice is the dialog's from now on: a reload does not open it again.
+  React.useEffect(() => {
+    if (subscribe && !checkout) void navigate({ to: ".", search: { action }, replace: true });
+  }, [subscribe, checkout, action, navigate]);
+
   React.useEffect(() => {
     if (!waiting) return;
     const done = setTimeout(() => setWaiting(false), 30_000);
@@ -105,6 +124,16 @@ function Billing() {
     scrollToInPage(button);
     button.focus({ preventScroll: true });
   }, [action, loaded]);
+
+  // Asked to subscribe where a checkout cannot start: say why.
+  const cannotSubscribe =
+    asked && billing.isSuccess
+      ? !billing.data.can_manage
+        ? "admin"
+        : isLive(billing.data.subscription)
+          ? "subscribed"
+          : null
+      : null;
 
   // Asked to cancel (an email, the footer) with nothing to cancel here: say so.
   const nothingToCancel =
@@ -151,6 +180,16 @@ function Billing() {
                 : null}
             </Alert>
           )}
+          {cannotSubscribe === "admin" && (
+            <Alert variant="info" title={words.subscribe.notAdmin(current.name)}>
+              {null}
+            </Alert>
+          )}
+          {cannotSubscribe === "subscribed" && asked && (
+            <Alert variant="info" title={words.subscribe.alreadySubscribed(current.name)}>
+              {words.subscribe.alreadySubscribedBody(planNames[asked.plan])}
+            </Alert>
+          )}
           <PlanSummary
             org={org}
             orgName={current.name}
@@ -158,7 +197,7 @@ function Billing() {
             cancelRef={cancelRef}
           />
           <UsageCard billing={billing.data} />
-          <PlanPicker org={org} billing={billing.data} />
+          <PlanPicker org={org} billing={billing.data} asked={asked} />
           {billing.data.can_manage && <InvoicesCard org={org} />}
         </>
       )}

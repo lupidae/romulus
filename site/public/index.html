@@ -33,14 +33,14 @@
 <meta property="og:site_name" content="romulus">
 <meta property="og:url" content="https://romulus.lupidae.com/">
 <meta property="og:title" content="romulus: design, version and review your Postgres schema together">
-<meta property="og:description" content="DBA as a service for teams on Postgres. Every version kept, any two diffed, and the next one designed live, in SQL and on the table graph. Open source: start free, or host it yourself.">
+<meta property="og:description" content="DBA as a service for teams on Postgres. Every version kept, any two diffed, and the next one designed live, in SQL and on the table graph. Open source: subscribe to a flat plan, start free, or host it yourself.">
 <meta property="og:image" content="https://romulus.lupidae.com/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="romulus: SQL on one side, the table graph on the other, with two teammates' cursors.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="romulus: design, version and review your Postgres schema together">
-<meta name="twitter:description" content="DBA as a service for teams on Postgres. Every version kept, any two diffed, and the next one designed live. Open source: start free, or host it yourself.">
+<meta name="twitter:description" content="DBA as a service for teams on Postgres. Every version kept, any two diffed, and the next one designed live. Open source: subscribe to a flat plan, start free, or host it yourself.">
 <meta name="twitter:image" content="https://romulus.lupidae.com/og.png">
 <meta name="twitter:image:alt" content="romulus: SQL on one side, the table graph on the other, with two teammates' cursors.">
 <script type="application/ld+json">
@@ -51,7 +51,7 @@
   "url": "https://romulus.lupidae.com/",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Web",
-  "description": "DBA as a service for teams on Postgres: version, diff and design your schema together. Open source (AGPL-3.0), with a free plan and free self-hosting.",
+  "description": "DBA as a service for teams on Postgres: version, diff and design your schema together. Open source (AGPL-3.0), with flat paid plans, a free plan and free self-hosting.",
   "license": "https://github.com/lupidae/romulus/blob/main/LICENSE",
   "publisher": { "@type": "Organization", "name": "lupidae", "url": "https://github.com/lupidae" }
 }
@@ -114,7 +114,7 @@
     <div class="header-actions">
       <a class="button ghost header-github" href="https://github.com/lupidae/romulus" aria-label="romulus on GitHub"><svg class="icon" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
       <a class="button ghost" href="/app/signin">Sign in</a>
-      <a class="button secondary header-cta" href="/app/signin">Start free</a>
+      <a class="button secondary header-cta" href="#pricing">Choose a plan</a>
     </div>
   </div>
 </header>
@@ -126,8 +126,8 @@
     <h1 id="hero-title">Design, version and review your Postgres schema together.</h1>
     <p class="lead">DBA as a service for Postgres teams. Keep every version, design the next one together, ship its migration.</p>
     <div class="cta-row">
-      <a class="button primary large" href="/app/signin">Start free</a>
-      <a class="button secondary large" href="mailto:romulus@lupidae.com">Talk to us</a>
+      <a class="button primary large" href="#pricing">Choose a plan</a>
+      <a class="button secondary large" href="/app/signin">Start free</a>
       <a class="button ghost large" href="/app/signin">Sign in</a>
     </div>
     <p class="fineprint"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>romulus never connects to your database.</p>
@@ -674,7 +674,7 @@
     <div class="pricing-head">
       <div class="section-head">
         <h2 id="pricing-title">Flat plans. Bring the whole team.</h2>
-        <p>Every paid plan has unlimited members, reviewers included: plans grow with your schemas, not your team.</p>
+        <p>Every paid plan has unlimited members, reviewers included: plans grow with your schemas, not your team. Pick one and subscribe as you create your organization, or start on Free.</p>
       </div>
       <div class="period">
         <fieldset class="period-switch">
@@ -688,15 +688,19 @@
     </div>
     <!-- The plans, in one place: edit them here, then run `npm --prefix site run
          pricing` to rewrite the cards below (the e2e test fails until you do).
-         Yearly = monthly × yearly_months. `signup` is where every plan's button
-         goes: every organization starts on Free, and an admin buys a paid plan
-         from its Billing page in the app. The header's, the hero's and the
-         closing "Start free" go there too (the e2e test checks they agree). -->
+         Yearly = monthly × yearly_months. A paid plan's button leads to
+         subscribing to it, for the period chosen: `subscribe`?plan=<id>&
+         interval=month|year (the API's plan ids, billing::plans), through
+         sign-in or sign-up, the Terms and the organization, to its checkout.
+         Free's goes to `signup`, and so do the hero's and the closing "Start
+         free" (the e2e test checks they agree); their "Choose a plan" comes
+         here. -->
     <script type="application/json" id="plans-data">
     {
       "currency": "€",
       "yearly_months": 10,
       "signup": "/app/signin",
+      "subscribe": "/app/signup",
       "talk": "mailto:romulus@lupidae.com?subject=romulus%20Business%20plan",
       "limits": [
         { "key": "members", "label": "Members" },
@@ -732,7 +736,7 @@
           "name": "Starter",
           "for": "For a small team with a few databases.",
           "monthly": 19,
-          "action": "Start free, upgrade anytime",
+          "action": "Subscribe to Starter",
           "limits": {
             "members": "Unlimited",
             "databases": "3",
@@ -750,7 +754,7 @@
           "for": "For teams that review every change before it ships.",
           "monthly": 49,
           "recommended": true,
-          "action": "Start free, upgrade anytime",
+          "action": "Subscribe to Team",
           "limits": {
             "members": "Unlimited",
             "databases": "10",
@@ -768,7 +772,7 @@
           "for": "For many teams and databases in one organization.",
           "monthly": 149,
           "talk": true,
-          "action": "Start free, upgrade anytime",
+          "action": "Subscribe to Business",
           "limits": {
             "members": "Unlimited",
             "databases": "50",
@@ -820,7 +824,8 @@
         </p>
         <p class="plan-alt"><span class="per-month">or 190&nbsp;€ a year</span><span class="per-year">or 19&nbsp;€ a month</span></p>
         <div class="plan-actions">
-          <a class="button secondary" href="/app/signin">Start free, upgrade anytime</a>
+          <a class="button secondary per-month" href="/app/signup?plan=starter&amp;interval=month">Subscribe to Starter</a>
+          <a class="button secondary per-year" href="/app/signup?plan=starter&amp;interval=year">Subscribe to Starter</a>
         </div>
         <dl class="plan-limits">
           <div><dt>Members</dt><dd>Unlimited</dd></div>
@@ -845,7 +850,8 @@
         </p>
         <p class="plan-alt"><span class="per-month">or 490&nbsp;€ a year</span><span class="per-year">or 49&nbsp;€ a month</span></p>
         <div class="plan-actions">
-          <a class="button primary" href="/app/signin">Start free, upgrade anytime</a>
+          <a class="button primary per-month" href="/app/signup?plan=team&amp;interval=month">Subscribe to Team</a>
+          <a class="button primary per-year" href="/app/signup?plan=team&amp;interval=year">Subscribe to Team</a>
         </div>
         <dl class="plan-limits">
           <div><dt>Members</dt><dd>Unlimited</dd></div>
@@ -869,7 +875,8 @@
         </p>
         <p class="plan-alt"><span class="per-month">or 1,490&nbsp;€ a year</span><span class="per-year">or 149&nbsp;€ a month</span></p>
         <div class="plan-actions">
-          <a class="button secondary" href="/app/signin">Start free, upgrade anytime</a>
+          <a class="button secondary per-month" href="/app/signup?plan=business&amp;interval=month">Subscribe to Business</a>
+          <a class="button secondary per-year" href="/app/signup?plan=business&amp;interval=year">Subscribe to Business</a>
           <a class="plan-talk" href="mailto:romulus@lupidae.com?subject=romulus%20Business%20plan">Talk to us</a>
         </div>
         <dl class="plan-limits">
@@ -1013,7 +1020,7 @@
       </details>
       <details>
         <summary>What does it cost?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
-        <p>The hosted plans are in <a href="#pricing">Pricing</a>: a free one for one person, then flat monthly or yearly prices with unlimited members, for businesses and professionals. Every organization starts on Free, and an admin moves it to a paid plan from its Billing page whenever it needs more. Self-hosting is free.</p>
+        <p>The hosted plans are in <a href="#pricing">Pricing</a>: flat monthly or yearly prices with unlimited members, for businesses and professionals, and a free one for one person. Choose a plan there and you subscribe as you create your organization: your business's details and the Terms, then the payment on Stripe. You can also start on Free; an admin moves the organization to a paid plan from its Billing page whenever it needs more. Self-hosting is free.</p>
       </details>
       <details>
         <summary>What happens when we reach a cap?<svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg></summary>
@@ -1040,8 +1047,9 @@
     <h2 id="closing-title">Bring the schema you have.</h2>
     <p>Upload your SQL, import your migrations or push from CI. Your team can open the first draft on it right away.</p>
     <div class="cta-row">
-      <a class="button primary large" href="/app/signin">Start free</a>
-      <a class="button secondary large" href="mailto:romulus@lupidae.com">Talk to us</a>
+      <a class="button primary large" href="#pricing">Choose a plan</a>
+      <a class="button secondary large" href="/app/signin">Start free</a>
+      <a class="button ghost large" href="mailto:romulus@lupidae.com">Talk to us</a>
     </div>
   </div>
 </section>

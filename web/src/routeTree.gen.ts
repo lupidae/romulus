@@ -14,6 +14,7 @@ import { Route as OrgRouteImport } from './routes/$org'
 import { Route as NewRouteImport } from './routes/new'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SigninRouteImport } from './routes/signin'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as OrgIndexRouteImport } from './routes/$org/index'
 import { Route as OrgDbRouteImport } from './routes/$org/$db'
 import { Route as DevDiffRouteImport } from './routes/dev/diff'
@@ -76,6 +77,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const SigninRoute = SigninRouteImport.update({
   id: '/signin',
   path: '/signin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OrgIndexRoute = OrgIndexRouteImport.update({
@@ -276,6 +282,7 @@ export interface FileRoutesByFullPath {
   '/new': typeof NewRoute
   '/settings': typeof SettingsRouteWithChildren
   '/signin': typeof SigninRoute
+  '/signup': typeof SignupRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/diff': typeof DevDiffRoute
   '/dev/editor': typeof DevEditorRoute
@@ -319,6 +326,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/new': typeof NewRoute
   '/signin': typeof SigninRoute
+  '/signup': typeof SignupRoute
   '/dev/diff': typeof DevDiffRoute
   '/dev/editor': typeof DevEditorRoute
   '/dev/kit': typeof DevKitRoute
@@ -363,6 +371,7 @@ export interface FileRoutesById {
   '/new': typeof NewRoute
   '/settings': typeof SettingsRouteWithChildren
   '/signin': typeof SigninRoute
+  '/signup': typeof SignupRoute
   '/$org/$db': typeof OrgDbRouteWithChildren
   '/dev/diff': typeof DevDiffRoute
   '/dev/editor': typeof DevEditorRoute
@@ -410,6 +419,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/settings'
     | '/signin'
+    | '/signup'
     | '/$org/$db'
     | '/dev/diff'
     | '/dev/editor'
@@ -453,6 +463,7 @@ export interface FileRouteTypes {
     | '/'
     | '/new'
     | '/signin'
+    | '/signup'
     | '/dev/diff'
     | '/dev/editor'
     | '/dev/kit'
@@ -496,6 +507,7 @@ export interface FileRouteTypes {
     | '/new'
     | '/settings'
     | '/signin'
+    | '/signup'
     | '/$org/$db'
     | '/dev/diff'
     | '/dev/editor'
@@ -542,6 +554,7 @@ export interface RootRouteChildren {
   NewRoute: typeof NewRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   SigninRoute: typeof SigninRoute
+  SignupRoute: typeof SignupRoute
   DevDiffRoute: typeof DevDiffRoute
   DevEditorRoute: typeof DevEditorRoute
   DevKitRoute: typeof DevKitRoute
@@ -594,6 +607,13 @@ declare module '@tanstack/react-router' {
       path: '/signin'
       fullPath: '/signin'
       preLoaderRoute: typeof SigninRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$org/': {
@@ -953,6 +973,7 @@ const rootRouteChildren: RootRouteChildren = {
   NewRoute: NewRoute,
   SettingsRoute: SettingsRouteWithChildren,
   SigninRoute: SigninRoute,
+  SignupRoute: SignupRoute,
   DevDiffRoute: DevDiffRoute,
   DevEditorRoute: DevEditorRoute,
   DevKitRoute: DevKitRoute,

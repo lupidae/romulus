@@ -13,6 +13,7 @@ import { AuthPage, authLinkClass } from "@/features/auth/components/auth-page";
 import { PasswordSignInForm } from "@/features/auth/components/password-forms";
 import { authMethodsQuery, meQuery } from "@/features/auth/queries";
 import { afterSignIn, devSigninUrl, loginUrl } from "@/features/auth/session";
+import { afterSignInLine, subscribeInNext } from "@/features/billing/subscribe";
 import { safePath } from "@/lib/safe-path";
 
 interface SigninSearch {
@@ -98,6 +99,8 @@ function SignIn() {
   const health = useQuery(healthQuery);
   const methods = useQuery(authMethodsQuery);
   const failure = error ? (errors[error] ?? fallbackError) : undefined;
+  // From the homepage's plan buttons (/app/signup): what follows.
+  const subscribing = subscribeInNext(next);
   const password = methods.data?.password === true;
   // Single sign-on is offered when it works, or when it is the only way in
   // (then disabled, saying why).
@@ -108,7 +111,11 @@ function SignIn() {
   return (
     <AuthPage
       title="Sign in to romulus"
-      description="Version, review and design your Postgres schemas together."
+      description={
+        subscribing
+          ? `Sign in, or create your account. ${afterSignInLine(subscribing)}`
+          : "Version, review and design your Postgres schemas together."
+      }
       footer={
         password &&
         (methods.data?.sign_up === "open" ? (

@@ -188,6 +188,7 @@ services:
       ROMULUS_PUBLIC_URL: ${ROMULUS_PUBLIC_URL:?run scripts/dev-env}
       ROMULUS_API_PORT: ${ROMULUS_API_PORT:?run scripts/dev-env}
       ROMULUS_PREVIEW_PORT: ${ROMULUS_PREVIEW_PORT:?run scripts/dev-env}
+      ROMULUS_E2E_BILLING_PORT: ${ROMULUS_E2E_BILLING_PORT:-}
       # The API's mail settings as seen from inside the network: Zitadel
       # sends sign-up codes and password resets to the mail catcher too.
       ROMULUS_SMTP_HOST: mail

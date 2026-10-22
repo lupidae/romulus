@@ -28,6 +28,7 @@ set -euo pipefail
 : "${ROMULUS_PUBLIC_URL:?}"   # the browser origin of the app (/app) and the API (/api)
 ROMULUS_API_PORT=${ROMULUS_API_PORT:-}         # dev: the API's own port, for direct testing
 ROMULUS_PREVIEW_PORT=${ROMULUS_PREVIEW_PORT:-} # dev: the production build Playwright drives, with its own API
+ROMULUS_E2E_BILLING_PORT=${ROMULUS_E2E_BILLING_PORT:-} # dev: Playwright's billing API, serving that build itself
 ISSUER=${ZITADEL_ISSUER:-http://$ZITADEL_HOST} # https://<external domain> behind TLS
 OIDC_DEV_MODE=${OIDC_DEV_MODE:-true}           # Zitadel's dev mode allows http redirect URIs
 TEST_USERS=${TEST_USERS:-true}                 # alice and bob, password $DEV_PASSWORD
@@ -56,10 +57,13 @@ esac
 LEGAL_CONTACT=${ROMULUS_LEGAL_CONTACT:-}
 
 issuer=$ISSUER
-# Every browser origin of the stack: dev has two (the dev server and the
-# preview build end-to-end tests use) and the API port; a deployment one.
+# Every browser origin of the stack: dev has three (the dev server, the
+# preview build end-to-end tests use, and the billing specs' API serving that
+# build: a subscription starts with single sign-on) and the API port; a
+# deployment one.
 origins=$(jq -cn --arg web "$ROMULUS_PUBLIC_URL" --arg preview "$ROMULUS_PREVIEW_PORT" \
-    '[$web] + (if $preview == "" then [] else ["http://localhost:" + $preview] end)')
+    --arg billing "$ROMULUS_E2E_BILLING_PORT" \
+    '[$web] + ([$preview, $billing] | map(select(. != "") | "http://localhost:" + .))')
 redirect_uris=$(jq -c --arg api "$ROMULUS_API_PORT" \
     '. + (if $api == "" then [] else ["http://localhost:" + $api] end) | map(. + "/api/auth/callback")' <<<"$origins")
 # The SPA lives under /app (the API serves the homepage at / in production).

@@ -355,6 +355,22 @@ export interface BillingCopy {
   contract: {
     cancelYourContract: string;
   };
+  /** The homepage's plan buttons: the organization to subscribe, then its checkout. */
+  subscribe: {
+    title: (plan: string) => string;
+    billed: (interval: "month" | "year") => string;
+    choose: string;
+    organizations: string;
+    onPlan: (plan: string) => string;
+    subscribed: string;
+    adminsOnly: string;
+    newOrg: string;
+    notNow: string;
+    /** On the billing page, when the organization chosen cannot check out. */
+    alreadySubscribed: (org: string) => string;
+    alreadySubscribedBody: (plan: string) => string;
+    notAdmin: (org: string) => string;
+  };
 }
 
 export const billingCopy: Record<Locale, BillingCopy> = {
@@ -490,6 +506,22 @@ export const billingCopy: Record<Locale, BillingCopy> = {
     },
     contract: {
       cancelYourContract: "Cancel your contract",
+    },
+    subscribe: {
+      title: (plan) => `Subscribe to ${plan}`,
+      billed: (interval) => (interval === "year" ? "Billed yearly" : "Billed monthly"),
+      choose:
+        "Choose the organization it is for. You confirm your business's details next, then pay on Stripe.",
+      organizations: "Your organizations",
+      onPlan: (plan) => `On ${plan}`,
+      subscribed: "Subscribed: change its plan from Billing",
+      adminsOnly: "Only its admins can subscribe it",
+      newOrg: "Create a new organization",
+      notNow: "Not now",
+      alreadySubscribed: (org) => `${org} already has a subscription`,
+      alreadySubscribedBody: (plan) =>
+        `To move it to ${plan}, choose it below: Stripe confirms the change.`,
+      notAdmin: (org) => `Only the admins of ${org} can subscribe it to a plan.`,
     },
   },
   fr: {
@@ -628,6 +660,23 @@ export const billingCopy: Record<Locale, BillingCopy> = {
     },
     contract: {
       cancelYourContract: "Résilier votre contrat",
+    },
+    subscribe: {
+      title: (plan) => `S'abonner à l'offre ${plan}`,
+      billed: (interval) =>
+        interval === "year" ? "Facturée chaque année" : "Facturée chaque mois",
+      choose:
+        "Choisissez l'organisation concernée. Vous confirmez ensuite les informations de votre entreprise, puis vous payez sur Stripe.",
+      organizations: "Vos organisations",
+      onPlan: (plan) => `Offre ${plan}`,
+      subscribed: "Abonnée : changez son offre depuis Facturation",
+      adminsOnly: "Seuls ses administrateurs peuvent l'abonner",
+      newOrg: "Créer une organisation",
+      notNow: "Plus tard",
+      alreadySubscribed: (org) => `${org} a déjà un abonnement`,
+      alreadySubscribedBody: (plan) =>
+        `Pour passer à l'offre ${plan}, choisissez-la ci-dessous : Stripe confirme le changement.`,
+      notAdmin: (org) => `Seuls les administrateurs de ${org} peuvent l'abonner à une offre.`,
     },
   },
 };

@@ -491,7 +491,7 @@ src/styles/globals.css   every token; the only file with raw colors
   and gate actions on `canWrite(org.role)` / `canManageMembers(org.role)`
   (`features/orgs/roles.ts`); the API enforces it anyway. Slugs must not
   collide with top-level routes: `signin`, `new`, `invite`, `dev`,
-  `settings`, `api`, `app`, `oauth` are reserved (API and database refuse them; `/app/settings/…`
+  `settings`, `api`, `app`, `oauth`, `signup` are reserved (API and database refuse them; `/app/settings/…`
   is the person's own account: `routes/settings.tsx`). The
   sign-in pages live under `/signin/…` (`signin_.forgot`, `signin_.reset`,
   `signin_.new`, `signin_.welcome`: not nested in `signin.tsx`), on
@@ -1206,8 +1206,13 @@ docs/MVP.md "Billing" has the decisions.
   memory at a time), hidden versions included, never capped, on with billing
   off too.
 - **Web** (`features/billing`): the billing page `/$org/settings/billing`
-  (sidebar item when `instance.billing`), the checkout dialog (see "The
-  hosted contract" below), the plan picker, the upgrade prompt shown
+  (sidebar item when `instance.billing`; `?subscribe=<plan>&interval=` opens
+  that plan's checkout), the checkout dialog (see "The hosted contract"
+  below), the plan picker, the subscribe link of the homepage's plans
+  (`/app/signup?plan=&interval=`, `routes/signup.tsx`, `subscribe.ts`: the
+  choice rides in `next` through sign-in, the Terms and `/new`, to the
+  billing page; the fake Stripe's page takes `?cancel=true` as Stripe's
+  back link), the upgrade prompt shown
   wherever an action answers `plan_limit` (`isPlanLimit`), export buttons
   in the database and organization settings.
 - **Tests**: `tests/api/billing.rs` (fake Stripe and host: every cap,
