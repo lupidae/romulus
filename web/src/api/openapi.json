@@ -5842,6 +5842,122 @@
         }
       }
     },
+    "/api/orgs/{org}/databases/{db}/imports/uploads/{id}/new-migrations": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "The upload's migrations that the database has not imported yet, as one\nmigration to test (the import's plan decides which are new); the upload\nis then done with. Developers and admins, the upload's starter only.",
+        "operationId": "take_new_migrations",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "description": "The organization's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "db",
+            "in": "path",
+            "description": "The database's slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The upload's id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "How to read the files; none: the format detected",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/NewMigrationsOptions"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new migrations (none when every migration was imported already); the upload is deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewMigrations"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`history_not_imported` (the database imported none of these migrations: nothing tells which are new), `migration_changed`, `migration_out_of_order`; `upload_expired`, `upload_busy`, `upload_closed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`import_failed` (a new migration does not parse; `details`: `ImportFailure`), `incomplete_upload`, `invalid_migrations`, `too_many_migrations`, `validation`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`rate_limited`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/orgs/{org}/databases/{db}/major": {
       "put": {
         "tags": [
@@ -16198,6 +16314,116 @@
           "newer_postgres",
           "function_bodies"
         ]
+      },
+      "NewMigration": {
+        "type": "object",
+        "description": "A new migration, and where it sits in [`NewMigrations::sql`].",
+        "required": [
+          "id",
+          "name",
+          "path",
+          "line",
+          "sql_line",
+          "lines",
+          "first_statement",
+          "statements"
+        ],
+        "properties": {
+          "first_statement": {
+            "type": "integer",
+            "description": "Its statements in `sql`, numbered from 0 as a migration test numbers\nthem: `statements` of them from `first_statement`.",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "description": "The tool's version, or the file name for plain folders."
+          },
+          "line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The line of `path` its SQL starts at.",
+            "minimum": 0
+          },
+          "lines": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many lines of `sql` it takes, from `sql_line`.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "sql_line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The line of `sql` its SQL starts at (1-based): line `sql_line + k`\nof `sql` is line `line + k` of `path`.",
+            "minimum": 0
+          },
+          "statements": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "NewMigrations": {
+        "type": "object",
+        "description": "A folder's new migrations, as one migration.",
+        "required": [
+          "format",
+          "imported",
+          "migrations",
+          "ignored",
+          "sql"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/MigrationFormat",
+            "description": "The format the files were read as."
+          },
+          "ignored": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IgnoredFile"
+            },
+            "description": "Files that are not migrations (down migrations, READMEs, the tool's\nown files)."
+          },
+          "imported": {
+            "type": "integer",
+            "description": "Migrations of the files the database imported already (removed ones\nincluded): the history the new ones apply to.",
+            "minimum": 0
+          },
+          "migrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NewMigration"
+            },
+            "description": "The new ones, in order."
+          },
+          "sql": {
+            "type": "string",
+            "description": "Their up SQL one after the other, each under a `-- <path>` line;\nempty when there is no new migration."
+          }
+        }
+      },
+      "NewMigrationsOptions": {
+        "type": "object",
+        "description": "How to read an upload's files for [`new_migrations`].",
+        "properties": {
+          "format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MigrationFormat",
+                "description": "Read the files as this tool's; detected from them when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       },
       "NewThread": {
         "type": "object",

@@ -48,6 +48,11 @@ sandboxed Postgres of the version you run (15, 16, 17 or 18).
   works in romulus as you, with a personal access token: it reads schemas,
   drafts a change, tests its migration on data and asks for a review, under
   your organization's rules. [docs/mcp.md](docs/mcp.md) connects it.
+- **Migration tests in CI.** `romulus test`, a small command line (and a
+  GitHub Action), runs a pull request's new migrations on a playground of
+  the database's latest version with generated rows, and fails the job when
+  one fails, locks a table dangerously or loses data.
+  [docs/cli.md](docs/cli.md) sets it up.
 
 ## Quick start
 
@@ -101,6 +106,7 @@ the product's specification.
 | `crates/romulus-diff`, `crates/romulus-migration` | model diffs, and migrations planned from them |
 | `crates/romulus-playground`, `crates/romulus-play-runner` | the playground service and the only process that talks to Docker |
 | `crates/romulus-wasm` | the homepage's in-browser engine |
+| `crates/romulus-cli`, `action.yml` | `romulus test`, the command line that tests migrations from CI, and its GitHub Action |
 | `web/` | the web app (React, Vite, TanStack, CodeMirror, React Flow, Yjs) |
 | `deploy/self-host` | the self-hosted bundle: `compose.yaml` and `install.sh` |
 | `deploy/sandbox`, `deploy/playground` | the Postgres images SQL compiles in and playgrounds run |

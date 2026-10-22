@@ -197,7 +197,7 @@ struct Ignored {
 }
 
 /// `auto` (or nothing) is `None`: detected from the files.
-fn import_format(format: Option<&str>) -> Result<Option<MigrationFormat>, ToolError> {
+pub(super) fn import_format(format: Option<&str>) -> Result<Option<MigrationFormat>, ToolError> {
     match format.map(str::trim) {
         None | Some("" | "auto") => Ok(None),
         Some(name) => serde_json::from_value(json!(name)).map(Some).map_err(|_| {
@@ -262,6 +262,16 @@ async fn import_migrations(ctx: &Ctx, a: ImportArgs) -> Result<Output, ToolError
         } else {
             ""
         };
+        let data = json!({
+            "org": org,
+            "database": database,
+            "upload": {
+                "id": id,
+                "files": upload.files,
+                "bytes": upload.bytes,
+                "expires_at": upload.expires_at,
+            },
+        });
         return Ok(Output::text(format!(
             "Upload {id} for {org}/{database}: {} file{} ({}) received so far, {sent} in this \
              call. Nothing is imported yet. Send the next files with upload={id} (commit: false \
@@ -272,7 +282,8 @@ async fn import_migrations(ctx: &Ctx, a: ImportArgs) -> Result<Output, ToolError
             if upload.files == 1 { "" } else { "s" },
             size(upload.bytes),
             upload.expires_at.format("%H:%M UTC"),
-        )));
+        ))
+        .with_data(data));
     }
 
     let id_text = id.to_string();

@@ -527,9 +527,16 @@ pub fn failed(index: usize, migration: &PlannedMigration, errors: Vec<ImportErro
     }
 }
 
+/// Why `planned` cannot be imported, whatever the options (a migration
+/// changed or out of order, too many, one that does not parse); `None`
+/// when it can.
+pub fn problem_of(planned: &Planned) -> Option<ApiError> {
+    problem(&planned.preview, planned.imported + planned.new.len())
+}
+
 /// Why `planned` cannot be imported with `options`; `None` when it can.
 pub fn refusal(planned: &Planned, options: &ImportOptions) -> Option<ApiError> {
-    if let Some(problem) = problem(&planned.preview, planned.imported + planned.new.len()) {
+    if let Some(problem) = problem_of(planned) {
         return Some(problem);
     }
     (planned.preview.needs_append && !options.append).then(|| ApiError::Conflict {

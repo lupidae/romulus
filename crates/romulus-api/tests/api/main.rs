@@ -8,6 +8,7 @@ mod access_tokens;
 mod approvals;
 mod auth;
 mod billing;
+mod cli;
 mod collab;
 mod comment_attacks;
 mod comments;

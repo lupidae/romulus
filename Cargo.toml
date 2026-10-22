@@ -15,6 +15,7 @@ remus-core = "0.2.0"
 remus-sql = "0.2.0"
 remus-dbml = "0.2.0"
 remus-mermaid = "0.2.0"
+romulus-cli = { path = "crates/romulus-cli" }
 romulus-diff = { path = "crates/romulus-diff" }
 romulus-fakedata = { path = "crates/romulus-fakedata" }
 romulus-migration = { path = "crates/romulus-migration" }

@@ -64,6 +64,8 @@ zip.workspace = true
 
 [dev-dependencies]
 remus-core = { workspace = true, features = ["fixtures"] }
+# tests/api/cli.rs: `romulus test` against the API on a socket.
+romulus-cli.workspace = true
 http-body-util.workspace = true
 # tests/import_memory.rs: peak heap use, without unsafe code of ours.
 peak_alloc = "0.3.0"

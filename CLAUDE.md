@@ -27,6 +27,8 @@ crates/romulus-sandbox/ SQL → model in the sandbox Postgres: statement keys, a
 crates/romulus-playground/ the playground service (lib + bin): builds playgrounds, console sessions, migration
                       runs; its `protocol` and `signing` (no `server` feature) are what the API shares
 crates/romulus-play-runner/ the playground runner: the only process with the Docker socket, fixed operations
+crates/romulus-cli/   `romulus test` (bin `romulus`, docs/cli.md): CI's migration tests over the MCP endpoint with a
+                      PAT; no server crate; action.yml (root) runs it, .github/workflows/cli.yml releases it on vX.Y.Z
 deploy/sandbox/       the sandbox image, one per Postgres major (PG_MAJOR 15–18) + PostGIS + pgvector, allowlisted extensions trusted
 deploy/playground/    a playground's Postgres image (17): the sandbox's, nothing trusted, init then scram-only
 migrations/           sqlx migrations, timestamp-named; .sqlx/ = offline query data
@@ -1351,6 +1353,44 @@ docs/MVP.md "Agents over MCP" has the decisions, docs/mcp.md the user guide.
   `tests/api/access_tokens.rs`, `tests/api/draft_text.rs`, `tests/api/oauth.rs` (`connect`
   runs a whole connection; `connected(db, who, scope)` makes an app token directly); web:
   `features/agent` (`snippets.test.ts`), `e2e/agent.spec.ts`, `e2e/oauth.spec.ts`.
+
+## Migration tests from CI (`romulus-cli`, `imports::pending`)
+
+docs/cli.md has the user's side.
+
+- **The CLI is an MCP client**, never a second API: PATs open `/api/mcp`
+  only. It sends the folder as an upload (`import_migrations`, `commit:
+  false`), then `test_migration` with `upload` (+ `name`: the CI label),
+  then `get_migration_test` until final. It asks for `Output::data` with
+  `_meta` `romulus/data` (`tools::DATA_META`): the API's JSON as
+  `structuredContent`, refusals as `{error: {code, message, details,
+  status}}` (`ToolError::data`). Agents never get it (clients prefer
+  `structuredContent` to the text). A tool a program reads gets
+  `.with_data(..)`; keep its shape when changing the tool.
+- **`POST …/imports/uploads/{id}/new-migrations`** (`uploads::new_migrations`,
+  `imports::pending::compose`): the import's plan decides what is new
+  (refusals: `plan::problem_of`, `history_not_imported` when none of the
+  files' migrations was imported), the new ones' up SQL laid out under
+  `-- <path>` lines (`sql_line`/`lines`, `first_statement`/`statements`: how
+  the CLI maps diagnostics and a test's statement indexes back to files;
+  `---` lines softened, a missing last `;` added), the upload deleted.
+- **`test_migration` with `upload`** (`testing::test_upload`): the caller's
+  open migration-mode draft of that `name` is reused (deleted and remade
+  when stale), the text written (`PUT …/text`, waited for), compile errors
+  answered against files (`in_files`), and a test of that exact text
+  (`?draft=`, `current`, same down and size) answered instead of a new one
+  unless `fresh`.
+- **What fails the job** is the CLI's (`report.rs`): the test's verdict,
+  rewrites of tables counted before (`before` phase's `row_counts`) and
+  `CREATE INDEX` without `CONCURRENTLY` holding `ShareLock` on one (unless
+  `--allow-locks`), undeclared loss not acknowledged; exit 0/1/2.
+- **Releases**: `.github/workflows/cli.yml` builds musl linux amd64/arm64
+  and macOS arm64 on every change and attaches them (and `SHA256SUMS`) to
+  the tag's release; `ROMULUS_CLI_VERSION` stamps the version.
+- **Tests**: `crates/romulus-cli` unit tests (args, CI context, files,
+  report and exit codes), `tests/api/cli.rs` (the CLI against the API on a
+  socket: good and bad migrations, reuse, nothing new, a changed
+  migration, tokens; the endpoint; the data opt-in).
 
 ## Retention and deletion (`retention`)
 

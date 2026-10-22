@@ -1,0 +1,107 @@
+# romulus test as a GitHub Action (docs/cli.md): downloads the `romulus`
+# command line of a release (the CLI workflow attaches it to each), checks
+# it against the release's SHA256SUMS, and runs `romulus test` on a
+# migrations folder. The job fails when a new migration fails, locks
+# dangerously or loses data; each finding is annotated on its file and
+# line, and the report goes to the job's summary.
+name: romulus migration test
+description: Run a pull request's new migrations on generated rows in a romulus playground; fail on a failed statement, a dangerous lock or data loss.
+author: lupidae
+branding:
+  icon: database
+  color: orange
+
+inputs:
+  migrations:
+    description: The migrations folder, relative to the repository (db/migrations, prisma/migrations…)
+    required: true
+  database:
+    description: "The database in romulus: <organization>/<database>, as in the app's address"
+    required: true
+  token:
+    description: A personal access token with write access, of a developer of the organization (store it as a secret)
+    required: true
+  url:
+    description: romulus's address (a self-hosted install's)
+    required: false
+    default: https://romulus.lupidae.com
+  version:
+    description: The CLI release to run (v0.3.0); by default the release this action is pinned to, else the latest
+    required: false
+    default: ""
+  args:
+    description: More options for romulus test, as on its command line (--format sqlx --allow-locks --timeout 20m)
+    required: false
+    default: ""
+
+outputs:
+  result:
+    description: passed, nothing_new, failed, error or timeout
+    value: ${{ steps.test.outputs.result }}
+  report:
+    description: The test's page in romulus (empty when no test ran)
+    value: ${{ steps.test.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download romulus
+      shell: bash
+      env:
+        WANTED: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPOSITORY: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) target=x86_64-unknown-linux-musl ;;
+          Linux-ARM64) target=aarch64-unknown-linux-musl ;;
+          macOS-ARM64) target=aarch64-apple-darwin ;;
+          *)
+            echo "::error::romulus has no build for $RUNNER_OS $RUNNER_ARCH: Linux (x64, arm64) and macOS (arm64)"
+            exit 1
+            ;;
+        esac
+        repository=${ACTION_REPOSITORY:-lupidae/romulus}
+        version=$WANTED
+        if [ -z "$version" ] && [[ $ACTION_REF =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+          version=$ACTION_REF
+        fi
+        if [ -n "$version" ]; then
+          base="https://github.com/$repository/releases/download/$version"
+        else
+          base="https://github.com/$repository/releases/latest/download"
+        fi
+        dir="$RUNNER_TEMP/romulus-cli"
+        mkdir -p "$dir"
+        curl -fsSL --retry 3 -o "$dir/romulus.tar.gz" "$base/romulus-$target.tar.gz"
+        curl -fsSL --retry 3 -o "$dir/SHA256SUMS" "$base/SHA256SUMS"
+        expected=$(awk -v f="romulus-$target.tar.gz" '$2 == f { print $1 }' "$dir/SHA256SUMS")
+        if command -v sha256sum > /dev/null; then
+          actual=$(sha256sum "$dir/romulus.tar.gz" | cut -d' ' -f1)
+        else
+          actual=$(shasum -a 256 "$dir/romulus.tar.gz" | cut -d' ' -f1)
+        fi
+        if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+          echo "::error::romulus-$target.tar.gz does not match the release's SHA256SUMS"
+          exit 1
+        fi
+        tar -xzf "$dir/romulus.tar.gz" -C "$dir"
+        echo "$dir" >> "$GITHUB_PATH"
+        "$dir/romulus" --version
+
+    - name: Test the migrations
+      id: test
+      shell: bash
+      env:
+        ROMULUS_TOKEN: ${{ inputs.token }}
+        ROMULUS_URL: ${{ inputs.url }}
+        MIGRATIONS: ${{ inputs.migrations }}
+        DATABASE: ${{ inputs.database }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        # The extra options split on spaces, never expanded as file names.
+        set -f
+        # shellcheck disable=SC2086
+        romulus test "$MIGRATIONS" --database "$DATABASE" $ARGS

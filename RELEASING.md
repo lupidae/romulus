@@ -1,8 +1,9 @@
 # Releasing romulus
 
 A release is a tag `vX.Y.Z` on main. Pushing it publishes everything: the
-images (the Images workflow) and the Helm chart (the Helm workflow). One
-version names both: the chart's version is the release's.
+images (the Images workflow), the Helm chart (the Helm workflow) and the
+`romulus` command line (the CLI workflow). One version names them all: the
+chart's version is the release's.
 
 ## Steps
 
@@ -23,10 +24,13 @@ version names both: the chart's version is the release's.
 4. **Write the release notes** on GitHub (self-hosters are told to read
    them before upgrading, docs/self-host/upgrade.md): what changed, the
    database migrations and how long they may take, anything to do by hand,
-   security fixes.
+   security fixes. The CLI workflow creates the release when it attaches
+   its binaries, if it does not exist yet: create it first, or edit it.
 
    ```bash
    gh release create vX.Y.Z --verify-tag --generate-notes --edit
+   # or, once the CLI workflow made it:
+   gh release edit vX.Y.Z --notes-file notes.md
    ```
 
 5. **Check what was published** (below), from a machine signed in to
@@ -56,12 +60,21 @@ version names both: the chart's version is the release's.
   run fails, the publish stops too: fix it, then re-run both runs' failed
   jobs on the same tag.
 
+- **The command line** (`.github/workflows/cli.yml`, job `release`):
+  `romulus-x86_64-unknown-linux-musl.tar.gz`,
+  `romulus-aarch64-unknown-linux-musl.tar.gz`,
+  `romulus-aarch64-apple-darwin.tar.gz` and `SHA256SUMS`, attached to the
+  tag's GitHub release; `romulus --version` says `X.Y.Z`. The action
+  (`action.yml`, `uses: lupidae/romulus@vX.Y.Z`) downloads the CLI of the
+  tag it is pinned to, so a release must carry them.
+
 Check (each lists linux/amd64 and linux/arm64):
 
 ```bash
 docker buildx imagetools inspect ghcr.io/lupidae/romulus-api:X.Y.Z
 docker buildx imagetools inspect ghcr.io/lupidae/romulus-sandbox:latest-pg18
 helm show chart oci://ghcr.io/lupidae/charts/romulus --version X.Y.Z
+gh release view vX.Y.Z --json assets --jq '.assets[].name'
 ```
 
 ## The first release only

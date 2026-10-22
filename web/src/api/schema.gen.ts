@@ -1276,6 +1276,27 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/imports/uploads/{id}/new-migrations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * The upload's migrations that the database has not imported yet, as one
+     *     migration to test (the import's plan decides which are new); the upload
+     *     is then done with. Developers and admins, the upload's starter only.
+     */
+    post: operations["take_new_migrations"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/major": {
     parameters: {
       query?: never;
@@ -4576,6 +4597,61 @@ export interface components {
       | "guessed_names"
       | "newer_postgres"
       | "function_bodies";
+    /** @description A new migration, and where it sits in [`NewMigrations::sql`]. */
+    NewMigration: {
+      /**
+       * @description Its statements in `sql`, numbered from 0 as a migration test numbers
+       *     them: `statements` of them from `first_statement`.
+       */
+      first_statement: number;
+      /** @description The tool's version, or the file name for plain folders. */
+      id: string;
+      /**
+       * Format: int32
+       * @description The line of `path` its SQL starts at.
+       */
+      line: number;
+      /**
+       * Format: int32
+       * @description How many lines of `sql` it takes, from `sql_line`.
+       */
+      lines: number;
+      name: string;
+      path: string;
+      /**
+       * Format: int32
+       * @description The line of `sql` its SQL starts at (1-based): line `sql_line + k`
+       *     of `sql` is line `line + k` of `path`.
+       */
+      sql_line: number;
+      statements: number;
+    };
+    /** @description A folder's new migrations, as one migration. */
+    NewMigrations: {
+      /** @description The format the files were read as. */
+      format: components["schemas"]["MigrationFormat"];
+      /**
+       * @description Files that are not migrations (down migrations, READMEs, the tool's
+       *     own files).
+       */
+      ignored: components["schemas"]["IgnoredFile"][];
+      /**
+       * @description Migrations of the files the database imported already (removed ones
+       *     included): the history the new ones apply to.
+       */
+      imported: number;
+      /** @description The new ones, in order. */
+      migrations: components["schemas"]["NewMigration"][];
+      /**
+       * @description Their up SQL one after the other, each under a `-- <path>` line;
+       *     empty when there is no new migration.
+       */
+      sql: string;
+    };
+    /** @description How to read an upload's files for [`new_migrations`]. */
+    NewMigrationsOptions: {
+      format?: components["schemas"]["MigrationFormat"] | null;
+    };
     NewThread: {
       anchor: components["schemas"]["Anchor"];
       /** @description The first comment: 1 to 4000 characters. */
@@ -10844,6 +10920,81 @@ export interface operations {
         };
       };
       /** @description `incomplete_upload` (a part missing), `invalid_migrations`, `import_failed` (a syntax error), `too_many_migrations`, `validation` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  take_new_migrations: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The upload's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    /** @description How to read the files; none: the format detected */
+    requestBody?: {
+      content: {
+        "application/json": components["schemas"]["NewMigrationsOptions"] | null;
+      };
+    };
+    responses: {
+      /** @description The new migrations (none when every migration was imported already); the upload is deleted */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["NewMigrations"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `history_not_imported` (the database imported none of these migrations: nothing tells which are new), `migration_changed`, `migration_out_of_order`; `upload_expired`, `upload_busy`, `upload_closed` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `import_failed` (a new migration does not parse; `details`: `ImportFailure`), `incomplete_upload`, `invalid_migrations`, `too_many_migrations`, `validation` */
       422: {
         headers: {
           [name: string]: unknown;
