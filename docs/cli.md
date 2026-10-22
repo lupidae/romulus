@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: lupidae/romulus@vX.Y.Z   # a release: the CLI of that release
+      - uses: lupidae/romulus@v0.3.0   # a release: the CLI of that release
         with:
           migrations: db/migrations
           database: acme/shop
