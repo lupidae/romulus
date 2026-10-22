@@ -1,7 +1,7 @@
 # Politique de confidentialité de romulus
 
-**Version :** 1.0
-**Date d'entrée en vigueur :** 21 octobre 2026
+**Version :** 1.1
+**Date d'entrée en vigueur :** 22 octobre 2026
 
 La présente Politique de confidentialité explique comment les données personnelles sont traitées lorsque vous utilisez le service hébergé romulus disponible à l'adresse **https://romulus.lupidae.com** (le « **Service** ») et son site internet. Elle est fournie en application des articles 13 et 14 du règlement (UE) 2016/679 (le « **RGPD** ») et de la loi n° 78-17 du 6 janvier 1978 (la « **loi Informatique et Libertés** »). Les termes commençant par une majuscule ont le sens que leur donnent les Conditions générales d'utilisation et de vente disponibles à l'adresse https://romulus.lupidae.com/fr/legal/conditions.
 
@@ -115,6 +115,7 @@ Vous pouvez obtenir une copie de ces garanties en écrivant à romulus@lupidae.c
 | Playgrounds | Arrêtés après 15 minutes d'inactivité, supprimés 7 jours après leur dernière utilisation. Le texte des requêtes et migrations exécutées est supprimé avec la fiche du Playground, au plus tard 30 jours après sa dernière utilisation. Les Playgrounds eux-mêmes ne sont jamais sauvegardés |
 | Journal d'audit | Pendant toute la durée de vie de l'Organisation, dont il constitue l'historique |
 | Invitations en attente | Valables 7 jours ; supprimées 30 jours après leur expiration ou leur révocation. Les invitations acceptées sont conservées avec le registre des membres de l'Organisation |
+| E-mails envoyés par le Service | L'adresse du destinataire, l'objet et le texte de chaque e-mail : 30 jours après son envoi ; 90 jours après l'abandon de sa remise |
 | Données contractuelles | Pendant toute la durée du contrat et 5 ans après son terme (délai de prescription : article 2224 du Code civil et article L110-4 du Code de commerce) |
 | Données de facturation et factures | 10 ans à compter de la clôture de l'exercice (article L123-22 du Code de commerce). Notifications de paiement reçues de Stripe : 90 jours |
 | Journaux techniques et de sécurité (y compris les adresses IP) | 6 mois au plus |

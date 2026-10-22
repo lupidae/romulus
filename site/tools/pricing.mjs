@@ -8,7 +8,10 @@
 //   node tools/pricing.mjs --check   exit 1 if they differ from the JSON (the e2e test runs it too)
 //
 // The cards are plain HTML, so the page needs no script to show them, and
-// both periods' prices are in it: the Monthly/Yearly switch is CSS alone.
+// both periods' prices are in it: the Monthly/Yearly switch is CSS alone. So
+// are both periods' buttons of a paid plan: each leads to subscribing to it
+// (`subscribe`?plan=<id>&interval=month|year, the API's plan ids), the
+// period shown being the one the visitor chose; Free's to `signup`.
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +29,7 @@ export function readPlans(html) {
   const match = DATA.exec(html);
   if (!match) throw new Error('index.html: no <script type="application/json" id="plans-data">');
   const data = JSON.parse(match[1]);
-  for (const key of ["currency", "yearly_months", "signup", "talk", "limits", "plans"])
+  for (const key of ["currency", "yearly_months", "signup", "subscribe", "talk", "limits", "plans"])
     if (data[key] === undefined) throw new Error(`#plans-data: "${key}" is missing`);
   for (const plan of data.plans) {
     for (const key of ["id", "name", "for", "monthly", "action"])
@@ -38,6 +41,10 @@ export function readPlans(html) {
   return data;
 }
 
+/** Where a paid plan's button leads for `interval` (`month` or `year`): the app's subscribe link. */
+export const subscribeHref = (data, plan, interval) =>
+  `${data.subscribe}?plan=${encodeURIComponent(plan.id)}&interval=${interval}`;
+
 /** "1,490 €": numbers written as the plans table writes them, the currency after, never on its own line. */
 export const price = (amount, currency) => `${amount.toLocaleString("en-US")}\u00a0${currency}`;
 
@@ -48,9 +55,13 @@ export function render(data) {
     const yearly = plan.monthly * data.yearly_months;
     const id = `plan-${plan.id}`;
     const money = (amount) => escape(price(amount, data.currency)).replace(/\u00a0/g, "&nbsp;");
-    const actions = [
-      `<a class="button ${plan.recommended ? "primary" : "secondary"}" href="${escape(data.signup)}">${escape(plan.action)}</a>`,
-    ];
+    const look = plan.recommended ? "primary" : "secondary";
+    const actions = plan.monthly
+      ? ["month", "year"].map(
+          (interval) =>
+            `<a class="button ${look} per-${interval}" href="${escape(subscribeHref(data, plan, interval))}">${escape(plan.action)}</a>`,
+        )
+      : [`<a class="button ${look}" href="${escape(data.signup)}">${escape(plan.action)}</a>`];
     if (plan.talk) actions.push(`<a class="plan-talk" href="${escape(data.talk)}">Talk to us</a>`);
     const lines = [
       `<article class="plan${plan.recommended ? " is-recommended" : ""}" aria-labelledby="${id}">`,

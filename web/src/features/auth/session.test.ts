@@ -1,4 +1,11 @@
-import { afterSignIn, appPath, devSigninUrl, loginUrl } from "./session";
+import {
+  afterSignIn,
+  appPath,
+  devSigninUrl,
+  loginUrl,
+  rememberSignUpNext,
+  takeSignUpNext,
+} from "./session";
 
 describe("afterSignIn", () => {
   it("goes on to a path in the app", () => {
@@ -34,5 +41,29 @@ describe("auth URLs", () => {
     expect(devSigninUrl("bob@romulus.test", "/app/")).toBe(
       "/api/auth/dev-signin?email=bob%40romulus.test&next=%2Fapp%2F",
     );
+  });
+});
+
+describe("the next an emailed sign-up link follows", () => {
+  afterEach(() => localStorage.clear());
+
+  it("is kept once, for the day the link works", () => {
+    rememberSignUpNext("/app/signup?plan=team&interval=year", 1_000);
+    expect(takeSignUpNext(2_000)).toBe("/app/signup?plan=team&interval=year");
+    expect(takeSignUpNext(3_000)).toBeUndefined();
+
+    rememberSignUpNext("/app/signup?plan=team", 0);
+    expect(takeSignUpNext(24 * 60 * 60 * 1000 + 1)).toBeUndefined();
+  });
+
+  it("forgets an older one when the sign-up has none, and refuses other origins", () => {
+    rememberSignUpNext("/app/signup?plan=team", 0);
+    rememberSignUpNext(undefined);
+    expect(takeSignUpNext(1)).toBeUndefined();
+
+    localStorage.setItem("romulus.signUpNext", JSON.stringify({ next: "//evil.test", at: 0 }));
+    expect(takeSignUpNext(1)).toBeUndefined();
+    localStorage.setItem("romulus.signUpNext", "not json");
+    expect(takeSignUpNext(1)).toBeUndefined();
   });
 });

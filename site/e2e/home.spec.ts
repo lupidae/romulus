@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
-import { price, readPlans, withPlans } from "../tools/pricing.mjs";
+import { price, readPlans, subscribeHref, withPlans } from "../tools/pricing.mjs";
 
 const publicFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../public/${name}`, import.meta.url)), "utf8");
@@ -41,11 +41,8 @@ test("the hero says what romulus is and how to start", async ({ page }) => {
   await expect(page.getByRole("contentinfo")).toBeVisible();
 
   const hero = page.locator(".hero");
+  await expect(hero.getByRole("link", { name: "Choose a plan" })).toHaveAttribute("href", "#pricing");
   await expect(hero.getByRole("link", { name: "Start free" })).toHaveAttribute("href", "/app/signin");
-  await expect(hero.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
-    "href",
-    "mailto:romulus@lupidae.com",
-  );
   for (const region of [page.getByRole("banner"), hero]) {
     await expect(region.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/app/signin");
   }
@@ -170,35 +167,38 @@ test("the agents section: in the nav, a readable session, the command to connect
   );
 });
 
-test("one way in: every Start free goes where the plans do, Talk to us is a mail", async ({ page }) => {
+test("subscribing leads, Free stays one click away, Talk to us is a mail", async ({ page }) => {
   const { signup } = readPlans(publicFile("index.html"));
   await page.goto("/");
   await expect(page.getByText("Request access")).toHaveCount(0);
-  const regions = [
+  await expect(page.getByText(/upgrade anytime/i)).toHaveCount(0);
+  const [header, heroRow, closingRow] = [
     page.getByRole("banner"),
     page.locator(".hero .cta-row"),
     page.locator(".closing .cta-row"),
   ];
-  for (const region of regions) {
-    await expect(region.getByRole("link", { name: "Start free", exact: true })).toHaveAttribute(
-      "href",
-      signup,
-    );
-  }
-  // The hero and the closing lead with Start free; Talk to us is the quieter
-  // one, and the hero's Sign in, for whoever has an account, the quietest.
-  const [, heroRow, closingRow] = regions;
-  await expect(heroRow.getByRole("link")).toHaveText(["Start free", "Talk to us", "Sign in"]);
-  await expect(heroRow.getByRole("link", { name: "Sign in" })).toHaveClass(/\bghost\b/);
-  await expect(closingRow.getByRole("link")).toHaveText(["Start free", "Talk to us"]);
+  // "Choose a plan" leads (the pricing, where each plan subscribes); Free's
+  // sign-up follows; the hero's Sign in, for whoever has an account, and the
+  // closing's Talk to us are the quietest.
+  await expect(header.getByRole("link", { name: "Choose a plan" })).toHaveAttribute("href", "#pricing");
+  await expect(heroRow.getByRole("link")).toHaveText(["Choose a plan", "Start free", "Sign in"]);
+  await expect(closingRow.getByRole("link")).toHaveText(["Choose a plan", "Start free", "Talk to us"]);
   for (const row of [heroRow, closingRow]) {
-    await expect(row.getByRole("link", { name: "Start free" })).toHaveClass(/\bprimary\b/);
-    await expect(row.getByRole("link", { name: "Talk to us" })).toHaveClass(/\bsecondary\b/);
-    await expect(row.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
-      "href",
-      "mailto:romulus@lupidae.com",
-    );
+    await expect(row.getByRole("link", { name: "Choose a plan" })).toHaveClass(/\bprimary\b/);
+    await expect(row.getByRole("link", { name: "Choose a plan" })).toHaveAttribute("href", "#pricing");
+    await expect(row.getByRole("link", { name: "Start free" })).toHaveClass(/\bsecondary\b/);
+    await expect(row.getByRole("link", { name: "Start free" })).toHaveAttribute("href", signup);
   }
+  await expect(heroRow.getByRole("link", { name: "Sign in" })).toHaveClass(/\bghost\b/);
+  await expect(closingRow.getByRole("link", { name: "Talk to us" })).toHaveClass(/\bghost\b/);
+  await expect(closingRow.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
+    "href",
+    "mailto:romulus@lupidae.com",
+  );
+
+  await heroRow.getByRole("link", { name: "Choose a plan" }).click();
+  await expect(page).toHaveURL(/#pricing$/);
+  await expect(page.getByRole("heading", { level: 2, name: "Flat plans. Bring the whole team." })).toBeInViewport();
 });
 
 test("the plan cards are the page's own JSON, rendered", async () => {
@@ -239,18 +239,60 @@ test("the billing switch shows monthly or yearly prices", async ({ page }) => {
   expect(await shown("Team")).toBe("49 € per month");
 });
 
-test("every plan starts with a free sign-up, Team is the one recommended", async ({ page }) => {
+test("each paid plan subscribes to itself for the period shown, Free signs up", async ({ page }) => {
   const plans = readPlans(publicFile("index.html"));
   await page.goto("/#pricing");
   const pricing = page.locator("#pricing");
+  const period = pricing.getByRole("group", { name: "Billing period" });
+  const card = (name: string) => pricing.getByRole("article", { name, exact: true });
   for (const plan of plans.plans) {
-    const card = pricing.getByRole("article", { name: plan.name, exact: true });
-    await expect(card.getByRole("link", { name: plan.action })).toHaveAttribute("href", plans.signup);
+    const link = card(plan.name).getByRole("link", { name: plan.action });
+    // One button shown per card (the other period's is hidden, out of the accessibility tree).
+    await expect(link).toHaveCount(1);
+    await expect(link).toHaveAttribute(
+      "href",
+      plan.monthly ? subscribeHref(plans, plan, "month") : plans.signup,
+    );
     // Same fields, same order, in every card.
-    await expect(card.locator("dt")).toHaveText(plans.limits.map((l: { label: string }) => l.label));
+    await expect(card(plan.name).locator("dt")).toHaveText(plans.limits.map((l: { label: string }) => l.label));
   }
+  // The API's plan ids (billing::plans), each paid one under its own name.
+  const paid = plans.plans.filter((p: { monthly: number }) => p.monthly > 0);
+  expect(paid.map((p: { id: string }) => p.id)).toEqual(["starter", "team", "business"]);
+  const planTable = repoFile("crates/romulus-api/src/billing/plans.rs");
+  for (const plan of paid) {
+    expect(planTable).toContain(`Self::${plan.name} => "${plan.id}"`);
+    expect(plan.action).toBe(`Subscribe to ${plan.name}`);
+  }
+  await expect(card("Team").getByRole("link", { name: "Subscribe to Team" })).toHaveAttribute(
+    "href",
+    "/app/signup?plan=team&interval=month",
+  );
+  await expect(card("Free").getByRole("link", { name: "Start free", exact: true })).toHaveAttribute(
+    "href",
+    plans.signup,
+  );
+
+  // Yearly: the same buttons, the year's links.
+  await period.getByText(/^Yearly/).click();
+  for (const plan of paid)
+    await expect(card(plan.name).getByRole("link", { name: plan.action })).toHaveAttribute(
+      "href",
+      subscribeHref(plans, plan, "year"),
+    );
+  await expect(card("Free").getByRole("link", { name: "Start free", exact: true })).toHaveAttribute(
+    "href",
+    plans.signup,
+  );
+  await period.getByText("Monthly").click();
+  await expect(card("Business").getByRole("link", { name: "Subscribe to Business" })).toHaveAttribute(
+    "href",
+    "/app/signup?plan=business&interval=month",
+  );
+
+  // Nothing reads as a purchase by a consumer: subscribing, by businesses.
+  await expect(pricing).not.toContainText(/buy now|add to cart|personal use/i);
   await expect(pricing.getByRole("link", { name: "Start free", exact: true })).toHaveCount(1);
-  await expect(pricing.getByRole("link", { name: "Start free, upgrade anytime" })).toHaveCount(3);
   await expect(pricing.getByRole("link", { name: "Talk to us" })).toHaveAttribute(
     "href",
     /^mailto:romulus@lupidae\.com\?subject=/,
@@ -480,10 +522,10 @@ test("the FAQ says what ships: agents, paid plans, the export", async ({ page })
   await expect(page).toHaveURL(/#mcp$/);
   await expect(page.getByRole("heading", { level: 2, name: "Your agent speaks romulus." })).toBeInViewport();
 
-  // Paid plans can be bought now, and the export exists, on every plan.
-  await expect(await open("What does it cost?")).toContainText(
-    "an admin moves it to a paid plan from its Billing page",
-  );
+  // Paid plans are bought as the organization is made (or later), and the export exists, on every plan.
+  const cost = await open("What does it cost?");
+  await expect(cost).toContainText("Choose a plan there and you subscribe as you create your organization");
+  await expect(cost).toContainText("an admin moves the organization to a paid plan from its Billing page");
   await expect(await open("Can we move from hosted to self-hosted?")).toContainText(
     "On every plan, an admin can export the whole organization as one ZIP",
   );

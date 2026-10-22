@@ -3,8 +3,8 @@
 /// Top-level routes of the web app (and the API's prefix). An organization
 /// named like one would be unreachable. The database refuses them too
 /// (`organizations_slug_not_reserved`); keep both lists equal.
-pub const RESERVED: [&str; 8] = [
-    "signin", "new", "invite", "dev", "settings", "api", "app", "oauth",
+pub const RESERVED: [&str; 9] = [
+    "signin", "signup", "new", "invite", "dev", "settings", "api", "app", "oauth",
 ];
 
 pub const MAX_LEN: usize = 63;

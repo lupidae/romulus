@@ -27,6 +27,36 @@ export function afterSignIn(next: string | undefined): string {
   return safePath(path) ?? "/";
 }
 
+// An emailed sign-up link (`/signin/welcome#token=…`) carries no `next`:
+// the sign-up form keeps it in this browser until the link is opened (it
+// works for 24 hours), so a plan chosen before signing up still follows.
+const SIGN_UP_NEXT = "romulus.signUpNext";
+const SIGN_UP_NEXT_TTL = 24 * 60 * 60 * 1000;
+
+/** Keeps `next` for the emailed link that finishes a sign-up (or forgets it). */
+export function rememberSignUpNext(next: string | undefined, now = Date.now()): void {
+  try {
+    if (next) localStorage.setItem(SIGN_UP_NEXT, JSON.stringify({ next, at: now }));
+    else localStorage.removeItem(SIGN_UP_NEXT);
+  } catch {
+    // Storage refused (a private window): the link lands on the home page.
+  }
+}
+
+/** The `next` a sign-up kept, once, if it is still fresh and on this origin. */
+export function takeSignUpNext(now = Date.now()): string | undefined {
+  try {
+    const raw = localStorage.getItem(SIGN_UP_NEXT);
+    localStorage.removeItem(SIGN_UP_NEXT);
+    if (!raw) return undefined;
+    const kept = JSON.parse(raw) as { next?: unknown; at?: unknown };
+    if (typeof kept.at !== "number" || now - kept.at > SIGN_UP_NEXT_TTL) return undefined;
+    return safePath(kept.next);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The API route that starts SSO, coming back to `next`. */
 export function loginUrl(
   next?: string,

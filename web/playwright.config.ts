@@ -172,6 +172,9 @@ export default defineConfig({
       ? [
           billingServer(billingPort, billingOrigin, {
             ROMULUS_SANDBOX_PREFIX: "romulus_e2e_billing",
+            // Anyone may create a password account (e2e/billing/subscribe:
+            // a plan chosen before signing up follows the emailed link).
+            ROMULUS_SIGNUP: "open",
           }),
         ]
       : []),

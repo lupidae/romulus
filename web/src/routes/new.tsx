@@ -18,8 +18,10 @@ import { InviteLink } from "@/features/orgs/components/invite-link";
 import { OrgPreview } from "@/features/orgs/components/org-preview";
 import { type CreatedInvitation, orgsQuery } from "@/features/orgs/queries";
 import { roleLabel } from "@/features/orgs/roles";
+import { planNames } from "@/features/billing/format";
+import { readSubscribe, type Subscribe, subscribeSearch } from "@/features/billing/subscribe";
 
-interface NewSearch {
+interface NewSearch extends Partial<Subscribe> {
   /** Set once the organization exists: the second step, inviting the team. */
   org?: string;
 }
@@ -27,6 +29,8 @@ interface NewSearch {
 export const Route = createFileRoute("/new")({
   validateSearch: (search: Record<string, unknown>): NewSearch => ({
     org: typeof search.org === "string" ? search.org : undefined,
+    // A plan chosen on the homepage (/app/signup): its checkout comes second.
+    ...subscribeSearch(readSubscribe(search)),
   }),
   beforeLoad: async ({ context: { queryClient }, location }) => {
     await requireUser(queryClient, location.href);
@@ -43,11 +47,14 @@ export const Route = createFileRoute("/new")({
 });
 
 function NewOrganization() {
-  const { org: createdSlug } = Route.useSearch();
+  const search = Route.useSearch();
+  const createdSlug = search.org;
   const { data: me } = useSuspenseQuery(meQuery);
   const orgs = useQuery(orgsQuery).data ?? [];
   const instance = useQuery(instanceQuery);
   const singleOrg = instance.data?.single_org === true;
+  // Ignored without billing (self-hosted).
+  const choice = instance.data?.billing ? readSubscribe(search) : undefined;
   const [changingPassword, setChangingPassword] = React.useState(false);
   const navigate = useNavigate();
   const created = orgs.find((o) => o.slug === createdSlug);
@@ -110,13 +117,22 @@ function NewOrganization() {
                 <p className="mt-2 text-base text-muted-foreground">
                   {orgs.length === 0 && `Welcome to romulus, ${me.name.split(/\s+/)[0]}. `}
                   An organization holds your team&rsquo;s databases, versions and drafts.
+                  {choice &&
+                    ` Next, you subscribe it to ${planNames[choice.plan]}, billed ${choice.interval === "year" ? "yearly" : "monthly"}.`}
                 </p>
                 <div className="mt-8">
                   <CreateOrgForm
                     urlPrefix={`${host}/app/`}
                     onChange={setDraft}
                     onCreated={(org) =>
-                      void navigate({ to: "/new", search: { org: org.slug }, replace: true })
+                      void (choice
+                        ? navigate({
+                            to: "/$org/settings/billing",
+                            params: { org: org.slug },
+                            search: { subscribe: choice.plan, interval: choice.interval },
+                            replace: true,
+                          })
+                        : navigate({ to: "/new", search: { org: org.slug }, replace: true }))
                     }
                   />
                 </div>

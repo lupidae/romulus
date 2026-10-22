@@ -1,7 +1,7 @@
 # romulus Privacy Policy
 
-**Version:** 1.0
-**Effective date:** 21 October 2026
+**Version:** 1.1
+**Effective date:** 22 October 2026
 
 This Privacy Policy explains how personal data is processed when you use the hosted romulus service at **https://romulus.lupidae.com** (the "**Service**") and its website. It is provided under Articles 13 and 14 of Regulation (EU) 2016/679 (the "**GDPR**") and French Law No. 78-17 of 6 January 1978 (the "**Loi Informatique et Libertés**"). Capitalized terms have the meaning given in the Terms of Service at https://romulus.lupidae.com/legal/terms.
 
@@ -115,6 +115,7 @@ You can obtain a copy of these safeguards by writing to romulus@lupidae.com.
 | Playgrounds | Stopped after 15 minutes without activity, deleted 7 days after their last use. The text of queries and migrations run is deleted with the Playground's record, at most 30 days after its last use. Playgrounds themselves are never backed up |
 | Audit log | For the life of the Organization, as it is the Organization's history |
 | Pending invitations | Valid for 7 days; deleted 30 days after they expire or are revoked. Accepted invitations are kept with the Organization's membership records |
+| Emails the Service sends | The recipient's address, the subject and the text of each email: 30 days after it is sent; 90 days after delivery is given up |
 | Contract records | For the duration of the contract and 5 years after it ends (limitation period: Article 2224 of the French Civil Code and Article L110-4 of the French Commercial Code) |
 | Billing data and invoices | 10 years from the end of the financial year (Article L123-22 of the French Commercial Code). Payment notifications received from Stripe: 90 days |
 | Technical and security logs (including IP addresses) | At most 6 months |

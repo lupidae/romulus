@@ -1076,6 +1076,27 @@ checkout's boxes, withdrawal) is "Legal: terms, checkout, withdrawal" below.
   `playground_usage`, `billing_notices`; audit actions for billing, kept
   out of a database's activity.
 
+### Subscribing from the homepage (decided 2026-10-22, built: task SUBSCRIBE)
+
+Subscribing is the homepage's main path, Free still one click away. Each
+paid plan's button is `/app/signup?plan=<starter|team|business>&interval=<month|year>`
+(the plan table's slugs and `Interval`), the period the one the visitor's
+switch shows. The app carries the choice in `next`, so it survives every way
+in: single sign-on there and back (the flow cookie), a password sign-in, a
+password sign-up's emailed link (kept in the browser that signed up, a day),
+then the Terms. Someone with no organization makes the first one (`/new`,
+"Next, you subscribe it to Team"), someone with some chooses (admins'
+organizations lead on, showing each one's plan; others say only admins
+subscribe; or a new one); either way the organization's billing page opens
+the checkout dialog for that plan and period, which asks what it always
+asks (the business, its professional use, the Terms) before Stripe. No API
+change beyond reserving the `signup` slug: the existing checkout endpoint,
+and Stripe's back link already lands on the billing page on Free ("Checkout
+cancelled. Nothing was charged."). An unknown or Free plan, or billing off
+(self-hosted), is the usual way in (`/app/`, then sign-in or onboarding).
+An organization already subscribed is told so, the plan picker showing the
+period asked, and changes plan through the portal as usual.
+
 ## Legal: terms, checkout, withdrawal (decided 2026-10-21, built: task COMPLY)
 
 The hosted service's contract, as its documents (published by the homepage,

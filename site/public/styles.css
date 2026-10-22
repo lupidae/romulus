@@ -2352,7 +2352,8 @@ code {
   font-weight: 600;
 }
 .plan-price .per-year,
-.plan-alt .per-year {
+.plan-alt .per-year,
+.plan-actions .per-year {
   display: none;
 }
 .pricing:has(#period-year:checked) .per-month {
@@ -2363,6 +2364,9 @@ code {
 }
 .pricing:has(#period-year:checked) .plan-alt .per-year {
   display: inline;
+}
+.pricing:has(#period-year:checked) .plan-actions .per-year {
+  display: inline-flex;
 }
 
 /* The plans: cards that decide. From two across, each card is a subgrid of

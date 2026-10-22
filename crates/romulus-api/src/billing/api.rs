@@ -29,7 +29,7 @@ use crate::{
         AcceptanceKind, AuditAction, Buyer, Interval, Locale, Plan, PlaygroundSize, TermsEdition,
     },
     error::ErrorBody,
-    extract::{Json, Path},
+    extract::{Json, Path, Query},
     legal::LegalLinks,
     orgs::invalid,
 };
@@ -999,12 +999,23 @@ async fn invoices(
     ))
 }
 
+/// What the buyer does on the fake checkout page.
+#[derive(Debug, Default, Deserialize)]
+struct FakeCheckoutChoice {
+    /// Leaves the page as Stripe's back link does: nothing paid, back to
+    /// the session's `cancel_url`.
+    #[serde(default)]
+    cancel: bool,
+}
+
 /// The fake checkout page (`ROMULUS_BILLING=fake`): completes the session as
 /// a paid subscription, applies it as its webhook would, and goes back to the
-/// billing page. 404 otherwise.
+/// billing page; with `?cancel=true`, goes back without paying, as Stripe's
+/// back link does. 404 otherwise.
 async fn fake_checkout(
     State(state): State<AppState>,
     Path(session): Path<String>,
+    Query(choice): Query<FakeCheckoutChoice>,
 ) -> ApiResult<Response> {
     let Some(inner) = state.billing.inner() else {
         return Err(ApiError::not_found("No such endpoint."));
@@ -1018,6 +1029,9 @@ async fn fake_checkout(
         .get(&session)
         .cloned()
         .ok_or_else(|| ApiError::not_found("No such checkout."))?;
+    if choice.cancel {
+        return Ok(Found::to(&checkout.cancel_url).into_response());
+    }
     let subscription = fake
         .complete_checkout(&session)
         .ok_or_else(|| ApiError::Conflict {

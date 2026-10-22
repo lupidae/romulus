@@ -90,9 +90,11 @@ from the API.
 - Hosting: Cloudflare Pages. Canonical URL `https://romulus.lupidae.com/`
   (in the head of `index.html`, `robots.txt`, `sitemap.xml`; the custom
   domain is attached in the Pages dashboard).
-- One way in: "Start free" (header, hero, closing, the plans) goes to the
-  plans' `signup` (`/app/signin`); "Talk to us" opens
-  `mailto:romulus@lupidae.com`. The returning visitor's "Sign in" is in the
+- Subscribing leads: "Choose a plan" (header, hero, closing, primary) goes to
+  the pricing, where each paid plan's button subscribes to it; "Start free"
+  (hero, closing, the Free card) goes to the plans' `signup` (`/app/signin`);
+  "Talk to us" opens `mailto:romulus@lupidae.com` (closing, the Business
+  card, the footer's Contact). The returning visitor's "Sign in" is in the
   header and, quietest (a ghost button), third in the hero's row.
 - The push snippet follows the spec: `POST /api/databases/<id>/versions` with
   the database's bearer token, remus JSON as the body.
@@ -111,10 +113,17 @@ from the API.
   markers; the e2e test fails until the two agree. Yearly is
   `yearly_months` (10) times the monthly price. The cards are static HTML
   holding both periods' prices, and the Monthly/Yearly switch is native
-  radios and CSS (`:has()`), no script. Every plan's button goes to
-  `signup` (`/app/signin`: Zitadel's login creates the account): every
-  organization starts on Free, and an admin buys a paid plan from its
-  Billing page in the app. The limits' labels and the support lines say what
+  radios and CSS (`:has()`), no script. A paid plan's button ("Subscribe
+  to Team") is two links, one per period, the one shown following the
+  switch: `subscribe?plan=<id>&interval=month|year` (`/app/signup`, the
+  API's plan ids from `billing::plans`), which carries the choice through
+  sign-in or sign-up (Zitadel's login creates the account), the Terms and
+  the first organization, to that organization's checkout (docs/MVP.md,
+  "Subscribing from the homepage"). Free's goes to `signup`
+  (`/app/signin`); an organization on Free still buys a plan from its
+  Billing page. Paid plans are for businesses (the line under the switch;
+  the checkout asks the business's name and its professional use). The
+  limits' labels and the support lines say what
   the hosted Terms say (7.1, 13.3): the table cap counts one version's
   tables and views, support times are targets. The line under the switch is
   the pricing's one VAT mention (Terms 7.3).

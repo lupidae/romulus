@@ -24,7 +24,8 @@ import {
   useSignUp,
 } from "@/features/auth/password";
 import { authMethodsQuery, instanceQuery } from "@/features/auth/queries";
-import { afterSignIn, appPath } from "@/features/auth/session";
+import { afterSignIn, appPath, rememberSignUpNext } from "@/features/auth/session";
+import { afterSignInLine, subscribeInNext } from "@/features/billing/subscribe";
 import { copyVersions } from "@/features/billing/copy";
 import { TermsBoxes } from "@/features/legal/components/terms-boxes";
 import { NO_TICKS, termsTicked, type TermsTicks } from "@/features/legal/ticks";
@@ -150,6 +151,7 @@ function SignUpForm({
   const [ticks, setTicks] = React.useState<TermsTicks>(NO_TICKS);
   const [showTicks, setShowTicks] = React.useState(false);
   const termsId = React.useId();
+  const subscribing = subscribeInNext(next);
 
   if (sentTo) {
     return (
@@ -191,6 +193,7 @@ function SignUpForm({
           {mail
             ? "We will email you a link to choose your password."
             : "Use the address you were invited with."}
+          {subscribing && ` ${afterSignInLine(subscribing)}`}
         </>
       }
       footer={footer}
@@ -234,7 +237,10 @@ function SignUpForm({
                 }
               },
               onSuccess: (result) => {
-                if (result.outcome === "email_sent") return setSentTo(email.trim());
+                if (result.outcome === "email_sent") {
+                  rememberSignUpNext(next);
+                  return setSentTo(email.trim());
+                }
                 if (result.org) {
                   toast.success(`Welcome to ${result.org.name}`, {
                     description: `You joined as ${result.org.role === "admin" ? "an" : "a"} ${result.org.role}.`,
