@@ -527,8 +527,10 @@ export function ModeToggle({
   // theirs (`data-state`), and the chosen mode would not show. The chosen
   // one is inverted: on the timeline's card, the kit's raised item would
   // barely differ from its track.
+  // On a phone (the sheet), items as tall as the kit's buttons there (36px)
+  // for a thumb: the kit's toggle is sized for a pointer.
   const item =
-    "data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:shadow-raised data-[state=on]:hover:text-background";
+    "max-md:h-9 max-md:px-3 data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:shadow-raised data-[state=on]:hover:text-background";
   return (
     <div className={cn("flex min-w-0 flex-col items-start gap-1", className)}>
       <ToggleGroup
@@ -538,7 +540,7 @@ export function ModeToggle({
         aria-label="What the graph shows"
         aria-describedby={caption}
         aria-keyshortcuts="M"
-        className="bg-background ring-1 ring-border-strong ring-inset"
+        className="bg-background ring-1 ring-border-strong ring-inset max-md:h-10"
       >
         <ToggleGroupItem
           value="superposed"

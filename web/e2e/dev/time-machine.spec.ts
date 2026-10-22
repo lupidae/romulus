@@ -352,5 +352,10 @@ test.describe("on a phone", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
+    // The modes, in the sheet, as tall as the bar's buttons: a thumb's target.
+    for (const name of ["Superposed", "At cursor"]) {
+      const box = (await page.getByRole("radio", { name }).boundingBox())!;
+      expect(box.height, name).toBeGreaterThanOrEqual(36);
+    }
   });
 });
