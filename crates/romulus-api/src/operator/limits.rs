@@ -19,7 +19,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use super::{Dashboard, Event, Notice, notify, who};
+use super::{Dashboard, Event, Notice, notify, org_label, who};
 use crate::{
     AppState,
     billing::{Cap, PlanLimitDetails},
@@ -167,7 +167,7 @@ async fn record(
             .await?
             .flatten();
     let mut notice = notice(
-        &format!("{name} ({slug})"),
+        &org_label(&name, &slug),
         details,
         &admins,
         customer.as_deref(),
@@ -205,9 +205,6 @@ fn notice(
     if !admins.is_empty() {
         lines.push(format!("Admins: {}.", admins.join(", ")));
     }
-    if let (Some(d), Some(customer)) = (dashboard, customer) {
-        lines.push(format!("Stripe customer: {}", d.customer(customer)));
-    }
     lines.push(format!(
         "Told once in {AGAIN_AFTER_DAYS} days per organization and limit."
     ));
@@ -217,6 +214,7 @@ fn notice(
         about: String::new(),
         subject: format!("Plan limit reached: {org}, {plan}, {cap}{count}"),
         lines,
+        links: dashboard.map_or_else(Vec::new, |d| d.links(customer, None)),
     }
 }
 

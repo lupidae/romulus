@@ -345,6 +345,56 @@ async fn a_failed_payment_is_told_once_per_invoice_and_the_grace_periods_end_onc
     let (subject, body) = told(&db, "grace_ended").await;
     assert_eq!(subject, "[romulus] Moved to Free: acme (acme), Team unpaid");
     assert!(body.contains("within 14 days"), "{body}");
+
+    // Paid at last, on the same subscription: back from Free, told once.
+    b.stripe
+        .update(&subscription, |s| s.status = "active".into());
+    for _ in 0..2 {
+        deliver(
+            &b,
+            "customer.subscription.updated",
+            subscription_object(&subscription),
+        )
+        .await;
+    }
+    let (subject, body) = told(&db, "recovered").await;
+    assert_eq!(subject, "[romulus] Back from Free: acme (acme), Team paid");
+    assert!(
+        body.contains("acme (acme) paid for Team, monthly: €49.00 a month after its grace period had ended: back on Team from Free."),
+        "{body}"
+    );
+    assert!(
+        body.contains("MRR: +€49.00 a month at list price"),
+        "{body}"
+    );
+    assert!(
+        body.contains("Stripe subscription: https://dashboard.stripe.com/test/subscriptions/"),
+        "{body}"
+    );
+    assert_eq!(queued(&db, "subscription_started").await.len(), OPS.len());
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn paying_late_within_the_grace_period_is_no_recovery(db: PgPool) {
+    let b = operated_billing(&db, false).await;
+    let subscription = subscribe(&b, "team", "month").await;
+    b.stripe
+        .update(&subscription, |s| s.status = "past_due".into());
+    deliver(
+        &b,
+        "customer.subscription.updated",
+        subscription_object(&subscription),
+    )
+    .await;
+    b.stripe
+        .update(&subscription, |s| s.status = "active".into());
+    deliver(
+        &b,
+        "customer.subscription.updated",
+        subscription_object(&subscription),
+    )
+    .await;
+    assert_eq!(queued(&db, "recovered").await.len(), 0, "within its grace");
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -609,8 +659,20 @@ async fn seed(db: &PgPool, day: NaiveDate, now: DateTime<Utc>) {
         member(db, id, who, Role::Admin).await;
         orgs.push(id);
     }
+    // And epsilon, nobody's, 40 days before.
+    let epsilon = org(db, "epsilon").await;
+    sqlx::query!(
+        "UPDATE organizations SET created_at = $2 WHERE id = $1",
+        epsilon,
+        end - Duration::days(40)
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    orgs.push(epsilon);
     // Billing: acme on Team monthly, beta on Business yearly ending with
-    // its period, gamma's Starter past due 3 days, delta's Team cancelled.
+    // its period, gamma's Starter past due 3 days, delta's Team cancelled,
+    // epsilon trying Team.
     for (i, (plan, interval, status, amount, cancelling, past_due)) in [
         ("team", "month", "active", 4_900_i64, false, None),
         ("business", "year", "active", 120_000, true, None),
@@ -623,6 +685,7 @@ async fn seed(db: &PgPool, day: NaiveDate, now: DateTime<Utc>) {
             Some(now - Duration::days(3)),
         ),
         ("team", "month", "canceled", 4_900, false, None),
+        ("team", "month", "trialing", 4_900, false, None),
     ]
     .into_iter()
     .enumerate()
@@ -749,21 +812,31 @@ async fn the_digest_counts_what_the_database_holds(db: PgPool) {
     );
     assert_eq!(
         (digest.orgs.yesterday, digest.orgs.week, digest.orgs_total),
-        (1, 2, 4)
+        (1, 2, 5)
     );
     // All but Cy, and their organizations.
     assert_eq!((digest.active_accounts, digest.active_orgs), (3, 3));
+    // Active subscriptions only: not gamma's (in grace), nor epsilon's
+    // (trialing).
     let billing = digest.billing.clone().unwrap();
     assert_eq!(
         billing.paying.into_iter().collect::<Vec<_>>(),
-        [(Plan::Starter, 1), (Plan::Team, 1), (Plan::Business, 1)]
+        [(Plan::Team, 1), (Plan::Business, 1)]
     );
-    // 49.00 + 1200.00 / 12 + 19.00.
-    assert_eq!(billing.mrr.get("eur"), Some(&16_800));
+    // 49.00 + 1200.00 / 12.
+    assert_eq!(billing.mrr.get("eur"), Some(&14_900));
     assert_eq!(billing.cancelling.len(), 1);
     assert_eq!(billing.cancelling[0].0, "beta (beta)");
     assert_eq!(billing.in_grace.len(), 1);
-    assert_eq!(billing.in_grace[0].0, "gamma (gamma)");
+    assert_eq!(
+        (billing.in_grace[0].0.as_str(), billing.in_grace[0].1),
+        ("gamma (gamma)", Plan::Starter)
+    );
+    assert_eq!(billing.trialing.len(), 1);
+    assert_eq!(
+        (billing.trialing[0].0.as_str(), billing.trialing[0].1),
+        ("epsilon (epsilon)", Plan::Team)
+    );
     assert_eq!(billing.playground_seconds, 7_200);
     assert_eq!(
         (
@@ -800,10 +873,11 @@ async fn the_digest_counts_what_the_database_holds(db: PgPool) {
     let text = notice.lines.join("\n");
     for line in [
         "Accounts: +1 (+2 in 7 days), 4 in all; 3 active in 7 days",
-        "Paying organizations: 3 (Starter 1, Team 1, Business 1)",
-        "MRR: €168.00",
+        "Paying organizations: 2 (Team 1, Business 1)",
+        "MRR: €149.00, active subscriptions at list price, before discounts",
+        "Trialing: 1: epsilon (epsilon), Team until ",
         "Cancellations scheduled: 1: beta (beta), ends ",
-        "Failed payments in grace: 1: gamma (gamma), Free on ",
+        "Failed payments in grace: 1: gamma (gamma), Starter, Free on ",
         "Playground hours: 2.0 in ",
         "Imports: 2 (3 migrations); 3 in 7 days",
         "Migration tests: 3 (1 passed, 1 failed, 1 error); 4 in 7 days",
@@ -812,7 +886,7 @@ async fn the_digest_counts_what_the_database_holds(db: PgPool) {
         assert!(text.contains(line), "{line}\n---\n{text}");
     }
     assert!(
-        notice.subject.ends_with("MRR €168.00"),
+        notice.subject.ends_with("MRR €149.00"),
         "{}",
         notice.subject
     );

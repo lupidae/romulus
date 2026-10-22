@@ -6,7 +6,7 @@
 
 use uuid::Uuid;
 
-use super::{Event, Notice, who};
+use super::{Event, Notice, flat, org_label, who};
 use crate::retention::{
     deletion::{AccountPlan, By, Fate, OrgPlan, OrgRef},
     idp::IdpOutcome,
@@ -31,7 +31,7 @@ pub fn account_created(user_id: Uuid, name: &str, email: &str, joined: Joined<'_
         Joined::SingleSignOn => "Signed in for the first time with single sign-on.".to_owned(),
         Joined::Password {
             invited_to: Some(org),
-        } => format!("Signed up with a password, invited to {org}."),
+        } => format!("Signed up with a password, invited to {}.", flat(org)),
         Joined::Password { invited_to: None } => "Signed up with a password.".to_owned(),
         Joined::Setup => "Created by romulus-api setup, as the first admin.".to_owned(),
         Joined::Dev => "Created by the development sign-in.".to_owned(),
@@ -45,12 +45,14 @@ pub fn account_created(user_id: Uuid, name: &str, email: &str, joined: Joined<'_
             how,
             format!("Account id: {user_id}"),
         ],
+        links: Vec::new(),
     }
 }
 
 /// A new organization, and who made it (`None`: `romulus-api setup`).
 pub fn org_created(org_id: Uuid, name: &str, slug: &str, by: Option<(&str, &str)>) -> Notice {
-    let mut lines = vec![format!("New organization: {name} ({slug}).")];
+    let org = org_label(name, slug);
+    let mut lines = vec![format!("New organization: {org}.")];
     lines.push(match by {
         Some((by_name, by_email)) => format!("Created by {}, its admin.", who(by_name, by_email)),
         None => "Created by romulus-api setup.".to_owned(),
@@ -59,13 +61,14 @@ pub fn org_created(org_id: Uuid, name: &str, slug: &str, by: Option<(&str, &str)
     Notice {
         event: Event::OrgCreated,
         about: org_id.to_string(),
-        subject: format!("New organization: {name} ({slug})"),
+        subject: format!("New organization: {org}"),
         lines,
+        links: Vec::new(),
     }
 }
 
 fn orgs<'a>(orgs: impl Iterator<Item = &'a OrgRef>) -> String {
-    orgs.map(|org| format!("{} ({})", org.name, org.slug))
+    orgs.map(|org| org_label(&org.name, &org.slug))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -104,8 +107,9 @@ pub fn account_deleted(
     }
     for (org, successor) in appointed {
         lines.push(format!(
-            "{successor} is now an admin of {} ({}), its only admin gone.",
-            org.name, org.slug
+            "{} is now an admin of {}, its only admin gone.",
+            flat(successor),
+            org_label(&org.name, &org.slug)
         ));
     }
     match idp {
@@ -113,7 +117,8 @@ pub fn account_deleted(
         IdpOutcome::Deleted => lines.push("Its Zitadel user is deleted too.".to_owned()),
         IdpOutcome::AlreadyGone => lines.push("Its Zitadel user was gone already.".to_owned()),
         IdpOutcome::Manual { user_id } => lines.push(format!(
-            "Delete its Zitadel user {user_id} in Zitadel's console: ROMULUS_ZITADEL_TOKEN is not set."
+            "Delete its Zitadel user {} in Zitadel's console: ROMULUS_ZITADEL_TOKEN is not set.",
+            flat(user_id)
         )),
     }
     lines.push(format!("Account id: {}", plan.user_id));
@@ -122,29 +127,28 @@ pub fn account_deleted(
         about: plan.user_id.to_string(),
         subject: format!(
             "Account deleted: {} ({})",
-            plan.email,
+            flat(&plan.email),
             match by {
                 By::Request => "on request",
                 By::Inactivity => "inactive",
             }
         ),
         lines,
+        links: Vec::new(),
     }
 }
 
 /// An organization deleted on request (`romulus-api delete-org`); one going
 /// with its only member's account is in that account's notification.
 pub fn org_deleted(plan: &OrgPlan) -> Notice {
-    let org = &plan.org;
+    let id = plan.org.id;
+    let org = org_label(&plan.org.name, &plan.org.slug);
     Notice {
         event: Event::OrgDeleted,
-        about: org.id.to_string(),
-        subject: format!("Organization deleted: {} ({})", org.name, org.slug),
+        about: id.to_string(),
+        subject: format!("Organization deleted: {org}"),
         lines: vec![
-            format!(
-                "The organization {} ({}) is deleted, on request (romulus-api delete-org).",
-                org.name, org.slug
-            ),
+            format!("The organization {org} is deleted, on request (romulus-api delete-org)."),
             format!(
                 "It held {} databases, {} versions, {} drafts, {} members, {} pending invitations and {} playgrounds.",
                 plan.databases,
@@ -154,8 +158,9 @@ pub fn org_deleted(plan: &OrgPlan) -> Notice {
                 plan.invitations,
                 plan.playgrounds
             ),
-            format!("Organization id: {}", org.id),
+            format!("Organization id: {id}"),
         ],
+        links: Vec::new(),
     }
 }
 
@@ -184,5 +189,27 @@ mod tests {
                 .lines
                 .contains(&"Signed up with a password, invited to acme.".to_owned())
         );
+    }
+
+    #[test]
+    fn a_name_cannot_start_a_line_of_its_own() {
+        let notice = org_created(
+            Uuid::from_u128(8),
+            "Acme\nCreated by romulus-api setup.",
+            "acme",
+            Some(("Ada\r\nAdmin", "ada@example.com")),
+        );
+        assert_eq!(
+            notice.subject,
+            "New organization: Acme Created by romulus-api setup. (acme)"
+        );
+        assert_eq!(
+            notice.lines[..2],
+            [
+                "New organization: Acme Created by romulus-api setup. (acme).",
+                "Created by Ada  Admin <ada@example.com>, its admin.",
+            ]
+        );
+        assert!(notice.lines.iter().all(|line| !line.contains('\n')));
     }
 }

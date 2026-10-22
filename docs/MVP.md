@@ -1289,6 +1289,12 @@ Policy promise the same. All of it lives in the API's `retention` module.
   accepted 30 days after they expired (revoked ones are deleted at once;
   accepted ones are the membership's record). Removed versions already purge
   after 30 days.
+- **Emails keep personal data in the mail outbox** (`mail_outbox`: the
+  address, the subject and the text, with names, addresses and business
+  names: contract and billing letters, operator notifications) until the
+  outbox purges them: 30 days after they were sent, 90 days after they were
+  given up (3 days of failures, then sent by hand). Deleting an account
+  leaves the emails already queued about it to these delays.
 - **A purged database's audit events stay** the organization's history (who
   published what, with which approvals): `audit_events.database_id` is
   `ON DELETE SET NULL`, and `database_name`, recorded with every event about
@@ -1377,13 +1383,20 @@ default: off, nothing written). The API's `operator` module.
   business's name and country: no more personal data than that), and a link
   to Stripe's dashboard (the customer, the subscription or the invoice; test
   or live as the key is) where there is something to look at. There is no
-  operator view in the app to link to yet.
+  operator view in the app to link to yet. What people typed (names,
+  addresses, business names, a cancellation's comment) has its control
+  characters, newlines included, made spaces, so it cannot forge a line; the
+  only links are the ones the code built (Stripe's dashboard, the install's
+  origin), never a URL found in the text.
 - **Events**: a new account (any way in: single sign-on's first sign-in, a
   password sign-up, `setup`, the dev sign-in) and a new organization;
   billing's (a subscription started, upgraded or downgraded or a change
   scheduled, a cancellation scheduled, a subscription over with Stripe's
   `cancellation_details`, a failed payment once per invoice, a grace period
-  over, a consumer's withdrawal, which only a consumer's checkout can make);
+  over, a payment on the same subscription after it (back from Free), a
+  consumer's withdrawal, which only a consumer's checkout can make). A
+  scheduled change says the plan it becomes, not a price: the stored row has
+  none for it, and the plan table's would ignore currency and discounts;
   deletions done (`delete-user`, `delete-org`, inactive accounts; no
   self-service request exists yet to report); a plan's cap reached, at most
   once per organization and cap in 30 days.
@@ -1400,10 +1413,12 @@ default: off, nothing written). The API's `operator` module.
 - **The digest**, from `ROMULUS_OPERATOR_DIGEST_HOUR` (UTC, 7): the day before
   and the 7 days to it. Accounts and organizations (new, in all, active: an
   account used in 7 days and its organizations), with billing the paying
-  organizations by plan, the MRR from the stored subscriptions (monthly
-  amounts, yearly ones divided by 12) and its change since the last digest,
-  cancellations scheduled, failed payments in grace, the month's playground
-  hours; imports, migration tests, deletions. No error count: the API keeps
+  organizations by plan (`active` subscriptions only), the MRR from them
+  (list prices before discounts, yearly ones divided by 12) and its change
+  since the last digest, trialing and in-grace organizations on lines of
+  their own (not in MRR), cancellations scheduled, the month's playground
+  hours; imports, migration tests, deletions (indexes for the windows:
+  `versions_imported_at_idx`, `migration_tests_created_at_idx`). No error count: the API keeps
   none that is cheap to read. One a day whatever the processes: the day's
   `operator_digests` row is taken in the transaction that queues it, with the
   MRR and playground time the next digest compares with.

@@ -22,3 +22,7 @@ CREATE TABLE operator_limit_notices (
 );
 COMMENT ON TABLE operator_limit_notices IS
     'When the operators were last told that an organization reached a cap of its plan (a 402 plan_limit): again only 30 days later.';
+
+-- The digest's windows over imports and migration tests (operator::digest).
+CREATE INDEX versions_imported_at_idx ON versions (created_at) WHERE origin = 'import';
+CREATE INDEX migration_tests_created_at_idx ON migration_tests (created_at);

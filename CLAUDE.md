@@ -1413,8 +1413,12 @@ docs/self-host/configuration.md the operator's side.
   config.operator.as_ref(), &notice)` **in the transaction of what it
   reports**, never after the commit. Builders live in `operator::accounts` (accounts, organizations,
   deletions) and `operator::billing` (`changes(before, next)` decides what a
-  webhook's stored change is). Links to Stripe go through
-  `operator::Dashboard`. Names, addresses and business names only.
+  webhook's stored change is). Every value from outside (names,
+  addresses, business names, Stripe's free text) goes through
+  `operator::flat` (control characters, newlines included, become spaces);
+  links are `Notice::links` (`operator::Link`, Stripe's through
+  `operator::Dashboard`), the only links an email has. Names, addresses and
+  business names only; MRR counts `active` subscriptions at list price.
 - **Plan caps**: `ApiError::PlanLimit` puts `error::PlanLimitReached` in its
   response's extensions; `operator::limits::watch` (a layer in `app()`) and
   `mcp::api` hand it to `limits::observe`. A new route under `/orgs/{org}/`

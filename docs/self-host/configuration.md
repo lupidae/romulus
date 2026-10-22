@@ -163,26 +163,33 @@ short email, its subject starting with `[romulus]`:
   and a business's name and country), upgraded or downgraded (or a change
   scheduled for the period's end), a cancellation scheduled, a subscription
   over (with Stripe's reason when the customer gave one), a failed payment,
-  a grace period over (the organization moved to Free), a consumer's
-  withdrawal and its refund, and an organization reaching a cap of its plan
-  for the first time (at most once per organization and cap in 30 days).
-  These link to the customer or subscription in Stripe's dashboard, in test
-  or live mode as the key is.
+  a grace period over (the organization moved to Free), a payment after it
+  on the same subscription (back from Free), a consumer's withdrawal and its
+  refund, and an organization reaching a cap of its plan for the first time
+  (at most once per organization and cap in 30 days). These link to the
+  customer or subscription in Stripe's dashboard, in test or live mode as
+  the key is. A scheduled change names the plan it becomes, without a
+  price (Stripe's schedule has it).
 
 Every day from `ROMULUS_OPERATOR_DIGEST_HOUR` (UTC) a digest follows,
 about the day before and the 7 days to it: new and active accounts and
-organizations; with billing, paying organizations by plan, the monthly
-recurring revenue (yearly plans divided by 12) and its change since the last
-digest, cancellations scheduled, failed payments in their grace period and
-the month's playground hours; migration imports, migration tests and their
-outcomes, deletions.
+organizations; with billing, paying organizations (active subscriptions) by
+plan, the monthly recurring revenue (their list prices before discounts,
+yearly plans divided by 12) and its change since the last digest,
+organizations trialing and those whose payment failed, in their grace period
+(neither counted in it), cancellations scheduled and the month's playground
+hours; migration imports, migration tests and their outcomes, deletions.
 
 Notifications are queued in the database in the transaction of what they
 report (a failure never breaks anyone's action) and sent by the API's mail
 outbox within half a minute, retried for 3 days if your mail server refuses
-them. They hold names, addresses and business names; sent ones are deleted
-after 30 days. Check the setup with `operator-test` (below). On Kubernetes, set
-both variables with the chart's `api.extraEnv`.
+them. They hold names, addresses and business names; the outbox deletes
+them 30 days after they were sent, 90 after they were given up ([Retention
+and deletion](#retention-and-deletion)). What people typed (names, business
+names, a cancellation's comment) is shown on one line, never as a link: the
+only links are to Stripe's dashboard and to your install. Check the setup
+with `operator-test` (below). On Kubernetes, set both variables with the
+chart's `api.extraEnv`.
 
 ## Admin commands
 
@@ -250,6 +257,11 @@ docker compose exec api romulus-api delete-org acme --dry-run
 - Run it while the API runs: open drafts close and the people removed are
   disconnected at once.
 - Backups still hold what was deleted until they expire (`backup.md`).
+- Emails stay in the database's mail outbox (`mail_outbox`: the address,
+  the subject and the text, so names, addresses and business names) until
+  it deletes them: 30 days after they were sent, 90 days after they were
+  given up (3 days of failures). This covers operator notifications; a
+  deleted account's emails already queued go with these delays too.
 
 `ROMULUS_DELETE_INACTIVE_ACCOUNTS=true` also deletes accounts nobody used
 for 3 years (no sign-in, no session, and none of their access tokens or the

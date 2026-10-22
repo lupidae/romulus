@@ -4,11 +4,12 @@
 //! - accounts and organizations: new yesterday and in 7 days, in all, and
 //!   active (an account used in 7 days, `users.last_seen_at`; an
 //!   organization one of whose members is);
-//! - with billing on: paying organizations by plan (the plan in force,
-//!   `billing::state`), the monthly recurring revenue (each paying
-//!   subscription's amount, a yearly one divided by 12) and its change since
-//!   the last digest, cancellations scheduled, failed payments in their
-//!   grace period, playground hours of the month;
+//! - with billing on: paying organizations by plan (subscriptions `active`
+//!   only), the monthly recurring revenue (their list prices, before
+//!   discounts; a yearly one divided by 12) and its change since the last
+//!   digest; apart, organizations trialing and those whose payment failed,
+//!   within their grace period (neither in MRR); cancellations scheduled,
+//!   playground hours of the month;
 //! - migration imports (one per replay: an import's versions share their
 //!   transaction's time), migration tests and their outcomes, deletions
 //!   (the sign-in log's `account_deleted`, `organization_deleted`).
@@ -23,7 +24,7 @@ use std::{collections::BTreeMap, fmt::Write as _};
 use chrono::{DateTime, Datelike as _, Duration, NaiveDate, Timelike as _, Utc};
 use sqlx::PgConnection;
 
-use super::{Event, Notice, day as long_day, notify};
+use super::{Event, Notice, day as long_day, notify, org_label};
 use crate::{
     AppState,
     billing::{money, state::Stored},
@@ -66,14 +67,18 @@ pub struct Digest {
 /// Hosted billing's numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Billing {
-    /// Organizations on each paid plan in force.
+    /// Organizations whose subscription is `active`, by plan.
     pub paying: BTreeMap<Plan, i64>,
-    /// Cents a month, per currency.
+    /// What those bring in a month at list price (before discounts), in
+    /// cents per currency.
     pub mrr: BTreeMap<String, i64>,
+    /// Trialing: the organization, its plan, when the trial ends.
+    pub trialing: Vec<(String, Plan, Option<DateTime<Utc>>)>,
     /// Subscriptions ending with their period: the organization, when.
     pub cancelling: Vec<(String, Option<DateTime<Utc>>)>,
-    /// Failed payments within their grace: the organization, when it ends.
-    pub in_grace: Vec<(String, DateTime<Utc>)>,
+    /// Failed payments within their grace: the organization, its plan, when
+    /// it ends.
+    pub in_grace: Vec<(String, Plan, DateTime<Utc>)>,
     /// The month of yesterday, and its playground time.
     pub playground_month: NaiveDate,
     pub playground_seconds: i64,
@@ -234,6 +239,7 @@ async fn billing(
     let mut billing = Billing {
         paying: BTreeMap::new(),
         mrr: BTreeMap::new(),
+        trialing: Vec::new(),
         cancelling: Vec::new(),
         in_grace: Vec::new(),
         playground_month: first_of_month(day.pred_opt().unwrap_or(day)),
@@ -254,29 +260,38 @@ async fn billing(
             withdrawn_at: r.withdrawn_at,
             ..Stored::default()
         };
-        let org = format!("{} ({})", r.name, r.slug);
+        let org = org_label(&r.name, &r.slug);
         let plan = stored.effective(now);
         if plan == Plan::Free {
             continue;
-        }
-        *billing.paying.entry(plan).or_default() += 1;
-        if let (Some(cents), Some(currency), Some(interval)) = (
-            stored.amount_cents,
-            stored.currency.as_deref(),
-            stored.interval,
-        ) {
-            *billing
-                .mrr
-                .entry(currency.to_ascii_lowercase())
-                .or_default() += super::monthly(cents, interval);
         }
         if stored.cancel_at_period_end {
             billing
                 .cancelling
                 .push((org.clone(), stored.current_period_end));
         }
-        if let Some(until) = stored.grace_until() {
-            billing.in_grace.push((org, until));
+        match stored.status.as_deref() {
+            Some("active") => {
+                *billing.paying.entry(plan).or_default() += 1;
+                if let (Some(cents), Some(currency), Some(interval)) = (
+                    stored.amount_cents,
+                    stored.currency.as_deref(),
+                    stored.interval,
+                ) {
+                    *billing
+                        .mrr
+                        .entry(currency.to_ascii_lowercase())
+                        .or_default() += super::monthly(cents, interval);
+                }
+            }
+            Some("trialing") => billing
+                .trialing
+                .push((org, plan, stored.current_period_end)),
+            _ => {
+                if let Some(until) = stored.grace_until() {
+                    billing.in_grace.push((org, plan, until));
+                }
+            }
         }
     }
     billing.playground_seconds = sqlx::query_scalar!(
@@ -407,6 +422,15 @@ fn hours(seconds: i64) -> String {
     format!("{}.{}", tenths / 10, (tenths % 10).abs())
 }
 
+/// `What: 0`, or `What: 2: a; b`.
+fn listed(what: &str, items: &[String]) -> String {
+    if items.is_empty() {
+        format!("{what}: 0")
+    } else {
+        format!("{what}: {}: {}", items.len(), some_of(items))
+    }
+}
+
 /// At most 5 of `items`, then how many more.
 fn some_of(items: &[String]) -> String {
     let mut shown = items.iter().take(5).cloned().collect::<Vec<_>>().join("; ");
@@ -488,6 +512,7 @@ pub fn notice(digest: &Digest, previous: Option<&Recorded>, origin: &str) -> Not
         about: digest.day.to_string(),
         subject,
         lines,
+        links: Vec::new(),
     }
 }
 
@@ -516,7 +541,17 @@ fn billing_lines(
             mrr_change(&previous.mrr, &billing.mrr)
         );
     }
+    mrr.push_str(", active subscriptions at list price, before discounts");
     lines.push(mrr);
+    let trialing: Vec<String> = billing
+        .trialing
+        .iter()
+        .map(|(org, plan, ends)| match ends {
+            Some(at) => format!("{org}, {} until {}", plan.name(), long_day(*at)),
+            None => format!("{org}, {}", plan.name()),
+        })
+        .collect();
+    lines.push(listed("Trialing", &trialing));
     let cancelling: Vec<String> = billing
         .cancelling
         .iter()
@@ -525,29 +560,13 @@ fn billing_lines(
             None => org.clone(),
         })
         .collect();
-    lines.push(if cancelling.is_empty() {
-        "Cancellations scheduled: 0".to_owned()
-    } else {
-        format!(
-            "Cancellations scheduled: {}: {}",
-            cancelling.len(),
-            some_of(&cancelling)
-        )
-    });
     let in_grace: Vec<String> = billing
         .in_grace
         .iter()
-        .map(|(org, until)| format!("{org}, Free on {}", long_day(*until)))
+        .map(|(org, plan, until)| format!("{org}, {}, Free on {}", plan.name(), long_day(*until)))
         .collect();
-    lines.push(if in_grace.is_empty() {
-        "Failed payments in grace: 0".to_owned()
-    } else {
-        format!(
-            "Failed payments in grace: {}: {}",
-            in_grace.len(),
-            some_of(&in_grace)
-        )
-    });
+    lines.push(listed("Failed payments in grace", &in_grace));
+    lines.push(listed("Cancellations scheduled", &cancelling));
     let mut playground = format!(
         "Playground hours: {} in {}",
         hours(billing.playground_seconds),
@@ -615,8 +634,9 @@ mod tests {
         let billing = Billing {
             paying: BTreeMap::from([(Plan::Starter, 4), (Plan::Team, 4), (Plan::Business, 1)]),
             mrr: BTreeMap::from([("eur".to_owned(), 61_250)]),
+            trialing: vec![("Delta (delta)".into(), Plan::Team, Some(at(5)))],
             cancelling: vec![("Acme (acme)".into(), Some(at(3)))],
-            in_grace: vec![("Gamma (gamma)".into(), at(1))],
+            in_grace: vec![("Gamma (gamma)".into(), Plan::Starter, at(1))],
             playground_month: NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
             playground_seconds: 1_124_640,
         };
@@ -640,9 +660,10 @@ mod tests {
             "Accounts: +3 (+12 in 7 days), 128 in all; 41 active in 7 days",
             "Organizations: +1 (+4 in 7 days), 40 in all; 17 active in 7 days",
             "Paying organizations: 9 (Starter 4, Team 4, Business 1)",
-            "MRR: €612.50 (+€49.00 since October 20)",
+            "MRR: €612.50 (+€49.00 since October 20), active subscriptions at list price, before discounts",
+            "Trialing: 1: Delta (delta), Team until November 5, 2026",
             "Cancellations scheduled: 1: Acme (acme), ends November 3, 2026",
-            "Failed payments in grace: 1: Gamma (gamma), Free on November 1, 2026",
+            "Failed payments in grace: 1: Gamma (gamma), Starter, Free on November 1, 2026",
             "Playground hours: 312.4 in October 2026 (+12.1 since October 20)",
             "Imports: 2 (35 migrations); 5 in 7 days",
             "Migration tests: 14 (11 passed, 2 failed, 1 error); 60 in 7 days",

@@ -8,12 +8,18 @@
 //!   prefixed `[romulus]`: a new account ([`accounts`]), a new organization,
 //!   a subscription started, upgraded or downgraded, a cancellation
 //!   scheduled, a subscription cancelled (Stripe's reason when it has one),
-//!   a failed payment, a grace period over, a consumer's withdrawal
-//!   ([`billing`]), an account or organization deleted (on request or for
-//!   inactivity), a plan's cap reached ([`limits`]: once per organization
-//!   and cap in 30 days). Each says which organization, which plan, who,
-//!   and links to Stripe's dashboard where there is something to look at.
-//!   Personal data: names, addresses and a business's name only.
+//!   a failed payment, a grace period over, a payment after it (back from
+//!   Free), a consumer's withdrawal ([`billing`]), an account or
+//!   organization deleted (on request or for inactivity), a plan's cap
+//!   reached ([`limits`]: once per organization and cap in 30 days). Each
+//!   says which organization, which plan, who, and links to Stripe's
+//!   dashboard where there is something to look at. Personal data: names,
+//!   addresses and a business's name only.
+//! - **What people typed stays text**: every value from outside (names,
+//!   addresses, business names, a cancellation's comment) goes through
+//!   [`flat`], so it cannot start a line of its own; only the links the
+//!   code built ([`Link`]: Stripe's dashboard, the install's origin) are
+//!   links.
 //! - **Through the mail outbox** (`mail_outbox`, [`crate::mail::outbox`]):
 //!   [`notify`] queues an email per operator in the transaction of what it
 //!   reports, so nothing is told that did not happen and sending never fails
@@ -34,7 +40,7 @@ pub mod billing;
 pub mod digest;
 pub mod limits;
 
-use std::time::Duration;
+use std::{fmt::Write as _, time::Duration};
 
 use chrono::{DateTime, NaiveDate, Timelike as _, Utc};
 use sha2::{Digest as _, Sha256};
@@ -72,6 +78,9 @@ pub enum Event {
     PaymentFailed,
     /// The grace period after a failed payment ended: on Free.
     GraceEnded,
+    /// Paid again, on the same subscription, after the grace period ended:
+    /// back from Free.
+    Recovered,
     /// A consumer withdrew (and is refunded the days not used).
     Withdrawal,
     AccountDeleted,
@@ -79,6 +88,8 @@ pub enum Event {
     /// An organization reached a cap of its plan (a 402 `plan_limit`).
     PlanLimitReached,
     Digest,
+    /// `romulus-api operator-test`'s message: sent at once, never queued.
+    Test,
 }
 
 impl Event {
@@ -93,11 +104,13 @@ impl Event {
             Self::SubscriptionCancelled => "operator_subscription_cancelled",
             Self::PaymentFailed => "operator_payment_failed",
             Self::GraceEnded => "operator_grace_ended",
+            Self::Recovered => "operator_recovered",
             Self::Withdrawal => "operator_withdrawal",
             Self::AccountDeleted => "operator_account_deleted",
             Self::OrgDeleted => "operator_org_deleted",
             Self::PlanLimitReached => "operator_plan_limit_reached",
             Self::Digest => "operator_digest",
+            Self::Test => "operator_test",
         }
     }
 }
@@ -113,6 +126,30 @@ pub struct Notice {
     pub subject: String,
     /// The body, a line each.
     pub lines: Vec<String>,
+    /// After the lines, a line each: the only links in the email.
+    pub links: Vec<Link>,
+}
+
+/// A link the code built (never one from what someone typed): `label: url`
+/// in the text, the URL a link in the HTML.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub label: &'static str,
+    pub url: String,
+}
+
+/// A value from outside (a name, an address, a business's name, a comment)
+/// on one line: control characters, newlines included, become spaces.
+pub(crate) fn flat(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Queues `notice` for each operator (`to`: `Config::operator`) in the
@@ -126,10 +163,8 @@ pub async fn notify(
     let Some(to) = to else {
         return Ok(());
     };
-    let subject = clip(&format!("{PREFIX} {}", notice.subject), SUBJECT_MAX);
-    let body = clip(&notice.lines.join("\n"), BODY_MAX);
     for address in &to.emails {
-        let email = email(&to.origin, notice.event.kind(), address, &subject, &body);
+        let email = email(&to.origin, address, notice);
         crate::mail::outbox::queue(conn, &key(notice, address), &email).await?;
     }
     Ok(())
@@ -148,54 +183,46 @@ fn key(notice: &Notice, to: &str) -> String {
     format!("{kind}:sha256:{}", crate::collab::store::hex(&digest))
 }
 
-/// A notification as an email: its text and why it arrived (`origin`: the
-/// install's), and the same in a minimal HTML version (monospace, links
-/// clickable).
-pub(crate) fn email(
-    origin: &str,
-    kind: &'static str,
-    to: &str,
-    subject: &str,
-    body: &str,
-) -> Email {
+/// A notification as an email to `to`: its lines, its links, and why it
+/// arrived (`origin`: the install's), in text and in a minimal HTML version
+/// (monospace; the links of [`Notice::links`] and the origin are the only
+/// links). The subject and every line are made [`flat`] once more here.
+pub(crate) fn email(origin: &str, to: &str, notice: &Notice) -> Email {
+    let subject = clip(&flat(&format!("{PREFIX} {}", notice.subject)), SUBJECT_MAX);
+    let lines: Vec<String> = notice.lines.iter().map(|line| flat(line)).collect();
+    let body = clip(&lines.join("\n"), BODY_MAX);
+    let mut text = body.clone();
+    let mut html = escape(&body);
+    for link in &notice.links {
+        let _ = write!(text, "\n{}: {}", link.label, link.url);
+        let _ = write!(
+            html,
+            "\n{}: <a href=\"{url}\" style=\"color:#b4532a;\">{url}</a>",
+            escape(link.label),
+            url = escape(&link.url),
+        );
+    }
     let footer = format!("Sent by romulus at {origin} to its operators (ROMULUS_OPERATOR_EMAILS).");
+    let origin_link = format!(
+        "<a href=\"{url}\" style=\"color:#57534e;\">{url}</a>",
+        url = escape(origin)
+    );
     let html = format!(
         "<!doctype html><html><body style=\"margin:0;padding:16px;background:#ffffff;color:#1c1917;\">\
          <pre style=\"margin:0;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;\
-         white-space:pre-wrap;word-break:break-word;\">{}</pre>\
+         white-space:pre-wrap;word-break:break-word;\">{html}</pre>\
          <p style=\"margin:16px 0 0;font:12px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,\
-         Helvetica,Arial,sans-serif;color:#57534e;\">{}</p></body></html>",
-        linked(body),
-        escape(&footer),
+         Helvetica,Arial,sans-serif;color:#57534e;\">Sent by romulus at {origin_link} to its operators \
+         (ROMULUS_OPERATOR_EMAILS).</p></body></html>",
     );
     Email {
         to: to.to_owned(),
-        kind: kind.into(),
-        subject: subject.to_owned(),
-        text: format!("{body}\n\n--\n{footer}\n"),
+        kind: notice.event.kind().into(),
+        subject,
+        text: format!("{text}\n\n--\n{footer}\n"),
         html,
         attachments: Vec::new(),
     }
-}
-
-/// `text` as HTML, its http(s) URLs as links.
-fn linked(text: &str) -> String {
-    text.split('\n')
-        .map(|line| {
-            line.split(' ')
-                .map(|word| {
-                    let escaped = escape(word);
-                    if word.starts_with("https://") || word.starts_with("http://") {
-                        format!("<a href=\"{escaped}\" style=\"color:#b4532a;\">{escaped}</a>")
-                    } else {
-                        escaped
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// `text` cut to at most `max` characters, an ellipsis saying so.
@@ -208,9 +235,14 @@ pub(crate) fn clip(text: &str, max: usize) -> String {
     cut
 }
 
-/// `Name <address>`.
+/// `Name <address>`, [`flat`].
 pub(crate) fn who(name: &str, email: &str) -> String {
-    format!("{name} <{email}>")
+    format!("{} <{}>", flat(name), flat(email))
+}
+
+/// `Name (slug)`, [`flat`].
+pub(crate) fn org_label(name: &str, slug: &str) -> String {
+    format!("{} ({})", flat(name), flat(slug))
 }
 
 /// `October 21, 2026`.
@@ -267,32 +299,35 @@ impl Dashboard {
         }
     }
 
-    pub fn customer(self, id: &str) -> String {
-        format!("{}customers/{id}", self.base)
+    /// `…/customers/<id>`; `None` for an id that is not one of Stripe's
+    /// (letters, digits, `_`).
+    pub fn customer(self, id: &str) -> Option<Link> {
+        self.link("Stripe customer", "customers", id)
     }
 
-    pub fn subscription(self, id: &str) -> String {
-        format!("{}subscriptions/{id}", self.base)
+    pub fn subscription(self, id: &str) -> Option<Link> {
+        self.link("Stripe subscription", "subscriptions", id)
     }
 
-    pub fn invoice(self, id: &str) -> String {
-        format!("{}invoices/{id}", self.base)
+    pub fn invoice(self, id: &str) -> Option<Link> {
+        self.link("Stripe invoice", "invoices", id)
     }
 
-    /// A `Stripe customer: …` and a `Stripe subscription: …` line, for what
-    /// is known.
-    pub(crate) fn lines(self, customer: Option<&str>, subscription: Option<&str>) -> Vec<String> {
-        let mut lines = Vec::new();
-        if let Some(customer) = customer {
-            lines.push(format!("Stripe customer: {}", self.customer(customer)));
-        }
-        if let Some(subscription) = subscription {
-            lines.push(format!(
-                "Stripe subscription: {}",
-                self.subscription(subscription)
-            ));
-        }
-        lines
+    fn link(self, label: &'static str, kind: &str, id: &str) -> Option<Link> {
+        let stripes = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        stripes.then(|| Link {
+            label,
+            url: format!("{}{kind}/{id}", self.base),
+        })
+    }
+
+    /// The customer's and the subscription's, for what is known.
+    pub(crate) fn links(self, customer: Option<&str>, subscription: Option<&str>) -> Vec<Link> {
+        customer
+            .and_then(|id| self.customer(id))
+            .into_iter()
+            .chain(subscription.and_then(|id| self.subscription(id)))
+            .collect()
     }
 }
 
@@ -360,34 +395,25 @@ pub async fn send_test(state: &AppState) -> Result<Vec<Tested>, sqlx::Error> {
         .operator
         .as_ref()
         .map_or(OperatorConfig::DEFAULT_DIGEST_HOUR, |o| o.digest_hour);
-    let body = [
-        format!(
-            "This is a test from romulus at {origin}: notifications to its operators arrive like this one."
-        ),
-        format!(
-            "They go to {}, the digest every day from {hour}:00 UTC.",
-            state.config.operators().join(", "),
-        ),
-    ]
-    .join("\n");
+    let test = Notice {
+        event: Event::Test,
+        about: String::new(),
+        subject: "Test notification".to_owned(),
+        lines: vec![
+            format!(
+                "This is a test from romulus at {origin}: notifications to its operators arrive like this one."
+            ),
+            format!(
+                "They go to {}, the digest every day from {hour}:00 UTC.",
+                state.config.operators().join(", "),
+            ),
+        ],
+        links: Vec::new(),
+    };
     let mut tested = Vec::new();
     for to in state.config.operators() {
-        let test = email(
-            &origin,
-            "operator_test",
-            to,
-            &format!("{PREFIX} Test notification"),
-            &body,
-        );
-        let digest = email(
-            &origin,
-            Event::Digest.kind(),
-            to,
-            &format!("{PREFIX} {}", summary.subject),
-            &summary.lines.join("\n"),
-        );
-        let notice = state.mailer.send_now(&test).await;
-        let digest = state.mailer.send_now(&digest).await;
+        let notice = state.mailer.send_now(&email(&origin, to, &test)).await;
+        let digest = state.mailer.send_now(&email(&origin, to, &summary)).await;
         tested.push(Tested {
             to: to.clone(),
             notice,
@@ -417,16 +443,54 @@ mod tests {
         assert_eq!(clip("ééééé", 3), "éé…");
     }
 
+    fn notice(body: &[&str], stripe: Vec<Link>) -> Notice {
+        Notice {
+            event: Event::AccountCreated,
+            about: "u_1".into(),
+            subject: "New account: <b>".into(),
+            lines: body.iter().map(|&line| line.to_owned()).collect(),
+            links: stripe,
+        }
+    }
+
     #[test]
-    fn the_html_escapes_the_text_and_links_its_urls() {
+    fn values_from_outside_stay_on_their_line() {
+        assert_eq!(
+            flat("Acme\nStripe customer:\r\tx\u{2028}y\u{85}z"),
+            "Acme Stripe customer:  x y z"
+        );
+        assert_eq!(
+            who("Ada\n\nRefund approved", "ada@example.com"),
+            "Ada  Refund approved <ada@example.com>"
+        );
+        assert_eq!(org_label("Acme\r\nInc", "acme"), "Acme  Inc (acme)");
+    }
+
+    #[test]
+    fn the_html_escapes_the_text_and_links_only_what_the_code_built() {
+        let dashboard = Dashboard::for_keys(&StripeKeys::Fake {
+            webhook_secret: None,
+        });
+        // A name carrying a line and a link of its own.
+        let forged = "Mallory\nStripe customer: https://evil.example/pay https://dashboard.stripe.com/test/customers/cus_x";
         let email = email(
             "https://romulus.example",
-            "operator_test",
             "ops@example.com",
-            "[romulus] New account: <b>",
-            "Name: <script>x</script> & co\nStripe: https://dashboard.stripe.com/test/customers/cus_1",
+            &notice(
+                &[&format!("Name: <script>x</script> & co, {forged}")],
+                dashboard.links(Some("cus_1"), None),
+            ),
         );
-        assert!(email.text.starts_with("Name: <script>x</script> & co\n"));
+        assert_eq!(email.subject, "[romulus] New account: <b>");
+        assert_eq!(email.kind, "operator_account_created");
+        let text_lines: Vec<&str> = email.text.lines().collect();
+        assert_eq!(
+            text_lines[..2],
+            [
+                "Name: <script>x</script> & co, Mallory Stripe customer: https://evil.example/pay https://dashboard.stripe.com/test/customers/cus_x",
+                "Stripe customer: https://dashboard.stripe.com/test/customers/cus_1",
+            ]
+        );
         assert!(email.text.ends_with(
             "Sent by romulus at https://romulus.example to its operators (ROMULUS_OPERATOR_EMAILS).\n"
         ));
@@ -436,10 +500,18 @@ mod tests {
                 .html
                 .contains("&lt;script&gt;x&lt;/script&gt; &amp; co")
         );
-        assert!(
-            email
-                .html
-                .contains("<a href=\"https://dashboard.stripe.com/test/customers/cus_1\"")
+        let hrefs: Vec<&str> = email
+            .html
+            .split("href=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        assert_eq!(
+            hrefs,
+            [
+                "https://dashboard.stripe.com/test/customers/cus_1",
+                "https://romulus.example"
+            ]
         );
     }
 
@@ -450,6 +522,7 @@ mod tests {
             about: "in_1".into(),
             subject: String::new(),
             lines: Vec::new(),
+            links: Vec::new(),
         };
         assert_eq!(
             key(&notice, "Ops@Example.com"),
@@ -467,29 +540,32 @@ mod tests {
     }
 
     #[test]
-    fn the_dashboard_links_follow_the_key_mode() {
+    fn the_dashboard_links_follow_the_key_mode_and_take_stripes_ids_only() {
+        let url = |link: Option<Link>| link.map(|link| link.url);
         let live = Dashboard::for_keys(&StripeKeys::Stripe {
             secret_key: Secret::new("sk_live_abc"),
             webhook_secret: Secret::new("whsec_x"),
         });
         assert_eq!(
-            live.customer("cus_1"),
-            "https://dashboard.stripe.com/customers/cus_1"
+            url(live.customer("cus_1")).as_deref(),
+            Some("https://dashboard.stripe.com/customers/cus_1")
         );
         let test = Dashboard::for_keys(&StripeKeys::Stripe {
             secret_key: Secret::new("rk_test_abc"),
             webhook_secret: Secret::new("whsec_x"),
         });
         assert_eq!(
-            test.subscription("sub_1"),
-            "https://dashboard.stripe.com/test/subscriptions/sub_1"
+            url(test.subscription("sub_1")).as_deref(),
+            Some("https://dashboard.stripe.com/test/subscriptions/sub_1")
         );
         let fake = Dashboard::for_keys(&StripeKeys::Fake {
             webhook_secret: None,
         });
         assert_eq!(
-            fake.invoice("in_1"),
-            "https://dashboard.stripe.com/test/invoices/in_1"
+            url(fake.invoice("in_1")).as_deref(),
+            Some("https://dashboard.stripe.com/test/invoices/in_1")
         );
+        assert_eq!(fake.invoice("in_1/../../evil"), None);
+        assert_eq!(fake.customer(""), None);
     }
 }

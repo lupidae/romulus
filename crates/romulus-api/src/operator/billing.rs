@@ -3,7 +3,9 @@
 //! and as whom: a business's name and country), upgraded or downgraded (or
 //! a change scheduled for the period's end), a cancellation scheduled, a
 //! subscription over (with Stripe's reason when it has one), a failed
-//! payment, a grace period over, a consumer's withdrawal.
+//! payment, a grace period over, paid again after it, a consumer's
+//! withdrawal. Prices are list prices (Stripe's, before discounts), and a
+//! subscription counts in MRR only while `active`.
 //!
 //! The webhook calls [`applied`] in the transaction that stores what Stripe
 //! said; [`changes`] decides, from the row before and after, what happened.
@@ -15,7 +17,10 @@ use chrono::{DateTime, Utc};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use super::{Dashboard, Event, Notice, QUOTE_MAX, clip, day, monthly, notify, price, who};
+use super::{
+    Dashboard, Event, Link, Notice, QUOTE_MAX, clip, day, flat, monthly, notify, org_label, price,
+    who,
+};
 use crate::{
     AppState,
     billing::{
@@ -39,6 +44,9 @@ pub enum Change {
     CancellationScheduled,
     /// The subscription that was running is over (cancelled, or deleted).
     Cancelled,
+    /// Paid again, on the same subscription, after its grace period ended
+    /// (the organization was on Free).
+    Recovered,
 }
 
 fn paying(stored: &Stored) -> bool {
@@ -46,8 +54,8 @@ fn paying(stored: &Stored) -> bool {
 }
 
 /// What happened between the row `before` and the row `next` a webhook
-/// stores.
-pub fn changes(before: &Stored, next: &Stored) -> Vec<Change> {
+/// stores at `now`.
+pub fn changes(before: &Stored, next: &Stored, now: DateTime<Utc>) -> Vec<Change> {
     let same = before.subscription_id.is_some() && before.subscription_id == next.subscription_id;
     // The same subscription, and it was running (paid, or within its grace).
     let was_running = same && before.status.as_deref().is_some_and(is_live);
@@ -76,6 +84,10 @@ pub fn changes(before: &Stored, next: &Stored) -> Vec<Change> {
     if was_running && ended {
         changes.push(Change::Cancelled);
     }
+    // Its grace was over, so it was on Free: paid now, it is back.
+    if same && paying(next) && before.grace_until().is_some_and(|until| until <= now) {
+        changes.push(Change::Recovered);
+    }
     changes
 }
 
@@ -100,7 +112,7 @@ async fn org_name(conn: &mut PgConnection, org: Uuid) -> Result<String, sqlx::Er
             .await?
             .map_or_else(
                 || format!("organization {org}"),
-                |o| format!("{} ({})", o.name, o.slug),
+                |o| org_label(&o.name, &o.slug),
             ),
     )
 }
@@ -160,13 +172,18 @@ fn amount(stored: &Stored) -> Option<(i64, &str)> {
     Some((stored.amount_cents?, stored.currency.as_deref()?))
 }
 
-/// What a subscription brings in a month (`None`: not known, or not paying).
+/// What a subscription brings in a month at list price: only while
+/// `active` (not trialing, not past due); `None` otherwise or not known.
 fn mrr(stored: &Stored) -> Option<(i64, &str)> {
+    if stored.withdrawn_at.is_some() || stored.status.as_deref() != Some("active") {
+        return None;
+    }
     let (cents, currency) = amount(stored)?;
     Some((monthly(cents, stored.interval?), currency))
 }
 
-/// `MRR: +€30.00` (or a loss); `None` when it cannot be said.
+/// `MRR: +€30.00 a month at list price` (or a loss); `None` when it cannot
+/// be said.
 fn mrr_line(before: Option<&Stored>, next: Option<&Stored>) -> Option<String> {
     let (delta, currency) = match (before.and_then(mrr), next.and_then(mrr)) {
         (Some((old, old_currency)), Some((new, currency))) if old_currency == currency => {
@@ -177,7 +194,10 @@ fn mrr_line(before: Option<&Stored>, next: Option<&Stored>) -> Option<String> {
         _ => return None,
     };
     let sign = if delta >= 0 { "+" } else { "" };
-    Some(format!("MRR: {sign}{} a month", money(delta, currency)))
+    Some(format!(
+        "MRR: {sign}{} a month at list price",
+        money(delta, currency)
+    ))
 }
 
 fn buyer_line(buyer: Option<&Bought>) -> String {
@@ -187,11 +207,12 @@ fn buyer_line(buyer: Option<&Bought>) -> String {
             email,
             business: Some((company, country)),
         }) => format!(
-            "Bought by {}, as a business: {company}{}.",
+            "Bought by {}, as a business: {}{}.",
             who(name, email),
+            flat(company),
             country
                 .as_deref()
-                .map_or_else(String::new, |c| format!(" ({c})"))
+                .map_or_else(String::new, |c| format!(" ({})", flat(c)))
         ),
         Some(Bought {
             name,
@@ -206,9 +227,9 @@ fn buyer_line(buyer: Option<&Bought>) -> String {
 pub fn reason_line(cancellation: Option<&Cancellation>) -> Option<String> {
     let c = cancellation?;
     let mut parts = Vec::new();
-    if let Some(reason) = c.reason.as_deref() {
+    if let Some(reason) = c.reason.as_deref().map(flat) {
         parts.push(
-            match reason {
+            match reason.as_str() {
                 "cancellation_requested" => "the customer asked",
                 "payment_failed" => "payments failed",
                 "payment_disputed" => "a payment was disputed",
@@ -217,8 +238,8 @@ pub fn reason_line(cancellation: Option<&Cancellation>) -> Option<String> {
             .to_owned(),
         );
     }
-    if let Some(feedback) = c.feedback.as_deref() {
-        let words = match feedback {
+    if let Some(feedback) = c.feedback.as_deref().map(flat) {
+        let words = match feedback.as_str() {
             "too_expensive" => "too expensive",
             "missing_features" => "missing features",
             "switched_service" => "switched to another service",
@@ -237,7 +258,7 @@ pub fn reason_line(cancellation: Option<&Cancellation>) -> Option<String> {
         .map(str::trim)
         .filter(|c| !c.is_empty())
     {
-        parts.push(format!("comment: “{}”", clip(comment, QUOTE_MAX)));
+        parts.push(format!("comment: “{}”", clip(&flat(comment), QUOTE_MAX)));
     }
     (!parts.is_empty()).then(|| format!("Reason: {}.", parts.join("; ")))
 }
@@ -264,7 +285,7 @@ pub async fn applied(
     let Some(operators) = state.config.operator.as_ref() else {
         return Ok(());
     };
-    let changes = changes(event.before, event.next);
+    let changes = changes(event.before, event.next, Utc::now());
     if changes.is_empty() && event.failed.is_none() {
         return Ok(());
     }
@@ -281,9 +302,9 @@ pub async fn applied(
     Ok(())
 }
 
-fn links(dashboard: Option<Dashboard>, stored: &Stored) -> Vec<String> {
+fn links(dashboard: Option<Dashboard>, stored: &Stored) -> Vec<Link> {
     dashboard.map_or_else(Vec::new, |d| {
-        d.lines(
+        d.links(
             stored.customer_id.as_deref(),
             stored.subscription_id.as_deref(),
         )
@@ -302,8 +323,9 @@ fn notice(
         Change::Scheduled => scheduled(&context.org, event),
         Change::CancellationScheduled => cancelling(&context.org, event),
         Change::Cancelled => cancelled(&context.org, event),
+        Change::Recovered => recovered(&context.org, event),
     };
-    notice.lines.extend(links(dashboard, event.next));
+    notice.links = links(dashboard, event.next);
     notice
 }
 
@@ -319,6 +341,7 @@ fn started(context: &Context, event: &Applied<'_>) -> Notice {
         about: subscription_or(next, event.event_id),
         subject: format!("New subscription: {org}, {}", plan_line(next)),
         lines,
+        links: Vec::new(),
     }
 }
 
@@ -352,6 +375,7 @@ fn changed(org: &str, event: &Applied<'_>) -> Notice {
         about: format!("{}:changed", event.event_id),
         subject: format!("{word}: {org}, {} → {}", named(before), named(next)),
         lines,
+        links: Vec::new(),
     }
 }
 
@@ -367,14 +391,8 @@ fn scheduled(org: &str, event: &Applied<'_>) -> Notice {
         || "at the end of the period".to_owned(),
         |at| format!("on {}", day(at)),
     );
-    let interval = next.scheduled_interval.or(next.interval);
-    let after = plan_of(
-        to,
-        interval,
-        interval
-            .and_then(|i| to.price_cents(i))
-            .map(|cents| (i64::from(cents), "eur")),
-    );
+    // The plan and interval only: the price is Stripe's schedule's.
+    let after = plan_of(to, next.scheduled_interval.or(next.interval), None);
     Notice {
         event: Event::PlanChanged,
         about: format!("{}:scheduled", event.event_id),
@@ -383,6 +401,7 @@ fn scheduled(org: &str, event: &Applied<'_>) -> Notice {
             "{org} is on {}: it becomes {after} {when}.",
             plan_line(next)
         )],
+        links: Vec::new(),
     }
 }
 
@@ -408,6 +427,7 @@ fn cancelling(org: &str, event: &Applied<'_>) -> Notice {
             next.plan.name()
         ),
         lines,
+        links: Vec::new(),
     }
 }
 
@@ -415,7 +435,7 @@ fn cancelled(org: &str, event: &Applied<'_>) -> Notice {
     let (before, next) = (event.before, event.next);
     let mut lines = vec![format!(
         "{org}'s subscription is over (Stripe status {}): {}. The organization is on Free.",
-        next.status.as_deref().unwrap_or("canceled"),
+        flat(next.status.as_deref().unwrap_or("canceled")),
         plan_line(before)
     )];
     if let Some(at) = before.withdrawn_at {
@@ -430,6 +450,37 @@ fn cancelled(org: &str, event: &Applied<'_>) -> Notice {
         about: subscription_or(next, event.event_id),
         subject: format!("Subscription cancelled: {org}, {}", before.plan.name()),
         lines,
+        links: Vec::new(),
+    }
+}
+
+fn recovered(org: &str, event: &Applied<'_>) -> Notice {
+    let (before, next) = (event.before, event.next);
+    let since = before.past_due_since;
+    let mut lines = vec![format!(
+        "{org} paid for {} after its grace period had ended: back on {} from Free.",
+        plan_line(next),
+        next.plan.name()
+    )];
+    if let (Some(since), Some(until)) = (since, before.grace_until()) {
+        lines.push(format!(
+            "Unpaid since {}; on Free from {}.",
+            day(since),
+            day(until)
+        ));
+    }
+    lines.extend(mrr_line(None, Some(next)));
+    Notice {
+        event: Event::Recovered,
+        // Once per unpaid spell of the subscription.
+        about: format!(
+            "{}:{}",
+            subscription_or(next, event.event_id),
+            since.map_or(0, |at| at.timestamp())
+        ),
+        subject: format!("Back from Free: {org}, {} paid", next.plan.name()),
+        lines,
+        links: Vec::new(),
     }
 }
 
@@ -443,7 +494,7 @@ fn payment_failed(
     let mut lines = vec![format!(
         "A payment of {total} for {org}'s {} failed (invoice {}). Stripe tries again.",
         plan_line(next),
-        invoice.number.as_deref().unwrap_or(&invoice.id),
+        flat(invoice.number.as_deref().unwrap_or(&invoice.id)),
     )];
     lines.push(next.grace_until().map_or_else(
         || "The plan holds while Stripe retries.".to_owned(),
@@ -454,15 +505,18 @@ fn payment_failed(
             )
         },
     ));
-    if let Some(d) = dashboard {
-        lines.push(format!("Stripe invoice: {}", d.invoice(&invoice.id)));
-        lines.extend(d.lines(next.customer_id.as_deref(), None));
-    }
+    let stripe = dashboard.map_or_else(Vec::new, |d| {
+        d.invoice(&invoice.id)
+            .into_iter()
+            .chain(d.links(next.customer_id.as_deref(), None))
+            .collect()
+    });
     Notice {
         event: Event::PaymentFailed,
         about: invoice.id.clone(),
         subject: format!("Payment failed: {org}, {total}"),
         lines,
+        links: stripe,
     }
 }
 
@@ -479,7 +533,7 @@ pub async fn grace_ended(
     };
     let stored = crate::billing::stored(&mut *conn, org).await?;
     let name = org_name(conn, org).await?;
-    let mut lines = vec![
+    let lines = vec![
         format!(
             "{name}'s payment for {} was not made within {} days: the organization is on the Free plan now.",
             plan_line(&stored),
@@ -487,7 +541,6 @@ pub async fn grace_ended(
         ),
         format!("Unpaid since {}.", day(since)),
     ];
-    lines.extend(links(Dashboard::of(state), &stored));
     notify(
         conn,
         Some(operators),
@@ -496,6 +549,7 @@ pub async fn grace_ended(
             about: format!("{org}:{}", since.timestamp()),
             subject: format!("Moved to Free: {name}, {} unpaid", stored.plan.name()),
             lines,
+            links: links(Dashboard::of(state), &stored),
         },
     )
     .await
@@ -528,7 +582,7 @@ pub async fn withdrawal(
     };
     let org = org_name(conn, w.org).await?;
     let days = (w.requested_at - w.started).num_days().max(0);
-    let mut lines = vec![
+    let lines = vec![
         format!(
             "{} withdrew from {org}'s {} {} subscription, {days} day{} after it began on {}. The organization is on Free.",
             who(w.name, w.email),
@@ -543,9 +597,8 @@ pub async fn withdrawal(
             money(w.refund, w.currency),
         ),
     ];
-    if let Some(d) = Dashboard::of(state) {
-        lines.extend(d.lines(w.customer, Some(w.subscription)));
-    }
+    let stripe =
+        Dashboard::of(state).map_or_else(Vec::new, |d| d.links(w.customer, Some(w.subscription)));
     notify(
         conn,
         Some(operators),
@@ -558,6 +611,7 @@ pub async fn withdrawal(
                 money(w.refund, w.currency)
             ),
             lines,
+            links: stripe,
         },
     )
     .await
@@ -565,7 +619,14 @@ pub async fn withdrawal(
 
 #[cfg(test)]
 mod tests {
+    use chrono::Duration;
+
     use super::*;
+
+    /// What changed, now.
+    fn changes(before: &Stored, next: &Stored) -> Vec<Change> {
+        super::changes(before, next, Utc::now())
+    }
 
     fn running(plan: Plan, status: &str) -> Stored {
         Stored {
@@ -649,18 +710,95 @@ mod tests {
     }
 
     #[test]
-    fn money_lines_say_the_monthly_difference() {
+    fn paying_again_after_the_grace_period_is_a_recovery_and_within_it_nothing() {
+        let mut overdue = running(Plan::Team, "past_due");
+        overdue.past_due_since = Some(Utc::now() - Duration::days(15));
+        let paid = running(Plan::Team, "active");
+        assert_eq!(changes(&overdue, &paid), [Change::Recovered]);
+        // Still within its grace: the plan never stopped.
+        overdue.past_due_since = Some(Utc::now() - Duration::days(3));
+        assert_eq!(changes(&overdue, &paid), []);
+        // Another subscription after the old one: a start, not a recovery.
+        overdue.past_due_since = Some(Utc::now() - Duration::days(15));
+        overdue.status = Some("canceled".into());
+        overdue.subscription_id = Some("sub_0".into());
+        assert_eq!(changes(&overdue, &paid), [Change::Started]);
+    }
+
+    #[test]
+    fn money_lines_count_active_subscriptions_at_list_price() {
         let team = running(Plan::Team, "active");
         let starter = running(Plan::Starter, "active");
         assert_eq!(
             mrr_line(Some(&starter), Some(&team)).as_deref(),
-            Some("MRR: +€30.00 a month")
+            Some("MRR: +€30.00 a month at list price")
         );
         assert_eq!(
             mrr_line(Some(&team), None).as_deref(),
-            Some("MRR: -€49.00 a month")
+            Some("MRR: -€49.00 a month at list price")
+        );
+        // Trialing or past due: not in MRR.
+        assert_eq!(mrr_line(None, Some(&running(Plan::Team, "trialing"))), None);
+        assert_eq!(
+            mrr_line(Some(&running(Plan::Team, "past_due")), Some(&team)).as_deref(),
+            Some("MRR: +€49.00 a month at list price")
         );
         assert_eq!(plan_line(&team), "Team, monthly: €49.00 a month");
+    }
+
+    #[test]
+    fn a_scheduled_change_names_the_plan_without_a_price() {
+        let team = running(Plan::Team, "active");
+        let mut scheduled = team.clone();
+        scheduled.scheduled_plan = Some(Plan::Starter);
+        scheduled.scheduled_interval = Some(Interval::Year);
+        let notice = super::scheduled(
+            "Acme (acme)",
+            &Applied {
+                org: Uuid::nil(),
+                event_id: "evt_1",
+                before: &team,
+                next: &scheduled,
+                read: None,
+                failed: None,
+            },
+        );
+        assert_eq!(
+            notice.lines,
+            [
+                "Acme (acme) is on Team, monthly: €49.00 a month: it becomes Starter, yearly at the end of the period."
+            ]
+        );
+        assert!(
+            notice
+                .subject
+                .starts_with("Downgrade scheduled: Acme (acme), Team → Starter")
+        );
+    }
+
+    #[test]
+    fn what_a_buyer_typed_stays_on_its_line() {
+        let line = buyer_line(Some(&Bought {
+            name: "Ada\nRefund approved".into(),
+            email: "ada@example.com".into(),
+            business: Some((
+                "Acme\r\nStripe customer: https://evil.example".into(),
+                Some("FR\n".into()),
+            )),
+        }));
+        assert_eq!(
+            line,
+            "Bought by Ada Refund approved <ada@example.com>, as a business: Acme  Stripe customer: https://evil.example (FR )."
+        );
+        let reason = reason_line(Some(&Cancellation {
+            reason: None,
+            feedback: Some("other\nx".into()),
+            comment: Some("Bye\nStripe invoice: https://evil.example".into()),
+        }));
+        assert_eq!(
+            reason.as_deref(),
+            Some("Reason: feedback: other x; comment: “Bye Stripe invoice: https://evil.example”.")
+        );
     }
 
     #[test]
