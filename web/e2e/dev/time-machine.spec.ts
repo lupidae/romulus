@@ -20,6 +20,64 @@ async function open(page: Page, query = "") {
   return errors;
 }
 
+const channels = (c: string) =>
+  c
+    .match(/[\d.]+/g)!
+    .slice(0, 3)
+    .map(Number);
+const luminance = (c: string) => {
+  const [r, g, b] = channels(c).map((v) => {
+    const s = v / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const ratio = (a: string, b: string) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+/**
+ * The text of `selector`'s elements as the eye gets it: its color, faded by
+ * its own and its ancestors' opacity, over the first opaque background
+ * behind it (an rgb string each).
+ */
+async function inkOf(page: Page, selector: string) {
+  return page.locator(selector).evaluateAll((elements) => {
+    const canvas = document.createElement("canvas").getContext("2d", {
+      willReadFrequently: true,
+    })!;
+    const rgba = (color: string) => {
+      canvas.clearRect(0, 0, 1, 1);
+      canvas.fillStyle = color;
+      canvas.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = canvas.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, a / 255] as const;
+    };
+    return elements
+      .filter((el) => el.textContent?.trim())
+      .map((el) => {
+        let opacity = 1;
+        let bg: readonly number[] | null = null;
+        for (let e: Element | null = el; e; e = e.parentElement) {
+          const style = getComputedStyle(e);
+          opacity *= Number(style.opacity);
+          const fill = rgba(style.backgroundColor);
+          if (!bg && fill[3] === 1) bg = fill;
+        }
+        const back = bg ?? [255, 255, 255, 1];
+        const fg = rgba(getComputedStyle(el).color);
+        const a = fg[3] * opacity;
+        const mix = [0, 1, 2].map((i) => Math.round(fg[i] * a + back[i] * (1 - a)));
+        return {
+          text: el.textContent.trim(),
+          ink: `rgb(${mix.join(", ")})`,
+          background: `rgb(${back.slice(0, 3).join(", ")})`,
+        };
+      });
+  });
+}
+
 /** Table ids drawn, and those drawn in full (there at the cursor). */
 async function drawn(page: Page) {
   return page.locator(".react-flow__node-table").evaluateAll((nodes) => {
@@ -150,22 +208,6 @@ test("the age scale: six distinct colors, at least 3:1 on a table in both themes
       probe.remove();
       return out;
     });
-    const channels = (c: string) =>
-      c
-        .match(/[\d.]+/g)!
-        .slice(0, 3)
-        .map(Number);
-    const luminance = (c: string) => {
-      const [r, g, b] = channels(c).map((v) => {
-        const s = v / 255;
-        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-      });
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    };
-    const ratio = (a: string, b: string) => {
-      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-      return (hi + 0.05) / (lo + 0.05);
-    };
     expect(new Set(colors.eras).size).toBe(6);
     for (const era of colors.eras) {
       expect(ratio(era, colors.card), `${colorScheme} ${era} on the card`).toBeGreaterThanOrEqual(
@@ -184,6 +226,110 @@ test("the age scale: six distinct colors, at least 3:1 on a table in both themes
     expect(fills.length).toBeGreaterThanOrEqual(6);
     await page.close();
   }
+});
+
+test("what steps back (versions after the cursor, events outside the range) keeps 4.5:1", async ({
+  browser,
+}) => {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const page = await browser.newPage({ colorScheme });
+    await open(page);
+    // The cursor at v4 (v5–v8 come later), the range from v2 (v1 outside it),
+    // and the history of orders (added in v1) open.
+    const cursor = page.getByRole("slider", { name: "Cursor" });
+    await cursor.focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
+    await page.getByRole("slider", { name: "Range start" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(caption(page)).toHaveText("7 versions (v2 → v8) superposed, v4 highlighted");
+    await node(page, "orders").locator(".sg-header").click();
+    const panel = page.getByRole("region", { name: "public.orders" });
+    await expect(panel.locator('li[data-in-range="false"]')).toHaveCount(1);
+
+    const legend = await inkOf(page, "[data-era-key] > span:not([aria-hidden])");
+    const events = await inkOf(page, 'aside li[data-in-range="false"] span');
+    expect(legend.map((l) => l.text)).toEqual(["v3", "v4", "v5", "v6", "v7", "v8"]);
+    expect(events.length).toBeGreaterThan(0);
+    for (const { text, ink, background } of [...legend, ...events]) {
+      expect(ratio(ink, background), `${colorScheme}: "${text}"`).toBeGreaterThanOrEqual(4.5);
+    }
+    await page.close();
+  }
+});
+
+test("the range start's bar looks like its key in the legend", async ({ page }) => {
+  await open(page);
+  const look = (selector: string) =>
+    page
+      .locator(selector)
+      .evaluate((el) => [getComputedStyle(el).backgroundColor, getComputedStyle(el).boxShadow]);
+  const key = await look('[data-legend-key="start"] > span[aria-hidden]');
+  expect(await look("[data-track] [data-range-start]")).toEqual(key);
+  // Uncolored, and outlined enough to be seen (≥ 3:1).
+  expect(key[1]).toMatch(/inset/);
+  const [, ring] = key[1].match(/(rgb\([^)]+\))/)!;
+  const card = await page.locator("[data-track]").evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.color = "var(--color-card)";
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+  expect(ratio(ring, card)).toBeGreaterThanOrEqual(3);
+});
+
+test("hovering a range handle says which it is and that it drags", async ({ page }) => {
+  await open(page);
+  const start = (await page.getByRole("slider", { name: "Range start" }).boundingBox())!;
+  const card = page.locator("[data-track-card]");
+  await page.mouse.move(start.x + start.width / 2 + 3, start.y + start.height / 2, { steps: 4 });
+  await expect(card).toContainText("Range start · drag to change the range");
+  await expect(card).toContainText("v1");
+  await expect(card).toContainText(/\d+ changes?/);
+  // Over a version between the handles, the card is that version's alone.
+  const track = (await page.locator("[data-track]").boundingBox())!;
+  await page.mouse.move(track.x + 14 + ((track.width - 28) * 3) / 7, start.y + 2, { steps: 4 });
+  await expect(card).toContainText("v4");
+  await expect(card).not.toContainText("Range start");
+});
+
+test("the sliders say how much each version changed, the readout not twice", async ({ page }) => {
+  await open(page);
+  const cursor = page.getByRole("slider", { name: "Cursor" });
+  await expect(cursor).toHaveAttribute("aria-valuetext", /^v8, Invoices, .*, \d+ changes?$/);
+  await expect(page.getByRole("slider", { name: "Range start" })).toHaveAttribute(
+    "aria-valuetext",
+    /^v1, Customers and orders, .*, \d+ changes?$/,
+  );
+  // On a slider, its value is read; the readout of the cursor's version
+  // speaks again once focus leaves the track (stepped with the buttons, [ ]).
+  const readout = page.locator("[data-cursor-readout]");
+  await expect(readout).toHaveAttribute("aria-live", "polite");
+  await cursor.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(readout).toHaveAttribute("aria-live", "off");
+  await expect(readout).toContainText("v7");
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Play the range" })).toBeFocused();
+  await expect(readout).toHaveAttribute("aria-live", "polite");
+});
+
+test.describe("narrower than the filters' room", () => {
+  test.use({ viewport: { width: 1024, height: 800 } });
+
+  test("the filters' popover says what they do, no tooltip over it", async ({ page }) => {
+    await open(page);
+    await page.getByRole("button", { name: "Filters" }).click();
+    const popover = page.getByRole("dialog");
+    await expect(popover.getByRole("button", { name: "Only changes" })).toBeVisible();
+    await expect(popover).toContainText("What the filters leave out fades back; no table moves.");
+    // A tooltip opened by the popover's focus would cover it: none, even a beat later.
+    await page.waitForTimeout(800);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+    await popover.getByRole("button", { name: "Only changes" }).click();
+    await expect(page.getByRole("button", { name: "Filters (on)" })).toBeVisible();
+  });
 });
 
 test.describe("on a phone", () => {

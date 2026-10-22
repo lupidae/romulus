@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildGraph } from "@/features/schema/graph/build";
 import { timeWords } from "@/features/schema/graph/time-words";
 
-import { describeChange, eventLine, eventsOf } from "./describe";
+import { changesText, describeChange, eventLine, eventsOf } from "./describe";
 import { column, model, table, timelineFrom } from "./fixtures";
 import { type FrameRequest, Frames } from "./frame";
 import {
@@ -139,6 +139,12 @@ describe("an object's history in words", () => {
     ]);
     const legacy = h.tables.find((t) => t.id === "public.legacy")!;
     expect(eventsOf(legacy.states).map((e) => e.kind)).toEqual(["added", "removed"]);
+  });
+
+  it("says how much a version changed, one change apart from many", () => {
+    expect(changesText(0)).toBe("no change");
+    expect(changesText(1)).toBe("1 change");
+    expect(changesText(12)).toBe("12 changes");
   });
 
   it("shows a rename the diff reports as a rename", () => {
