@@ -1216,11 +1216,6 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
     if !state.billing.is_on() {
         return Ok(());
     }
-    // Stripe retries a delivery for three days: event ids older than 90 are
-    // of no use.
-    sqlx::query!("DELETE FROM billing_events WHERE received_at < now() - interval '90 days'")
-        .execute(&state.db)
-        .await?;
     super::withdrawal::complete_pending(state).await?;
     let renewals = sqlx::query!(
         r#"SELECT org_id, plan AS "plan: Plan", current_period_end AS "period_end!", amount_cents, currency,

@@ -1,7 +1,10 @@
 //! Many compiles at once: the pool isolates them, per-key coalescing keeps
 //! only the newest, and every model belongs to the text it was asked for.
 
-use std::time::{Duration, Instant};
+use std::{
+    task::Poll,
+    time::{Duration, Instant},
+};
 
 use remus_core::Schema;
 use romulus_sandbox::{Compilation, Compiler, Rejected, SandboxConfig, SandboxError};
@@ -114,8 +117,11 @@ fn fifty_draft_compiles_across_twenty_keys_coalesce_to_the_newest() {
     });
 }
 
-/// Send a draft's version, and give it a moment to register before the
-/// next one, so versions arrive in order.
+/// Send a draft's version: the key's newest request once this returns, so
+/// versions arrive in order. `compile_for` takes its place on its first
+/// poll, before it waits for anything: it is polled once here, then left
+/// to a task. (Spawned, a request registers whenever the runtime first
+/// polls its task: a later version's may be first on a busy runtime.)
 async fn start(
     compiler: &Compiler,
     key: &str,
@@ -125,9 +131,12 @@ async fn start(
     let compiler = compiler.clone();
     let key = key.to_owned();
     let sql = draft(draft_key, version);
-    let handle = tokio::spawn(async move { compiler.compile_for(&key, sql).await });
-    tokio::time::sleep(Duration::from_millis(2)).await;
-    handle
+    let mut request = Box::pin(async move { compiler.compile_for(&key, sql).await });
+    let first = std::future::poll_fn(|cx| Poll::Ready(request.as_mut().poll(cx))).await;
+    match first {
+        Poll::Ready(result) => tokio::spawn(async move { result }),
+        Poll::Pending => tokio::spawn(request),
+    }
 }
 
 #[test]

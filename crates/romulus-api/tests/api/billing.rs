@@ -730,6 +730,75 @@ async fn webhooks_need_a_valid_fresh_signature_and_a_redelivery_changes_nothing(
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn webhook_events_are_kept_90_days_and_swept_by_one_process_at_a_time(db: PgPool) {
+    use romulus_api::billing::events;
+
+    async fn kept(db: &PgPool) -> Vec<String> {
+        sqlx::query_scalar("SELECT id FROM billing_events ORDER BY id")
+            .fetch_all(db)
+            .await
+            .unwrap()
+    }
+
+    let b = billed(&db).await;
+    let subscription = subscribe(&b, "team", "month").await;
+    b.stripe
+        .update(&subscription, |s| s.cancel_at_period_end = true);
+    let body = event(
+        "evt_fresh",
+        "customer.subscription.updated",
+        &subscription_object(&subscription),
+    );
+    let signed = || Some(sign(SECRET, body.as_bytes(), Utc::now().timestamp()));
+    assert_eq!(
+        post_event(&b.app, &body, signed()).await.status,
+        StatusCode::OK
+    );
+    for (id, age) in [("evt_old", "91 days"), ("evt_kept", "89 days")] {
+        sqlx::query(
+            "INSERT INTO billing_events (id, type, received_at)
+             VALUES ($1, 'invoice.paid', now() - $2::interval)",
+        )
+        .bind(id)
+        .bind(age)
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    let before = kept(&db).await;
+
+    // Another process sweeping holds the lock: this one skips.
+    let mut other = db.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(hashtext($1))")
+        .bind(events::SWEEP_LOCK)
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    assert_eq!(events::sweep(&db).await, None);
+    assert_eq!(kept(&db).await, before);
+    sqlx::query("SELECT pg_advisory_unlock(hashtext($1))")
+        .bind(events::SWEEP_LOCK)
+        .execute(&mut *other)
+        .await
+        .unwrap();
+
+    // Past 90 days only.
+    assert_eq!(events::sweep(&db).await, Some(1));
+    let after = kept(&db).await;
+    assert!(!after.contains(&"evt_old".to_owned()), "{after:?}");
+    assert!(after.contains(&"evt_kept".to_owned()), "{after:?}");
+    assert_eq!(after.len(), before.len() - 1);
+    // An event just handled is still known: its redelivery changes nothing.
+    assert!(after.contains(&"evt_fresh".to_owned()), "{after:?}");
+    let changed = audits(&db, "subscription_changed").await;
+    assert_eq!(
+        post_event(&b.app, &body, signed()).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(audits(&db, "subscription_changed").await, changed);
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn events_out_of_order_store_the_subscription_as_stripe_has_it_now(db: PgPool) {
     let b = billed(&db).await;
     let subscription = subscribe(&b, "team", "month").await;

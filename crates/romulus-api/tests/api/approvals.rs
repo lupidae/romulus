@@ -486,6 +486,57 @@ async fn withdrawing_takes_the_approval_back(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn approving_answers_once_the_room_counts_the_approval(db: PgPool) {
+    use romulus_api::collab::review::Approval;
+
+    let s = setup(&db, 1).await;
+    // As the handler does: the room says what the approval is of, the row
+    // is written, then the room is told. Once that answers, the room counts
+    // it: read without letting its task run in between, it is there.
+    let hub = &s.app.state.collab;
+    let reviewer = s.team.reviewer.user;
+    let reviewed = hub
+        .check_approval(
+            s.draft,
+            reviewer,
+            s.sha256(),
+            std::collections::BTreeMap::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    hub.approved(
+        s.draft,
+        Approval {
+            user_id: reviewer,
+            name: "Reviewer-acme".into(),
+            sha256: reviewed,
+            at: chrono::Utc::now(),
+        },
+    )
+    .await;
+    assert_eq!(hub.approved_by(&[s.draft])[&s.draft], [reviewer]);
+    hub.withdrawn(s.draft, reviewer).await;
+    assert_eq!(hub.approved_by(&[s.draft])[&s.draft], Vec::<Uuid>::new());
+
+    // Through the API: the answer, and a read straight after, say what the
+    // database has.
+    for _ in 0..5 {
+        let approved = s.approve(&s.team.reviewer).await;
+        assert_eq!(approved.status, StatusCode::OK, "{}", approved.json());
+        assert_eq!(approved.json()["approvals"], 1);
+        assert_eq!(s.review().await["approvals"], 1);
+        let withdrawn = s
+            .app
+            .as_user(&s.team.reviewer)
+            .delete(&s.path("/approvals"))
+            .await;
+        assert_eq!(withdrawn.json()["approvals"], 0);
+        assert_eq!(s.review().await["approvals"], 0);
+    }
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn the_organization_decides_how_many_approvals(db: PgPool) {
     let app = TestApp::new(db.clone());
     let team = Team::new(&db, "acme").await;

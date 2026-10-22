@@ -1098,6 +1098,10 @@ async fn acknowledge(
         && member.org.require_passing_test
         && member.role != Role::Admin
     {
+        // The room first: it writes a first edit's `draft_editors` row
+        // behind it, so whoever just typed may not be there yet. A room not
+        // loaded has written everything, which the database then says.
+        let editing = state.collab.editors(draft).await.contains(&member.user.id);
         let own = sqlx::query_scalar!(
             r#"SELECT EXISTS (
                    SELECT 1 FROM drafts WHERE id = $1 AND created_by = $2
@@ -1109,7 +1113,7 @@ async fn acknowledge(
         )
         .fetch_one(&state.db)
         .await?;
-        if own {
+        if editing || own {
             return Err(ApiError::Denied {
                 code: "own_draft",
                 message: "You wrote this draft: someone else acknowledges the data loss its test found, or an admin.".into(),

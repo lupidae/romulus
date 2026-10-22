@@ -589,20 +589,57 @@ impl Hub {
         wait.await.map_err(|_| HubError::Unavailable)
     }
 
-    /// An approval was written: everyone in the draft hears it.
-    pub fn approved(&self, draft: Uuid, approval: Approval) {
-        self.0
-            .tell(draft, Command::Review(ReviewChange::Approved(approval)));
+    /// Who edited the draft, as its room knows now (a first edit is written
+    /// to `draft_editors` behind the room); empty when the room is not
+    /// loaded: it wrote everything before it left, the database says.
+    pub async fn editors(&self, draft: Uuid) -> HashSet<Uuid> {
+        let (reply, wait) = oneshot::channel();
+        if !self.0.tell(draft, Command::Editors { reply }) {
+            return HashSet::new();
+        }
+        wait.await.unwrap_or_default()
     }
 
-    pub fn withdrawn(&self, draft: Uuid, user_id: Uuid) {
-        self.0
-            .tell(draft, Command::Review(ReviewChange::Withdrawn(user_id)));
+    /// An approval was written: everyone in the draft hears it. Answers
+    /// once the room (when loaded) counts it, so that what the caller reads
+    /// next ([`Hub::approved_by`]) has it.
+    pub async fn approved(&self, draft: Uuid, approval: Approval) {
+        self.review_written(draft, ReviewChange::Approved(approval))
+            .await;
+    }
+
+    /// An approval was taken back; answers as [`Hub::approved`] does.
+    pub async fn withdrawn(&self, draft: Uuid, user_id: Uuid) {
+        self.review_written(draft, ReviewChange::Withdrawn(user_id))
+            .await;
     }
 
     pub fn review_requested(&self, draft: Uuid, requested: Option<ReviewRequest>) {
-        self.0
-            .tell(draft, Command::Review(ReviewChange::Requested(requested)));
+        self.0.tell(
+            draft,
+            Command::Review {
+                change: ReviewChange::Requested(requested),
+                done: None,
+            },
+        );
+    }
+
+    /// Tells the draft's room of `change` and waits until it counts it. A
+    /// room not loaded has nothing to wait for: it reads the change from
+    /// the database when it loads.
+    async fn review_written(&self, draft: Uuid, change: ReviewChange) {
+        let (done, wait) = oneshot::channel();
+        let told = self.0.tell(
+            draft,
+            Command::Review {
+                change,
+                done: Some(done),
+            },
+        );
+        if told {
+            // A room that stops meanwhile (shutdown) answers nothing.
+            let _ = wait.await;
+        }
     }
 
     /// The organization changed how many approvals publishing needs: its
@@ -611,9 +648,10 @@ impl Hub {
         let rooms = self.0.rooms();
         for entry in rooms.entries.values() {
             if entry.shared.org_id.get() == Some(&org_id) {
-                let _ = entry
-                    .commands
-                    .send(Command::Review(ReviewChange::Required(required)));
+                let _ = entry.commands.send(Command::Review {
+                    change: ReviewChange::Required(required),
+                    done: None,
+                });
             }
         }
     }

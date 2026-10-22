@@ -1426,6 +1426,82 @@ async fn undeclared_loss_counts_once_a_developer_acknowledges_it(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn an_editor_who_just_typed_cannot_acknowledge_before_their_edit_is_written(db: PgPool) {
+    let (app, team, host) = setup(&db).await;
+    require_tests(&app, &team).await;
+    let (draft, mut editor) = new_draft(&app, &team, "schema").await;
+    write_source(
+        &mut editor,
+        false,
+        &format!("{V2}CREATE TABLE public.invoices (id bigint PRIMARY KEY);\n"),
+    )
+    .await;
+    let (_, sha) = preview_of(&app, &team, &draft).await;
+    host.calls().verdict = Some(Verdict::NeedsAcknowledgement);
+    let test = tested(&app, &team, json!({ "draft_id": draft, "sha256": sha })).await;
+    assert_eq!(test["status"], "needs_acknowledgement", "{test}");
+    let acknowledge = path(
+        &team,
+        &format!("/{}/acknowledge", test["id"].as_str().unwrap()),
+    );
+
+    // Another developer types: an editor in the room at once, while the
+    // `draft_editors` row the room writes behind it waits (a lock holds it).
+    let other = super::harness::user(&db, "Other-acme").await;
+    super::harness::member(&db, team.org, other, romulus_api::domain::Role::Developer).await;
+    let other_session = super::harness::session(&db, other).await;
+    let mut hold = db.begin().await.unwrap();
+    sqlx::query("LOCK TABLE draft_editors IN SHARE MODE")
+        .execute(&mut *hold)
+        .await
+        .unwrap();
+    let mut typist = Client::join(
+        serve(&app).await,
+        &format!("/api/orgs/acme/drafts/{draft}/ws"),
+        &other_session,
+    )
+    .await;
+    typist
+        .edit(|roots, txn| {
+            use yrs::Text;
+            roots.sql.push(txn, "-- mine\n");
+        })
+        .await;
+    typist
+        .until(|c| {
+            c.last_event("review").is_some_and(|e| {
+                e["editors"]
+                    .as_array()
+                    .is_some_and(|editors| editors.contains(&json!(other)))
+            })
+        })
+        .await;
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM draft_editors WHERE user_id = $1")
+        .bind(other)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(written, 0, "the row waits");
+
+    // The room says they edited it: not theirs to acknowledge.
+    let refused = app.as_user(&other_session).post_empty(&acknowledge).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.json());
+    assert_eq!(refused.code(), "own_draft");
+
+    // Written, the same.
+    hold.rollback().await.unwrap();
+    app.state.collab.shutdown().await;
+    let written: i64 = sqlx::query_scalar("SELECT count(*) FROM draft_editors WHERE user_id = $1")
+        .bind(other)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(written, 1);
+    let refused = app.as_user(&other_session).post_empty(&acknowledge).await;
+    assert_eq!(refused.code(), "own_draft");
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
 async fn an_acknowledged_up_only_test_never_opens_the_gate(db: PgPool) {
     let (app, host) = app_with(&db, super::draft_modes::mode_compiler());
     let team = Team::new(&db, "acme").await;

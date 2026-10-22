@@ -511,7 +511,17 @@ pub enum Command {
         /// counted by.
         reply: oneshot::Sender<Result<String, ApprovalError>>,
     },
-    Review(ReviewChange),
+    /// Who edited the draft, as the room knows now: a first edit's
+    /// `draft_editors` row may not be written yet.
+    Editors {
+        reply: oneshot::Sender<HashSet<Uuid>>,
+    },
+    /// A change to the review, written already: `done` is answered once
+    /// the room counts it.
+    Review {
+        change: ReviewChange,
+        done: Option<oneshot::Sender<()>>,
+    },
     /// Replace the SQL with `changes`, computed against the text whose
     /// SHA-256 is `from`, for `reason` (`tidy`…): whether anything changed.
     Rewrite {
@@ -1251,7 +1261,13 @@ impl Room {
             } => {
                 let _ = reply.send(self.check_approval(user_id, &sha256, &renames));
             }
-            Command::Review(change) => self.review_changed(change),
+            Command::Editors { reply } => drop(reply.send(self.review.editors.clone())),
+            Command::Review { change, done } => {
+                self.review_changed(change);
+                if let Some(done) = done {
+                    let _ = done.send(());
+                }
+            }
             Command::Rewrite {
                 from,
                 changes,
