@@ -32,6 +32,13 @@
 //!   (`operator_digests`) in the transaction that queues it: once a day,
 //!   whatever the processes.
 //!
+//! - **Ignored domains** (`ROMULUS_OPERATOR_IGNORE_DOMAINS`, e.g. the
+//!   team's own and test addresses): an account at one of them, or under
+//!   one, is never the subject of a notification ([`heeding`]), nor is an
+//!   organization whose members all are ([`ignores_org`]) or a subscription
+//!   such an account bought; the digest leaves them out of its counts (the
+//!   database's `email_in_domains` and `organization_in_domains`).
+//!
 //! `romulus-api operator-test` sends a test notification and the digest at
 //! once ([`send_test`]).
 
@@ -45,6 +52,7 @@ use std::{fmt::Write as _, time::Duration};
 use chrono::{DateTime, NaiveDate, Timelike as _, Utc};
 use sha2::{Digest as _, Sha256};
 use sqlx::PgConnection;
+use uuid::Uuid;
 
 use crate::{
     AppState,
@@ -168,6 +176,32 @@ pub async fn notify(
         crate::mail::outbox::queue(conn, &key(notice, address), &email).await?;
     }
     Ok(())
+}
+
+/// `to`, unless `email` is at a domain it ignores
+/// ([`OperatorConfig::ignores`]): who hears of an account, or of what it
+/// did.
+pub fn heeding<'a>(to: Option<&'a OperatorConfig>, email: &str) -> Option<&'a OperatorConfig> {
+    to.filter(|to| !to.ignores(email))
+}
+
+/// Whether every member of `org` is at a domain `to` ignores: nobody hears
+/// of it. False when notifications are off or nothing is ignored.
+pub async fn ignores_org(
+    conn: &mut PgConnection,
+    to: Option<&OperatorConfig>,
+    org: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let Some(to) = to.filter(|to| !to.ignore_domains.is_empty()) else {
+        return Ok(false);
+    };
+    sqlx::query_scalar!(
+        r#"SELECT organization_in_domains($1, $2) AS "ignored!""#,
+        org,
+        &to.ignore_domains,
+    )
+    .fetch_one(conn)
+    .await
 }
 
 /// The outbox key of `notice` to `to`: its kind, what it is about and the
@@ -426,6 +460,40 @@ pub async fn send_test(state: &AppState) -> Result<Vec<Tested>, sqlx::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn rust_and_postgres_agree_on_ignored_addresses(db: sqlx::PgPool) {
+        let operator = OperatorConfig {
+            emails: vec!["ops@example.com".into()],
+            digest_hour: 7,
+            origin: "https://romulus.example".into(),
+            ignore_domains: vec!["romulus.test".into(), "æsir.example".into()],
+        };
+        for email in [
+            "alice@romulus.test",
+            "Alice@ROMULUS.TEST",
+            "ops@eu.romulus.test",
+            "ops@xromulus.test",
+            "ops@romulus.test.evil",
+            "romulus.test@gmail.com",
+            "odin@ÆSIR.example",
+            "odin@Ae\u{301}sir.example",
+            "no address",
+            "",
+        ] {
+            let postgres = sqlx::query_scalar!(
+                r#"SELECT email_in_domains($1, $2) AS "ignored!""#,
+                email,
+                &operator.ignore_domains,
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            assert_eq!(operator.ignores(email), postgres, "{email}");
+        }
+        assert!(operator.ignores("ops@eu.romulus.test"));
+        assert!(!operator.ignores("ops@xromulus.test"));
+    }
 
     #[test]
     fn prices_read_per_month_and_a_year_says_its_month_too() {

@@ -14,6 +14,11 @@
 //!   transaction's time), migration tests and their outcomes, deletions
 //!   (the sign-in log's `account_deleted`, `organization_deleted`).
 //!
+//! Accounts at ignored domains (`ROMULUS_OPERATOR_IGNORE_DOMAINS`) are
+//! counted nowhere, nor organizations only they are members of (with their
+//! imports, tests, playground time and subscriptions), nor subscriptions
+//! they bought, nor deletions of either.
+//!
 //! The API counts no errors anywhere cheap to read, so the digest has none.
 //! [`due`] takes the day's row (`operator_digests`) and queues the digest in
 //! one transaction: one digest a day, whatever the processes; a day the API
@@ -110,15 +115,21 @@ pub async fn compute(
     let end = midnight(day);
     let yesterday = end - Duration::days(1);
     let week = end - Duration::days(7);
+    let ignored = state
+        .config
+        .operator
+        .as_ref()
+        .map_or(&[][..], |o| o.ignore_domains.as_slice());
 
     let accounts = sqlx::query!(
         r#"SELECT count(*) FILTER (WHERE created_at >= $1 AND created_at < $2) AS "yesterday!",
                   count(*) FILTER (WHERE created_at >= $3 AND created_at < $2) AS "week!",
                   count(*) AS "total!"
-           FROM users"#,
+           FROM users WHERE NOT email_in_domains(email, $4)"#,
         yesterday,
         end,
         week,
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -126,18 +137,21 @@ pub async fn compute(
         r#"SELECT count(*) FILTER (WHERE created_at >= $1 AND created_at < $2) AS "yesterday!",
                   count(*) FILTER (WHERE created_at >= $3 AND created_at < $2) AS "week!",
                   count(*) AS "total!"
-           FROM organizations"#,
+           FROM organizations WHERE NOT organization_in_domains(id, $4)"#,
         yesterday,
         end,
         week,
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;
     let active = sqlx::query!(
-        r#"SELECT (SELECT count(*) FROM users WHERE last_seen_at >= $1) AS "accounts!",
+        r#"SELECT (SELECT count(*) FROM users
+                   WHERE last_seen_at >= $1 AND NOT email_in_domains(email, $2)) AS "accounts!",
                   (SELECT count(DISTINCT m.org_id) FROM memberships m JOIN users u ON u.id = m.user_id
-                   WHERE u.last_seen_at >= $1) AS "orgs!""#,
+                   WHERE u.last_seen_at >= $1 AND NOT email_in_domains(u.email, $2)) AS "orgs!""#,
         now - Duration::days(7),
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -145,10 +159,13 @@ pub async fn compute(
         r#"SELECT count(DISTINCT (database_id, created_at)) FILTER (WHERE created_at >= $1) AS "yesterday!",
                   count(*) FILTER (WHERE created_at >= $1) AS "migrations!",
                   count(DISTINCT (database_id, created_at)) AS "week!"
-           FROM versions WHERE origin = 'import' AND created_at >= $2 AND created_at < $3"#,
+           FROM versions v
+           WHERE origin = 'import' AND created_at >= $2 AND created_at < $3
+             AND NOT organization_in_domains((SELECT org_id FROM databases d WHERE d.id = v.database_id), $4)"#,
         yesterday,
         week,
         end,
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -158,10 +175,12 @@ pub async fn compute(
                   count(*) FILTER (WHERE created_at >= $1 AND status = 'failed') AS "failed!",
                   count(*) FILTER (WHERE created_at >= $1 AND status = 'error') AS "errors!",
                   count(*) AS "week!"
-           FROM migration_tests WHERE created_at >= $2 AND created_at < $3"#,
+           FROM migration_tests WHERE created_at >= $2 AND created_at < $3
+             AND NOT organization_in_domains(org_id, $4)"#,
         yesterday,
         week,
         end,
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;
@@ -171,15 +190,18 @@ pub async fn compute(
                   count(*) FILTER (WHERE kind = 'organization_deleted' AND created_at >= $1) AS "orgs_yesterday!",
                   count(*) FILTER (WHERE kind = 'organization_deleted') AS "orgs_week!"
            FROM auth_events
-           WHERE kind IN ('account_deleted', 'organization_deleted') AND created_at >= $2 AND created_at < $3"#,
+           WHERE kind IN ('account_deleted', 'organization_deleted') AND created_at >= $2 AND created_at < $3
+             AND NOT (kind = 'account_deleted' AND email_in_domains(email, $4))
+             AND NOT (kind = 'organization_deleted' AND details ? 'operators_ignore')"#,
         yesterday,
         week,
         end,
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;
     let billing = if state.billing.is_on() {
-        Some(billing(conn, day, now).await?)
+        Some(billing(conn, day, now, ignored).await?)
     } else {
         None
     };
@@ -221,18 +243,25 @@ pub async fn compute(
     })
 }
 
+/// `ignored`: the domains whose buyers' subscriptions, and organizations,
+/// are left out.
 async fn billing(
     conn: &mut PgConnection,
     day: NaiveDate,
     now: DateTime<Utc>,
+    ignored: &[String],
 ) -> Result<Billing, sqlx::Error> {
     let rows = sqlx::query!(
         r#"SELECT b.org_id, o.name, o.slug, b.plan AS "plan: Plan", b.interval AS "interval: Interval",
                   b.status, b.current_period_end, b.cancel_at_period_end, b.amount_cents, b.currency,
                   b.past_due_since, b.withdrawn_at, b.subscription_id
            FROM org_billing b JOIN organizations o ON o.id = b.org_id
+                LEFT JOIN legal_acceptances a ON a.id = b.acceptance_id
            WHERE b.subscription_id IS NOT NULL
-           ORDER BY lower(o.name), o.slug"#
+             AND NOT organization_in_domains(b.org_id, $1)
+             AND NOT email_in_domains(a.user_email, $1)
+           ORDER BY lower(o.name), o.slug"#,
+        ignored,
     )
     .fetch_all(&mut *conn)
     .await?;
@@ -295,8 +324,10 @@ async fn billing(
         }
     }
     billing.playground_seconds = sqlx::query_scalar!(
-        r#"SELECT coalesce(sum(seconds), 0)::bigint AS "seconds!" FROM playground_usage WHERE month = $1"#,
+        r#"SELECT coalesce(sum(seconds), 0)::bigint AS "seconds!" FROM playground_usage
+           WHERE month = $1 AND NOT organization_in_domains(org_id, $2)"#,
         billing.playground_month,
+        ignored,
     )
     .fetch_one(&mut *conn)
     .await?;

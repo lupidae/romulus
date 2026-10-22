@@ -685,7 +685,7 @@ async fn sign_up(
     .await?;
     crate::operator::notify(
         &mut tx,
-        state.config.operator.as_ref(),
+        crate::operator::heeding(state.config.operator.as_ref(), &email),
         &crate::operator::accounts::account_created(
             user_id,
             &name,
@@ -915,7 +915,7 @@ async fn finish_sign_up(
     .await?;
     crate::operator::notify(
         &mut tx,
-        state.config.operator.as_ref(),
+        crate::operator::heeding(state.config.operator.as_ref(), &link.email),
         &crate::operator::accounts::account_created(
             user_id,
             &name,

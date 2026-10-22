@@ -53,6 +53,7 @@ binary's; the bundle's own value is in the third column when it differs.
 | `ROMULUS_SMTP_HOST`, `_PORT`, `_TLS`, `_USERNAME`, `_PASSWORD`, `ROMULUS_MAIL_FROM` | mail off | `.env` | [Mail](#mail-smtp) |
 | `ROMULUS_OPERATOR_EMAILS` | empty: off | `.env` | the people running this install, comma-separated: emailed as things happen and once a day ([Operator notifications](#operator-notifications)). Needs mail: the API refuses to start without it |
 | `ROMULUS_OPERATOR_DIGEST_HOUR` | `7` | `.env` | the hour (UTC, 0 to 23) from which the daily digest goes |
+| `ROMULUS_OPERATOR_IGNORE_DOMAINS` | empty: none | `.env` | email domains, comma-separated (`romulus.test,example.com`), whose accounts the notifications and the digest leave out: your team's, your tests' ([Ignored domains](#ignored-domains)) |
 | `ROMULUS_SANDBOX_URL` | unset | the `sandbox` container | an admin connection to Postgres 17's sandbox, where SQL compiles. Unset: uploads answer 503 and drafts do not compile |
 | `ROMULUS_SANDBOX_URL_PG15`, `_PG16`, `_PG18` | unset | when enabled | the other majors' sandboxes. A major without one answers 503 for its databases only |
 | `ROMULUS_SANDBOX_PREFIX` | `romulus_sandbox` | | names the compile pool's roles and databases in the sandboxes. One API per prefix and sandbox |
@@ -188,8 +189,30 @@ them 30 days after they were sent, 90 after they were given up ([Retention
 and deletion](#retention-and-deletion)). What people typed (names, business
 names, a cancellation's comment) is shown on one line, never as a link: the
 only links are to Stripe's dashboard and to your install. Check the setup
-with `operator-test` (below). On Kubernetes, set both variables with the
+with `operator-test` (below). On Kubernetes, set these variables with the
 chart's `api.extraEnv`.
+
+### Ignored domains
+
+Your own team signing in, and your tests, would otherwise be news. List
+their email domains in `ROMULUS_OPERATOR_IGNORE_DOMAINS`, comma-separated
+(`romulus.test,example.com`; a leading `@` is allowed). An address matches
+when its domain is one of them or under one (`ops@eu.example.com` matches
+`example.com`; `ops@notexample.com` does not), whatever the case. Then:
+
+- an account at one of them is never the subject of a notification: not
+  when it is created, not when it is deleted;
+- nor is an organization all of whose members are at one of them: its
+  creation (by such an account), its deletion, its plan's caps, its
+  billing; nor a subscription such an account bought, wherever;
+- the digest counts none of them: such accounts (new, in all, active),
+  such organizations and their imports, migration tests and playground
+  hours, subscriptions such an account bought (or of such an organization:
+  paying, MRR, trialing, cancelling, in grace), and their deletions.
+
+An organization is judged by its members at the time: one with a single
+member from outside is told of and counted. Empty (the default) leaves
+nothing out.
 
 ## Admin commands
 

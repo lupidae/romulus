@@ -376,7 +376,7 @@ pub async fn upsert_user(
     if user.created {
         crate::operator::notify(
             &mut tx,
-            operators,
+            crate::operator::heeding(operators, email),
             &crate::operator::accounts::account_created(
                 user.id,
                 &name,
@@ -578,7 +578,7 @@ async fn dev_signin(
         .await?;
         crate::operator::notify(
             &mut tx,
-            state.config.operator.as_ref(),
+            crate::operator::heeding(state.config.operator.as_ref(), email),
             &crate::operator::accounts::account_created(
                 id,
                 &name,

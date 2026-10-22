@@ -117,6 +117,12 @@ pub struct OperatorConfig {
     pub digest_hour: u32,
     /// `ROMULUS_PUBLIC_URL`'s origin: which install an email is from.
     pub origin: String,
+    /// `ROMULUS_OPERATOR_IGNORE_DOMAINS`: comma-separated email domains
+    /// (lowercase, as [`crate::email::key`] makes them) whose accounts are
+    /// left out: no instant notification about them or what they alone
+    /// hold, nothing of theirs in the digest's counts ([`Self::ignores`]).
+    /// Empty: nothing is.
+    pub ignore_domains: Vec<String>,
 }
 
 impl OperatorConfig {
@@ -159,11 +165,47 @@ impl OperatorConfig {
                 emails.push(email);
             }
         }
+        let mut ignore_domains: Vec<String> = Vec::new();
+        for item in get("ROMULUS_OPERATOR_IGNORE_DOMAINS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let domain = crate::email::key(item.strip_prefix('@').unwrap_or(item));
+            let labels_ok = domain.split('.').all(|label| !label.is_empty());
+            if !labels_ok || domain.contains(|c: char| c == '@' || c.is_whitespace()) {
+                return Err(ConfigError::Invalid {
+                    var: "ROMULUS_OPERATOR_IGNORE_DOMAINS",
+                    reason: format!("{item:?} is not an email domain (e.g. example.com)"),
+                });
+            }
+            if !ignore_domains.contains(&domain) {
+                ignore_domains.push(domain);
+            }
+        }
         Ok((!emails.is_empty()).then_some(Self {
             emails,
             digest_hour,
             origin,
+            ignore_domains,
         }))
+    }
+
+    /// Whether `email` is at one of [`Self::ignore_domains`] or under one
+    /// (`ops.example.com` is under `example.com`), ignoring case. The
+    /// database's `email_in_domains` says the same.
+    pub fn ignores(&self, email: &str) -> bool {
+        let Some((_, domain)) = email.rsplit_once('@') else {
+            return false;
+        };
+        let domain = crate::email::key(domain);
+        self.ignore_domains.iter().any(|ignored| {
+            domain == *ignored
+                || domain
+                    .strip_suffix(ignored.as_str())
+                    .is_some_and(|rest| rest.ends_with('.'))
+        })
     }
 }
 
@@ -1698,6 +1740,7 @@ mod tests {
                 emails: vec!["ops@example.com".into(), "Founder@Example.com".into()],
                 digest_hour: 7,
                 origin: "http://localhost:41000".into(),
+                ignore_domains: Vec::new(),
             })
         );
         assert_eq!(on.operators().len(), 2);
@@ -1716,6 +1759,63 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn ignored_domains_match_exactly_or_below_whatever_the_case() {
+        let mut vars = BASE.to_vec();
+        vars.extend([
+            ("ROMULUS_OPERATOR_EMAILS", "ops@example.com"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+        ]);
+        let operator =
+            |vars: &[(&'static str, &'static str)]| config(vars).unwrap().operator.unwrap();
+        assert_eq!(operator(&vars).ignore_domains, Vec::<String>::new());
+        assert!(
+            !operator(&vars).ignores("ada@romulus.test"),
+            "empty ignores nothing"
+        );
+
+        vars.push((
+            "ROMULUS_OPERATOR_IGNORE_DOMAINS",
+            " Romulus.Test, @example.com,romulus.test ,, ",
+        ));
+        let on = operator(&vars);
+        assert_eq!(on.ignore_domains, ["romulus.test", "example.com"]);
+        for (email, ignored) in [
+            ("alice@romulus.test", true),
+            ("Alice@ROMULUS.TEST", true),
+            ("ops@eu.example.com", true),
+            ("ops@EU.Example.Com", true),
+            ("ops@notexample.com", false),
+            ("ops@example.com.evil", false),
+            ("example.com@gmail.com", false),
+            ("not an address", false),
+        ] {
+            assert_eq!(on.ignores(email), ignored, "{email}");
+        }
+
+        for bad in [
+            "a@b.com",
+            ".com",
+            "example..com",
+            "exa mple.com",
+            "example.com.",
+        ] {
+            let mut vars = vars.clone();
+            vars.push(("ROMULUS_OPERATOR_IGNORE_DOMAINS", bad));
+            assert!(
+                matches!(
+                    config(&vars),
+                    Err(ConfigError::Invalid {
+                        var: "ROMULUS_OPERATOR_IGNORE_DOMAINS",
+                        ..
+                    })
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

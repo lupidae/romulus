@@ -38,9 +38,28 @@ fn operated_at(config: Config, hour: u32) -> Config {
             emails: OPS.map(str::to_owned).to_vec(),
             digest_hour: hour,
             origin: config.public_origin(),
+            ignore_domains: Vec::new(),
         }),
         ..config
     }
+}
+
+/// `config`, notifications on, leaving out accounts at `domains`
+/// (`ROMULUS_OPERATOR_IGNORE_DOMAINS`).
+fn ignoring(mut config: Config, domains: &[&str]) -> Config {
+    let operator = config.operator.as_mut().expect("notifications on");
+    operator.ignore_domains = domains.iter().map(|&d| d.to_owned()).collect();
+    config
+}
+
+/// A user whose address is `email`.
+async fn user_at(db: &PgPool, name: &str, email: &str) -> uuid::Uuid {
+    let id = user(db, name).await;
+    sqlx::query!("UPDATE users SET email = $2 WHERE id = $1", id, email)
+        .execute(db)
+        .await
+        .unwrap();
+    id
 }
 
 fn operated(config: Config) -> Config {
@@ -530,9 +549,103 @@ async fn deletions_are_told_with_what_went(db: PgPool) {
     assert!(body.contains("2 members"), "{body}");
 }
 
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn accounts_at_ignored_domains_are_never_told_of(db: PgPool) {
+    let config = ignoring(operated(dev(Config::for_tests())), &["staff.example"]);
+    let app = TestApp::with_config(db.clone(), config.clone());
+    let operators = app.state.config.operator.as_ref();
+
+    // Sign-ups: the domain, a subdomain, any case.
+    dev_sign_in(&app, "ada@staff.example").await;
+    dev_sign_in(&app, "bea@eu.Staff.Example").await;
+    let mut grace = identity("sub-grace");
+    grace.email = Some("Grace@STAFF.example".to_owned());
+    upsert_user(&db, operators, &grace).await.unwrap();
+    // An organization one of them creates.
+    let ada = sqlx::query_scalar!("SELECT id FROM users WHERE email = 'ada@staff.example'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let ada_session = super::harness::session(&db, ada).await;
+    let created = app
+        .as_user(&ada_session)
+        .post("/api/orgs", &json!({"name": "Staff", "slug": "staff"}))
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    assert_eq!(total(&db).await, 0, "nothing about the staff");
+
+    // Anyone else still is: a domain merely ending the same way too.
+    dev_sign_in(&app, "eve@notstaff.example").await;
+    assert_eq!(queued(&db, "account_created").await.len(), OPS.len());
+    let alice = signed_in(&db, "Alice").await;
+    let created = app
+        .as_user(&alice)
+        .post("/api/orgs", &json!({"name": "Acme", "slug": "acme"}))
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let (subject, _) = told(&db, "org_created").await;
+    assert_eq!(subject, "[romulus] New organization: Acme (acme)");
+
+    // Deletions: a staff account (and the organization it alone held), an
+    // organization of staff only: nothing.
+    let deleter = Deleter::new(db.clone(), &config, Mailer::off());
+    let solo = org(&db, "solo").await;
+    member(&db, solo, ada, Role::Admin).await;
+    deleter.delete_account(ada, By::Request).await.unwrap();
+    let kim = user_at(&db, "Kim", "kim@staff.example").await;
+    let lou = user_at(&db, "Lou", "lou@staff.example").await;
+    let team = org(&db, "team").await;
+    member(&db, team, kim, Role::Admin).await;
+    member(&db, team, lou, Role::Developer).await;
+    deleter.delete_org(team).await.unwrap();
+    assert_eq!(queued(&db, "account_deleted").await.len(), 0);
+    assert_eq!(queued(&db, "org_deleted").await.len(), 0);
+    let flagged = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM auth_events
+           WHERE kind = 'organization_deleted' AND details ? 'operators_ignore'"#
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(flagged, 3, "staff and solo (with Ada), team");
+
+    // An organization with one member from outside is told of.
+    let mixed = org(&db, "mixed").await;
+    member(&db, mixed, kim, Role::Admin).await;
+    member(&db, mixed, alice.user, Role::Developer).await;
+    deleter.delete_org(mixed).await.unwrap();
+    let (subject, _) = told(&db, "org_deleted").await;
+    assert_eq!(subject, "[romulus] Organization deleted: mixed (mixed)");
+    let bob = user(&db, "Bob").await;
+    deleter.delete_account(bob, By::Request).await.unwrap();
+    let (subject, _) = told(&db, "account_deleted").await;
+    assert_eq!(
+        subject,
+        "[romulus] Account deleted: bob@romulus.test (on request)"
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn billing_and_caps_of_ignored_accounts_are_never_told_of(db: PgPool) {
+    // The billing team's members are all at romulus.test.
+    let config = ignoring(operated(Config::for_tests()), &["romulus.test"]);
+    let b = billed_with_config(&db, false, config).await;
+    subscribe(&b, "team", "month").await;
+    assert_eq!(create_database(&b, "one").await.status, StatusCode::CREATED);
+    assert_eq!(create_database(&b, "two").await.status, StatusCode::CREATED);
+    assert_eq!(
+        create_database(&b, "three").await.status,
+        StatusCode::CREATED
+    );
+    assert_eq!(total(&db).await, 0);
+}
+
 /// An app with notifications on (the digest from `hour`) and billing on.
 fn billed_state(db: &PgPool, hour: u32) -> AppState {
-    let config = operated_at(Config::for_tests(), hour);
+    billed_state_with(db, operated_at(Config::for_tests(), hour))
+}
+
+fn billed_state_with(db: &PgPool, config: Config) -> AppState {
     let billing = Billing::with_stripe(
         billing_config(),
         legal_config(false),
@@ -890,6 +1003,120 @@ async fn the_digest_counts_what_the_database_holds(db: PgPool) {
         "{}",
         notice.subject
     );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn the_digest_leaves_out_accounts_at_ignored_domains(db: PgPool) {
+    let now = Utc::now();
+    let day = now.date_naive();
+    seed(&db, day, now).await;
+    // Ada (acme's only member: its subscription, playground time, imports
+    // and tests) is staff now; and two deletions of staff yesterday.
+    sqlx::query!("UPDATE users SET email = 'ada@Staff.Example' WHERE email = 'ada@romulus.test'")
+        .execute(&db)
+        .await
+        .unwrap();
+    let yesterday = midnight(day) - Duration::hours(10);
+    sqlx::query!(
+        "INSERT INTO auth_events (kind, email, details, created_at) VALUES
+           ('account_deleted', 'kim@eu.staff.example', '{}', $1),
+           ('organization_deleted', NULL, '{\"operators_ignore\": true}', $1)",
+        yesterday
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let state = billed_state_with(
+        &db,
+        ignoring(operated_at(Config::for_tests(), 0), &["staff.example"]),
+    );
+    let mut conn = db.acquire().await.unwrap();
+    let digest = digest::compute(&mut conn, &state, day, now).await.unwrap();
+    assert_eq!(
+        (
+            digest.accounts.yesterday,
+            digest.accounts.week,
+            digest.accounts_total
+        ),
+        (0, 1, 3)
+    );
+    assert_eq!(
+        (digest.orgs.yesterday, digest.orgs.week, digest.orgs_total),
+        (0, 1, 4)
+    );
+    assert_eq!((digest.active_accounts, digest.active_orgs), (2, 2));
+    let billing = digest.billing.clone().unwrap();
+    assert_eq!(
+        billing.paying.into_iter().collect::<Vec<_>>(),
+        [(Plan::Business, 1)]
+    );
+    assert_eq!(billing.mrr.get("eur"), Some(&10_000));
+    assert_eq!(billing.playground_seconds, 1_800);
+    assert_eq!(
+        (
+            digest.imports.yesterday,
+            digest.imported_migrations,
+            digest.imports.week
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!((digest.tests.yesterday, digest.tests.week), (0, 0));
+    // The seed's deletions only.
+    assert_eq!(
+        (
+            digest.accounts_deleted.yesterday,
+            digest.accounts_deleted.week
+        ),
+        (1, 2)
+    );
+    assert_eq!(
+        (digest.orgs_deleted.yesterday, digest.orgs_deleted.week),
+        (1, 1)
+    );
+
+    // Bought by staff, in an organization of others: left out too.
+    sqlx::query!("UPDATE users SET email = 'bob@staff.example' WHERE email = 'bob@romulus.test'")
+        .execute(&db)
+        .await
+        .unwrap();
+    let bob = sqlx::query_scalar!("SELECT id FROM users WHERE email = 'bob@staff.example'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let beta = sqlx::query_scalar!("SELECT id FROM organizations WHERE slug = 'beta'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let dee = sqlx::query_scalar!("SELECT id FROM users WHERE email = 'dee@romulus.test'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    member(&db, beta, dee, Role::Developer).await;
+    let digest = digest::compute(&mut conn, &state, day, now).await.unwrap();
+    assert_eq!(
+        digest.billing.unwrap().paying.get(&Plan::Business),
+        Some(&1)
+    );
+    let bought = sqlx::query_scalar!(
+        "INSERT INTO legal_acceptances (kind, user_id, user_name, user_email, terms_version, edition,
+                                        locale, professional_use)
+         VALUES ('terms', $1, 'Bob', 'bob@staff.example', 'test', 'professional', 'en', true)
+         RETURNING id",
+        bob
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE org_billing SET acceptance_id = $2 WHERE org_id = $1",
+        beta,
+        bought
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let digest = digest::compute(&mut conn, &state, day, now).await.unwrap();
+    assert!(digest.billing.unwrap().paying.is_empty());
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

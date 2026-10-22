@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT b.org_id, o.name, o.slug, b.plan AS \"plan: Plan\", b.interval AS \"interval: Interval\",\n                  b.status, b.current_period_end, b.cancel_at_period_end, b.amount_cents, b.currency,\n                  b.past_due_since, b.withdrawn_at, b.subscription_id\n           FROM org_billing b JOIN organizations o ON o.id = b.org_id\n           WHERE b.subscription_id IS NOT NULL\n           ORDER BY lower(o.name), o.slug",
+  "query": "SELECT b.org_id, o.name, o.slug, b.plan AS \"plan: Plan\", b.interval AS \"interval: Interval\",\n                  b.status, b.current_period_end, b.cancel_at_period_end, b.amount_cents, b.currency,\n                  b.past_due_since, b.withdrawn_at, b.subscription_id\n           FROM org_billing b JOIN organizations o ON o.id = b.org_id\n                LEFT JOIN legal_acceptances a ON a.id = b.acceptance_id\n           WHERE b.subscription_id IS NOT NULL\n             AND NOT organization_in_domains(b.org_id, $1)\n             AND NOT email_in_domains(a.user_email, $1)\n           ORDER BY lower(o.name), o.slug",
   "describe": {
     "columns": [
       {
@@ -170,7 +170,9 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "TextArray"
+      ]
     },
     "nullable": [
       false,
@@ -188,5 +190,5 @@
       true
     ]
   },
-  "hash": "c3d336330d24f71b76e7f518e82817163b5a76fd2e8928d0fb5a8eea079b854c"
+  "hash": "51778e684b227f5b8c8460abae9cac2ff1f71a5c186f8b7dd944f912619c172d"
 }

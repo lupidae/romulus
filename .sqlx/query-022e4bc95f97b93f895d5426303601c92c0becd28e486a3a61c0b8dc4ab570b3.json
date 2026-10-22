@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT coalesce(sum(seconds), 0)::bigint AS \"seconds!\" FROM playground_usage WHERE month = $1",
+  "query": "SELECT coalesce(sum(seconds), 0)::bigint AS \"seconds!\" FROM playground_usage\n           WHERE month = $1 AND NOT organization_in_domains(org_id, $2)",
   "describe": {
     "columns": [
       {
@@ -12,12 +12,13 @@
     ],
     "parameters": {
       "Left": [
-        "Date"
+        "Date",
+        "TextArray"
       ]
     },
     "nullable": [
       null
     ]
   },
-  "hash": "b80dfb6d33b915d7a8f965c75790146f226b54a4f92e272365f9bd1394a7b980"
+  "hash": "022e4bc95f97b93f895d5426303601c92c0becd28e486a3a61c0b8dc4ab570b3"
 }

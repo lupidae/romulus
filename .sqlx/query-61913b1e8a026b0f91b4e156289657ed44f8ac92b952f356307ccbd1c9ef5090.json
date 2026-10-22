@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO legal_acceptances (kind, user_id, user_name, user_email, terms_version, edition,\n                                        locale, professional_use)\n         VALUES ('terms', $1, 'Bob', 'bob@staff.example', 'test', 'professional', 'en', true)\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "61913b1e8a026b0f91b4e156289657ed44f8ac92b952f356307ccbd1c9ef5090"
+}

@@ -166,7 +166,7 @@ pub async fn setup(db: &PgPool, config: &Config, input: Setup) -> Result<SetupOu
         .await?;
         operator::notify(
             &mut tx,
-            config.operator.as_ref(),
+            operator::heeding(config.operator.as_ref(), &email),
             &operator::accounts::account_created(id, &name, &email, Joined::Setup),
         )
         .await?;
@@ -192,7 +192,7 @@ pub async fn setup(db: &PgPool, config: &Config, input: Setup) -> Result<SetupOu
         .await?;
         operator::notify(
             &mut tx,
-            config.operator.as_ref(),
+            operator::heeding(config.operator.as_ref(), &email),
             &operator::accounts::org_created(org_id, &org_name, &org_slug, None),
         )
         .await?;
