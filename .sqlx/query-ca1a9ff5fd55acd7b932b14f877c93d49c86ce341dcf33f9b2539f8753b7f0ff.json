@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT email_in_domains($1, $2) AS \"ignored!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ignored!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ca1a9ff5fd55acd7b932b14f877c93d49c86ce341dcf33f9b2539f8753b7f0ff"
+}

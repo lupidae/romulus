@@ -349,10 +349,11 @@ impl Deleter {
         if plan.subscription.is_some() {
             return Err(DeletionError::Paying(vec![plan.org.clone()]));
         }
-        delete_org_rows(&mut tx, &plan, "delete-org").await?;
+        let ignored =
+            delete_org_rows(&mut tx, &plan, "delete-org", self.operators.as_ref()).await?;
         crate::operator::notify(
             &mut tx,
-            self.operators.as_ref(),
+            self.operators.as_ref().filter(|_| !ignored),
             &crate::operator::accounts::org_deleted(&plan),
         )
         .await?;
@@ -607,12 +608,17 @@ async fn plan_org(db: impl PgExecutor<'_>, org_id: Uuid) -> Result<Option<OrgPla
 }
 
 /// Deletes the organization's row (everything cascades), in `tx`: the
-/// sign-in log's event, and the notices the running API needs.
+/// sign-in log's event, and the notices the running API needs. True when
+/// its members were all at domains the operators ignore
+/// (`ROMULUS_OPERATOR_IGNORE_DOMAINS`): the event says so, and the digest
+/// does not count it.
 async fn delete_org_rows(
     tx: &mut PgConnection,
     plan: &OrgPlan,
     by: &str,
-) -> Result<(), sqlx::Error> {
+    operators: Option<&OperatorConfig>,
+) -> Result<bool, sqlx::Error> {
+    let ignored = crate::operator::ignores_org(&mut *tx, operators, plan.org.id).await?;
     let databases = sqlx::query_scalar!(
         "SELECT id FROM databases WHERE org_id = $1 AND deleted_at IS NULL",
         plan.org.id
@@ -641,19 +647,23 @@ async fn delete_org_rows(
         )
         .await?;
     }
+    let mut details = json!({
+        "by": by,
+        "organization": plan.org.id,
+        "slug": plan.org.slug,
+        "databases": plan.databases,
+        "versions": plan.versions,
+        "members": plan.members,
+    });
+    if ignored {
+        details["operators_ignore"] = json!(true);
+    }
     events::record(
         &mut *tx,
-        Event::new(AuthEventKind::OrganizationDeleted).details(json!({
-            "by": by,
-            "organization": plan.org.id,
-            "slug": plan.org.slug,
-            "databases": plan.databases,
-            "versions": plan.versions,
-            "members": plan.members,
-        })),
+        Event::new(AuthEventKind::OrganizationDeleted).details(details),
     )
     .await?;
-    Ok(())
+    Ok(ignored)
 }
 
 /// The account's rows, in `tx` (holding its row lock), then the commit:
@@ -681,7 +691,13 @@ async fn delete_rows(
                 .await?;
             }
             Fate::DeletedWith(org) => {
-                delete_org_rows(&mut tx, org, &format!("with the account {}", plan.email)).await?;
+                delete_org_rows(
+                    &mut tx,
+                    org,
+                    &format!("with the account {}", plan.email),
+                    operators,
+                )
+                .await?;
             }
             Fate::LastAdmin { .. } => {
                 // Only for inactivity: `refuse` stopped a request.
@@ -724,7 +740,7 @@ async fn delete_rows(
         .collect();
     crate::operator::notify(
         &mut tx,
-        operators,
+        crate::operator::heeding(operators, &plan.email),
         &crate::operator::accounts::account_deleted(plan, by, idp, &named),
     )
     .await?;

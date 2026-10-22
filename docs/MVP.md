@@ -1410,6 +1410,14 @@ default: off, nothing written). The API's `operator` module.
   wrote nothing, so the 402's details ride in the response's extensions and
   a layer (and the MCP adapter) records it afterwards, in its own
   transaction (`operator_limit_notices`).
+- **Ignored domains** (`ROMULUS_OPERATOR_IGNORE_DOMAINS`, decided
+  2026-10-22): the team's and tests' accounts are not news. An account at
+  one of the domains (or a subdomain, any case) triggers nothing, nor does
+  an organization whose members all are (creation, deletion, caps,
+  billing), nor a subscription such an account bought; the digest leaves
+  all of them out of its counts. Judged at the time: a deleted
+  organization's `organization_deleted` event records `operators_ignore`
+  for the digest, since its members are gone by then.
 - **The digest**, from `ROMULUS_OPERATOR_DIGEST_HOUR` (UTC, 7): the day before
   and the 7 days to it. Accounts and organizations (new, in all, active: an
   account used in 7 days and its organizations), with billing the paying

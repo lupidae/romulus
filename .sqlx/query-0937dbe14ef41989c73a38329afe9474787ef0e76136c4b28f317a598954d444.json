@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO auth_events (kind, email, details, created_at) VALUES\n           ('account_deleted', 'kim@eu.staff.example', '{}', $1),\n           ('organization_deleted', NULL, '{\"operators_ignore\": true}', $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0937dbe14ef41989c73a38329afe9474787ef0e76136c4b28f317a598954d444"
+}

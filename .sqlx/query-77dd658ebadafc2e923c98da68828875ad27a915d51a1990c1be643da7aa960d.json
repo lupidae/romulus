@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(*) FROM users\n                   WHERE last_seen_at >= $1 AND NOT email_in_domains(email, $2)) AS \"accounts!\",\n                  (SELECT count(DISTINCT m.org_id) FROM memberships m JOIN users u ON u.id = m.user_id\n                   WHERE u.last_seen_at >= $1 AND NOT email_in_domains(u.email, $2)) AS \"orgs!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "accounts!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "orgs!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "77dd658ebadafc2e923c98da68828875ad27a915d51a1990c1be643da7aa960d"
+}

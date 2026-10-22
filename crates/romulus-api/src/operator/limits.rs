@@ -19,7 +19,7 @@ use axum::{
 };
 use uuid::Uuid;
 
-use super::{Dashboard, Event, Notice, notify, org_label, who};
+use super::{Dashboard, Event, Notice, ignores_org, notify, org_label, who};
 use crate::{
     AppState,
     billing::{Cap, PlanLimitDetails},
@@ -137,6 +137,10 @@ async fn record(
     let Some((org, name, slug)) = org else {
         return Ok(());
     };
+    // Its members all at ignored domains (the team's own, tests).
+    if ignores_org(&mut tx, state.config.operator.as_ref(), org).await? {
+        return Ok(());
+    }
     let Some(notified_at) = sqlx::query_scalar!(
         "INSERT INTO operator_limit_notices (org_id, cap) VALUES ($1, $2)
          ON CONFLICT (org_id, cap) DO UPDATE SET notified_at = now()

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT organization_in_domains($1, $2) AS \"ignored!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ignored!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ca9ed18e21dc8203c465121c15848121028d9d719f120e8d0f3fe34f7c620183"
+}

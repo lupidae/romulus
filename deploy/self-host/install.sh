@@ -171,6 +171,7 @@ ROMULUS_PLAY_SECRET=''
 # ROMULUS_TRUSTED_PROXIES=''        # default: ROMULUS_PROXIES (Caddy's address, or the gateway for a proxy on this host)
 # ROMULUS_OPERATOR_EMAILS=''        # you, emailed on new accounts, deletions… and a daily digest (needs mail)
 # ROMULUS_OPERATOR_DIGEST_HOUR='7'  # the digest's hour, UTC
+# ROMULUS_OPERATOR_IGNORE_DOMAINS='' # email domains left out of both, e.g. your team's: example.com
 # BACKUP_AT='03:00'
 # BACKUP_KEEP_DAYS='14'
 # RUST_LOG='romulus_api=info,tower_http=info,sqlx=warn'

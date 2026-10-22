@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) FILTER (WHERE created_at >= $1 AND created_at < $2) AS \"yesterday!\",\n                  count(*) FILTER (WHERE created_at >= $3 AND created_at < $2) AS \"week!\",\n                  count(*) AS \"total!\"\n           FROM users",
+  "query": "SELECT count(*) FILTER (WHERE created_at >= $1 AND created_at < $2) AS \"yesterday!\",\n                  count(*) FILTER (WHERE created_at >= $3 AND created_at < $2) AS \"week!\",\n                  count(*) AS \"total!\"\n           FROM organizations WHERE NOT organization_in_domains(id, $4)",
   "describe": {
     "columns": [
       {
@@ -26,7 +26,8 @@
       "Left": [
         "Timestamptz",
         "Timestamptz",
-        "Timestamptz"
+        "Timestamptz",
+        "TextArray"
       ]
     },
     "nullable": [
@@ -35,5 +36,5 @@
       null
     ]
   },
-  "hash": "77c8febbd94ca7dbcf6ce9f3dec093485456011066d560b48acacb05539343de"
+  "hash": "b5af82f5f9cc9d210f698df241f1455d670155ba44123bda25f8a643eb0d6b12"
 }

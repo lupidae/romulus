@@ -10,6 +10,8 @@
 //! The webhook calls [`applied`] in the transaction that stores what Stripe
 //! said; [`changes`] decides, from the row before and after, what happened.
 //! Every notification links to Stripe's dashboard ([`super::Dashboard`]).
+//! Nothing is told of a subscription bought by an account at an ignored
+//! domain, or of an organization whose members all are ([`ignored`]).
 
 use std::cmp::Ordering;
 
@@ -18,8 +20,8 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::{
-    Dashboard, Event, Link, Notice, QUOTE_MAX, clip, day, flat, monthly, notify, org_label, price,
-    who,
+    Dashboard, Event, Link, Notice, QUOTE_MAX, clip, day, flat, ignores_org, monthly, notify,
+    org_label, price, who,
 };
 use crate::{
     AppState,
@@ -28,6 +30,7 @@ use crate::{
         state::{ENDED_STATUSES, Stored, is_live},
         stripe::{Cancellation, Invoice, Subscription},
     },
+    config::OperatorConfig,
     domain::{Buyer, Interval, Plan},
 };
 
@@ -141,6 +144,19 @@ async fn context(
         None => None,
     };
     Ok(Context { org, buyer })
+}
+
+/// Whether the operators ignore this organization's billing: its buyer
+/// (the checkout's record, `buyer_email`) is at a domain they ignore, or
+/// all its members are ([`super::ignores_org`]).
+async fn ignored(
+    conn: &mut PgConnection,
+    operators: &OperatorConfig,
+    org: Uuid,
+    buyer_email: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    Ok(buyer_email.is_some_and(|email| operators.ignores(email))
+        || ignores_org(conn, Some(operators), org).await?)
 }
 
 fn interval_word(interval: Interval) -> &'static str {
@@ -290,6 +306,10 @@ pub async fn applied(
         return Ok(());
     }
     let context = context(conn, event.org, event.next.acceptance_id).await?;
+    let buyer = context.buyer.as_ref().map(|b| b.email.as_str());
+    if ignored(conn, operators, event.org, buyer).await? {
+        return Ok(());
+    }
     let dashboard = Dashboard::of(state);
     for change in changes {
         let notice = notice(change, &context, &event, dashboard);
@@ -532,7 +552,17 @@ pub async fn grace_ended(
         return Ok(());
     };
     let stored = crate::billing::stored(&mut *conn, org).await?;
-    let name = org_name(conn, org).await?;
+    let Context { org: name, buyer } = context(conn, org, stored.acceptance_id).await?;
+    if ignored(
+        conn,
+        operators,
+        org,
+        buyer.as_ref().map(|b| b.email.as_str()),
+    )
+    .await?
+    {
+        return Ok(());
+    }
     let lines = vec![
         format!(
             "{name}'s payment for {} was not made within {} days: the organization is on the Free plan now.",
@@ -580,6 +610,9 @@ pub async fn withdrawal(
     let Some(operators) = state.config.operator.as_ref() else {
         return Ok(());
     };
+    if ignored(conn, operators, w.org, Some(w.email)).await? {
+        return Ok(());
+    }
     let org = org_name(conn, w.org).await?;
     let days = (w.requested_at - w.started).num_days().max(0);
     let lines = vec![

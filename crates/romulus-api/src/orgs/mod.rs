@@ -204,7 +204,7 @@ async fn create(
     .await?;
     crate::operator::notify(
         &mut tx,
-        config.operator.as_ref(),
+        crate::operator::heeding(config.operator.as_ref(), &user.email),
         &crate::operator::accounts::org_created(id, &name, &slug, Some((&user.name, &user.email))),
     )
     .await?;
