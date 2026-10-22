@@ -39,13 +39,13 @@ pub async fn begin_read_committed(
 
 /// Takes the session-level advisory lock `name` (`hashtext` of it) on a
 /// connection of its own, out of the pool: the lock is the session's and
-/// goes with the connection whatever happens (close it to release). `None`
-/// when another session holds it. For work one process does at a time
-/// (sweeps).
+/// goes with the connection whatever happens. `None` when another session
+/// holds it. For work one process does at a time (sweeps); give it back
+/// with [`AdvisoryLock::release`].
 pub async fn try_advisory_lock(
     db: &PgPool,
-    name: &str,
-) -> Result<Option<PgConnection>, sqlx::Error> {
+    name: &'static str,
+) -> Result<Option<AdvisoryLock>, sqlx::Error> {
     let mut conn = db.acquire().await?.detach();
     let locked = sqlx::query_scalar!(
         r#"SELECT pg_try_advisory_lock(hashtext($1)) AS "locked!""#,
@@ -53,7 +53,33 @@ pub async fn try_advisory_lock(
     )
     .fetch_one(&mut conn)
     .await?;
-    Ok(locked.then_some(conn))
+    Ok(locked.then_some(AdvisoryLock { conn, name }))
+}
+
+/// A lock [`try_advisory_lock`] took.
+#[must_use = "release the lock"]
+pub struct AdvisoryLock {
+    conn: PgConnection,
+    name: &'static str,
+}
+
+impl AdvisoryLock {
+    /// Gives the lock back, then closes its connection. Unlocked first:
+    /// closing alone frees it only once the server's backend has exited,
+    /// after `close` returns, so a sweep right after this one could find
+    /// it still held and skip. Should the unlock fail, the connection
+    /// still goes, and the lock with it.
+    pub async fn release(mut self) -> Result<(), sqlx::Error> {
+        let unlocked = sqlx::query_scalar!(
+            r#"SELECT pg_advisory_unlock(hashtext($1)) AS "unlocked!""#,
+            self.name
+        )
+        .fetch_one(&mut self.conn)
+        .await;
+        let closed = sqlx::Connection::close(self.conn).await;
+        unlocked?;
+        closed
+    }
 }
 
 /// The constraint a database error names, if any: unique and foreign-key

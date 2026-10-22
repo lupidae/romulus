@@ -8,6 +8,7 @@ use std::time::Duration;
 use romulus_api::{
     AppState, Config,
     admin::{self, AdminError, OrgDeletion, UserDeletion},
+    billing,
     domain::{Role, TokenScope},
     mail::{Mailer, Outbox},
     orgs::events::MembershipChange,
@@ -1238,6 +1239,24 @@ async fn accounts_put_off_never_hold_the_others_up(db: PgPool) {
     assert!(minutes.unwrap() > 50.0, "{minutes:?}");
     assert_eq!(inactive::delete_due(&state).await.unwrap(), 0);
     assert_eq!(idp.deleted_users(), Vec::<String>::new());
+}
+
+/// The advisory locks held on this test's database.
+const ADVISORY_LOCKS_HELD: &str = "SELECT count(*) FROM pg_locks
+     WHERE locktype = 'advisory'
+       AND database = (SELECT oid FROM pg_database WHERE datname = current_database())";
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_sweep_gives_its_lock_back_before_it_returns(db: PgPool) {
+    // Closing the lock's connection alone freed it only once the server's
+    // backend had exited: a sweep right after could find it held and skip.
+    let (state, _) = sweeping(&db, true);
+    for _ in 0..20 {
+        retention::sweep(&state).await;
+        assert_eq!(count(&db, ADVISORY_LOCKS_HELD).await, 0);
+        assert_eq!(billing::events::sweep(&db).await, Some(0));
+        assert_eq!(count(&db, ADVISORY_LOCKS_HELD).await, 0);
+    }
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

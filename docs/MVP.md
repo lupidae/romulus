@@ -1258,7 +1258,12 @@ Policy promise the same. All of it lives in the API's `retention` module.
   (`ROMULUS_ZITADEL_TOKEN`, a machine user the provisioner makes with
   IAM_USER_MANAGER; without it the command prints the user to delete in the
   console, and the log warns with its id; rows failing after Zitadel's delete
-  are logged as an error with the id: running it again finishes). What the person wrote in organizations they shared is the
+  are logged as an error with the id: running it again finishes). Zitadel
+  is event-sourced: its event store keeps the user's events (email, names,
+  password hash, each sign-in's IP address and user agent), and nothing in
+  Zitadel erases them; the operator blanks them with the SQL in
+  docs/self-host/privacy.md (tested on v4.19.4, unsupported by Zitadel:
+  zitadel#807, #7811). What the person wrote in organizations they shared is the
   organization's and stays (versions, comments, frozen approvals: by a
   deleted account); the audit log keeps the name it recorded, as for someone
   who left. Requests about those go to the organization, the controller.

@@ -280,6 +280,11 @@ docker compose exec api romulus-api delete-org acme --dry-run
 - Run it while the API runs: open drafts close and the people removed are
   disconnected at once.
 - Backups still hold what was deleted until they expire (`backup.md`).
+- With Zitadel as the identity provider, its event store still holds the
+  deleted user's email address, names, password hash and the IP address
+  and browser of each sign-in: Zitadel offers no way to erase them.
+  [privacy.md](privacy.md) has a tested SQL script that blanks them, and
+  what else stays.
 - Emails stay in the database's mail outbox (`mail_outbox`: the address,
   the subject and the text, so names, addresses and business names) until
   it deletes them: 30 days after they were sent, 90 days after they were
