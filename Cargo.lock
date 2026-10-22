@@ -2836,6 +2836,7 @@ dependencies = [
  "remus-mermaid",
  "remus-sql",
  "reqwest",
+ "romulus-cli",
  "romulus-diff",
  "romulus-migration",
  "romulus-migration-check",
@@ -2862,6 +2863,18 @@ dependencies = [
  "uuid",
  "yrs",
  "zip",
+]
+
+[[package]]
+name = "romulus-cli"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]

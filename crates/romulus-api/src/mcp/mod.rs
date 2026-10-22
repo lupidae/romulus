@@ -318,7 +318,12 @@ async fn handle(ctx: &Ctx, era: &Era, method: &str, params: &Value) -> Result<Va
             if !(arguments.is_object() || arguments.is_null()) {
                 return Err(invalid_params("`arguments` must be an object."));
             }
-            Ok(tool_result(tools::call(ctx, tool, arguments).await))
+            let data = params
+                .get("_meta")
+                .and_then(|meta| meta.get(tools::DATA_META))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Ok(tool_result(tools::call(ctx, tool, arguments).await, data))
         }
         "prompts/list" => Ok(prompts::list()),
         "prompts/get" => {
@@ -348,23 +353,31 @@ async fn handle(ctx: &Ctx, era: &Era, method: &str, params: &Value) -> Result<Va
 }
 
 /// A tool's answer: its text, or its error for the model to act on
-/// (`isError`).
-fn tool_result(result: Result<tools::Output, ToolError>) -> Value {
+/// (`isError`); with its data when the request asked for it
+/// ([`tools::DATA_META`]).
+fn tool_result(result: Result<tools::Output, ToolError>, data: bool) -> Value {
     match result {
         Ok(output) => {
             let mut result = json!({
                 "content": [{ "type": "text", "text": output.text }],
                 "isError": false,
             });
-            if let Some(structured) = output.structured {
+            let data = output.data.filter(|_| data);
+            if let Some(structured) = data.or(output.structured) {
                 result["structuredContent"] = structured;
             }
             result
         }
-        Err(err) => json!({
-            "content": [{ "type": "text", "text": err.text() }],
-            "isError": true,
-        }),
+        Err(err) => {
+            let mut result = json!({
+                "content": [{ "type": "text", "text": err.text() }],
+                "isError": true,
+            });
+            if data {
+                result["structuredContent"] = json!({ "error": err.data() });
+            }
+            result
+        }
     }
 }
 

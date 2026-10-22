@@ -1,0 +1,138 @@
+name: CLI
+
+# `romulus`, the command line (crates/romulus-cli, docs/cli.md), built for
+# linux/amd64 and linux/arm64 (static, musl: any distribution, Alpine
+# included) and macOS arm64, each natively on a runner of its own.
+#   build    every pull request touching it, and main: the three builds,
+#            each run once (--version, --help).
+#   release  a release tag vX.Y.Z (RELEASING.md): the builds, stamped with
+#            the version, attached to the tag's GitHub release (made if it
+#            does not exist yet) as romulus-<target>.tar.gz, with
+#            SHA256SUMS. The action at the repository's root (action.yml)
+#            downloads them. A tag publishes everything: images, chart, CLI.
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    paths:
+      - "crates/romulus-cli/**"
+      - "action.yml"
+      - "Cargo.lock"
+      - ".github/workflows/cli.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # rust-toolchain.toml names the toolchain; only the target is added.
+      - name: Target
+        run: rustup target add ${{ matrix.target }}
+
+      # ring (rustls) compiles C: musl's compiler wrapper, on the runner's
+      # own architecture.
+      - name: musl
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q musl-tools
+          target=${{ matrix.target }}
+          echo "CC_${target//-/_}=musl-gcc" >> "$GITHUB_ENV"
+
+      # A release says its version; any other build its commit.
+      - name: Version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            echo "ROMULUS_CLI_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "ROMULUS_CLI_VERSION=0.0.0-${GITHUB_SHA::12}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        run: cargo build --release --locked -p romulus-cli --target ${{ matrix.target }}
+
+      - name: Run it
+        run: |
+          bin=target/${{ matrix.target }}/release/romulus
+          "$bin" --version
+          "$bin" --help > /dev/null
+          # A usage error exits 2, before any network.
+          set +e
+          "$bin" test > /dev/null 2>&1
+          [ $? -eq 2 ] || { echo "::error::a usage error must exit 2"; exit 1; }
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp LICENSE NOTICE target/${{ matrix.target }}/release/
+          tar -czf dist/romulus-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release romulus LICENSE NOTICE
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: romulus-${{ matrix.target }}
+          path: dist/romulus-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: attach to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: romulus-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          builds=(romulus-*.tar.gz)
+          [ "${#builds[@]}" -eq 3 ] || { echo "::error::a build is missing"; ls; exit 1; }
+          sha256sum romulus-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      # The release may exist already (made by hand first, RELEASING.md):
+      # its notes are kept, the files replaced.
+      - name: Attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            prerelease=()
+            [[ $TAG == *-* ]] && prerelease=(--prerelease)
+            gh release create "$TAG" --verify-tag --title "romulus ${TAG#v}" --generate-notes "${prerelease[@]}"
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          {
+            echo "Attached to $TAG:"
+            for f in dist/*; do echo "- \`$(basename "$f")\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1234,7 +1234,8 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
   proxy in front allows. The official Rust SDK was not used: the endpoint needs none of its
   streams or sessions, and has to sit inside the API's auth, errors and limits.
 - **Tool answers are text only**: clients hand a model `structuredContent` instead of the
-  text when both are present, and the text carries the ids, links and next steps.
+  text when both are present, and the text carries the ids, links and next steps. (A
+  program asks for the API's JSON besides, call by call: next section's `romulus/data`.)
 - **Migration files between a repository and romulus** (task MCP-FILES). The MCP server
   cannot read the person's disk: the agent reads the files and sends them, and writes the
   files romulus answers. `import_migrations` goes through an upload (`imports::uploads`,
@@ -1260,6 +1261,46 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
   (NFC, no format characters); its import starts in a task of its own and is kept alive by
   a heartbeat. A file's markers carry a code drawn per answer and its length, so no
   content (a comment, a name) can forge the end of one file or the start of another.
+
+## Migration tests from CI (decided 2026-10-22, built: task CLI)
+
+A team's CI runs each pull request's new migrations on rows before they merge: `romulus test
+<migrations-dir> --database <org>/<db>`, a small binary (`crates/romulus-cli`, released with
+each tag for linux amd64/arm64 and macOS arm64) and a GitHub Action (`action.yml`), failing
+the job when a migration fails, locks dangerously or loses data ([docs/cli.md](cli.md)).
+
+- **A client of the MCP endpoint, with a personal access token.** PATs open `/api/mcp` only,
+  and stay so: the CLI does what an agent does there (the folder as an upload, then
+  `test_migration` with it, then `get_migration_test`), so roles, limits, the audit log and
+  every rule are the web app's, and there is no second API to keep. It depends on no server
+  crate.
+- **Tools give programs their data on request.** A `tools/call` with `_meta`
+  `romulus/data: true` gets the API's own JSON as `structuredContent` (a refusal: its code,
+  message, details and status); agents, which never ask, keep the text. One flag, no new
+  tools in the list models read.
+- **New migrations are the ones not imported**, decided by the import's own plan: the CLI
+  works on a database whose history was imported from the migrations (and is kept so by the
+  CI import on main); a folder with none of them imported is refused
+  (`history_not_imported`), as nothing else tells which are new. A changed or out-of-order
+  migration fails the job, as it would fail the import. Git is not read.
+- **One REST endpoint was missing**: `POST …/imports/uploads/{id}/new-migrations`, the
+  upload's new migrations as one migration text (each under a comment naming its file, with
+  where its lines and statements sit, so errors and failed statements are told against their
+  files), the upload then deleted (an upload is never left to count against its person's
+  three).
+- **The test is of a draft**, in migration mode on the latest version, named after the pull
+  request (`PR #42: <branch>`, from the CI's environment, or `--label`): every push updates
+  the same draft (deleted and remade once a version came after its base), so the team sees
+  the change coming, comments on it, and its tests are its history. Its migration as written
+  runs up only, unless `--down generate`. A test of the exact text (same rows, same down) is
+  answered instead of a new playground, so a re-run is cheap and an acknowledged data loss
+  lets the job pass once acknowledged.
+- **What fails the job is the CLI's rule over the report**: the verdict (failed, or data
+  loss no statement declares and nobody acknowledged), migrations that do not apply, and
+  dangerous locks measured on tables that existed before: a rewrite (`ACCESS EXCLUSIVE` for
+  the whole copy) or a `CREATE INDEX` without `CONCURRENTLY` (`SHARE`, writes wait), unless
+  `--allow-locks`. Declared data loss warns. Exit 0 passed or nothing new, 1 a check failed,
+  2 it could not test.
 
 ## Retention and deletion (decided 2026-10-21, built: task RETAIN)
 

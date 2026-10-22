@@ -55,6 +55,8 @@ struct Calls {
     undeclared: bool,
     /// Tests answer that every table touched was empty.
     nothing_checked: bool,
+    /// Tests fail at the first up statement containing this.
+    fail_on: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -66,6 +68,20 @@ pub(super) struct TestHost {
 impl TestHost {
     fn calls(&self) -> std::sync::MutexGuard<'_, Calls> {
         self.calls.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Tests fail at the first up statement containing `marker`.
+    pub(super) fn fail_on(&self, marker: &str) {
+        self.calls().fail_on = Some(marker.to_owned());
+    }
+
+    /// The up migrations tested so far, in order.
+    pub(super) fn tested(&self) -> Vec<Vec<String>> {
+        self.calls()
+            .tests
+            .iter()
+            .map(|(_, test, _)| test.up.iter().map(|s| s.sql.clone()).collect())
+            .collect()
     }
 }
 
@@ -92,9 +108,11 @@ fn undeclared_loss() -> DataLoss {
     }
 }
 
-/// The report a test of `test` gives; its verdict the engine's own rule
-/// ([`romulus_migration_check::verdict`]).
-fn report(test: &Test, failed: bool, undeclared: bool) -> Report {
+/// The report a test of `test` gives, failing at up statement `failed_at`;
+/// its verdict the engine's own rule ([`romulus_migration_check::verdict`]).
+fn report(test: &Test, failed_at: Option<usize>, undeclared: bool) -> Report {
+    let failed = failed_at.is_some();
+    let at = failed_at.unwrap_or(usize::MAX);
     let results = |statements: &[romulus_migration_check::Statement]| MigrationReport {
         passed: !failed,
         statements: statements
@@ -103,12 +121,10 @@ fn report(test: &Test, failed: bool, undeclared: bool) -> Report {
             .map(|(index, s)| StatementResult {
                 index,
                 sql: s.sql.clone(),
-                status: if failed && index == 0 {
-                    StatementStatus::Failed
-                } else if failed {
-                    StatementStatus::NotRun
-                } else {
-                    StatementStatus::Passed
+                status: match index.cmp(&at) {
+                    std::cmp::Ordering::Less => StatementStatus::Passed,
+                    std::cmp::Ordering::Equal => StatementStatus::Failed,
+                    std::cmp::Ordering::Greater => StatementStatus::NotRun,
                 },
                 hazard: s.hazard.clone(),
                 duration_ms: 2,
@@ -117,7 +133,7 @@ fn report(test: &Test, failed: bool, undeclared: bool) -> Report {
                 rewrote: Vec::new(),
                 rows_changed: None,
                 tag: None,
-                error: (failed && index == 0).then(|| romulus_migration_check::SqlError {
+                error: (index == at).then(|| romulus_migration_check::SqlError {
                     sqlstate: "23502".to_owned(),
                     message: "column \"email\" contains null values".to_owned(),
                     ..Default::default()
@@ -125,7 +141,7 @@ fn report(test: &Test, failed: bool, undeclared: bool) -> Report {
                 offending: None,
             })
             .collect(),
-        failed_at: failed.then_some(0),
+        failed_at,
         duration_ms: 4,
     };
     let phases = if failed {
@@ -152,8 +168,12 @@ fn report(test: &Test, failed: bool, undeclared: bool) -> Report {
     Report {
         verdict: romulus_migration_check::verdict(&phases, &data_loss, down_status),
         headline: if failed {
-            "Failed at statement 1 of 1 of the up migration: column \"email\" contains null values"
-                .to_owned()
+            format!(
+                "Failed at statement {} of {} of the up migration: column \"email\" contains \
+                 null values",
+                at + 1,
+                test.up.len()
+            )
         } else {
             "Up and down ran on 10 rows. Everything came back.".to_owned()
         },
@@ -223,7 +243,15 @@ impl Backend for TestHost {
     ) -> BoxFuture<'_, Result<mpsc::Receiver<TestEvent>, HostError>> {
         let mut calls = self.calls();
         calls.tests.push((id, test.clone(), caller));
-        let (hold, fail) = (calls.hold, calls.fail);
+        let hold = calls.hold;
+        let fail = if calls.fail {
+            Some(0)
+        } else {
+            calls
+                .fail_on
+                .as_ref()
+                .and_then(|marker| test.up.iter().position(|s| s.sql.contains(marker)))
+        };
         let (verdict, nothing_checked, undeclared) =
             (calls.verdict, calls.nothing_checked, calls.undeclared);
         drop(calls);

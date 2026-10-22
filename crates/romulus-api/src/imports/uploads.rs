@@ -25,6 +25,11 @@
 //!   history: past that, 403 `review_required`, and the change goes through
 //!   a draft ([`run::Gate`]). The web's and CI's imports are not gated.
 //! - `GET …/imports/uploads/{id}` [member]: where it stands.
+//! - `POST …/imports/uploads/{id}/new-migrations` [developer]: instead of
+//!   importing the files, takes out the migrations the database has not
+//!   imported yet, as one migration ([`pending`]), to test on rows before
+//!   they merge (`romulus test`, the MCP's `test_migration`); the upload
+//!   is done with (deleted). Refused, the files stay.
 //!
 //! The files stay until an import stores them: after a refusal, a failure
 //! or a dry run, fix a file (send it again) and import again. An upload
@@ -63,6 +68,8 @@ use uuid::Uuid;
 
 use super::{
     ImportEvent, ImportOptions, ImportPreview, ImportReport, Turns,
+    pending::{self, NewMigrations},
+    plan,
     run::{self, Author, Gate, Target},
     upload,
 };
@@ -101,6 +108,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(add_files))
         .routes(routes!(import_upload))
         .routes(routes!(get_upload))
+        .routes(routes!(new_migrations))
         .layer(DefaultBodyLimit::max(CHUNK_LIMIT))
 }
 
@@ -453,6 +461,74 @@ impl Start {
         tokio::spawn(record(state.db.clone(), id, job.spawn(), progress, dry_run));
         Ok(())
     }
+}
+
+/// How to read an upload's files for [`new_migrations`].
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct NewMigrationsOptions {
+    /// Read the files as this tool's; detected from them when absent.
+    pub format: Option<MigrationFormat>,
+}
+
+/// The upload's migrations that the database has not imported yet, as one
+/// migration to test (the import's plan decides which are new); the upload
+/// is then done with. Developers and admins, the upload's starter only.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/databases/{db}/imports/uploads/{id}/new-migrations",
+    operation_id = "take_new_migrations",
+    tag = "imports",
+    params(
+        ("org" = String, Path, description = "The organization's slug"),
+        ("db" = String, Path, description = "The database's slug"),
+        ("id" = Uuid, Path, description = "The upload's id"),
+    ),
+    request_body(content = Option<NewMigrationsOptions>, description = "How to read the files; none: the format detected"),
+    responses(
+        (status = 200, description = "The new migrations (none when every migration was imported already); the upload is deleted", body = NewMigrations),
+        (status = 403, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 409, description = "`history_not_imported` (the database imported none of these migrations: nothing tells which are new), `migration_changed`, `migration_out_of_order`; `upload_expired`, `upload_busy`, `upload_closed`", body = ErrorBody),
+        (status = 422, description = "`import_failed` (a new migration does not parse; `details`: `ImportFailure`), `incomplete_upload`, `invalid_migrations`, `too_many_migrations`, `validation`", body = ErrorBody),
+        (status = 429, description = "`rate_limited`", body = ErrorBody),
+    )
+)]
+async fn new_migrations(
+    member: Member<min::Developer>,
+    State(state): State<AppState>,
+    Path((_, slug, id)): Path<(String, String, Uuid)>,
+    options: Option<Json<NewMigrationsOptions>>,
+) -> ApiResult<Json<NewMigrations>> {
+    let options = options.map(|Json(options)| options).unwrap_or_default();
+    let database = databases::find(&state.db, member.org.id, &slug).await?;
+    state.limits.compile.check(member.user.id)?;
+    state.limits.import_previews.check(database.id)?;
+    let mut tx = state.db.begin().await?;
+    claim(&mut tx, database.id, id, member.user.id).await?;
+    let files = files(&mut tx, id).await?;
+    let options = ImportOptions {
+        format: options.format,
+        ..ImportOptions::default()
+    };
+    let planned = plan::plan(&state.db, database.id, files, &options).await?;
+    if let Some(problem) = plan::problem_of(&planned) {
+        return Err(problem);
+    }
+    // New migrations apply to the ones imported: with none of the files'
+    // migrations in the history, every one would look new.
+    let imported = |m: &plan::PlannedMigration| m.status == plan::MigrationStatus::Imported;
+    if !planned.preview.migrations.iter().any(imported) {
+        return Err(ApiError::Conflict {
+            code: "history_not_imported",
+            message: "This database imported none of these migrations, so nothing tells which are new. Import the folder once (the database's Import migrations, or the import from CI on your main branch); from then on, the migrations it does not have yet are the ones tested.".into(),
+        });
+    }
+    let taken = pending::compose(&planned);
+    sqlx::query!("DELETE FROM import_uploads WHERE id = $1", id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(taken))
 }
 
 /// An upload: its files, and its import's progress or outcome. Its starter

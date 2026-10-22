@@ -149,7 +149,7 @@ token is offered only the others.
 | `get_draft` | the draft's text, its compile problems, review state and generated migration | |
 | `generate_migration` | a draft's migration, or between two versions, as a tool's files (plain, sqlx, Flyway, Prisma, dbmate, golang-migrate), renames detected | |
 | `confirm_renames` | keeps, in a draft, which detected renames its migration applies | yes |
-| `test_migration` | runs a migration up and down on generated rows (or a copy of a playground's), and reports | yes |
+| `test_migration` | runs a migration up and down on generated rows (or a copy of a playground's), and reports; or, given an upload of migration files, the ones the database has not imported yet (written into a migration-mode draft first) | yes |
 | `get_migration_test` | a test's progress, then its verdict and the data it found lost | |
 | `request_review` | marks a draft ready for review, or takes that back | yes |
 | `publish_draft` | publishes a draft as the next version, exactly as reviewed, with the organization's rules | yes |
@@ -224,6 +224,12 @@ affected.
 - When an import is refused or a migration fails, the files stay uploaded
   for an hour: the agent fixes the file named (sends it again) and imports
   again, without sending the rest.
+- **Testing new migrations instead of importing them**: an upload
+  (`commit: false`) given to `test_migration` as `upload` is used up: the
+  migrations the database has not imported yet go, one after the other, into
+  a draft in migration mode (`name`: the agent's open draft of that name is
+  reused), and are tested on rows. This is what `romulus test` does from CI
+  ([cli.md](cli.md)).
 - Rails, Django and Alembic migrations are code, which romulus never runs:
   the agent imports the SQL the tool prints, with the exporter scripts
   (`scripts/export-migrations`, served as the resources above). It asks you
@@ -340,6 +346,12 @@ Cursor and other local clients do not.
   person across their tokens (a burst of 120, then 4 a second). A client
   sending tokens that are not valid is refused for a while after 20 of
   them.
+- Tools answer text, written for a model. A program driving them (the
+  romulus CLI) asks for the API's JSON as well by putting
+  `"romulus/data": true` in a `tools/call`'s `_meta`: that call's answer
+  then carries it as `structuredContent` (and a refusal its `code`,
+  `message`, `details` and HTTP `status`). Without it, only `whoami` has
+  `structuredContent`.
 - The endpoint is written in romulus itself (`crates/romulus-api/src/mcp`)
   rather than with an SDK: it needs no streams, sessions or server-initiated
   requests, and it has to sit inside the API's own authentication, error

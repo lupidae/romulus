@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO version_migrations (version_id, database_id, migration_id, path, format, checksum)\n         VALUES ($1, $2, '1', '1_customers.sql', 'sqlx', $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "949646c43c65492c3808d85920892cbad53a99011e9147fddbace462475869f9"
+}

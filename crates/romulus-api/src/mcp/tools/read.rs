@@ -101,6 +101,7 @@ async fn whoami(ctx: &Ctx) -> Result<Output, ToolError> {
     Ok(Output {
         text,
         structured: Some(structured),
+        data: None,
     })
 }
 

@@ -27,7 +27,10 @@
 //!   imported").
 //! - `…/imports/uploads…` [developer]: files sent a few at a time, then
 //!   imported, and the import followed after its request ([`uploads`]):
-//!   what an agent does over MCP.
+//!   what an agent does over MCP. Or, instead of importing them, the
+//!   migrations the database has not imported yet taken out as one
+//!   migration, to test on rows before they merge ([`pending`]: what
+//!   `romulus test` does from CI).
 //!
 //! Bodies: `multipart/form-data` (files named by their path in the folder,
 //! or a zip), `application/zip`, or one SQL text (`application/sql`, what an
@@ -57,6 +60,7 @@
 //!
 //! Tables: `versions`, `version_migrations` (one row per imported version).
 
+pub mod pending;
 mod plan;
 mod run;
 pub mod staging;

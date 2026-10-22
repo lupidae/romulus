@@ -182,18 +182,34 @@ fn budget(asked: Duration, max: Duration, left: Duration) -> Duration {
 /// whole answer: ids, links, what to do next. Only `whoami` adds structured
 /// facts, for programs checking a connection (the web app's Test
 /// connection).
+///
+/// A program driving the tools (the romulus CLI) asks for `data` too, the
+/// API's own JSON of what a tool did, by putting [`DATA_META`]`: true` in
+/// the request's `_meta`: only that request gets it, as
+/// `structuredContent`, so agents keep reading the text.
 #[derive(Default)]
 pub struct Output {
     pub text: String,
     pub structured: Option<Value>,
+    pub data: Option<Value>,
 }
+
+/// The `_meta` key a `tools/call` sets (to `true`) to get [`Output::data`].
+pub const DATA_META: &str = "romulus/data";
 
 impl Output {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
-            structured: None,
+            ..Self::default()
         }
+    }
+
+    /// With `data`, for programs that ask for it.
+    #[must_use]
+    pub fn with_data(mut self, data: Value) -> Self {
+        self.data = Some(data);
+        self
     }
 }
 
@@ -240,6 +256,21 @@ impl ToolError {
             Self::Invalid(message) => format!("Invalid arguments: {message}"),
             Self::Say(message) => message.clone(),
             Self::Api(failure) => explain(failure),
+        }
+    }
+
+    /// The error as a program reads it ([`Output::data`]): the API's own
+    /// (`code`, `message`, `details`, and its HTTP `status`), or `invalid`
+    /// for arguments and `refused` for anything else the tool says.
+    pub fn data(&self) -> Value {
+        match self {
+            Self::Api(failure) => {
+                let mut body = json!(failure.body);
+                body["status"] = json!(failure.status.as_u16());
+                body
+            }
+            Self::Invalid(message) => json!({ "code": "invalid", "message": message }),
+            Self::Say(message) => json!({ "code": "refused", "message": message }),
         }
     }
 }
