@@ -60,12 +60,10 @@ test("every section link lands on a section", async ({ page }) => {
 
   await page
     .getByRole("navigation", { name: "Sections" })
-    .getByRole("link", { name: "Migrations" })
+    .getByRole("link", { name: "MCP" })
     .click();
-  await expect(page).toHaveURL(/#migrations$/);
-  await expect(
-    page.getByRole("heading", { name: "Bring your migrations. Get the next one written." }),
-  ).toBeInViewport();
+  await expect(page).toHaveURL(/#mcp$/);
+  await expect(page.getByRole("heading", { name: "Your agent speaks romulus." })).toBeInViewport();
 });
 
 test("the page covers what ships, section by section", async ({ page }) => {

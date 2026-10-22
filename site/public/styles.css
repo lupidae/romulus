@@ -295,6 +295,7 @@ p a:hover,
 }
 .site-nav {
   display: none;
+  align-items: center;
   gap: 0.25rem;
 }
 .site-nav a {
@@ -303,6 +304,7 @@ p a:hover,
   color: var(--muted-foreground);
   font-size: var(--text-small);
   font-weight: 500;
+  white-space: nowrap;
   text-decoration: none;
   transition:
     color var(--duration-fast) var(--ease-out),
@@ -329,15 +331,6 @@ p a:hover,
 @media (min-width: 60rem) {
   .site-nav {
     display: flex;
-  }
-}
-/* The feature links wait for room; pricing, self-host and the FAQ never do. */
-.site-nav .nav-wide {
-  display: none;
-}
-@media (min-width: 80rem) {
-  .site-nav .nav-wide {
-    display: block;
   }
 }
 /* The repository: its name on a phone is the icon's label. */
