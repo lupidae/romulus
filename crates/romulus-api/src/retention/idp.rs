@@ -5,6 +5,10 @@
 //!
 //! Without the token the operator deletes the user in Zitadel's console
 //! (Users → the user → Delete): `delete-user` prints the id.
+//!
+//! Either way Zitadel's event store keeps what the user's events carried
+//! (email, names, password hash, sign-ins' IP addresses): it has no API to
+//! erase them, docs/self-host/privacy.md has the operator's SQL.
 
 use std::time::Duration;
 

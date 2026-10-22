@@ -14,6 +14,7 @@ The other pages:
 - [configuration.md](configuration.md): every setting, SMTP examples, the admin commands.
 - [playgrounds.md](playgrounds.md): the host setup playgrounds need.
 - [hardening.md](hardening.md): what to check before people rely on it.
+- [privacy.md](privacy.md): what deleting an account erases, what stays (Zitadel's event store included), and how to remove it.
 - [kubernetes.md](kubernetes.md): the Helm chart, for a Kubernetes cluster.
 
 ## Requirements

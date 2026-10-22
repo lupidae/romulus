@@ -1368,7 +1368,9 @@ docs/MVP.md "Retention and deletion" has the decisions.
   membership changes. In process, the endpoints keep calling the Hub and
   `MembershipEvents` directly.
 - **Sweeps** (`retention::sweep`, hourly, under the `SWEEP_LOCK` advisory
-  lock on a detached connection: one process at a time): `purge::databases`
+  lock on a detached connection: one process at a time; `db::try_advisory_lock`
+  and `AdvisoryLock::release`, which unlocks before closing, or the next
+  sweep can find the lock still held): `purge::databases`
   (deleted 30 days ago; their audit events stay, `database_id` NULL by the
   FK, a last `database_purged`), `purge::invitations` (pending, expired 30
   days ago), and with `ROMULUS_DELETE_INACTIVE_ACCOUNTS` (off by default,
@@ -1389,6 +1391,10 @@ docs/MVP.md "Retention and deletion" has the decisions.
   (`ROMULUS_SOURCE_URL`, the build's repository by default),
   `source_at_commit()`; `/api/health` `commit`, `/api/instance` `source`; the
   user menu's "Source code" (`ShellSource`).
+- **Zitadel's event store** keeps a deleted user's events (email, names,
+  password hash, sign-ins' IPs): Zitadel has no API to erase them;
+  docs/self-host/privacy.md has the operator's SQL (tested on v4.19.4: re-test
+  it after a Zitadel upgrade).
 - **Zitadel**: the provisioner configures its SMTP from `ROMULUS_SMTP_*` and
   `ROMULUS_MAIL_FROM` (compose passes the mail catcher's in-network
   address), and makes the `romulus-api` machine user (IAM_USER_MANAGER) whose

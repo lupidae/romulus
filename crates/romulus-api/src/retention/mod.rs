@@ -26,7 +26,8 @@
 //! Kept elsewhere, by their own rules: invoices (in Stripe), the sign-in log
 //! (`auth_events`, 90 days: it records the deletions too), Stripe's webhook
 //! events (`billing_events`, 90 days: `billing::events`), backups (the
-//! operator's).
+//! operator's), Zitadel's event store (until the operator redacts it:
+//! docs/self-host/privacy.md).
 //!
 //! Self-service deletion (later): an endpoint calls
 //! [`deletion::Deleter::delete_account`] with the signed-in person's id,
@@ -77,9 +78,8 @@ pub async fn sweep(state: &AppState) -> Swept {
         }
     };
     let swept = sweep_locked(state).await;
-    // Closing the connection releases the lock too.
-    if let Err(err) = sqlx::Connection::close(lock).await {
-        tracing::debug!(error = %err, "retention: closing the lock's connection");
+    if let Err(err) = lock.release().await {
+        tracing::debug!(error = %err, "retention: releasing the sweep's lock");
     }
     swept
 }

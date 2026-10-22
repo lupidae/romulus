@@ -38,9 +38,8 @@ pub async fn sweep(db: &PgPool) -> Option<u64> {
         sqlx::query!("DELETE FROM billing_events WHERE received_at < now() - interval '90 days'")
             .execute(db)
             .await;
-    // Closing the connection releases the lock too.
-    if let Err(err) = sqlx::Connection::close(lock).await {
-        tracing::debug!(error = %err, "billing: closing the webhook events sweep's lock");
+    if let Err(err) = lock.release().await {
+        tracing::debug!(error = %err, "billing: releasing the webhook events sweep's lock");
     }
     match deleted {
         Ok(done) => Some(done.rows_affected()),
