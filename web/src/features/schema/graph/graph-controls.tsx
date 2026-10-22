@@ -272,14 +272,14 @@ export function GraphKey({ diff, time = false }: { diff: boolean; time?: boolean
                   </span>
                 }
               >
-                Superposed: not at the cursor
+                All versions: not at the cursor
               </KeyRow>
               <KeyRow icon={<span className="font-mono font-semibold text-warning">~</span>}>
                 Changed in the range
               </KeyRow>
               <KeyRow icon={<KbdGroup keys={["[", "]"]} />}>Previous, next version</KeyRow>
               <KeyRow icon={<Kbd>K</Kbd>}>Play or pause</KeyRow>
-              <KeyRow icon={<Kbd>M</Kbd>}>Superposed or at cursor</KeyRow>
+              <KeyRow icon={<Kbd>M</Kbd>}>All versions or one version</KeyRow>
             </ul>
           </section>
         )}

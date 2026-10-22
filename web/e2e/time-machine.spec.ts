@@ -186,7 +186,7 @@ test("the time machine: a range superposed, a removed table ghosted, a new colum
   await expect(row(page, "orders", "total")).toHaveAttribute("data-later", "");
 
   // At the cursor: exactly v2, as v2's own page draws it.
-  await page.getByRole("radio", { name: "At cursor" }).click();
+  await page.getByRole("radio", { name: "One version" }).click();
   await expect(page).toHaveURL(/mode=cursor/);
   await expect(node(page, "legacy").locator(".sg-node")).toBeVisible();
   // Leaving animations are over once a step settles.
@@ -373,7 +373,7 @@ async function tables(page: Page) {
   });
 }
 
-test("superposed draws the whole range at any cursor; at the cursor, that version as its page does", async ({
+test("all versions draws the whole range at any cursor; one version, that version as its page does", async ({
   page,
 }) => {
   const { slug } = await shop(page, "tm-modes");
@@ -381,9 +381,9 @@ test("superposed draws the whole range at any cursor; at the cursor, that versio
   const cursor = page.getByRole("slider", { name: "Cursor" });
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v2, /);
   const caption = page.locator("[data-mode-caption]:visible");
-  await expect(caption).toHaveText("All 4 versions superposed, v2 highlighted");
+  await expect(caption).toHaveText("All 4 versions at once, v2 highlighted");
 
-  // Superposed at v2: invoices (v4) and orders.total (v3) are there, faded;
+  // All versions, the cursor on v2: invoices (v4) and orders.total (v3) are there, faded;
   // legacy is there in full, its removal (v3) on its header.
   await expect
     .poll(async () => (await tables(page)).all)
@@ -395,8 +395,8 @@ test("superposed draws the whole range at any cursor; at the cursor, that versio
   await expect(node(page, "legacy")).toContainText("−v3");
   await shot(page, "superposed, the cursor on v2");
 
-  // At the cursor: exactly what superposed drew in full, as v2's page draws it.
-  await page.getByRole("radio", { name: "At cursor" }).click();
+  // One version: exactly what all versions drew in full, as v2's page draws it.
+  await page.getByRole("radio", { name: "One version" }).click();
   await expect(caption).toHaveText("The schema at v2");
   await expect(page).toHaveURL(/mode=cursor/);
   // Once what leaves has gone (an animation: polled, not waited for).
@@ -409,7 +409,7 @@ test("superposed draws the whole range at any cursor; at the cursor, that versio
   expect(await drawn(page)).toEqual(labels);
 });
 
-test("playing: superposed, the highlight walks; at the cursor, the schema evolves", async ({
+test("playing: all versions, the highlight walks; one version, the schema evolves", async ({
   page,
 }) => {
   const { slug } = await shop(page, "tm-playing");
@@ -417,7 +417,7 @@ test("playing: superposed, the highlight walks; at the cursor, the schema evolve
   const cursor = page.getByRole("slider", { name: "Cursor" });
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v1, /);
 
-  // Superposed: the same four tables all along, the faded ones lighting up.
+  // All versions: the same four tables all along, the faded ones lighting up.
   await expect(node(page, "invoices").locator(".sg-node")).toHaveAttribute("data-later", "");
   await page.getByRole("button", { name: "Play the range" }).click();
   const seen = new Set<string>();
@@ -448,25 +448,33 @@ test("playing: superposed, the highlight walks; at the cursor, the schema evolve
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("the timeline is a sheet over the graph", async ({ page }) => {
+  test("the timeline is a strip over the bar and a sheet over the graph", async ({ page }) => {
     const { slug } = await shop(page, "tm-phone");
     await page.goto(`./${slug}/shop/time-machine`);
     await expect(node(page, "invoices")).toBeVisible();
+    // One cursor slider at a time: the strip's folded, the track's open.
     const cursor = page.getByRole("slider", { name: "Cursor" });
-    // Folded: the bar plays and steps; the track waits in the sheet.
+    const strip = page.locator("[data-timeline-strip]");
+    const thumb = page.locator('[data-thumb="at"]');
+    // Folded: the bar plays and steps, the strip scrubs; the track waits in the sheet.
     await expect(page.getByRole("button", { name: "Play the range" })).toBeVisible();
-    await expect(cursor).toBeHidden();
-    await page.getByRole("button", { name: "Show the timeline" }).click();
-    await expect(cursor).toBeVisible();
-    await expect(page.getByRole("radio", { name: "At cursor" })).toBeVisible();
+    await expect(strip).toBeVisible();
+    await expect(thumb).toBeHidden();
+    await expect(page.locator("[data-mode-name]")).toHaveText("All versions");
+    const timeline = page.getByRole("button", { name: "Timeline" });
+    await timeline.click();
+    await expect(timeline).toHaveAttribute("aria-expanded", "true");
+    await expect(thumb).toBeVisible();
+    await expect(page.getByRole("radio", { name: "One version" })).toBeVisible();
     await page.getByRole("button", { name: "Previous version" }).click();
     await expect(cursor).toHaveAttribute("aria-valuetext", /^v3, /);
-    await page.getByRole("button", { name: "Hide the timeline" }).click();
-    await expect(cursor).toBeHidden();
+    await timeline.click();
+    await expect(thumb).toBeHidden();
+    await expect(cursor).toHaveAttribute("aria-valuetext", /^v3, /);
     // A table picked opens the sheet on its history.
     await node(page, "customers").locator("[data-table-header]").click();
     await expect(page.getByRole("region", { name: "public.customers" })).toBeVisible();
-    await expect(cursor).toBeVisible();
+    await expect(thumb).toBeVisible();
     await shot(page, "phone, the sheet on a table's history");
     // Nothing wider than the screen.
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(

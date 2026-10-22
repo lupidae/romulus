@@ -24,11 +24,12 @@ import { devRoutes } from "@/lib/dev-routes";
 import { orgs, user } from "./-fixtures";
 
 // The time machine on sample histories, without the API. Dev builds only.
-//   ?fixture=shop|large   eight versions of a shop, or 220 tables over 120 versions
+//   ?fixture=shop|large|long   eight versions of a shop, 220 tables over 120
+//                         versions, or 60 tables over 1000 versions (the cap)
 //   ?removed=1            the shop with a removed version (an admin's view)
 //   ?state=loading        the loading state
 
-const FIXTURES = ["shop", "large"] as const;
+const FIXTURES = ["shop", "large", "long"] as const;
 type FixtureId = (typeof FIXTURES)[number];
 
 interface Search {
@@ -74,7 +75,11 @@ function Preview() {
   const history = React.useMemo(
     () =>
       parseHistory(
-        id === "large" ? largeHistory() : shopHistory({ removed: search.removed === 1 }),
+        id === "large"
+          ? largeHistory()
+          : id === "long"
+            ? largeHistory(60, 1000)
+            : shopHistory({ removed: search.removed === 1 }),
       ),
     [id, search.removed],
   );
@@ -116,6 +121,7 @@ function Preview() {
             <SelectContent align="end">
               <SelectItem value="shop">A shop, 8 versions</SelectItem>
               <SelectItem value="large">220 tables, 120 versions</SelectItem>
+              <SelectItem value="long">60 tables, 1000 versions</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -137,6 +143,7 @@ function Preview() {
               }}
               VersionLink={DevVersionLink}
               layoutKey={`dev-${id}`}
+              person={user.id}
             />
           )}
         </div>

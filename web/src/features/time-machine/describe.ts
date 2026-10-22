@@ -211,9 +211,12 @@ export function summaryText(counts: Frame["counts"]): string {
   return parts.filter(Boolean).join(" · ") || "No change";
 }
 
+/** The modes' names, as the toggle and the phone's readout say them. */
+export const MODE_NAME = { superposed: "All versions", cursor: "One version" } as const;
+
 /**
- * What the graph shows, in a line: "All 8 versions superposed, v4
- * highlighted", "The schema at v4". Superposed with nothing faded (the
+ * What the graph shows, in a line: "All 8 versions at once, v4
+ * highlighted", "The schema at v4". All versions with nothing faded (the
  * cursor's version has all the range had), it says so: the other mode then
  * draws the same graph.
  */
@@ -233,9 +236,8 @@ export function modeCaption(
       : range.from === 0 && range.to === versions.length - 1
         ? `All ${n} versions`
         : `${n} versions (${name(range.from)} → ${name(range.to)})`;
-  if (away && away.gone + away.later === 0)
-    return `${what} superposed: all of it is in ${name(at)}`;
-  return `${what} superposed, ${name(at)} highlighted`;
+  if (away && away.gone + away.later === 0) return `${what} at once: all of it is in ${name(at)}`;
+  return `${what} at once, ${name(at)} highlighted`;
 }
 
 /** How much a version changed, in words (the timeline's bars, as high as that). */
