@@ -9,8 +9,8 @@ type: application
 # tags vX.Y.Z, which publishes the images and this chart (RELEASING.md; the
 # publish job refuses a tag they do not match). appVersion is the images'
 # tag by default (image.tag).
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/lupidae/romulus
 sources:
