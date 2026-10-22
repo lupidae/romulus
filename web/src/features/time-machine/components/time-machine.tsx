@@ -3,9 +3,11 @@ import * as React from "react";
 import {
   ClockRotateRightIcon,
   FilterIcon,
+  InfoCircleIcon,
   NavArrowDownIcon,
   NavArrowUpIcon,
   SearchIcon,
+  XmarkIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,16 +25,18 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useAutoLayout } from "@/features/schema/graph/use-auto-layout";
 import { SchemaGraph } from "@/features/schema/graph/schema-graph";
 import { groupColor } from "@/features/schema/layout";
+import { usePreference } from "@/lib/use-preference";
 import { cn } from "@/lib/utils";
 
 import { Frames } from "../frame";
 import { activity as activityOf, type History } from "../history";
 import { keepPlaced, placedOnly, readPlaced } from "../layout-store";
+import { scaleOf } from "../scale";
 import { carryOver, type TimeMachineState } from "../state";
 import { useFrame, usePlayback } from "../use-frame";
 import { HistoryPanel, type VersionLink } from "./history-panel";
 import { summaryText } from "../describe";
-import { CursorReadout, Legend, ModeToggle, Track, Transport } from "./timeline-bar";
+import { CursorReadout, Legend, ModeToggle, TimelineStrip, Track, Transport } from "./timeline-bar";
 
 export interface TimeMachineProps {
   history: History;
@@ -47,6 +51,11 @@ export interface TimeMachineProps {
    * computed once. None: computed on every visit.
    */
   layoutKey?: string;
+  /**
+   * Who is looking (a user id): the first-run hint, once dismissed, stays
+   * dismissed for them in this browser.
+   */
+  person?: string;
   /** More in the toolbar: compare the range, removed versions… */
   actions?: (state: TimeMachineState) => React.ReactNode;
   className?: string;
@@ -81,6 +90,7 @@ export function TimeMachine({
   onStateChange,
   VersionLink,
   layoutKey,
+  person,
   actions,
   className,
 }: TimeMachineProps) {
@@ -100,6 +110,11 @@ export function TimeMachine({
   const [onSlider, setOnSlider] = React.useState(false);
   const sheet = React.useRef<HTMLDivElement>(null);
   const [query, setQuery] = React.useState(initial.query);
+  const [hintDismissed, setHintDismissed] = usePreference(
+    `romulus:time-machine:hint:${person ?? "anyone"}`,
+    false,
+    isBoolean,
+  );
   const update = React.useCallback((patch: Partial<TimeMachineState>) => {
     setState((s) => ({ ...s, ...patch }));
   }, []);
@@ -115,6 +130,9 @@ export function TimeMachine({
   const { versions } = history;
   const n = versions.length;
   const activity = React.useMemo(() => activityOf(history), [history]);
+  // The range's age scale, the same object while the range is: the
+  // timeline's bars are drawn again only when it changes, not at every step.
+  const scale = React.useMemo(() => scaleOf(state.range), [state.range]);
   const groupMembers = React.useMemo(
     () => (state.group ? new Set(history.groups[state.group]?.members ?? []) : null),
     [state.group, history.groups],
@@ -280,6 +298,12 @@ export function TimeMachine({
     );
   };
 
+  const onRange = (range: TimeMachineState["range"], at: number) => update({ range, at });
+  const onAt = (at: number) => {
+    setPlaying(false);
+    update({ at });
+  };
+
   const versionsCount = state.range.to - state.range.from + 1;
   const range = `v${versions[state.range.from]?.number} → v${versions[state.range.to]?.number}`;
   const modeToggle = (className?: string) => (
@@ -341,7 +365,7 @@ export function TimeMachine({
                   }
                   description={
                     state.mode === "cursor"
-                      ? "This version has no table or view. Move the cursor, or superpose the range."
+                      ? "This version has no table or view. Move the cursor, or show all versions."
                       : "No version of this range has a table or view. Widen the range."
                   }
                 />
@@ -365,119 +389,166 @@ export function TimeMachine({
       </div>
 
       {/* The timeline: the track over the bar, docked under the graph; on a
-          phone, the bar alone, the track in a sheet rising from it. */}
+          phone, a strip of the track over the bar, the track in a sheet
+          rising from the bar (over the strip). */}
       <section
         aria-label="Timeline"
         className="relative z-1 shrink-0 border-t border-border bg-card shadow-raised md:shadow-none"
         onFocus={(event) => setOnSlider(event.target.getAttribute("role") === "slider")}
         onBlur={() => setOnSlider(false)}
       >
-        <div
-          ref={sheet}
-          id="time-machine-sheet"
-          className={cn(
-            // A phone: a sheet rising from the bar over the graph, which keeps
-            // its size. Wider: docked under the graph, always open.
-            "absolute inset-x-0 bottom-full max-h-[min(58vh,32rem)] overflow-y-auto rounded-t-xl border-t border-border bg-card px-3 pt-4 pb-3 shadow-dialog",
-            "duration-(--duration-base) motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2",
-            "md:static md:block md:max-h-none md:animate-none md:overflow-visible md:rounded-none md:border-0 md:px-4 md:pt-2 md:pb-1.5 md:shadow-none",
-            expanded ? "block" : "hidden",
-          )}
-        >
-          <span
-            aria-hidden
-            className="absolute top-1.5 left-1/2 h-1 w-9 -translate-x-1/2 rounded-full bg-border-strong md:hidden"
-          />
-          <Track
-            versions={versions}
-            activity={activity}
-            range={state.range}
-            at={state.at}
-            scale={frame.scale}
-            onRange={(range, at) => update({ range, at })}
-            onAt={(at) => {
-              setPlaying(false);
-              update({ at });
-            }}
-          />
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-1">
-            <Legend scale={frame.scale} versions={versions} mode={state.mode} at={state.at} />
-            <p className="text-xs text-muted-foreground lg:hidden">
-              <span className="font-mono tabular">{range}</span>: {summary}
-            </p>
-          </div>
-          {modeToggle("mt-3 md:hidden")}
-          {track && (
-            <div className="-mx-3 mt-3 border-t border-border md:hidden">
-              <HistoryPanel
-                history={history}
-                track={track}
-                range={state.range}
-                scale={frame.scale}
-                VersionLink={VersionLink}
-                onClose={() => update({ table: null })}
-              />
-            </div>
-          )}
-        </div>
-        {/* Above the sheet, whose shadow falls on the graph, not on it. */}
-        <div className="relative z-2 flex items-center gap-2 bg-card px-3 py-2 md:gap-3 md:border-t md:border-border md:px-4">
-          <Transport
-            mode={state.mode}
-            playing={playing}
-            onPlayingChange={play}
-            canBack={state.at > state.range.from}
-            canForward={state.at < state.range.to}
-            onStep={step}
-          />
-          <CursorReadout version={cursor} live={!playing && !onSlider} />
-          <p className="sr-only" aria-live="polite">
-            {announcement}
-          </p>
-          {modeToggle("hidden shrink-0 items-end md:flex")}
-          <div className="hidden shrink-0 items-center gap-1.5 xl:flex">{filters("bar")}</div>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                variant={filtering ? "secondary" : "ghost"}
-                size="icon"
-                aria-label={filtering ? "Filters (on)" : "Filters"}
-                className="xl:hidden"
-              >
-                <FilterIcon />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="end" side="top" className="grid w-64 gap-2">
-              {filters("popover")}
-            </PopoverContent>
-          </Popover>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="md:hidden"
-            aria-expanded={expanded}
-            aria-controls="time-machine-sheet"
-            aria-label={expanded ? "Hide the timeline" : "Show the timeline"}
-            onClick={(event) => {
-              setExpanded(!expanded);
-              // Opened from the keyboard: the sheet's controls come before
-              // this button, so the keys go on in it, on the cursor (drawn
-              // once the track has measured itself, a frame or two later).
-              if (!expanded && event.detail === 0) {
-                let frames = 0;
-                const focus = () => {
-                  const thumb = sheet.current?.querySelector<HTMLElement>('[data-thumb="at"]');
-                  if (thumb) thumb.focus();
-                  else if (++frames < 10) requestAnimationFrame(focus);
-                };
-                requestAnimationFrame(focus);
-              }
-            }}
+        <TimelineStrip
+          versions={versions}
+          activity={activity}
+          range={state.range}
+          at={state.at}
+          scale={scale}
+          onRange={onRange}
+          onAt={onAt}
+          inert={expanded}
+          className="mx-3 mt-1.5 md:hidden"
+        />
+        <div className="relative">
+          <div
+            ref={sheet}
+            id="time-machine-sheet"
+            className={cn(
+              // A phone: a sheet rising from the bar over the strip and the
+              // graph, which keep their size. Wider: docked under the graph,
+              // always open.
+              "absolute inset-x-0 bottom-full max-h-[min(58vh,32rem)] overflow-y-auto rounded-t-xl border-t border-border bg-card px-3 pt-4 pb-3 shadow-dialog",
+              "duration-(--duration-base) motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2",
+              "md:static md:block md:max-h-none md:animate-none md:overflow-visible md:rounded-none md:border-0 md:px-4 md:pt-2 md:pb-1.5 md:shadow-none",
+              expanded ? "block" : "hidden",
+            )}
           >
-            {expanded ? <NavArrowDownIcon /> : <NavArrowUpIcon />}
-          </Button>
+            <span
+              aria-hidden
+              className="absolute top-1.5 left-1/2 h-1 w-9 -translate-x-1/2 rounded-full bg-border-strong md:hidden"
+            />
+            <Track
+              versions={versions}
+              activity={activity}
+              range={state.range}
+              at={state.at}
+              scale={scale}
+              onRange={onRange}
+              onAt={onAt}
+            />
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-1">
+              <Legend scale={frame.scale} versions={versions} mode={state.mode} at={state.at} />
+              <p className="text-xs text-muted-foreground lg:hidden">
+                <span className="font-mono tabular">{range}</span>: {summary}
+              </p>
+            </div>
+            {!hintDismissed && (
+              <FirstRunHint onDismiss={() => setHintDismissed(true)} className="mt-2" />
+            )}
+            {modeToggle("mt-3 md:hidden")}
+            {track && (
+              <div className="-mx-3 mt-3 border-t border-border md:hidden">
+                <HistoryPanel
+                  history={history}
+                  track={track}
+                  range={state.range}
+                  scale={frame.scale}
+                  VersionLink={VersionLink}
+                  onClose={() => update({ table: null })}
+                />
+              </div>
+            )}
+          </div>
+          {/* Above the sheet, whose shadow falls on the graph, not on it. */}
+          <div className="relative z-2 flex items-center gap-2 bg-card px-3 py-2 md:gap-3 md:border-t md:border-border md:px-4">
+            <Transport
+              mode={state.mode}
+              playing={playing}
+              onPlayingChange={play}
+              canBack={state.at > state.range.from}
+              canForward={state.at < state.range.to}
+              onStep={step}
+            />
+            <CursorReadout version={cursor} mode={state.mode} live={!playing && !onSlider} />
+            <p className="sr-only" aria-live="polite">
+              {announcement}
+            </p>
+            {modeToggle("hidden shrink-0 items-end md:flex")}
+            <div className="hidden shrink-0 items-center gap-1.5 xl:flex">{filters("bar")}</div>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant={filtering ? "secondary" : "ghost"}
+                  size="icon"
+                  aria-label={filtering ? "Filters (on)" : "Filters"}
+                  className="xl:hidden"
+                >
+                  <FilterIcon />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" side="top" className="grid w-64 gap-2">
+                {filters("popover")}
+              </PopoverContent>
+            </Popover>
+            {/* The range, the legend and the modes: in the sheet. Named, so
+                that it is clear there is more than the strip. */}
+            <Button
+              variant={expanded ? "secondary" : "ghost"}
+              className="px-2.5 md:hidden"
+              aria-expanded={expanded}
+              aria-controls="time-machine-sheet"
+              onClick={(event) => {
+                setExpanded(!expanded);
+                // Opened from the keyboard: the sheet's controls come before
+                // this button, so the keys go on in it, on the cursor (drawn
+                // once the track has measured itself, a frame or two later).
+                if (!expanded && event.detail === 0) {
+                  let frames = 0;
+                  const focus = () => {
+                    const thumb = sheet.current?.querySelector<HTMLElement>('[data-thumb="at"]');
+                    if (thumb) thumb.focus();
+                    else if (++frames < 10) requestAnimationFrame(focus);
+                  };
+                  requestAnimationFrame(focus);
+                }
+              }}
+            >
+              Timeline
+              {expanded ? <NavArrowDownIcon /> : <NavArrowUpIcon />}
+            </Button>
+          </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
+/**
+ * On a first visit, what to do first, in one line: the screen relies on
+ * finding the handles and playing. Dismissed for good (per person, in this
+ * browser).
+ */
+function FirstRunHint({ onDismiss, className }: { onDismiss: () => void; className?: string }) {
+  return (
+    <div
+      role="note"
+      data-first-run-hint=""
+      className={cn(
+        "flex items-center gap-2 rounded-md bg-muted py-1 pr-1 pl-2.5 text-sm text-foreground",
+        className,
+      )}
+    >
+      <InfoCircleIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+      <p className="min-w-0 flex-1">
+        Drag the handles to choose versions, then play: each table takes the color of the version
+        that added it.
+      </p>
+      <Tooltip content="Dismiss">
+        <Button variant="ghost" size="icon-sm" aria-label="Dismiss the hint" onClick={onDismiss}>
+          <XmarkIcon />
+        </Button>
+      </Tooltip>
     </div>
   );
 }

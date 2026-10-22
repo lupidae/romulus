@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 import { Tooltip } from "@/components/ui/tooltip";
+import { meQuery } from "@/features/auth/queries";
 import { databaseQuery } from "@/features/databases/queries";
 import { useOpenUpload } from "@/features/databases/upload-context";
 import { canManageMembers } from "@/features/orgs/roles";
@@ -121,6 +122,7 @@ function TimeMachinePage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const { data: database } = useSuspenseQuery(databaseQuery(org, db));
   const { data: orgData } = useSuspenseQuery(orgQuery(org));
+  const { data: me } = useSuspenseQuery(meQuery);
   const admin = canManageMembers(orgData.role);
   const removed = admin && search.removed === 1;
   const openUpload = useOpenUpload();
@@ -226,7 +228,7 @@ function TimeMachinePage() {
         <EmptyState
           icon={<ClockRotateRightIcon />}
           title="Only one version so far"
-          description={`The time machine superposes versions to show how the schema changed. v${database.latest.number} is the only one: the next upload, push, import or published draft gives it something to compare.`}
+          description={`The time machine lays versions over one another to show how the schema changed. v${database.latest.number} is the only one: the next upload, push, import or published draft gives it something to compare.`}
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <Button asChild>
@@ -303,6 +305,7 @@ function TimeMachinePage() {
       // in or out, or a version pushed meanwhile, keeps its place (by number).
       key={database.id}
       layoutKey={database.id}
+      person={me.id}
       history={history}
       initial={initialState(history, search)}
       onStateChange={toAddress}

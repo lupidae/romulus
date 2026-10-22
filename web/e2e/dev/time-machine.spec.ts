@@ -97,15 +97,15 @@ test("the two modes differ whenever the cursor is before the range's end", async
   const errors = await open(page);
   const cursor = page.getByRole("slider", { name: "Cursor" });
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v8, /);
-  await expect(caption(page)).toHaveText("All 8 versions superposed, v8 highlighted");
-  const superposedRadio = page.getByRole("radio", { name: "Superposed" });
+  await expect(caption(page)).toHaveText("All 8 versions at once, v8 highlighted");
+  const superposedRadio = page.getByRole("radio", { name: "All versions" });
   await expect(superposedRadio).toHaveAttribute("data-state", "on");
 
-  // Back to v4: superposed still draws all of the range, invoices (v8) faded.
+  // Back to v4: all versions still draws all of the range, invoices (v8) faded.
   await cursor.focus();
   for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
   await expect(cursor).toHaveAttribute("aria-valuetext", /^v4, Timestamps/);
-  await expect(caption(page)).toHaveText("All 8 versions superposed, v4 highlighted");
+  await expect(caption(page)).toHaveText("All 8 versions at once, v4 highlighted");
   await expect(node(page, "invoices").locator(".sg-node")).toHaveAttribute("data-later", "");
   await expect(node(page, "invoices")).toContainText("+v8");
   // coupons: there at v4 (in full), though it goes in v5.
@@ -119,9 +119,12 @@ test("the two modes differ whenever the cursor is before the range's end", async
   const superposed = await drawn(page);
   expect(superposed.all).toContain("public.invoices");
 
-  // At the cursor: exactly v4, which is what superposed drew in full.
+  // One version: exactly v4, which is what all versions drew in full.
   await page.locator("body").press("m");
-  await expect(page.getByRole("radio", { name: "At cursor" })).toHaveAttribute("data-state", "on");
+  await expect(page.getByRole("radio", { name: "One version" })).toHaveAttribute(
+    "data-state",
+    "on",
+  );
   await expect(caption(page)).toHaveText("The schema at v4");
   // Once what leaves has gone (an animation: polled, not waited for).
   await expect.poll(async () => (await drawn(page)).all).toEqual(superposed.full);
@@ -130,7 +133,7 @@ test("the two modes differ whenever the cursor is before the range's end", async
   await expect(node(page, "orders").locator('[data-column="status"]')).toHaveCount(0);
 
   // And back: switching always shows a change.
-  await page.getByRole("radio", { name: "Superposed" }).click();
+  await page.getByRole("radio", { name: "All versions" }).click();
   await expect(node(page, "invoices")).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -159,7 +162,7 @@ test("a dragged range handle says where it is, during the drag and after it", as
   await expect(card).toHaveAttribute("data-track-card", "hover");
   await expect(card).toContainText("v3");
   await expect(card).not.toContainText("Customers and orders");
-  await expect(caption(page)).toHaveText("6 versions (v3 → v8) superposed, v8 highlighted");
+  await expect(caption(page)).toHaveText("6 versions (v3 → v8) at once, v8 highlighted");
 });
 
 test("keys go through the timeline as it reads, each control visibly focused", async ({ page }) => {
@@ -168,10 +171,12 @@ test("keys go through the timeline as it reads, each control visibly focused", a
     page.getByRole("slider", { name: "Range start" }),
     page.getByRole("slider", { name: "Range end" }),
     page.getByRole("slider", { name: "Cursor" }),
+    // The first-run hint's, under the track and its legend.
+    page.getByRole("button", { name: "Dismiss the hint" }),
     page.getByRole("button", { name: "Play the range" }),
     // Next version is disabled at the range's end: skipped.
     page.getByRole("button", { name: "Previous version" }),
-    page.getByRole("radio", { name: "Superposed" }),
+    page.getByRole("radio", { name: "All versions" }),
     page.getByRole("button", { name: "Only changes" }),
     page.getByRole("searchbox", { name: "Filter tables by name" }),
   ];
@@ -241,7 +246,7 @@ test("what steps back (versions after the cursor, events outside the range) keep
     for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
     await page.getByRole("slider", { name: "Range start" }).focus();
     await page.keyboard.press("ArrowRight");
-    await expect(caption(page)).toHaveText("7 versions (v2 → v8) superposed, v4 highlighted");
+    await expect(caption(page)).toHaveText("7 versions (v2 → v8) at once, v4 highlighted");
     await node(page, "orders").locator(".sg-header").click();
     const panel = page.getByRole("region", { name: "public.orders" });
     await expect(panel.locator('li[data-in-range="false"]')).toHaveCount(1);
@@ -311,7 +316,8 @@ test("the sliders say how much each version changed, the readout not twice", asy
   await expect(readout).toHaveAttribute("aria-live", "off");
   await expect(readout).toContainText("v7");
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Play the range" })).toBeFocused();
+  // The first-run hint's button comes next, then Play.
+  await expect(page.getByRole("button", { name: "Dismiss the hint" })).toBeFocused();
   await expect(readout).toHaveAttribute("aria-live", "polite");
 });
 
@@ -337,25 +343,168 @@ test.describe("on a phone", () => {
 
   test("the sheet opened from the keyboard takes the keys, on the cursor", async ({ page }) => {
     await open(page);
-    const toggle = page.getByRole("button", { name: "Show the timeline" });
+    const toggle = page.getByRole("button", { name: "Timeline" });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await toggle.focus();
     await page.keyboard.press("Enter");
     const cursor = page.getByRole("slider", { name: "Cursor" });
     await expect(cursor).toBeFocused();
     await page.keyboard.press("ArrowLeft");
     await expect(cursor).toHaveAttribute("aria-valuetext", /^v7, /);
-    await expect(caption(page)).toHaveText("All 8 versions superposed, v7 highlighted");
+    await expect(caption(page)).toHaveText("All 8 versions at once, v7 highlighted");
     // Opened by touch or click, focus stays where it was.
-    await page.getByRole("button", { name: "Hide the timeline" }).click();
-    await page.getByRole("button", { name: "Show the timeline" }).click();
-    await expect(page.getByRole("button", { name: "Hide the timeline" })).toBeFocused();
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toBeFocused();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
     // The modes, in the sheet, as tall as the bar's buttons: a thumb's target.
-    for (const name of ["Superposed", "At cursor"]) {
+    for (const name of ["All versions", "One version"]) {
       const box = (await page.getByRole("radio", { name }).boundingBox())!;
       expect(box.height, name).toBeGreaterThanOrEqual(36);
     }
+  });
+
+  test("folded, a strip of the track scrubs the cursor, and the bar names the mode", async ({
+    page,
+  }) => {
+    await open(page);
+    // Folded, the strip is the cursor's slider: its bars, the playhead, nothing else.
+    const strip = page.getByRole("slider", { name: "Cursor" });
+    await expect(strip).toHaveAttribute("data-timeline-strip", "");
+    await expect(strip.locator("[data-bar]")).toHaveCount(8);
+    const box = (await strip.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(28);
+    const xOf = (i: number) => box.x + 14 + ((box.width - 28) * i) / 7;
+    const y = box.y + box.height / 2;
+    // A tap on v3's place puts the cursor there; dragged, it follows.
+    await page.mouse.click(xOf(2), y);
+    await expect(strip).toHaveAttribute("aria-valuetext", /^v3, /);
+    await page.mouse.move(xOf(2), y);
+    await page.mouse.down();
+    await page.mouse.move(xOf(5), y, { steps: 6 });
+    await page.mouse.up();
+    await expect(strip).toHaveAttribute("aria-valuetext", /^v6, /);
+    const readout = page.locator("[data-cursor-readout]");
+    await expect(readout).toContainText("v6");
+    // The mode, which only the sheet switches on a phone (no M key), is said in the bar.
+    await expect(page.locator("[data-mode-name]")).toHaveText("All versions");
+    // The keys move it too.
+    await strip.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(strip).toHaveAttribute("aria-valuetext", /^v5, /);
+
+    // Opened, the sheet rises over the strip and the graph, which keeps its
+    // size; one cursor slider is left, the track's.
+    const graph = page.locator(".react-flow");
+    const before = (await graph.boundingBox())!;
+    await page.getByRole("button", { name: "Timeline" }).click();
+    await expect(page.getByRole("slider", { name: "Cursor" })).toHaveAttribute("data-thumb", "at");
+    await expect(page.locator("[data-timeline-strip]")).toHaveAttribute("inert", "");
+    expect((await graph.boundingBox())!.height).toBe(before.height);
+    await page.getByRole("radio", { name: "One version" }).click();
+    await expect(page.locator("[data-mode-name]")).toHaveText("One version");
+    await page.getByRole("button", { name: "Timeline" }).click();
+    await expect(page.getByRole("slider", { name: "Cursor" })).toHaveAttribute(
+      "aria-valuetext",
+      /^v5, /,
+    );
+  });
+});
+
+test("a first visit says what to do first, once dismissed never again", async ({ page }) => {
+  await open(page);
+  const hint = page.locator("[data-first-run-hint]");
+  await expect(hint).toHaveRole("note");
+  await expect(hint).toHaveText(
+    "Drag the handles to choose versions, then play: each table takes the color of the version that added it.",
+  );
+  // Reached by the keys, after the track.
+  await page.getByRole("slider", { name: "Cursor" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(hint.getByRole("button", { name: "Dismiss the hint" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(hint).toHaveCount(0);
+  await page.reload();
+  await expect(tables(page).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("radio", { name: "All versions" })).toBeVisible();
+  await expect(hint).toHaveCount(0);
+});
+
+test.describe("a long history: 1000 versions", () => {
+  test("two lanes: the whole history with the range as a window, the range in detail", async ({
+    page,
+  }) => {
+    await open(page);
+    await expect(page.locator("[data-track-lanes]")).toHaveAttribute("data-track-lanes", "one");
+    await open(page, "?fixture=long");
+    await expect(page.locator("[data-track-lanes]")).toHaveAttribute("data-track-lanes", "two");
+    const overview = page.locator("[data-track-overview]");
+    const detail = page.locator("[data-track]");
+    // Dates as ticks; a bar per run of neighbours, never one per version.
+    await expect(overview).toContainText("Jan 2027");
+    const bars = await overview.locator("[data-bar]").count();
+    expect(bars).toBeGreaterThan(100);
+    expect(bars).toBeLessThan(500);
+
+    // The range's handles are the overview's; the keys still go start, end, cursor.
+    const start = overview.getByRole("slider", { name: "Range start" });
+    const end = overview.getByRole("slider", { name: "Range end" });
+    const cursor = detail.getByRole("slider", { name: "Cursor" });
+    await start.focus();
+    await page.keyboard.press("Tab");
+    await expect(end).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(cursor).toBeFocused();
+
+    // Narrowed (Page Up: a tenth), the detail shows the range alone, a bar a version.
+    await start.focus();
+    for (let i = 0; i < 9; i++) await page.keyboard.press("PageUp");
+    await expect(start).toHaveAttribute("aria-valuetext", /^v901, /);
+    await expect(detail.locator("[data-bar]")).toHaveCount(100);
+    const labels = detail.locator("[data-lane-labels] > span");
+    await expect(labels.first()).toHaveText("v901");
+    await expect(labels.last()).toHaveText("v1000");
+    await expect(caption(page)).toHaveText(/^100 versions \(v901 → v1000\) at once/);
+
+    // Hovering the window says it moves; dragging it moves the range, its
+    // length and the cursor's place in it kept.
+    const win = (await page.locator("[data-range-window]").boundingBox())!;
+    const y = win.y + win.height / 2;
+    await page.mouse.move(win.x + win.width / 2, y, { steps: 4 });
+    await expect(page.locator("[data-track-card]")).toContainText("Range · drag to move it");
+    await page.mouse.down();
+    await page.mouse.move(win.x + win.width / 2 - 500, y, { steps: 12 });
+    await page.mouse.up();
+    const from = Number(await start.getAttribute("aria-valuenow"));
+    const to = Number(await end.getAttribute("aria-valuenow"));
+    expect(from).toBeLessThan(700);
+    expect(to - from).toBe(99);
+    await expect(cursor).toHaveAttribute("aria-valuenow", String(to));
+    await expect(detail.locator("[data-bar]")).toHaveCount(100);
+  });
+
+  test("on a phone, the strip shows the range alone", async ({ browser }) => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await open(page, "?fixture=long");
+    const strip = page.getByRole("slider", { name: "Cursor" });
+    // The whole history: runs of neighbours.
+    expect(await strip.locator("[data-bar]").count()).toBeLessThan(200);
+    await page.getByRole("button", { name: "Timeline" }).click();
+    const start = page.getByRole("slider", { name: "Range start" });
+    await start.focus();
+    for (let i = 0; i < 9; i++) await page.keyboard.press("PageUp");
+    for (let i = 0; i < 50; i++) await page.keyboard.press("ArrowRight");
+    await expect(start).toHaveAttribute("aria-valuetext", /^v951, /);
+    await page.getByRole("button", { name: "Timeline" }).click();
+    // The range's 50 versions, about 6px each: a bar each.
+    await expect(page.locator("[data-timeline-strip] [data-bar]")).toHaveCount(50);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    await page.close();
   });
 });

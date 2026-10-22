@@ -110,11 +110,11 @@ test("220 tables over 120 versions: first render, scrubbing, playing, modes", as
   );
 
   report(
-    "switch to at cursor and back (reported, no budget)",
+    "switch to one version and back (reported, no budget)",
     await frames(page, async () => {
-      await page.getByRole("radio", { name: "At cursor" }).click();
+      await page.getByRole("radio", { name: "One version" }).click();
       await page.waitForTimeout(800);
-      await page.getByRole("radio", { name: "Superposed" }).click();
+      await page.getByRole("radio", { name: "All versions" }).click();
       await page.waitForTimeout(800);
     }),
     false,

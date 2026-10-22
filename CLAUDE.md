@@ -1140,11 +1140,15 @@ docs/MVP.md "The time machine" has the decisions.
   Renames: `reported_renames` is the seam (none reported yet); `step_with` takes them.
 - **Web**: `history.ts` (parse, `stateAt`, `bornWithin`…), `scale.ts` (the age scale: runs of
   versions, one categorical `--era-1..6` color each), `frame.ts` (`Frames`: one frame per
-  range, cursor, mode and filters; superposed = the range's union, each object `here`, `gone`
-  (ghost) or `later` at the cursor, the cursor's version in full; at cursor = that version;
+  range, cursor, mode and filters; `superposed` ("All versions") = the range's union, each
+  object `here`, `gone` (ghost) or `later` at the cursor, the cursor's version in full;
+  `cursor` ("One version", `?mode=cursor`) = that version;
   tables keyed by their id, the name of the moment as `TimeMark.label`; unchanged tables
   and edges handed again as the same objects; enter/leave motion, then `settle`),
-  `describe.ts` (changes and events in words), components (timeline, history panel, the
+  `describe.ts` (changes and events in words, `MODE_NAME`), `track.ts` (lanes: positions,
+  bars per run of neighbours, date ticks; `isLong`: under 4 px a version the track is two
+  lanes, the whole history with the range as a window over the range in detail), components
+  (timeline: `Track`, the phone's `TimelineStrip`, the first-run hint; history panel; the
   view). The graph draws `TimeMark`s (`build.ts`: era, ghost, later, changed, label, added,
   removed, muted, motion, history) on tables, columns, edges and types (zoomed out, nodes are
   filled by `data-era` in schema-graph.css); `SchemaGraph`'s `graph` prop takes a
@@ -1154,7 +1158,7 @@ docs/MVP.md "The time machine" has the decisions.
   previous history as placeholder while the next loads and remaps the view by version
   number (`state.ts` `carryOver`): the removed toggle and a pushed version never remount
   it. `fixtures.ts` folds models into a timeline the way the API does (tests, the dev
-  route `/app/dev/time-machine?fixture=shop|large`).
+  route `/app/dev/time-machine?fixture=shop|large|long`, long = 1000 versions).
 - **Tests**: `versions/timeline/history/tests.rs` (renames reported, gaps, labels),
   `tests/api/timeline.rs` (roles, cross-org, removed versions, the cache),
   `frame.test.ts`, `e2e/time-machine.spec.ts` (modes against the version page, playback),

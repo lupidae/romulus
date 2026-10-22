@@ -867,14 +867,16 @@ Several versions of a database superposed on one graph, with a timeline of its v
 it: `/app/<org>/<db>/time-machine`, from the history page and from every version's strip (T).
 
 - **Overlay and timeline.** A range of versions (two handles on the timeline) and a cursor in
-  it (a playhead: dragged, `[`/`]`, played with K). *Superposed* draws the union of the whole
-  range, whatever the cursor: what the cursor's version has in full, the rest faded back (its
+  it (a playhead: dragged, `[`/`]`, played with K). Two modes, *All versions* and *One
+  version* (named *Superposed* and *At cursor* until 2026-10-22: rare English, and "cursor"
+  reads as the mouse; the address keeps `?mode=cursor`). *All versions* draws the union of the
+  whole range, whatever the cursor: what the cursor's version has in full, the rest faded back (its
   frame and fill fade, its words stay readable in muted ink, ≥ 4.5:1; gone by then: struck
   through, dashed; not there yet: plain; one gone that comes back later says `−v5 +v8`), so
   moving the cursor moves a
-  highlight and playing walks it through the versions. *At cursor* draws exactly the version
+  highlight and playing walks it through the versions. *One version* draws exactly the version
   at the cursor, nothing else, and playing makes the schema evolve (M switches; the chosen
-  mode is inverted and a line under it says what is shown: "All 8 versions superposed, v4
+  mode is inverted and a line under it says what is shown: "All 8 versions at once, v4
   highlighted", "The schema at v4"). The two differ whenever the range has more than the
   cursor's version. Each table, column and foreign key is colored by when it appeared in the
   range: six distinct hues at most (`--era-1`…`--era-6`), a run of versions each when the
@@ -927,6 +929,23 @@ it: `/app/<org>/<db>/time-machine`, from the history page and from every version
   users → customers`), drawn under the name it had at the cursor.
 - At most the newest 1000 versions (`earlier` counts the rest). One version: the page
   explains what the time machine needs.
+- **Long histories** (decided 2026-10-22, from the TM-UX review): when versions would sit
+  closer than 4 px on the track, it becomes two lanes: an overview of the whole history (its
+  bars, the range as a window with a handle at each end, dates as ticks: days to years,
+  whichever have room) and below it the range alone at full width, where the cursor moves.
+  Drag a handle to change the range, the window to move it (its length and the cursor's place
+  in it kept). Two lanes rather than a scrolling or zoomable track: the range already says
+  which versions matter, so the detail needs no second notion of zoom. Bars closer than 3 px
+  are drawn one per run of neighbours (the busiest standing for it), and what comes after the
+  cursor fades under a veil, so a cursor step never redraws the bars.
+- **On a phone** the track lives in a sheet; folded, a strip of it (its bars and the playhead,
+  no labels, no handles) stays above the bar and scrubs the cursor, and the bar's readout says
+  the mode on a second line; "Timeline" (a word, not a bare chevron) opens the sheet, which
+  rises over the strip and the graph without resizing them.
+- **A first-run hint** under the track and its legend says what to do first ("Drag the
+  handles to choose versions, then play: each table takes the color of the version that added
+  it."), until the person dismisses it: remembered per person in the browser, as the agent
+  card is (a preference kept on the server would be a table and an endpoint for one line).
 
 ## Self-host and open source (decided 2026-10-19, built: task OSS)
 

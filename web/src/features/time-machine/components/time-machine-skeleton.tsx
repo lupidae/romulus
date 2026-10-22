@@ -43,6 +43,12 @@ export function TimeMachineSkeleton() {
         ))}
       </div>
       <div className="shrink-0 border-t border-border bg-card px-3 py-2 md:px-4">
+        {/* A phone's strip of the track, above the bar. */}
+        <div className="mb-2 flex h-7 items-end gap-1 px-3.5 md:hidden">
+          {Array.from({ length: 16 }, (_, i) => (
+            <Skeleton key={i} className="flex-1" style={{ height: `${25 + ((i * 37) % 60)}%` }} />
+          ))}
+        </div>
         <div className="flex h-9 items-center gap-2">
           <Skeleton className="size-8 rounded-md" />
           <Skeleton className="size-8 rounded-md" />

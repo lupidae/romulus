@@ -71,10 +71,10 @@ What it is: docs/MVP.md "The time machine"; the code is `web/src/features/time-m
 | 5 | Each cursor step read twice | Screen reader noise | Fixed |
 | 6 | A tooltip opening over the filters popover | Visual glitch, < 1280 px | Fixed |
 | 7 | The mode switch 28 px tall on a phone | Touch target | Fixed |
-| 8 | On a phone, the mode and the legend are hidden | Comprehension at 390 px | Proposal (3.1) |
-| 9 | No first-run explanation | Onboarding | Proposal (3.2) |
-| 10 | "Superposed" | Vocabulary | Proposal (3.3) |
-| 11 | Very long histories on the track | Precision past ~300 versions | Proposal (3.4) |
+| 8 | On a phone, the mode and the legend are hidden | Comprehension at 390 px | Built (3.1, TM2) |
+| 9 | No first-run explanation | Onboarding | Built (3.2, TM2) |
+| 10 | "Superposed" | Vocabulary | Built (3.3, TM2) |
+| 11 | Very long histories on the track | Precision past ~300 versions | Built (3.4, TM2) |
 | 12 | Selection dims other tables with opacity | Contrast, shared viewer | Proposal (3.5) |
 | 13 | The kit's toggle has no phone size | Touch targets, app-wide | Proposal (3.6) |
 
@@ -161,7 +161,10 @@ hit on the screen, and the only way to switch modes there (no M key).
 the bar's buttons. The kit itself is left alone (proposal 3.6).
 **Test**: the phone test checks both items are 36 px tall or more.
 
-## 3. Proposals (not built)
+## 3. Proposals
+
+3.1 to 3.4 were built in task TM2 (2026-10-22): docs/MVP.md "The time machine" has what
+was decided; 3.5 and 3.6 remain proposals.
 
 ### 3.1 On a phone, keep the timeline in view (serious at 390 px)
 
