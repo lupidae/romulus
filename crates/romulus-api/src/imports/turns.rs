@@ -186,6 +186,11 @@ impl Turns {
             .collect()
     }
 
+    /// The databases with an import in flight in this process.
+    pub fn databases_in_flight(&self) -> Vec<Uuid> {
+        lock(&self.0.running).keys().copied().collect()
+    }
+
     /// How many bytes of models one import may store ([`MODEL_BUDGET`]).
     pub fn model_budget(&self) -> usize {
         match self.0.model_budget.load(Ordering::Relaxed) {

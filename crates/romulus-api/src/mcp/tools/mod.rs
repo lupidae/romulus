@@ -17,6 +17,7 @@
 //! anyway, from the API calls it made ([`call`]).
 
 mod drafts;
+mod files;
 mod onboarding;
 mod playgrounds;
 mod read;
@@ -86,6 +87,7 @@ pub fn all() -> Vec<&'static Tool> {
     tools.extend(testing::TOOLS);
     tools.extend(playgrounds::TOOLS);
     tools.extend(onboarding::TOOLS);
+    tools.extend(files::TOOLS);
     tools
 }
 
@@ -129,6 +131,13 @@ impl Ctx {
     pub async fn audit(&self, audit: Audit) {
         self.audited.store(true, Ordering::Relaxed);
         record(self, &audit).await;
+    }
+
+    /// The call's writes so far changed nothing anyone else sees (files
+    /// staged for an import, the person's alone): nothing for the Activity
+    /// unless [`Ctx::audit`] records something after.
+    pub fn nothing_to_audit(&self) {
+        self.audited.store(true, Ordering::Relaxed);
     }
 
     /// The page at `path` (under `/app`), as a link.
@@ -271,6 +280,27 @@ fn explain(failure: &Failure) -> String {
              web app (Update draft), then try again.",
         ),
         "draft_changed" => Some("Read the draft again (get_draft), then try again."),
+        "concurrent_import" => Some(
+            "Another import of this database is running (maybe this one, sent twice): wait for \
+             it (get_import), then try again if it is still needed.",
+        ),
+        "review_required" => Some(
+            "Nothing was imported. This organization reviews changes, so an agent's import \
+             only brings a history into a database without versions. Write the change as a \
+             draft instead: create_draft in migration mode with the new migration's SQL, then \
+             test_migration and request_review; publishing it makes the version once approved.",
+        ),
+        "upload_expired" => {
+            Some("Send every file again with a new import_migrations call (without `upload`).")
+        }
+        "upload_busy" => Some("Follow the import with get_import; do not send it again."),
+        "too_many_uploads" => Some(
+            "Commit one of your uploads (import_migrations with its `upload`), or wait an hour \
+             for it to expire.",
+        ),
+        "payload_too_large" => Some(
+            "Send fewer files per call (commit: false, then `upload`), or a large file in parts.",
+        ),
         "timeout" => Some(
             "It may still finish: read the state again (get_draft, get_database, \
              list_playgrounds) before trying again.",
@@ -321,6 +351,7 @@ pub async fn call(ctx: &Ctx, tool: &Tool, arguments: Value) -> Result<Output, To
         name if drafts::handles(name) => drafts::call(ctx, name, arguments).await,
         name if testing::handles(name) => testing::call(ctx, name, arguments).await,
         name if playgrounds::handles(name) => playgrounds::call(ctx, name, arguments).await,
+        name if files::handles(name) => files::call(ctx, name, arguments).await,
         name => onboarding::call(ctx, name, arguments).await,
     };
     // A write the tool did not get to describe (it failed after it): in the
@@ -458,6 +489,30 @@ pub async fn test_place(ctx: &Ctx, test: Uuid) -> Result<Place, ToolError> {
     .await
     .map_err(|err| ToolError::Api(super::api::failure_of(&err.into())))?
     .ok_or_else(|| ToolError::Say(format!("No migration test {test} in your organizations.")))
+}
+
+/// An upload of migration files (and its import) the caller started.
+pub async fn upload_place(ctx: &Ctx, upload: Uuid) -> Result<Place, ToolError> {
+    sqlx::query_as!(
+        Place,
+        r#"SELECT o.slug AS org, d.slug AS database, d.id AS database_id
+           FROM import_uploads u
+           JOIN databases d ON d.id = u.database_id
+           JOIN organizations o ON o.id = d.org_id
+           JOIN memberships m ON m.org_id = o.id AND m.user_id = $2
+           WHERE u.id = $1 AND u.created_by = $2 AND d.deleted_at IS NULL"#,
+        upload,
+        ctx.api.agent().user.id,
+    )
+    .fetch_optional(&ctx.api.state().db)
+    .await
+    .map_err(|err| ToolError::Api(super::api::failure_of(&err.into())))?
+    .ok_or_else(|| {
+        ToolError::Say(format!(
+            "No upload or import {upload} of yours: it may have expired (a day after it ended). \
+             Send the files again with import_migrations (without `upload`)."
+        ))
+    })
 }
 
 pub async fn playground_place(ctx: &Ctx, playground: Uuid) -> Result<Place, ToolError> {

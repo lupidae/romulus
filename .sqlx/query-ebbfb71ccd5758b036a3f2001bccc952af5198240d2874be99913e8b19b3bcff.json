@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.slug AS org, d.slug AS database, d.id AS database_id\n           FROM import_uploads u\n           JOIN databases d ON d.id = u.database_id\n           JOIN organizations o ON o.id = d.org_id\n           JOIN memberships m ON m.org_id = o.id AND m.user_id = $2\n           WHERE u.id = $1 AND u.created_by = $2 AND d.deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "organizations",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "database",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "slug"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "database_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "databases",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ebbfb71ccd5758b036a3f2001bccc952af5198240d2874be99913e8b19b3bcff"
+}

@@ -2855,6 +2855,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "unicode-properties",
  "url",
  "utoipa",
  "utoipa-axum",

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM import_upload_files f USING import_uploads u\n         WHERE f.upload_id = u.id AND u.expires_at < now() AND u.status <> 'importing'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d4b32467967a1dbf71ee32b67f38669fda5eb4871c4baee984691472d6a011a1"
+}

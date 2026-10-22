@@ -129,6 +129,20 @@ pub struct Target {
     pub major: PgMajor,
 }
 
+/// Whether an import may add versions to a history the organization
+/// reviews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    /// The web's and CI's imports: the person (or their pipeline) decides.
+    Open,
+    /// An agent's (MCP's `import_migrations`) in an organization that
+    /// reviews changes (approvals or a passing migration test before
+    /// publishing): only a database without a live version takes its
+    /// versions (onboarding); after that, changes go through drafts. A dry
+    /// run, which stores nothing, is always allowed.
+    FirstHistoryOnly,
+}
+
 /// Silence after which the NDJSON stream sends a blank line.
 pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -142,59 +156,9 @@ pub async fn start(
     options: ImportOptions,
     stream: bool,
 ) -> ApiResult<Response> {
-    let started = Instant::now();
-    let mut planned = plan::plan(&state.db, target.database_id, files, &options).await?;
-    // One import of a database at a time, settled before any answer goes
-    // out: a retry of this one (a proxy stopped waiting for the answer)
-    // gets a real 409, streamed or not. Once it is this import's turn, the
-    // history may have moved since it was planned: match again.
-    let running = if planned.new.is_empty() {
-        None
-    } else {
-        let running = state.imports.running(
-            target.database_id,
-            plan::fingerprint(&planned, options.dry_run),
-        )?;
-        planned = plan::rematch(&state.db, target.database_id, planned).await?;
-        Some(running)
-    };
-    if let Some(refusal) = plan::refusal(&planned, &options) {
-        return Err(refusal);
-    }
-    // The plan's caps, before the sandbox: an import that cannot be stored
-    // is refused now (schema sizes are checked again once replayed).
-    if !planned.new.is_empty() && !options.dry_run {
-        let limits = state
-            .billing
-            .version_limits(&state.db, target.database_id)
-            .await?;
-        let live = sqlx::query_scalar!(
-            r#"SELECT count(*) AS "n!" FROM versions WHERE database_id = $1 AND removed_at IS NULL"#,
-            target.database_id,
-        )
-        .fetch_one(&state.db)
-        .await?;
-        limits.check(
-            live,
-            i64::try_from(planned.new.len()).unwrap_or(i64::MAX),
-            0,
-        )?;
-    }
-    let job = Job {
-        state,
-        target,
-        author,
-        options,
-        planned,
-        started,
-        running,
-    };
+    let job = prepare(state, target, author, files, options, Gate::Open).await?;
     if stream {
-        let (events, received) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            let _ = job.run(Some(events)).await;
-        });
-        let body = ndjson(received, KEEP_ALIVE);
+        let body = ndjson(job.spawn(), KEEP_ALIVE);
         return Ok((
             StatusCode::OK,
             [
@@ -218,6 +182,84 @@ pub async fn start(
     Ok((status, Json(report)).into_response())
 }
 
+/// The import of `files`, planned, with what cannot be imported refused
+/// (an error to answer at once: 409, 402, 422, 403 past the `gate`): ready
+/// to run. Every way in (the web, CI, uploads) goes through here.
+pub(super) async fn prepare(
+    state: AppState,
+    target: Target,
+    author: Author,
+    files: Vec<romulus_sandbox::import::SourceFile>,
+    options: ImportOptions,
+    gate: Gate,
+) -> ApiResult<Job> {
+    let started = Instant::now();
+    let mut planned = plan::plan(&state.db, target.database_id, files, &options).await?;
+    // One import of a database at a time, settled before any answer goes
+    // out: a retry of this one (a proxy stopped waiting for the answer)
+    // gets a real 409, streamed or not. Once it is this import's turn, the
+    // history may have moved since it was planned: match again.
+    let running = if planned.new.is_empty() {
+        None
+    } else {
+        let running = state.imports.running(
+            target.database_id,
+            plan::fingerprint(&planned, options.dry_run),
+        )?;
+        planned = plan::rematch(&state.db, target.database_id, planned).await?;
+        Some(running)
+    };
+    // Decided on the plan as matched last: storing refuses a history that
+    // moved since (`latest_id`), so a database that had no live version
+    // here has none when the versions are stored.
+    if gate == Gate::FirstHistoryOnly
+        && !options.dry_run
+        && !planned.new.is_empty()
+        && planned.latest_id().is_some()
+    {
+        return Err(review_required());
+    }
+    if let Some(refusal) = plan::refusal(&planned, &options) {
+        return Err(refusal);
+    }
+    // The plan's caps, before the sandbox: an import that cannot be stored
+    // is refused now (schema sizes are checked again once replayed).
+    if !planned.new.is_empty() && !options.dry_run {
+        let limits = state
+            .billing
+            .version_limits(&state.db, target.database_id)
+            .await?;
+        let live = sqlx::query_scalar!(
+            r#"SELECT count(*) AS "n!" FROM versions WHERE database_id = $1 AND removed_at IS NULL"#,
+            target.database_id,
+        )
+        .fetch_one(&state.db)
+        .await?;
+        limits.check(
+            live,
+            i64::try_from(planned.new.len()).unwrap_or(i64::MAX),
+            0,
+        )?;
+    }
+    Ok(Job {
+        state,
+        target,
+        author,
+        options,
+        planned,
+        started,
+        running,
+    })
+}
+
+/// 403 `review_required`: an agent's import past the organization's review.
+fn review_required() -> ApiError {
+    ApiError::Denied {
+        code: "review_required",
+        message: "This organization reviews changes (approvals or a passing migration test before publishing) and this database has versions already: an agent's import cannot add to them. Create a draft (create_draft in migration mode) with the change, so approvals and tests apply.".into(),
+    }
+}
+
 /// The events as NDJSON lines, a blank line after `keep_alive` without
 /// one; ends when the job drops its sender.
 fn ndjson(
@@ -239,7 +281,7 @@ fn ndjson(
     })
 }
 
-struct Job {
+pub(super) struct Job {
     state: AppState,
     target: Target,
     author: Author,
@@ -254,6 +296,21 @@ struct Job {
 type Events = mpsc::UnboundedSender<ImportEvent>;
 
 impl Job {
+    /// What the import was planned as.
+    pub(super) fn preview(&self) -> &ImportPreview {
+        &self.planned.preview
+    }
+
+    /// Runs the job in a task of its own (a client leaving does not stop
+    /// it): its progress, one event at a time, the last `done` or `failed`.
+    pub(super) fn spawn(self) -> mpsc::UnboundedReceiver<ImportEvent> {
+        let (events, received) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let _ = self.run(Some(events)).await;
+        });
+        received
+    }
+
     /// The job, start to end. Its outcome also ends the stream.
     async fn run(self, events: Option<Events>) -> ApiResult<ImportReport> {
         if let Some(events) = &events {

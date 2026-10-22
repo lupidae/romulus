@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_uploads\n         SET status = 'importing', dry_run = $2, progress = NULL, outcome = NULL,\n             updated_at = now()\n         WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b9ab0d7bfc1b3e636c30913ba5f3b5179a6e6ccd4e8edf39548630dbd2118126"
+}

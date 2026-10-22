@@ -1195,6 +1195,87 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/databases/{db}/imports/uploads": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Starts an upload of migration files, with some or none. Developers and
+     *     admins. See the module documentation.
+     */
+    post: operations["start_import_upload"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/imports/uploads/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * An upload: its files, and its import's progress or outcome. Its starter
+     *     only.
+     */
+    get: operations["get_import_upload"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/imports/uploads/{id}/files": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Adds files to an upload (a path and part sent again replaces it).
+     *     Developers and admins, the upload's starter only.
+     */
+    post: operations["add_import_files"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/orgs/{org}/databases/{db}/imports/uploads/{id}/import": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Imports an upload's files: what the import refuses is answered at once,
+     *     otherwise it runs on (202); read the upload to follow it. Developers and
+     *     admins, the upload's starter only.
+     */
+    post: operations["import_upload"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/databases/{db}/major": {
     parameters: {
       query?: never;
@@ -3641,6 +3722,19 @@ export interface components {
       new: number;
       problem?: components["schemas"]["ErrorBody"] | null;
     };
+    /** @description A running import's progress. */
+    ImportProgress: {
+      /**
+       * Format: int32
+       * @description The number the first new version gets.
+       */
+      first_number?: number | null;
+      /** @description New migrations replayed so far… */
+      replayed: number;
+      stage: components["schemas"]["ImportStage"];
+      /** @description …of these many (the versions it creates). */
+      total: number;
+    };
     /** @description What an import did. */
     ImportReport: {
       /** @description Versions created. */
@@ -3654,10 +3748,48 @@ export interface components {
       status: components["schemas"]["ImportStatus"];
     };
     /**
+     * @description Where a running import is.
+     * @enum {string}
+     */
+    ImportStage: "planned" | "queued" | "replaying";
+    /**
      * @description How an import ended.
      * @enum {string}
      */
     ImportStatus: "created" | "unchanged" | "checked";
+    /** @description An upload: its files, and its import once asked for. */
+    ImportUpload: {
+      /** Format: int64 */
+      bytes: number;
+      /** Format: date-time */
+      created_at: string;
+      /** @description The last import asked was a dry run. */
+      dry_run: boolean;
+      error?: components["schemas"]["ErrorBody"] | null;
+      expired: boolean;
+      /**
+       * Format: date-time
+       * @description Past it, the files are gone: start again.
+       */
+      expires_at: string;
+      /**
+       * Format: int64
+       * @description Files received (one sent in parts counts once), and what they weigh
+       *     (paths and contents, in bytes).
+       */
+      files: number;
+      /** Format: uuid */
+      id: string;
+      progress?: components["schemas"]["ImportProgress"] | null;
+      report?: components["schemas"]["ImportReport"] | null;
+      status: components["schemas"]["ImportUploadStatus"];
+    };
+    /**
+     * @description Where migration files sent a few at a time stand
+     *     (`import_upload_status`, `imports::uploads`).
+     * @enum {string}
+     */
+    ImportUploadStatus: "open" | "importing" | "checked" | "failed" | "imported";
     /** @description One migration in the report. */
     ImportedMigration: {
       /** @description What it changed, against the version before it: `"2 tables added"`. */
@@ -6155,6 +6287,27 @@ export interface components {
        */
       diagnostics?: components["schemas"]["Diagnostic"][];
     };
+    /** @description Files to add. */
+    UploadFiles: {
+      files?: components["schemas"]["UploadedFile"][];
+    };
+    /**
+     * @description How to import an upload's files (all optional: a bare `POST` detects
+     *     the format and refuses to append).
+     */
+    UploadImportOptions: {
+      /**
+       * @description Import even though the database has versions that were not
+       *     imported: the imported ones continue the numbering.
+       */
+      append?: boolean;
+      /**
+       * @description Replay without storing anything: the files are kept, to import for
+       *     real next.
+       */
+      dry_run?: boolean;
+      format?: components["schemas"]["MigrationFormat"] | null;
+    };
     UploadSql: {
       /**
        * @description Only as the database's first version: refused (409 `has_versions`)
@@ -6166,6 +6319,25 @@ export interface components {
       message?: string | null;
       /** @description The schema as SQL DDL, at most 1 MiB. */
       sql: string;
+    };
+    /** @description A file, or a part of one. */
+    UploadedFile: {
+      /** @description The file's text (UTF-8), exactly as it is on disk. */
+      content: string;
+      /**
+       * Format: int32
+       * @description For a file too large for one request: which part this is, 1, 2…
+       *     (joined in order). 1 by default.
+       */
+      part?: number | null;
+      /**
+       * @description Its path relative to the repository (or to the migrations folder),
+       *     with `/`: `db/migration/V2__add_invoices.sql`,
+       *     `prisma/migrations/20240101000000_init/migration.sql`. The import
+       *     reads the tool and each migration's name from paths. Never absolute,
+       *     never `..`.
+       */
+      path: string;
     };
     /** @description Usage against every cap of the plan in force. */
     Usage: {
@@ -10391,6 +10563,287 @@ export interface operations {
         };
       };
       /** @description `invalid_migrations` (no migration found, two with one version, a malformed file), `invalid_file`, `validation` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  start_import_upload: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UploadFiles"];
+      };
+    };
+    responses: {
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportUpload"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `too_many_uploads` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `payload_too_large`: send fewer files per request */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (a path, a part, too many or too large files), `invalid_file` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_import_upload: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The upload's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportUpload"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  add_import_files: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The upload's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UploadFiles"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportUpload"];
+        };
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `upload_expired`, `upload_busy` (its import runs), `upload_closed` (imported) */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `payload_too_large`: send fewer files per request */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `validation` (a path, a part, too many or too large files), `invalid_file` */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `rate_limited` */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  import_upload: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+        /** @description The database's slug */
+        db: string;
+        /** @description The upload's id */
+        id: string;
+      };
+      cookie?: never;
+    };
+    /** @description How to import them; none: the format detected, no append */
+    requestBody?: {
+      content: {
+        "application/json": components["schemas"]["UploadImportOptions"] | null;
+      };
+    };
+    responses: {
+      /** @description The import runs: read the upload to follow it */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportUpload"];
+        };
+      };
+      /** @description `plan_limit`: the versions would pass the plan's cap; nothing stored */
+      402: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `review_required`: an agent's import into a database with versions, in an organization that reviews changes (write a draft instead); `forbidden` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `upload_expired`, `upload_busy`, `upload_closed`; the import's own: `has_versions` (pass `append=true`), `migration_changed`, `migration_out_of_order`, `concurrent_import` */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `incomplete_upload` (a part missing), `invalid_migrations`, `import_failed` (a syntax error), `too_many_migrations`, `validation` */
       422: {
         headers: {
           [name: string]: unknown;

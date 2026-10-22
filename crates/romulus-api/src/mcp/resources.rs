@@ -1,6 +1,8 @@
 //! Resources: each database's versions as SQL, `romulus://<org>/<db>/v<n>`
-//! (the list names each database's latest; the template reaches any), and
-//! the CI guide, `romulus://guide/ci`.
+//! (the list names each database's latest; the template reaches any), the
+//! CI guide, `romulus://guide/ci`, and the exporters an agent runs to import
+//! code migrations (`romulus://export-migrations/<tool>.sh`, the scripts of
+//! `scripts/export-migrations`).
 
 use serde_json::{Value, json};
 
@@ -8,6 +10,25 @@ use super::tools::{Ctx, ToolError};
 use crate::{databases::Database, orgs::Org, versions::VersionTexts};
 
 const CI_GUIDE: &str = "romulus://guide/ci";
+/// The exporters of migrations written in code: what they print is what
+/// `import_migrations` takes (format `alembic`, `django`, `rails`).
+const EXPORTERS: [(&str, &str, &str); 3] = [
+    (
+        "romulus://export-migrations/alembic.sh",
+        "Alembic: prints every migration's SQL (offline mode, no database). Run next to alembic.ini.",
+        include_str!("../../../../scripts/export-migrations/alembic.sh"),
+    ),
+    (
+        "romulus://export-migrations/django.sh",
+        "Django: prints every migration's SQL, applying each to an empty scratch database (--database ALIAS). Run next to manage.py.",
+        include_str!("../../../../scripts/export-migrations/django.sh"),
+    ),
+    (
+        "romulus://export-migrations/rails.sh",
+        "Rails: prints the SQL each migration runs on an empty scratch database (DATABASE_URL). Run from the app's root.",
+        include_str!("../../../../scripts/export-migrations/rails.sh"),
+    ),
+];
 /// Databases the list names at most.
 const LISTED: usize = 100;
 
@@ -30,6 +51,16 @@ pub async fn list(ctx: &Ctx) -> Result<Value, ToolError> {
         "title": "Pushing from CI with remus",
         "mimeType": "text/plain",
     })];
+    for (uri, description, _) in EXPORTERS {
+        let file = uri.rsplit('/').next().unwrap_or(uri);
+        resources.push(json!({
+            "uri": uri,
+            "name": file,
+            "title": format!("Migration exporter ({file})"),
+            "description": description,
+            "mimeType": "text/x-shellscript",
+        }));
+    }
     let orgs: Vec<Org> = ctx.api.get(&["orgs"], &[]).await?;
     'orgs: for org in &orgs {
         let databases: Vec<Database> = ctx.api.get(&["orgs", &org.slug, "databases"], &[]).await?;
@@ -67,6 +98,9 @@ pub async fn read(ctx: &Ctx, uri: &str) -> Result<Option<Value>, ToolError> {
             "text/plain",
             &super::tools::ci_guide(&command, None),
         )));
+    }
+    if let Some((_, _, script)) = EXPORTERS.iter().find(|(known, _, _)| *known == uri) {
+        return Ok(Some(contents(uri, "text/x-shellscript", script)));
     }
     let Some((org, database, number)) = parse(uri) else {
         return Ok(None);

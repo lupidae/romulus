@@ -54,6 +54,7 @@ tracing.workspace = true
 tokio-tungstenite.workspace = true
 tracing-subscriber.workspace = true
 unicode-normalization.workspace = true
+unicode-properties.workspace = true
 url.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true

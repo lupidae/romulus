@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT files, parts, bytes FROM import_uploads WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "files",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "files"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "parts",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "parts"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "import_uploads",
+            "name": "bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5ede6eeaa6b19afbbe9b01bb1e96a2e42c03cf40b9789076386eba52daaca212"
+}

@@ -17,10 +17,10 @@ pub const BODY_LIMIT: usize = 32 << 20;
 /// What one request may unpack to, every file and every zip together.
 const UNPACKED_LIMIT: u64 = 64 << 20;
 /// One file, unpacked.
-const FILE_LIMIT: u64 = 8 << 20;
+pub(super) const FILE_LIMIT: u64 = 8 << 20;
 /// Files in one request, zips' entries included (a migrations folder with its
 /// down files and the like fits many times over).
-const MAX_FILES: usize = 5_000;
+pub(super) const MAX_FILES: usize = 5_000;
 
 /// What is left to read of one request: bytes unpacked and files, whatever
 /// they come in (multipart fields, zips, zips among fields). Checked as the
@@ -54,7 +54,7 @@ impl Budget {
     }
 }
 
-fn too_many_files() -> ApiError {
+pub(super) fn too_many_files() -> ApiError {
     invalid(
         "files",
         &format!("That is more than {MAX_FILES} files; an import reads at most {MAX_FILES}."),
@@ -260,7 +260,7 @@ fn unzip(bytes: &[u8], budget: &mut Budget) -> ApiResult<Vec<SourceFile>> {
     Ok(files)
 }
 
-fn file_too_large(path: &str, len: u64) -> ApiError {
+pub(super) fn file_too_large(path: &str, len: u64) -> ApiError {
     invalid(
         "files",
         &format!(

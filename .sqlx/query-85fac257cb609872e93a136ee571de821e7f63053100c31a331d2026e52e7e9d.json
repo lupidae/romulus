@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_uploads SET created_at = now() - interval '24 hours 1 minute',\n                expires_at = now() - interval '1 minute' WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "85fac257cb609872e93a136ee571de821e7f63053100c31a331d2026e52e7e9d"
+}

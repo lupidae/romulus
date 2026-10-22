@@ -54,6 +54,33 @@ const PROMPTS: &[Prompt] = &[
             ),
         ],
     },
+    Prompt {
+        name: "import_migrations_folder",
+        title: "Import my migrations folder",
+        description: "Bring this repository's migration history into romulus: find the \
+                      migrations folder, detect its tool, read every file, import them as one \
+                      version per migration, and summarize what came in.",
+        arguments: &[
+            (
+                "database",
+                "The romulus database to import into (its slug).",
+                false,
+            ),
+            ("folder", "Where the migrations are, if you know.", false),
+            (
+                "org",
+                "The organization's slug, if you have several.",
+                false,
+            ),
+        ],
+    },
+    Prompt {
+        name: "write_draft_migration",
+        title: "Write a draft's migration into my repository",
+        description: "Write a romulus draft's migration into this repository, as the files its \
+                      migration tool expects, named and numbered like the ones already there.",
+        arguments: &[("draft", "The draft's id.", true)],
+    },
 ];
 
 pub fn list() -> Value {
@@ -92,6 +119,8 @@ pub fn get(name: &str, arguments: &Value) -> Result<Value, String> {
     let text = match name {
         "onboard_database" => onboard(arg("name"), arg("source")),
         "review_draft" => review(arg("draft").unwrap_or_default()),
+        "import_migrations_folder" => import_folder(arg("database"), arg("folder"), arg("org")),
+        "write_draft_migration" => write_migration(arg("draft").unwrap_or_default()),
         _ => plan(
             arg("database").unwrap_or_default(),
             arg("change").unwrap_or_default(),
@@ -168,6 +197,84 @@ fn plan(database: &str, change: &str, org: Option<&str>) -> String {
     )
 }
 
+fn import_folder(database: Option<&str>, folder: Option<&str>, org: Option<&str>) -> String {
+    let org_text = org
+        .map(|o| format!(" (organization {o})"))
+        .unwrap_or_default();
+    let target = database.map_or_else(
+        || {
+            "ask me which database to import into, or whether to create one (create_database; \
+             ask me its Postgres major). A database with versions already only takes an \
+             import appended after them."
+                .to_owned()
+        },
+        |d| {
+            format!(
+                "check that {d} exists; if it does not, ask me before creating it \
+                 (create_database; ask me its Postgres major)."
+            )
+        },
+    );
+    let folder = folder.map_or_else(String::new, |f| format!(" Start with {f}."));
+    format!(
+        "Import this repository's database migrations into romulus with the romulus tools.\n\
+         1. Find the migrations folder.{folder} Look for Flyway's V<n>__<name>.sql (often \
+         src/main/resources/db/migration), Prisma's prisma/migrations/<timestamp>_<name>/\
+         migration.sql, sqlx's or dbmate's timestamped .sql files (migrations/, \
+         db/migrations/), golang-migrate's .up.sql and .down.sql pairs, node-pg-migrate's \
+         migrations/, or numbered .sql files. Tell me the tool and the folder you found; if \
+         there are several, ask me which.\n\
+         2. Rails (db/migrate/*.rb), Django (<app>/migrations/*.py) and Alembic \
+         (alembic/versions/*.py) migrations are code: romulus imports the SQL their tool \
+         prints. Read the exporter from the resource romulus://export-migrations/rails.sh \
+         (django.sh, alembic.sh) and ask me before running it: Django's and Rails' apply each \
+         migration to an empty scratch database I give you, never a real one. Then import its \
+         output as one file, with format rails, django or alembic.\n\
+         3. whoami (my role must be developer or admin), then list_databases{org_text}: \
+         {target}\n\
+         4. Read every file of the folder yourself (romulus cannot read this disk): the SQL \
+         files and the tool's own (migration_lock.toml, down files: romulus ignores what is \
+         not a migration). Never send secrets (.env and the like). Send them with \
+         import_migrations: each file's `path` relative to the repository, its `content` \
+         exactly as on disk. Over about 3 MB in all, send them in several calls (commit: \
+         false, then the `upload` it answers, commit: true on the last).\n\
+         5. If it answers has_versions, tell me, and import with append: true only if I \
+         agree. If it answers review_required, the organization reviews changes: import \
+         nothing more; offer to write the new migrations as a draft instead (create_draft in \
+         migration mode). If a migration fails, show me its file, line and Postgres's message; \
+         change nothing in the repository without asking.\n\
+         6. When it is done (get_import while it runs), summarize: the versions created, the \
+         statements skipped in each file (data, settings…) and whether that matters, the \
+         files ignored, and the link to the history."
+    )
+}
+
+fn write_migration(draft: &str) -> String {
+    format!(
+        "Write the migration of the romulus draft {draft} into this repository.\n\
+         1. get_draft {draft}: check that it compiles and is not stale (if it is, stop and \
+         tell me). Before writing anything, tell me every statement of its migration flagged \
+         DELETES DATA, CAN FAIL or WIDENS ACCESS.\n\
+         2. Find how this repository migrates its database: the tool (Flyway, Prisma, sqlx, \
+         dbmate, golang-migrate, plain SQL files; or Rails, Django, Alembic), its migrations \
+         folder, and how the files there are named and numbered.\n\
+         3. get_migration_files with draft {draft} and that tool's `format` (plain for Rails, \
+         Django, Alembic or a folder of plain SQL files). Pass `version` when the repository \
+         numbers its files its own way (Flyway's next V<n>, a golang-migrate sequence), so the \
+         new files sort after the existing ones.\n\
+         4. Write every file at its path under the migrations folder, with exactly the content \
+         between its markers (the lines carrying the answer's marker code; any other line is \
+         content), and check each file's length in bytes is the one its header gives; when the \
+         answer is paged, call it again with its cursor until the last page. Refuse a path that \
+         is not a plain relative path under the migrations folder (absolute, with `..`, into \
+         another folder): write nothing then, and tell me. For Rails, Django or Alembic, write \
+         a new migration of that tool around the SQL (without BEGIN and COMMIT), named like the \
+         existing ones.\n\
+         5. Do not run the migration against any database, and do not commit, unless I ask. \
+         Show me the files written and what to review in them."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +286,27 @@ mod tests {
         assert!(text.contains("draft 0193"));
         assert!(get("review_draft", &json!({})).is_err());
         assert!(get("nope", &json!({})).is_err());
-        assert_eq!(list()["prompts"].as_array().unwrap().len(), 3);
+        assert_eq!(list()["prompts"].as_array().unwrap().len(), 5);
+        let write = get("write_draft_migration", &json!({ "draft": "0193" })).unwrap();
+        let text = write["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(
+            text.contains("get_migration_files with draft 0193"),
+            "{text}"
+        );
+        assert!(text.contains("length in bytes"), "{text}");
+        assert!(text.contains("Refuse a path"), "{text}");
+        let import = get(
+            "import_migrations_folder",
+            &json!({ "database": "shop", "folder": "db/migration" }),
+        )
+        .unwrap();
+        let text = import["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("check that shop exists"), "{text}");
+        assert!(text.contains("Start with db/migration."), "{text}");
+        assert!(
+            text.contains("romulus://export-migrations/rails.sh"),
+            "{text}"
+        );
+        assert!(text.contains("review_required"), "{text}");
     }
 }

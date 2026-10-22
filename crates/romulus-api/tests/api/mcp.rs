@@ -37,17 +37,17 @@ pub(super) async fn pat(db: &PgPool, who: &Session, scope: AccessTokenScope) -> 
 }
 
 /// An MCP client with a token.
-struct Mcp<'a> {
+pub(super) struct Mcp<'a> {
     app: &'a TestApp,
     token: String,
 }
 
 impl<'a> Mcp<'a> {
-    fn new(app: &'a TestApp, token: String) -> Self {
+    pub(super) fn new(app: &'a TestApp, token: String) -> Self {
         Self { app, token }
     }
 
-    async fn post(&self, body: &Value, headers: &[(&str, &str)]) -> TestResponse {
+    pub(super) async fn post(&self, body: &Value, headers: &[(&str, &str)]) -> TestResponse {
         let mut request = Request::post("/api/mcp")
             .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
             .header(header::CONTENT_TYPE, "application/json")
@@ -61,7 +61,7 @@ impl<'a> Mcp<'a> {
     }
 
     /// A legacy-era request: the whole JSON-RPC response, which must be 200.
-    async fn rpc(&self, method: &str, params: Value) -> Value {
+    pub(super) async fn rpc(&self, method: &str, params: Value) -> Value {
         let response = self
             .post(
                 &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }),
@@ -75,7 +75,7 @@ impl<'a> Mcp<'a> {
     }
 
     /// A tool's text, and whether it is an error.
-    async fn tool(&self, name: &str, arguments: Value) -> (String, bool) {
+    pub(super) async fn tool(&self, name: &str, arguments: Value) -> (String, bool) {
         let body = self
             .rpc(
                 "tools/call",
@@ -93,13 +93,13 @@ impl<'a> Mcp<'a> {
         )
     }
 
-    async fn ok(&self, name: &str, arguments: Value) -> String {
+    pub(super) async fn ok(&self, name: &str, arguments: Value) -> String {
         let (text, error) = self.tool(name, arguments).await;
         assert!(!error, "{name} failed: {text}");
         text
     }
 
-    async fn refused(&self, name: &str, arguments: Value) -> String {
+    pub(super) async fn refused(&self, name: &str, arguments: Value) -> String {
         let (text, error) = self.tool(name, arguments).await;
         assert!(error, "{name} should have been refused: {text}");
         text
@@ -115,7 +115,7 @@ fn modern_meta() -> Value {
 }
 
 /// The id in `text` after `prefix` (`Created draft <id>`).
-fn id_after(text: &str, prefix: &str) -> Uuid {
+pub(super) fn id_after(text: &str, prefix: &str) -> Uuid {
     let at = text
         .find(prefix)
         .unwrap_or_else(|| panic!("{prefix:?} in {text}"))
@@ -123,7 +123,7 @@ fn id_after(text: &str, prefix: &str) -> Uuid {
     text[at..at + 36].parse().expect("an id")
 }
 
-async fn audited(db: &PgPool) -> Vec<Value> {
+pub(super) async fn audited(db: &PgPool) -> Vec<Value> {
     sqlx::query_scalar!(
         r#"SELECT details AS "details!" FROM audit_events WHERE action = 'agent_action' ORDER BY id"#
     )
@@ -1287,7 +1287,7 @@ async fn prompts_and_resources_are_offered(db: PgPool) {
     .await;
     let mcp = Mcp::new(&app, pat(&db, &team.reviewer, AccessTokenScope::Read).await);
     let prompts = mcp.rpc("prompts/list", json!({})).await;
-    assert_eq!(prompts["result"]["prompts"].as_array().unwrap().len(), 3);
+    assert_eq!(prompts["result"]["prompts"].as_array().unwrap().len(), 5);
     let prompt = mcp
         .rpc(
             "prompts/get",
@@ -1315,7 +1315,16 @@ async fn prompts_and_resources_are_offered(db: PgPool) {
         .iter()
         .map(|r| r["uri"].as_str().unwrap())
         .collect();
-    assert_eq!(uris, ["romulus://guide/ci", "romulus://acme/shop/v1"]);
+    assert_eq!(
+        uris,
+        [
+            "romulus://guide/ci",
+            "romulus://export-migrations/alembic.sh",
+            "romulus://export-migrations/django.sh",
+            "romulus://export-migrations/rails.sh",
+            "romulus://acme/shop/v1"
+        ]
+    );
     let read = mcp
         .rpc("resources/read", json!({ "uri": "romulus://acme/shop/v1" }))
         .await;

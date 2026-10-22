@@ -3,10 +3,11 @@
 romulus speaks the [Model Context Protocol](https://modelcontextprotocol.io):
 an AI agent (Claude Code, Claude Desktop, Cursor, VS Code, or any MCP
 client) can work in romulus for you. It reads your organizations' schemas,
-versions and diffs, brings a database in from SQL, drafts a change, generates
-its migration with every risky statement flagged, tests it on generated rows,
-queries a playground, and asks for a review, with the same rules as the web
-app.
+versions and diffs, brings a database in from SQL or from your repository's
+migration files, drafts a change, generates its migration with every risky
+statement flagged, tests it on generated rows, writes the migration into your
+repository, queries a playground, and asks for a review, with the same rules
+as the web app.
 
 There is nothing to install: the endpoint is part of romulus, at
 `/api/mcp` under the address you open romulus at (a self-hosted install has
@@ -158,17 +159,108 @@ token is offered only the others.
 | `create_database` | a new database in an organization | yes |
 | `push_schema` | a new database's first version from SQL (`pg_dump --schema-only`, remus's SQL); refused once it has one | yes |
 | `ci_setup` | how to push from CI with remus, filled in for a database, with the link to create its token | |
+| `import_migrations` | a repository's migration files as the database's history, one version per migration, as the web import does; the agent reads the files and sends them. Where changes are reviewed, only into a database without versions | yes |
+| `get_import` | an import's progress, then the versions it created, the statements it skipped and the files it ignored, or where it stopped | |
+| `get_migration_files` | a draft's migration, or between two versions, as the files a migration tool expects, exactly as the web app downloads them, with where they go | |
 
-Long work never holds a request open: `test_migration` and
-`create_playground` wait 40 seconds at most, then answer an id to poll
-(`get_migration_test`, `list_playgrounds`).
+Long work never holds a request open: `test_migration`,
+`create_playground` and `import_migrations` wait 40 seconds at most, then
+answer an id to poll (`get_migration_test`, `list_playgrounds`,
+`get_import`).
 
 **Prompts** (a client may offer them as commands): `onboard_database`,
-`review_draft`, `plan_safe_migration`.
+`review_draft`, `plan_safe_migration`, `import_migrations_folder` (find the
+repository's migrations, import them, summarize) and `write_draft_migration`
+(a draft's migration written into the repository, named like the files
+there).
 
 **Resources**: each database's latest version as SQL,
-`romulus://<org>/<database>/v<n>` (any version by the same template), and
-the CI guide, `romulus://guide/ci`.
+`romulus://<org>/<database>/v<n>` (any version by the same template), the
+CI guide, `romulus://guide/ci`, and the exporters of migrations written in
+code, `romulus://export-migrations/<alembic|django|rails>.sh`.
+
+## Migration files and your repository
+
+romulus's MCP server runs on romulus, not on your computer: it cannot read
+your disk, and it writes nothing there. The agent does both, with its own
+tools, and the romulus tools say so.
+
+**Importing a migrations folder** ("import my migrations folder", or the
+`import_migrations_folder` prompt). The agent finds the folder, reads every
+file and sends each one's path, relative to the repository, and its content
+to `import_migrations`. romulus imports them exactly as the web app's
+**Import migrations** does: the tool is detected from the files (Flyway,
+Prisma, sqlx, dbmate, golang-migrate, node-pg-migrate, plain numbered SQL
+files) unless the agent names it; each migration becomes a version, its
+message the file name; data and session statements (`INSERT`, `SET`…) are
+skipped and listed per file; migrations imported before are skipped, a
+changed one is refused; a database with versions that were not imported
+needs `append` (the agent asks you first). Every rule and limit of an import
+applies: your role (developers and admins), your plan's version cap, one
+import of a database at a time.
+
+In an organization that reviews changes (approvals, or a passing migration
+test, required before publishing), an agent's import only gives a database
+without versions its history: that is how a repository is brought in. Once
+the database has versions, the import is refused (`review_required`) and the
+agent writes the change as a draft instead (`create_draft` in migration
+mode), so approvals and tests apply as they do to everyone. A dry run, which
+stores nothing, is always allowed, and your own import in the web app is not
+affected.
+
+- A message to the endpoint carries 4 MiB at most. Larger folders go over
+  several calls: the first answers an upload id, the next add files to it,
+  the last imports them (`commit`). A file larger than a call goes in parts
+  (10 at most). An upload is yours alone (3 in progress at most) and expires
+  an hour after its last files, and a day after it started whatever
+  happens; sending a file again replaces it, so a retried call changes
+  nothing. An upload holds what one import reads: 5,000 files, 8 MiB each,
+  32 MiB in all, paths included. Paths are relative, 512 bytes at most,
+  without invisible formatting characters (a bidi override or a zero-width
+  space would make a path read as another).
+- The import runs on after the call: `import_migrations` waits up to 40
+  seconds, then answers the import's id for `get_import`. The answer lists
+  the versions created, the statements skipped and the files ignored.
+- When an import is refused or a migration fails, the files stay uploaded
+  for an hour: the agent fixes the file named (sends it again) and imports
+  again, without sending the rest.
+- Rails, Django and Alembic migrations are code, which romulus never runs:
+  the agent imports the SQL the tool prints, with the exporter scripts
+  (`scripts/export-migrations`, served as the resources above). It asks you
+  first: Django's and Rails' apply each migration to an empty scratch
+  database you give it.
+- The Activity shows each import an agent started, with its token; the
+  versions show who imported them.
+
+**Writing a migration into the repository** ("write this draft's migration
+into my repo", or the `write_draft_migration` prompt). The agent finds the
+repository's migration tool and folder, then asks `get_migration_files` for
+the draft's migration (or one between two versions) in that tool's format.
+The files are the web app's download, byte for byte: same names, same
+content, same down migration where the tool has one. The answer says where
+the tool expects them:
+
+| format | files | where |
+|---|---|---|
+| `plain` | `<version>_<name>.sql`, in a transaction | wherever the project keeps SQL |
+| `sqlx` | `<version>_<name>.sql` | `migrations/` |
+| `flyway` | `V<n>__<name>.sql` (a `.sql.conf` for one run outside a transaction) | `src/main/resources/db/migration/`, or the folder `flyway.locations` names |
+| `prisma` | `<timestamp>_<name>/migration.sql` | `prisma/migrations/` |
+| `dbmate` | `<version>_<name>.sql`, up and down sections | `db/migrations/` |
+| `golang_migrate` | `<version>_<name>.up.sql` and `.down.sql` | the folder given to `migrate -path` |
+
+The agent passes `version` when the repository numbers its files its own way
+(Flyway's next `V<n>`, a golang-migrate sequence), so the new files sort
+after the existing ones. For Rails, Django and Alembic it takes `plain` and
+writes a migration of that tool around the SQL. A long migration comes in
+pages, each naming its files as the first did; a draft edited between two
+pages makes the agent start again. Each file sits between two marker lines
+carrying a code drawn for that answer, and its header gives its length in
+bytes: a line inside a file (a table comment someone wrote, say) cannot pass
+for the end of it or the start of another, and the agent checks it wrote
+exactly that many bytes. It writes only to plain relative paths under the
+migrations folder, and stops to tell you otherwise. Nothing is run against
+a database, and nothing is committed, unless you ask.
 
 ## What an agent can do
 
@@ -223,8 +315,10 @@ sign-on). Behind your own reverse proxy:
   `/.well-known/oauth-authorization-server` to the API, as well as `/app`
   and `/api`: that is where MCP clients find how to sign in. The bundle's Caddy and the Helm chart's Ingress send every path
   to the API already;
-- pass the `Authorization` header through and allow requests of up to a
-  minute (`test_migration` and `create_playground` wait up to 40 seconds).
+- pass the `Authorization` header through, allow requests of up to a
+  minute (`test_migration`, `create_playground` and `import_migrations`
+  wait up to 40 seconds) and bodies of 4 MiB (migration files arrive in
+  chunks of up to that).
 
 `ROMULUS_PUBLIC_URL` is what tokens are issued for: after changing it,
 connected apps connect again. Tools that need playgrounds answer that
@@ -296,8 +390,11 @@ authorization spec, OAuth 2.1); your sign-in itself stays the usual one.
 | "romulus can't accept this request" | the app asked in a way romulus refuses (no PKCE `S256`, an unknown scope, another resource): **Return to** sends it the reason; tell its maker |
 | 403, `insufficient_scope` | the app was allowed to read only: connect it again with read and write |
 | 403 | the request came with another site's `Origin` |
+| 413 | one message was over 4 MiB: the agent sends fewer migration files per call, or a large file in parts |
 | 429 | too many requests (with this token, with all your tokens, or with tokens that are not valid): wait the `Retry-After` seconds |
 | 500, "could not check the access token" | romulus could not reach its database for a moment: try again; the token is fine |
 | a tool answers "forbidden" | your role in that organization does not allow it |
 | a tool answers "read_only_token" | the token is read-only: create one with write access |
+| a tool answers "upload_expired" | migration files sent more than an hour before they were imported (or an upload started more than a day ago): the agent sends them again |
+| a tool answers "review_required" | the organization reviews changes and the database has versions: the agent writes the change as a draft (`create_draft` in migration mode) for review, instead of importing it |
 | a tool answers "plan_limit" | the organization's plan does not allow more (databases, versions, playground hours…): the answer says which plan does; an admin changes it on the organization's Billing page |

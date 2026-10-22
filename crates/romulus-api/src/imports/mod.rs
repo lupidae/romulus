@@ -25,6 +25,9 @@
 //!   `scripts/export-migrations/README.md` turn it into an exit status. A
 //!   retry while it runs answers 409 `concurrent_import` ("still being
 //!   imported").
+//! - `…/imports/uploads…` [developer]: files sent a few at a time, then
+//!   imported, and the import followed after its request ([`uploads`]):
+//!   what an agent does over MCP.
 //!
 //! Bodies: `multipart/form-data` (files named by their path in the folder,
 //! or a zip), `application/zip`, or one SQL text (`application/sql`, what an
@@ -59,6 +62,7 @@ mod run;
 pub mod staging;
 mod turns;
 pub mod upload;
+pub mod uploads;
 
 use axum::{
     extract::State,
@@ -92,6 +96,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(preview))
         .routes(routes!(import))
         .routes(routes!(import_with_token))
+        .merge(uploads::router())
 }
 
 /// How to read and import the files.

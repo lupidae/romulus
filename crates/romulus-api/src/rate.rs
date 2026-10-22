@@ -168,6 +168,9 @@ pub struct Limits {
     /// 64 MiB on the API. Apart from `imports`, so that looking at the
     /// files a few times never costs the import itself.
     pub import_previews: Limiter<Uuid>,
+    /// Requests adding migration files to an upload, per person (each
+    /// writes up to a few MiB; `imports::uploads`).
+    pub import_uploads: Limiter<Uuid>,
     /// Changes to versions' discussions per person (a draft's are budgeted
     /// by its room): someone commenting writes a few at a time.
     pub version_comments: Limiter<Uuid>,
@@ -222,6 +225,7 @@ impl Default for Limits {
             database_compiles: Limiter::new(60, Duration::from_secs(1)),
             imports: Limiter::new(6, Duration::from_secs(30)),
             import_previews: Limiter::new(6, Duration::from_secs(5)),
+            import_uploads: Limiter::new(40, Duration::from_secs(2)),
             version_comments: Limiter::new(30, Duration::from_millis(500)),
             playgrounds: Limiter::new(5, Duration::from_mins(2)),
             playground_actions: Limiter::new(10, Duration::from_secs(6)),

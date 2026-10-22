@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT path, sum(octet_length(content)) > $3 AS \"too_large!\"\n           FROM import_upload_files WHERE upload_id = $1 AND path = ANY($2)\n           GROUP BY path\n           HAVING sum(octet_length(content)) > $3 OR (count(*) > 1 AND bool_or(content = ''))\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "import_upload_files",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "too_large!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "cc284d517e3e068acc82e69e5eca80d91b178c141cb39b2de4358748f275f7f9"
+}

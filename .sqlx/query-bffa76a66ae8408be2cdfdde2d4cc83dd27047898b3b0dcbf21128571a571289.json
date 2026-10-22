@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT path, array_agg(part ORDER BY part) AS \"parts!\",\n                  string_agg(content, '' ORDER BY part) AS \"content!\"\n           FROM import_upload_files WHERE upload_id = $1\n           GROUP BY path ORDER BY path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "import_upload_files",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "parts!",
+        "type_info": "Int4Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "content!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "bffa76a66ae8408be2cdfdde2d4cc83dd27047898b3b0dcbf21128571a571289"
+}
