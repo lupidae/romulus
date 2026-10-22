@@ -580,6 +580,10 @@ pub struct SignedUp {
         (status = 429, body = ErrorBody),
     )
 )]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the invitation's way in, checked and written in one transaction"
+)]
 async fn sign_up(
     State(state): State<AppState>,
     client: Client,
@@ -677,6 +681,19 @@ async fn sign_up(
             .email(&email)
             .ip(ip)
             .details(json!({ "invitation": invitation.id, "org": org.slug })),
+    )
+    .await?;
+    crate::operator::notify(
+        &mut tx,
+        state.config.operator.as_ref(),
+        &crate::operator::accounts::account_created(
+            user_id,
+            &name,
+            &email,
+            crate::operator::accounts::Joined::Password {
+                invited_to: Some(&org.slug),
+            },
+        ),
     )
     .await?;
     tx.commit().await?;
@@ -894,6 +911,19 @@ async fn finish_sign_up(
             .email(&link.email)
             .ip(ip)
             .details(json!({ "invitation": link.invitation_id, "org": org.as_ref().map(|org| &org.slug) })),
+    )
+    .await?;
+    crate::operator::notify(
+        &mut tx,
+        state.config.operator.as_ref(),
+        &crate::operator::accounts::account_created(
+            user_id,
+            &name,
+            &link.email,
+            crate::operator::accounts::Joined::Password {
+                invited_to: org.as_ref().map(|org| org.slug.as_str()),
+            },
+        ),
     )
     .await?;
     tx.commit().await?;

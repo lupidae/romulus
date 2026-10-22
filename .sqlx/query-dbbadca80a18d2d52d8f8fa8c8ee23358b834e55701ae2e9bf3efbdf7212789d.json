@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT day FROM operator_digests ORDER BY day",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "operator_digests",
+            "name": "day"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dbbadca80a18d2d52d8f8fa8c8ee23358b834e55701ae2e9bf3efbdf7212789d"
+}

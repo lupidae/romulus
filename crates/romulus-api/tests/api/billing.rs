@@ -37,7 +37,7 @@ use super::{
 
 const SECRET: &str = "whsec_test_billing";
 
-fn billing_config() -> BillingConfig {
+pub(super) fn billing_config() -> BillingConfig {
     BillingConfig {
         stripe: StripeKeys::Fake {
             webhook_secret: Some(Secret::new(SECRET)),
@@ -100,11 +100,20 @@ pub(super) async fn billed(db: &PgPool) -> Billed {
 
 /// [`billed`], consumers buying too when `consumer_sales`.
 pub(super) async fn billed_with(db: &PgPool, consumer_sales: bool) -> Billed {
+    billed_with_config(db, consumer_sales, Config::for_tests()).await
+}
+
+/// [`billed_with`], the app running with `config` (operator notifications
+/// on, in `operator.rs`).
+pub(super) async fn billed_with_config(
+    db: &PgPool,
+    consumer_sales: bool,
+    config: Config,
+) -> Billed {
     let stripe = Fake::new(ORIGIN);
     let host = FakeHost::default();
     let (mailer, outbox) = Mailer::memory();
     let live = live_app(db.clone(), quick());
-    let config = Config::for_tests();
     let billing = Billing::with_stripe(
         billing_config(),
         legal_config(consumer_sales),
@@ -118,6 +127,7 @@ pub(super) async fn billed_with(db: &PgPool, consumer_sales: bool) -> Billed {
         .with_playgrounds(Host::new(host.clone()))
         .with_mailer(mailer)
         .with_billing(billing);
+    state.config = std::sync::Arc::new(config);
     // Uploads, pushes and playground scripts compile with the hub's fake.
     state.compiler = state.collab.compiler().clone();
     let app = TestApp::with_state(state);

@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT user_name, user_email, buyer AS \"buyer: Buyer\", company_name, company_country\n               FROM legal_acceptances WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "user_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_email",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "user_email"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "buyer: Buyer",
+        "type_info": {
+          "Custom": {
+            "name": "buyer",
+            "kind": {
+              "Enum": [
+                "business",
+                "consumer"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "buyer"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "company_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "company_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "company_country",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "legal_acceptances",
+            "name": "company_country"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8d5c56887d12a7c4a59d5b349f8223e95df88577029e678b211eaf8f57d9520c"
+}

@@ -14,7 +14,8 @@ hosted by lupidae and self-hostable for one organization (`deploy/self-host`,
 crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tests/api/; `billing` (hosted
                       plans, Stripe; off unless configured), `legal` (the hosted Terms: first sign-in,
                       records, notices; legal/ = the Terms PDFs), `export` (ZIP of databases),
-                      `retention` (deleting accounts and organizations, purges, inactive accounts)
+                      `retention` (deleting accounts and organizations, purges, inactive accounts),
+                      `operator` (emails to whoever runs the install: events, a daily digest)
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API;
                       `rename`: renames between two models (known, detected and scored, chosen)
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
@@ -1399,6 +1400,38 @@ docs/MVP.md "Retention and deletion" has the decisions.
   listener), `main.rs` unit tests (parsing, exit 4), `user-menu.test.tsx`,
   `deploy/zitadel/test/provision-test.sh` (dev stack: no secret in argv,
   SMTP credentials put and taken away, the token kept or replaced on a 401).
+
+## Operator notifications (`operator`)
+
+docs/MVP.md "Operator notifications" has the decisions,
+docs/self-host/configuration.md the operator's side.
+
+- **Off unless `ROMULUS_OPERATOR_EMAILS`** (needs mail; `Config::operator`
+  is `None` when off and every call below is a no-op).
+- **A new event** is an `operator::Event` value, a builder returning an
+  `operator::Notice` (subject without the `[romulus]` prefix, a line per
+  fact, an `about` key: the outbox key is the event, it and the address, so
+  the same event queued twice goes once), and `operator::notify(&mut tx,
+  config.operator.as_ref(), &notice)` **in the transaction of what it
+  reports**, never after the commit. Builders live in `operator::accounts` (accounts, organizations,
+  deletions) and `operator::billing` (`changes(before, next)` decides what a
+  webhook's stored change is). Every value from outside (names,
+  addresses, business names, Stripe's free text) goes through
+  `operator::flat` (control characters, newlines included, become spaces);
+  links are `Notice::links` (`operator::Link`, Stripe's through
+  `operator::Dashboard`), the only links an email has. Names, addresses and
+  business names only; MRR counts `active` subscriptions at list price.
+- **Plan caps**: `ApiError::PlanLimit` puts `error::PlanLimitReached` in its
+  response's extensions; `operator::limits::watch` (a layer in `app()`) and
+  `mcp::api` hand it to `limits::observe`. A new route under `/orgs/{org}/`
+  or `/databases/{database_id}/` is covered as is.
+- **Sending** is the mail outbox's (`mail::outbox`, `operator_*` kinds); the
+  operator task only queues the digest (`operator::digest::due`), which
+  takes its `operator_digests` row in the transaction that queues it. Tests
+  call `mail::outbox::deliver` and `digest::due` directly.
+- **Tests**: `tests/api/operator.rs` (each event once and none when off,
+  sent once and retried, the digest's numbers and once a day), unit tests in
+  each module, `config.rs` (mail required).
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 

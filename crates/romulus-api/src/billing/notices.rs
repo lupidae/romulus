@@ -1260,7 +1260,7 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
         let key = r.since.to_rfc3339();
         if now >= until {
             if let Some(decided) = decide(state, r.org_id, "downgraded", &key).await? {
-                downgraded(state, decided, r.org_id, r.plan).await?;
+                downgraded(state, decided, r.org_id, r.plan, r.since).await?;
             }
         } else if now >= until - Span::days(GRACE_WARNING)
             && let Some(mut decided) = decide(state, r.org_id, "grace_ending", &key).await?
@@ -1305,12 +1305,13 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
     Ok(())
 }
 
-/// The grace period ended: audited, and the admins told.
+/// The grace period ended: audited, and the admins and the operators told.
 async fn downgraded(
     state: &AppState,
     mut decided: Decided,
     org_id: Uuid,
     plan: Plan,
+    since: DateTime<Utc>,
 ) -> ApiResult<()> {
     audit::record(
         decided.conn(),
@@ -1333,6 +1334,7 @@ async fn downgraded(
         },
     )
     .await?;
+    crate::operator::billing::grace_ended(decided.conn(), state, org_id, since).await?;
     decided.queue_to_admins(org_id, "billing_downgraded", |locale, org| {
         let (subject, paragraphs) = match locale {
             Locale::En => (

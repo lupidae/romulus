@@ -35,6 +35,7 @@ pub mod mail;
 pub mod mcp;
 pub mod migration_tests;
 pub mod oauth;
+pub mod operator;
 pub mod orgs;
 pub mod playgrounds;
 pub mod rate;
@@ -121,6 +122,11 @@ pub fn app(state: AppState) -> Router {
     }
     let router = router
         .fallback(error::not_found)
+        // A plan's cap reached (a 402 `plan_limit`): the operators hear of it.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            operator::limits::watch,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), csrf::guard))
         // The client behind a trusted reverse proxy (after the edge, which
         // names it itself).

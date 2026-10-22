@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, interval, status,\n                                      current_period_end, cancel_at_period_end, amount_cents,\n                                      currency, past_due_since)\n             VALUES ($1, $2, $3, $4::text::billing_plan, $5::text::billing_interval, $6, $7, $8,\n                     $9, 'eur', $10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Bool",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1034e9da08856e5601b9cdbd92fb13563d3aa6bda0fa9e5dbc52577fcba701a6"
+}

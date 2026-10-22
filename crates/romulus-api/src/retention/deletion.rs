@@ -30,8 +30,9 @@
 //!   emailed).
 //!
 //! Each deletion is a sign-in log event (`account_deleted`,
-//! `organization_deleted`: who and what, kept its 90 days) and tells the
-//! running API what it ended ([`super::live`]).
+//! `organization_deleted`: who and what, kept its 90 days), tells the
+//! running API what it ended ([`super::live`]) and the operators what went
+//! (`crate::operator`), in its transaction.
 
 use serde_json::json;
 use sqlx::{PgConnection, PgExecutor, PgPool};
@@ -48,6 +49,7 @@ use crate::{
         throttle,
     },
     billing::state::ENDED_STATUSES,
+    config::OperatorConfig,
     domain::{AuditAction, AuthEventKind, Role},
     mail::{Letter, Mailer},
 };
@@ -207,6 +209,8 @@ pub struct Deleter {
     pub zitadel: Option<Zitadel>,
     /// `ROMULUS_PUBLIC_URL`'s origin, named in the emails.
     pub origin: String,
+    /// Who hears of a deletion (`Config::operator`).
+    pub operators: Option<OperatorConfig>,
 }
 
 impl Deleter {
@@ -216,6 +220,7 @@ impl Deleter {
             mailer,
             zitadel: Zitadel::from_config(config),
             origin: config.public_origin(),
+            operators: config.operator.clone(),
         }
     }
 
@@ -288,7 +293,7 @@ impl Deleter {
                 "deleting an account: delete this user in Zitadel's console too (ROMULUS_ZITADEL_TOKEN is not set)"
             );
         }
-        let appointed = match delete_rows(tx, &plan, by, &idp).await {
+        let appointed = match delete_rows(tx, &plan, by, &idp, self.operators.as_ref()).await {
             Ok(appointed) => appointed,
             Err(err) => {
                 if idp == IdpOutcome::Deleted {
@@ -345,6 +350,12 @@ impl Deleter {
             return Err(DeletionError::Paying(vec![plan.org.clone()]));
         }
         delete_org_rows(&mut tx, &plan, "delete-org").await?;
+        crate::operator::notify(
+            &mut tx,
+            self.operators.as_ref(),
+            &crate::operator::accounts::org_deleted(&plan),
+        )
+        .await?;
         tx.commit().await?;
         tracing::info!(org = %plan.org.slug, "organization deleted");
 
@@ -653,6 +664,7 @@ async fn delete_rows(
     plan: &AccountPlan,
     by: By,
     idp: &IdpOutcome,
+    operators: Option<&OperatorConfig>,
 ) -> Result<Vec<(OrgRef, Successor)>, sqlx::Error> {
     let user_id = plan.user_id;
     let mut appointed = Vec::new();
@@ -704,6 +716,16 @@ async fn delete_rows(
                 "organizations_deleted": plan.deletes().iter().map(|o| &o.org.slug).collect::<Vec<_>>(),
                 "identity_provider": idp_word(idp),
             })),
+    )
+    .await?;
+    let named: Vec<(OrgRef, String)> = appointed
+        .iter()
+        .map(|(org, successor)| (org.clone(), successor.name.clone()))
+        .collect();
+    crate::operator::notify(
+        &mut tx,
+        operators,
+        &crate::operator::accounts::account_deleted(plan, by, idp, &named),
     )
     .await?;
     tx.commit().await?;

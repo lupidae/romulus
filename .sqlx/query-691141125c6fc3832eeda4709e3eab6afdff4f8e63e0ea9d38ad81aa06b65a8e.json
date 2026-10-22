@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO operator_digests (day) VALUES ($1) ON CONFLICT (day) DO NOTHING RETURNING day",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "operator_digests",
+            "name": "day"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "691141125c6fc3832eeda4709e3eab6afdff4f8e63e0ea9d38ad81aa06b65a8e"
+}

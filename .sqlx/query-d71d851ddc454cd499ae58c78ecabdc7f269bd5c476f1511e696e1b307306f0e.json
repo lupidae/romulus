@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE operator_limit_notices SET notified_at = now() - interval '31 days'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d71d851ddc454cd499ae58c78ecabdc7f269bd5c476f1511e696e1b307306f0e"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_billing (org_id, subscription_id, plan, interval, status, amount_cents, currency)\n         VALUES ($1, 'sub_1', 'team', 'month', 'active', 4900, 'eur')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba08962580cba58fe6637dba24c1c6e3ba8c8bba8ce0677370c9ccc63e119691"
+}

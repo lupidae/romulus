@@ -227,6 +227,10 @@ impl Api {
             )));
         }
         let uri = uri(path, query);
+        let uri_path = uri
+            .split_once('?')
+            .map_or(uri.as_str(), |(path, _)| path)
+            .to_owned();
         let mut request = Request::builder()
             .method(method)
             .uri(uri)
@@ -259,6 +263,11 @@ impl Api {
                 return Err(Failure::timeout());
             }
         };
+        // The routes are called without the app's layers: a plan's cap
+        // reached is told from here.
+        if let Some(details) = crate::operator::limits::reached(&response) {
+            crate::operator::limits::observe(&self.state, &uri_path, &details).await;
+        }
         let status = response.status();
         if writes && status.is_success() {
             let segment = |i: usize| path.get(i).map(|s| (*s).to_owned());

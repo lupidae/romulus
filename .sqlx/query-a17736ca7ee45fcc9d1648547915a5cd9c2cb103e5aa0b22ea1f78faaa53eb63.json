@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT day, mrr, playground_month, playground_seconds FROM operator_digests\n         WHERE day < $1 ORDER BY day DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "operator_digests",
+            "name": "day"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "mrr",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "operator_digests",
+            "name": "mrr"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "playground_month",
+        "type_info": "Date",
+        "origin": {
+          "Table": {
+            "table": "operator_digests",
+            "name": "playground_month"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "playground_seconds",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "operator_digests",
+            "name": "playground_seconds"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Date"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "a17736ca7ee45fcc9d1648547915a5cd9c2cb103e5aa0b22ea1f78faaa53eb63"
+}
