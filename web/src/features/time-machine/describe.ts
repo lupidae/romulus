@@ -237,3 +237,9 @@ export function modeCaption(
     return `${what} superposed: all of it is in ${name(at)}`;
   return `${what} superposed, ${name(at)} highlighted`;
 }
+
+/** How much a version changed, in words (the timeline's bars, as high as that). */
+export function changesText(count: number): string {
+  if (count === 0) return "no change";
+  return count === 1 ? "1 change" : `${count} changes`;
+}

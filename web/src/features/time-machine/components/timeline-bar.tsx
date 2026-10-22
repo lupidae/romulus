@@ -16,13 +16,19 @@ import { originLabel } from "@/features/databases/queries";
 import { formatDate } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
-import { modeCaption, versionName } from "../describe";
+import { changesText, modeCaption, versionName } from "../describe";
 import type { Frame, Mode } from "../frame";
 import type { TimelineVersion } from "../history";
 import { ERA_BG, eraOf, type Range, type Scale } from "../scale";
 
 /** Room at both ends of the track, so the end handles are whole. */
 const PAD = 14;
+
+/**
+ * What was there at the range's start: uncolored, outlined. Its bar on the
+ * track and its key in the legend look alike, the timeline being the legend.
+ */
+const START_KEY = "rounded-xs bg-card ring-1 ring-faint-foreground ring-inset";
 
 export interface TimelineProps {
   versions: TimelineVersion[];
@@ -37,13 +43,15 @@ export interface TimelineProps {
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
-function describeVersion(v: TimelineVersion): string {
+/** A version for a slider's value: what it is, then how much it changed (the bars' height). */
+function describeVersion(v: TimelineVersion, changes: number | undefined): string {
   return [
     versionName(v),
     v.message ?? "no message",
     originLabel[v.origin].toLowerCase(),
     v.author?.name,
     formatDate(v.created_at),
+    changes !== undefined && changesText(changes),
   ]
     .filter(Boolean)
     .join(", ");
@@ -56,12 +64,15 @@ const THUMB_LABEL = { from: "Range start", to: "Range end", at: "Cursor" } as co
  * age scale inside the range), the range between two handles and the cursor.
  * Click or drag anywhere to move the cursor, drag a handle to change the
  * range; each is a slider for the keyboard too. Hovering says what a version
- * is; dragging, what the handle dragged is on.
+ * is (a handle, which one it is and that it drags); dragging, what the handle
+ * dragged is on.
  */
 export function Track({ versions, activity, range, at, scale, onRange, onAt }: TimelineProps) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [width, setWidth] = React.useState(0);
   const [hover, setHover] = React.useState<number | null>(null);
+  // The range handle under the pointer: the card names it.
+  const [over, setOver] = React.useState<"from" | "to" | null>(null);
   const [drag, setDrag] = React.useState<"from" | "to" | "at" | null>(null);
   const n = versions.length;
 
@@ -99,21 +110,23 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
     }
   };
 
-  const onPointerDown = (event: React.PointerEvent) => {
-    if (event.button !== 0) return;
+  /** The range handle within reach of the pointer, on the track's lane. */
+  const handleAt = (event: React.PointerEvent): "from" | "to" | null => {
     const box = ref.current!.getBoundingClientRect();
     const px = event.clientX - box.left;
     const y = event.clientY - box.top;
     // A finger gets a 44px target around each handle; a pointer, 24px.
     const reach = event.pointerType === "mouse" ? 12 : 22;
-    const inLane = y >= 60 - reach && y <= 60 + reach;
-    // A handle, when pressed on (on the track's lane); the cursor anywhere else.
-    const target =
-      inLane && Math.abs(px - x(range.to)) <= reach
-        ? "to"
-        : inLane && Math.abs(px - x(range.from)) <= reach
-          ? "from"
-          : "at";
+    if (y < 60 - reach || y > 60 + reach) return null;
+    if (Math.abs(px - x(range.to)) <= reach) return "to";
+    if (Math.abs(px - x(range.from)) <= reach) return "from";
+    return null;
+  };
+
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    // A handle, when pressed on; the cursor anywhere else.
+    const target = handleAt(event) ?? "at";
     event.preventDefault();
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     setDrag(target);
@@ -127,11 +140,16 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
     const i = indexAt(event.clientX);
     if (drag) move(drag, i);
     // Kept while dragging too: once dropped, the card is about where the pointer is.
-    if (event.pointerType !== "touch") setHover(i);
+    if (event.pointerType !== "touch") {
+      setHover(i);
+      if (!drag) setOver(handleAt(event));
+    }
   };
   const end = (event: React.PointerEvent) => {
     setDrag(null);
-    setHover(event.pointerType === "touch" ? null : indexAt(event.clientX));
+    const touch = event.pointerType === "touch";
+    setHover(touch ? null : indexAt(event.clientX));
+    setOver(touch ? null : handleAt(event));
   };
 
   const keys = (target: "from" | "to" | "at", value: number) => (event: React.KeyboardEvent) => {
@@ -165,9 +183,11 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
     }
     labels.push(i);
   }
-  // Dragging: the version the dragged handle is on, said to be its own.
+  // Dragging: the version the dragged handle is on, said to be its own; over
+  // a range handle, the version it is on, the card saying which handle it is.
   const value = { from: range.from, to: range.to, at };
-  const card = drag !== null ? value[drag] : hover;
+  const named = drag ?? over;
+  const card = named !== null ? value[named] : hover;
   const shown = card !== null ? versions[card] : undefined;
   const barWidth = clamp(spacing * 0.56, 2, 10);
   const cursor = versions[at];
@@ -184,7 +204,10 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
       onPointerMove={onPointerMove}
       onPointerUp={end}
       onPointerCancel={end}
-      onPointerLeave={() => setHover(null)}
+      onPointerLeave={() => {
+        setHover(null);
+        setOver(null);
+      }}
     >
       {width > 0 && (
         <>
@@ -197,12 +220,13 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
               return (
                 <span
                   key={v.id}
+                  data-range-start={i === range.from ? "" : undefined}
                   className={cn(
                     "absolute bottom-0 rounded-t-xs transition-opacity duration-(--duration-fast)",
                     slot !== undefined
                       ? ERA_BG[slot]
-                      : i === range.from
-                        ? "bg-muted-foreground"
+                      : i === range.from && !v.removed_at
+                        ? cn(START_KEY, "rounded-b-none")
                         : "bg-border-strong",
                     !inRange && "opacity-60",
                     inRange && i > at && "opacity-35",
@@ -251,7 +275,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
             min={0}
             max={range.to - 1}
             value={range.from}
-            text={describeVersion(versions[range.from]!)}
+            text={describeVersion(versions[range.from]!, activity[range.from])}
             onKeyDown={keys("from", range.from)}
           />
           <Thumb
@@ -261,7 +285,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
             min={range.from + 1}
             max={n - 1}
             value={range.to}
-            text={describeVersion(versions[range.to]!)}
+            text={describeVersion(versions[range.to]!, activity[range.to])}
             onKeyDown={keys("to", range.to)}
           />
           <Thumb
@@ -271,7 +295,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
             min={range.from}
             max={range.to}
             value={at}
-            text={cursor ? describeVersion(cursor) : ""}
+            text={cursor ? describeVersion(cursor, activity[at]) : ""}
             onKeyDown={keys("at", at)}
           >
             v{cursor?.number}
@@ -299,7 +323,12 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
                 transform: "translateX(-50%)",
               }}
             >
-              {drag && <span className="text-background/70">{THUMB_LABEL[drag]}</span>}
+              {named && (
+                <span className="text-background/70">
+                  {THUMB_LABEL[named]}
+                  {!drag && " · drag to change the range"}
+                </span>
+              )}
               <span className="flex items-center gap-1.5 font-medium">
                 <span className="font-mono">{versionName(shown)}</span>
                 <span className="truncate">{shown.message ?? "No message"}</span>
@@ -307,7 +336,7 @@ export function Track({ versions, activity, range, at, scale, onRange, onAt }: T
               <span className="text-background/70">
                 {originLabel[shown.origin]}
                 {shown.author ? ` by ${shown.author.name}` : ""} · {formatDate(shown.created_at)}
-                {activity[card] ? ` · ${activity[card]} changes` : ""}
+                {activity[card] !== undefined ? ` · ${changesText(activity[card])}` : ""}
               </span>
               {shown.removal_reason && (
                 <span className="text-background/70">Removed: {shown.removal_reason}</span>
@@ -442,7 +471,11 @@ export function CursorReadout({
   live?: boolean;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2.5" aria-live={live ? "polite" : "off"}>
+    <div
+      data-cursor-readout=""
+      className="flex min-w-0 flex-1 items-center gap-2.5"
+      aria-live={live ? "polite" : "off"}
+    >
       <span className="shrink-0 font-mono text-base font-semibold text-foreground tabular">
         v{version.number}
       </span>
@@ -494,8 +527,10 @@ export function ModeToggle({
   // theirs (`data-state`), and the chosen mode would not show. The chosen
   // one is inverted: on the timeline's card, the kit's raised item would
   // barely differ from its track.
+  // On a phone (the sheet), items as tall as the kit's buttons there (36px)
+  // for a thumb: the kit's toggle is sized for a pointer.
   const item =
-    "data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:shadow-raised data-[state=on]:hover:text-background";
+    "max-md:h-9 max-md:px-3 data-[state=on]:bg-foreground data-[state=on]:text-background data-[state=on]:shadow-raised data-[state=on]:hover:text-background";
   return (
     <div className={cn("flex min-w-0 flex-col items-start gap-1", className)}>
       <ToggleGroup
@@ -505,7 +540,7 @@ export function ModeToggle({
         aria-label="What the graph shows"
         aria-describedby={caption}
         aria-keyshortcuts="M"
-        className="bg-background ring-1 ring-border-strong ring-inset"
+        className="bg-background ring-1 ring-border-strong ring-inset max-md:h-10"
       >
         <ToggleGroupItem
           value="superposed"
@@ -552,25 +587,28 @@ export function Legend({
   const cursor = name(at);
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-      <span className="flex items-center gap-1.5">
-        <span
-          aria-hidden
-          className="size-2.5 rounded-xs bg-card ring-1 ring-border-strong ring-inset"
-        />
+      <span className="flex items-center gap-1.5" data-legend-key="start">
+        {/* The range start's bar on the track is drawn the same: uncolored. */}
+        <span aria-hidden className={cn("size-2.5", START_KEY)} />
         In {start ? `v${start.number}` : "the first version"}
       </span>
       {scale.buckets.length > 0 && (
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span>Appeared in</span>
           {scale.buckets.map((b) => (
-            <span
-              key={b.first}
-              data-era-key={b.slot + 1}
-              // After the cursor: faded, as their bars are.
-              className={cn("flex items-center gap-1", b.first > at && "opacity-50")}
-            >
-              <span aria-hidden className={cn("size-2.5 rounded-xs", ERA_BG[b.slot])} />
-              <span className="font-mono text-foreground tabular">
+            <span key={b.first} data-era-key={b.slot + 1} className="flex items-center gap-1">
+              {/* After the cursor: the swatch fades, as their bars do; the
+                  words step back to muted ink, never below 4.5:1. */}
+              <span
+                aria-hidden
+                className={cn("size-2.5 rounded-xs", ERA_BG[b.slot], b.first > at && "opacity-50")}
+              />
+              <span
+                className={cn(
+                  "font-mono tabular",
+                  b.first > at ? "text-muted-foreground" : "text-foreground",
+                )}
+              >
                 {b.first === b.last
                   ? name(b.first)
                   : `${name(b.first)}–${versions[b.last]?.number}`}
@@ -580,7 +618,9 @@ export function Legend({
         </span>
       )}
       {/* Superposed, the two faded states: keys of the encoding, shown
-          whether or not the frame has one (playing never reflows them). */}
+          whether or not the frame has one (playing never reflows them). The
+          outlines stay visible (≥ 3:1 for the solid ones): a key that cannot
+          be seen keys nothing. */}
       {mode === "superposed" && (
         <span className="flex items-center gap-1.5">
           <span
@@ -594,7 +634,7 @@ export function Legend({
         <span className="flex items-center gap-1.5">
           <span
             aria-hidden
-            className="h-2.5 w-4 rounded-xs bg-card/60 ring-1 ring-border ring-inset"
+            className="h-2.5 w-4 rounded-xs bg-card/60 ring-1 ring-faint-foreground/45 ring-inset"
           />
           Not yet in {cursor}
         </span>

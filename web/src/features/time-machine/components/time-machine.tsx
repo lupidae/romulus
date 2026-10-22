@@ -95,6 +95,9 @@ export function TimeMachine({
   }
   const [playing, setPlaying] = React.useState(false);
   const [expanded, setExpanded] = React.useState(false);
+  // A slider of the track has focus: it says its own value (the version, as
+  // the readout would), so the readout keeps quiet instead of saying it twice.
+  const [onSlider, setOnSlider] = React.useState(false);
   const sheet = React.useRef<HTMLDivElement>(null);
   const [query, setQuery] = React.useState(initial.query);
   const update = React.useCallback((patch: Partial<TimeMachineState>) => {
@@ -210,55 +213,72 @@ export function TimeMachine({
   const groups = Object.entries(history.groups);
   const filtering = state.changedOnly || state.group !== null || state.query.trim() !== "";
 
-  const filters = (
-    <>
-      <Tooltip content="Fade back what did not change in the range" side="top">
-        <Button
-          variant={state.changedOnly ? "secondary" : "ghost"}
-          size="sm"
-          aria-pressed={state.changedOnly}
-          onClick={() => update({ changedOnly: !state.changedOnly })}
-          className={cn(state.changedOnly && "border-primary/40 bg-primary/8 text-foreground")}
-        >
-          <FilterIcon />
-          Only changes
-        </Button>
-      </Tooltip>
-      {groups.length > 0 && (
-        <Select
-          value={state.group ?? "all"}
-          onValueChange={(v) => update({ group: v === "all" ? null : v })}
-        >
-          <SelectTrigger aria-label="Group" className="h-7 w-auto min-w-36 text-sm sm:h-7">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All tables</SelectItem>
-            {groups.map(([id, g]) => (
-              <SelectItem key={id} value={id}>
-                <span className="flex items-center gap-2">
-                  <span
-                    aria-hidden
-                    className={cn("size-2 rounded-xs", GROUP_DOT[groupColor(g.color)])}
-                  />
-                  {g.name}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-      <Input
-        type="search"
-        aria-label="Filter tables by name"
-        placeholder="Filter tables"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        prefix={<SearchIcon aria-hidden className="mr-1.5 size-3.5" />}
-        className="h-7 w-full sm:h-7 xl:w-44"
-      />
-    </>
-  );
+  // In the bar (wide screens), "Only changes" explains itself in a tooltip;
+  // in the popover, whose opening focuses it, a tooltip would open at once
+  // over the popover: a line under the filters says what they do instead.
+  const filters = (where: "bar" | "popover") => {
+    const changesOnly = (
+      <Button
+        variant={state.changedOnly ? "secondary" : "ghost"}
+        size="sm"
+        aria-pressed={state.changedOnly}
+        onClick={() => update({ changedOnly: !state.changedOnly })}
+        className={cn(state.changedOnly && "border-primary/40 bg-primary/8 text-foreground")}
+      >
+        <FilterIcon />
+        Only changes
+      </Button>
+    );
+    return (
+      <>
+        {where === "bar" ? (
+          <Tooltip content="Fade back what did not change in the range" side="top">
+            {changesOnly}
+          </Tooltip>
+        ) : (
+          changesOnly
+        )}
+        {groups.length > 0 && (
+          <Select
+            value={state.group ?? "all"}
+            onValueChange={(v) => update({ group: v === "all" ? null : v })}
+          >
+            <SelectTrigger aria-label="Group" className="h-7 w-auto min-w-36 text-sm sm:h-7">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All tables</SelectItem>
+              {groups.map(([id, g]) => (
+                <SelectItem key={id} value={id}>
+                  <span className="flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className={cn("size-2 rounded-xs", GROUP_DOT[groupColor(g.color)])}
+                    />
+                    {g.name}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <Input
+          type="search"
+          aria-label="Filter tables by name"
+          placeholder="Filter tables"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          prefix={<SearchIcon aria-hidden className="mr-1.5 size-3.5" />}
+          className="h-7 w-full sm:h-7 xl:w-44"
+        />
+        {where === "popover" && (
+          <p className="text-xs text-muted-foreground">
+            What the filters leave out fades back; no table moves.
+          </p>
+        )}
+      </>
+    );
+  };
 
   const versionsCount = state.range.to - state.range.from + 1;
   const range = `v${versions[state.range.from]?.number} → v${versions[state.range.to]?.number}`;
@@ -349,6 +369,8 @@ export function TimeMachine({
       <section
         aria-label="Timeline"
         className="relative z-1 shrink-0 border-t border-border bg-card shadow-raised md:shadow-none"
+        onFocus={(event) => setOnSlider(event.target.getAttribute("role") === "slider")}
+        onBlur={() => setOnSlider(false)}
       >
         <div
           ref={sheet}
@@ -408,12 +430,12 @@ export function TimeMachine({
             canForward={state.at < state.range.to}
             onStep={step}
           />
-          <CursorReadout version={cursor} live={!playing} />
+          <CursorReadout version={cursor} live={!playing && !onSlider} />
           <p className="sr-only" aria-live="polite">
             {announcement}
           </p>
           {modeToggle("hidden shrink-0 items-end md:flex")}
-          <div className="hidden shrink-0 items-center gap-1.5 xl:flex">{filters}</div>
+          <div className="hidden shrink-0 items-center gap-1.5 xl:flex">{filters("bar")}</div>
           <Popover>
             <PopoverTrigger asChild>
               <Button
@@ -426,7 +448,7 @@ export function TimeMachine({
               </Button>
             </PopoverTrigger>
             <PopoverContent align="end" side="top" className="grid w-64 gap-2">
-              {filters}
+              {filters("popover")}
             </PopoverContent>
           </Popover>
           <Button

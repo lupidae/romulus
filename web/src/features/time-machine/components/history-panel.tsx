@@ -175,12 +175,19 @@ function EventList({
         const inRange = e.at >= range.from && e.at <= range.to;
         const slot = eraOf(scale, e.at);
         const what = e.details.length > 0 ? e.details.join("; ") : EVENT_VERB[e.kind];
+        // Outside the range, a step back in ink, never in opacity: the words
+        // keep 4.5:1 on the panel.
         return (
-          <li key={i} className={cn("flex items-start gap-2", !inRange && "opacity-60")}>
+          <li key={i} data-in-range={inRange} className="flex items-start gap-2">
             <VersionLink
               at={e.at}
               label={`v${v.number}: ${what}. See what v${v.number} changed`}
-              className="flex h-5 shrink-0 items-center gap-1 rounded-sm px-1 font-mono text-xs font-medium text-foreground tabular ring-1 ring-border-strong ring-inset"
+              className={cn(
+                "flex h-5 shrink-0 items-center gap-1 rounded-sm px-1 font-mono text-xs font-medium tabular ring-1 ring-inset",
+                inRange
+                  ? "text-foreground ring-border-strong"
+                  : "text-muted-foreground ring-border",
+              )}
             >
               <span
                 aria-hidden
@@ -198,13 +205,13 @@ function EventList({
             <span className="min-w-0 text-xs leading-5">
               <span
                 className={cn(
-                  "text-foreground",
+                  inRange ? "text-foreground" : "text-muted-foreground",
                   e.kind === "removed" && "text-muted-foreground line-through",
                 )}
               >
                 {what}
               </span>
-              <span className="text-muted-foreground">
+              <span className={inRange ? "text-muted-foreground" : "text-faint-foreground"}>
                 {" "}
                 · {v.author?.name ?? "deleted account"},{" "}
                 <time dateTime={v.created_at} title={formatDateTime(v.created_at)}>
