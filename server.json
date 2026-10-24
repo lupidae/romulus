@@ -1,0 +1,40 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.lupidae/romulus",
+  "title": "romulus",
+  "description": "Postgres schema review: versions, diffs, drafts, migrations flagged by hazard, tests on rows",
+  "version": "0.3.0",
+  "websiteUrl": "https://romulus.lupidae.com",
+  "repository": {
+    "url": "https://github.com/lupidae/romulus",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://romulus.lupidae.com/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": ["any"]
+    },
+    {
+      "src": "https://romulus.lupidae.com/icon-512.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://romulus.lupidae.com/api/mcp"
+    },
+    {
+      "type": "streamable-http",
+      "url": "https://{host}/api/mcp",
+      "variables": {
+        "host": {
+          "description": "A self-hosted romulus's address, without https:// (romulus.example.com)",
+          "isRequired": true
+        }
+      }
+    }
+  ]
+}
