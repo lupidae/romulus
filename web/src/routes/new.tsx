@@ -19,7 +19,12 @@ import { OrgPreview } from "@/features/orgs/components/org-preview";
 import { type CreatedInvitation, orgsQuery } from "@/features/orgs/queries";
 import { roleLabel } from "@/features/orgs/roles";
 import { planNames } from "@/features/billing/format";
-import { readSubscribe, type Subscribe, subscribeSearch } from "@/features/billing/subscribe";
+import {
+  billingSearch,
+  readSubscribe,
+  type Subscribe,
+  subscribeSearch,
+} from "@/features/billing/subscribe";
 
 interface NewSearch extends Partial<Subscribe> {
   /** Set once the organization exists: the second step, inviting the team. */
@@ -129,7 +134,7 @@ function NewOrganization() {
                         ? navigate({
                             to: "/$org/settings/billing",
                             params: { org: org.slug },
-                            search: { subscribe: choice.plan, interval: choice.interval },
+                            search: billingSearch(choice),
                             replace: true,
                           })
                         : navigate({ to: "/new", search: { org: org.slug }, replace: true }))

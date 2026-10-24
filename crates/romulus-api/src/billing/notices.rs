@@ -620,7 +620,7 @@ fn confirmation(
         Interval::Year => "chaque année",
     };
     let price = stored
-        .amount_cents
+        .paid_cents()
         .zip(stored.currency.as_deref())
         .map(|(cents, currency)| money(locale, cents, currency));
     let terms_url = &links.of_locale(locale).terms;
@@ -1218,7 +1218,8 @@ pub async fn due(state: &AppState, now: DateTime<Utc>) -> ApiResult<()> {
     }
     super::withdrawal::complete_pending(state).await?;
     let renewals = sqlx::query!(
-        r#"SELECT org_id, plan AS "plan: Plan", current_period_end AS "period_end!", amount_cents, currency,
+        r#"SELECT org_id, plan AS "plan: Plan", current_period_end AS "period_end!",
+                  greatest(amount_cents - coalesce(discount_cents, 0), 0) AS amount_cents, currency,
                   scheduled_plan AS "scheduled_plan: Plan",
                   scheduled_interval AS "scheduled_interval: Interval", scheduled_at
            FROM org_billing

@@ -154,7 +154,13 @@ from the API.
   limits' labels and the support lines say what
   the hosted Terms say (7.1, 13.3): the table cap counts one version's
   tables and views, support times are targets. The line under the switch is
-  the pricing's one VAT mention (Terms 7.3).
+  the pricing's one VAT mention (Terms 7.3). A plan's `offer` (the
+  founding teams', on Team: docs/MVP.md "The founding-team offer") is a line
+  under its button, hidden in the HTML; `app.js` asks its `count` endpoint
+  (`/api/billing/offers/founding`, through the Function) and shows it, with
+  the places left, only while there are some. Its links add `&offer=<id>`;
+  its words follow the Terms (7.11: the price holds for as long as the
+  subscription stays on the plan, so never "for life").
 - Legal: the legal notice the LCEN requires is `mentions-legales.html`
   (French) and `legal-notice.html` (its English translation), served at
   `/mentions-legales` and `/legal-notice`, each linking to the other. The

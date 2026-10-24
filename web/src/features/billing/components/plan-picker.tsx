@@ -14,7 +14,7 @@ import { billingCopy } from "../copy";
 import { direction, euros, isLive, planFeatures } from "../format";
 import { goTo, useOpenPortal } from "../mutations";
 import type { Interval, OrgBilling, PlanOffer } from "../queries";
-import type { Subscribe } from "../subscribe";
+import { offered, type Subscribe } from "../subscribe";
 import { CheckoutDialog } from "./checkout-dialog";
 
 /**
@@ -46,6 +46,11 @@ export function PlanPicker({
       ? (billing.plans.find((offer) => offer.plan === asked.plan) ?? null)
       : null,
   );
+  // The founding-team offer, for whoever came with its link and checks out.
+  const priced = (offer: PlanOffer) =>
+    subscription
+      ? { plan: offer, founding: null }
+      : offered(offer, asked?.offer, billing.founding_offer);
   const portal = useOpenPortal(org);
   const [switching, setSwitching] = React.useState<string | null>(null);
 
@@ -83,7 +88,8 @@ export function PlanPicker({
         {billing.plans.map((offer) => {
           const current = offer.plan === billing.plan;
           const sameInterval = !subscription || subscription.interval === interval;
-          const cents = interval === "month" ? offer.monthly_cents : offer.yearly_cents;
+          const { plan: billed, founding } = priced(offer);
+          const cents = interval === "month" ? billed.monthly_cents : billed.yearly_cents;
           const move = direction(billing.plan, offer.plan);
           let action: React.ReactNode = null;
           let note: string | null = null;
@@ -129,6 +135,7 @@ export function PlanPicker({
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-base font-semibold text-foreground">{offer.name}</h3>
                 {current && <Badge variant="primary">{t.current}</Badge>}
+                {founding && <Badge>{t.founding}</Badge>}
               </div>
               <p className="flex items-baseline gap-1.5">
                 <span className="text-xl font-semibold text-foreground tabular-nums">
@@ -161,7 +168,8 @@ export function PlanPicker({
       </p>
       <CheckoutDialog
         org={org}
-        offer={buying}
+        offer={buying && priced(buying).plan}
+        founding={buying && priced(buying).founding}
         interval={interval}
         documents={billing.documents}
         onOpenChange={(open) => !open && setBuying(null)}

@@ -624,6 +624,46 @@
         }
       }
     },
+    "/api/billing/offers/founding": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "The founding-team offer and how many of its places are left, for the\nhomepage (no session; Stripe's count is at most five minutes old, the\nplaces held by open checkouts counted now). `left` is 0 while the offer\nis off.",
+        "operationId": "get_founding_offer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FoundingOffer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Billing is off on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`billing_unavailable`: Stripe did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/billing/webhook": {
       "post": {
         "tags": [
@@ -2521,7 +2561,7 @@
             }
           },
           "409": {
-            "description": "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload",
+            "description": "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload; `offer_ended`: the founding-team offer has no place left; `offer_used`: this organization had the founding-team offer already",
             "content": {
               "application/json": {
                 "schema": {
@@ -10733,6 +10773,13 @@
             ],
             "description": "The month whose playground hours ran out (`2026-10`)."
           },
+          "offer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The offer a checkout applied (`founding`)."
+          },
           "plan": {
             "oneOf": [
               {
@@ -13898,6 +13945,58 @@
           }
         }
       },
+      "FoundingOffer": {
+        "type": "object",
+        "description": "The founding-team offer, as the homepage and the checkout show it.",
+        "required": [
+          "plan",
+          "monthly_cents",
+          "yearly_cents",
+          "list_monthly_cents",
+          "list_yearly_cents",
+          "teams",
+          "left"
+        ],
+        "properties": {
+          "left": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "list_monthly_cents": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The plan's own prices.",
+            "minimum": 0
+          },
+          "list_yearly_cents": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "monthly_cents": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Euro cents with the offer, for as long as the subscription stays on\nthe plan.",
+            "minimum": 0
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan",
+            "description": "The plan it is for (Team)."
+          },
+          "teams": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many teams get it in all, and how many places are left.",
+            "minimum": 0
+          },
+          "yearly_cents": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "Generated": {
         "type": "string",
         "description": "`pg_attribute.attgenerated`, as a word.",
@@ -16627,6 +16726,13 @@
           }
         }
       },
+      "OfferChoice": {
+        "type": "string",
+        "description": "An offer a checkout may ask for (`StartCheckout::offer`).",
+        "enum": [
+          "founding"
+        ]
+      },
       "OpenPortal": {
         "type": "object",
         "properties": {
@@ -16715,6 +16821,17 @@
           "documents": {
             "$ref": "#/components/schemas/LegalLinks",
             "description": "The Terms checkout has people accept, and the other documents, in\nEnglish and in French."
+          },
+          "founding_offer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FoundingOffer",
+                "description": "The founding-team offer while it runs (`null`: off, or its count\ndid not read): what a checkout with `offer: founding` costs."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "plan": {
             "$ref": "#/components/schemas/Plan",
@@ -20089,6 +20206,17 @@
               {
                 "$ref": "#/components/schemas/Locale",
                 "description": "The language of the page: the payment page's and the contract's."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "offer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfferChoice",
+                "description": "An offer the buyer came with (the homepage's `?offer=founding`):\napplied when the plan is its own (Team), ignored otherwise."
               },
               {
                 "type": "null"

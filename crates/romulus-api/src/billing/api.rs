@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use super::{
     Billing, Inner, copy, hours,
+    offer::{self, FoundingOffer, OfferChoice},
     plans::{self, Limits},
     state::Stored,
     stored,
@@ -42,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(invoices))
         .routes(routes!(withdrawal::withdraw))
         .routes(routes!(webhook::receive))
+        .routes(routes!(super::offer::get_founding_offer))
         // Undocumented: only with `ROMULUS_BILLING=fake` (the e2e suite).
         .route("/billing/fake/checkout/{session}", get(fake_checkout))
 }
@@ -164,6 +166,9 @@ pub struct OrgBilling {
     /// A consumer's right of withdrawal: until when, or the withdrawal
     /// made. `null` for a business.
     pub withdrawal: Option<WithdrawalInfo>,
+    /// The founding-team offer while it runs (`null`: off, or its count
+    /// did not read): what a checkout with `offer: founding` costs.
+    pub founding_offer: Option<FoundingOffer>,
 }
 
 /// What the buyer states before paying (Terms 3.4 c, 3.5 and 9.3): as whom,
@@ -210,6 +215,10 @@ pub struct StartCheckout {
     /// The language of the page: the payment page's and the contract's.
     #[serde(default)]
     pub locale: Option<Locale>,
+    /// An offer the buyer came with (the homepage's `?offer=founding`):
+    /// applied when the plan is its own (Team), ignored otherwise.
+    #[serde(default)]
+    pub offer: Option<OfferChoice>,
 }
 
 /// A checkout's statements, checked.
@@ -340,7 +349,7 @@ pub struct InvoiceSummary {
     pub pdf: Option<String>,
 }
 
-fn unavailable(err: &StripeError) -> ApiError {
+pub(super) fn unavailable(err: &StripeError) -> ApiError {
     tracing::warn!(error = %err, "billing: Stripe call failed");
     ApiError::Down {
         code: "billing_unavailable",
@@ -457,7 +466,7 @@ fn subscription_info(stored: &Stored) -> Option<SubscriptionInfo> {
         status,
         current_period_end: stored.current_period_end,
         cancel_at_period_end: stored.cancel_at_period_end,
-        amount_cents: stored.amount_cents,
+        amount_cents: stored.paid_cents(),
         currency: stored.currency.clone(),
         grace_until: stored.grace_until(),
         scheduled: match (stored.scheduled_plan, stored.scheduled_at) {
@@ -511,6 +520,7 @@ async fn get_billing(member: Member, State(state): State<AppState>) -> ApiResult
         checkout_copy_version: copy::version(inner.legal.edition()).to_owned(),
         buyer: buyer.filter(|_| stored.subscription_id.is_some()),
         withdrawal,
+        founding_offer: offer::shown(inner, member.org.id).await?,
     }))
 }
 
@@ -544,6 +554,15 @@ struct Order<'a> {
     price: &'a str,
     statement: &'a Statement,
     copy_version: &'a str,
+    /// The offer the buyer came with (applied to Team only).
+    offer: Option<OfferChoice>,
+}
+
+/// A checkout opened: where to send the browser, and whether it applies the
+/// founding-team offer.
+struct Opened {
+    url: String,
+    offered: bool,
 }
 
 /// Opens one Checkout Session for the organization, under its billing lock
@@ -554,20 +573,25 @@ struct Order<'a> {
 ///    organization's), its invoice mentions brought up to date;
 /// 2. refused when Stripe already has a running subscription for it (a
 ///    checkout paid whose webhook has not arrived yet);
-/// 3. the session, with an idempotency key made of the organization, the
-///    price and a nonce kept until the session is known: the same request
-///    again after a timeout gets the same session, never a second one;
-/// 4. every other open session of the customer expired (after creating
+/// 3. with the founding-team offer asked for (Team), a place held for it
+///    (`offer::reserve`: once per organization, while places are left);
+/// 4. the session, with an idempotency key made of the organization, the
+///    price, the offer's code and a nonce kept until the session is known:
+///    the same request again after a timeout gets the same session, never a
+///    second one (an offered session expires about 30 minutes after it was
+///    asked for, its place held until then: asked again more than two
+///    minutes later, it is a new request);
+/// 5. every other open session of the customer expired (after creating
 ///    this one, so that a replayed request never expires its own answer):
 ///    one open checkout at a time, so two can never both be paid;
-/// 5. the record of what the buyer accepted and stated
+/// 6. the record of what the buyer accepted and stated
 ///    (`legal_acceptances`), with the session's id; the session and its
 ///    subscription carry the record's id (kept with the nonce, so a retry
 ///    sends Stripe the same request).
 ///
 /// What it learned (the customer, the pending nonce, the session) is
 /// committed even when Stripe fails midway, for the retry.
-async fn open_checkout(state: &AppState, inner: &Inner, order: &Order<'_>) -> ApiResult<String> {
+async fn open_checkout(state: &AppState, inner: &Inner, order: &Order<'_>) -> ApiResult<Opened> {
     let org = order.member.org.id;
     let mut tx = state.db.begin().await?;
     super::lock_org(&mut tx, org).await?;
@@ -604,7 +628,7 @@ async fn exchange(
     order: &Order<'_>,
     pending: Pending,
     tx: &mut sqlx::PgConnection,
-) -> ApiResult<String> {
+) -> ApiResult<Opened> {
     let member = order.member;
     let price = order.price;
     let org = member.org.id;
@@ -638,8 +662,26 @@ async fn exchange(
     if !running.is_empty() {
         return Err(already_subscribed());
     }
+    let promotion_code = offer::reserve(
+        inner,
+        &mut *tx,
+        org,
+        order.offer,
+        order.plan,
+        order.interval,
+    )
+    .await?;
+    let now = Utc::now();
+    // An offered session expires: the same request again only while its
+    // expiry is still far enough for Stripe.
+    let still_same = |acceptance: Uuid| {
+        promotion_code.is_none()
+            || offer::made_at(acceptance).is_some_and(|at| now - at < offer::RETRY_WITHIN)
+    };
     let (nonce, acceptance_id) = match (pending.nonce, pending.session_id, pending.acceptance_id) {
-        (Some(nonce), None, Some(acceptance)) if pending.price.as_deref() == Some(price) => {
+        (Some(nonce), None, Some(acceptance))
+            if pending.price.as_deref() == Some(price) && still_same(acceptance) =>
+        {
             (nonce, acceptance)
         }
         _ => (
@@ -660,6 +702,9 @@ async fn exchange(
     )
     .execute(&mut *tx)
     .await?;
+    let expires = promotion_code
+        .as_ref()
+        .map(|_| offer::made_at(acceptance_id).unwrap_or(now) + offer::HOLD);
     let locale = order.statement.locale;
     let session = inner
         .stripe
@@ -669,11 +714,19 @@ async fn exchange(
             price: price.to_owned(),
             success_url: billing_url(inner, &member.org.slug, "checkout=success"),
             cancel_url: billing_url(inner, &member.org.slug, "checkout=cancelled"),
-            idempotency_key: super::stripe::checkout_key(org, price, locale, &nonce),
+            idempotency_key: super::stripe::checkout_key(
+                org,
+                price,
+                locale,
+                promotion_code.as_deref(),
+                &nonce,
+            ),
             acceptance_id,
             locale,
             edition: inner.legal.edition(),
             business: order.statement.buyer == Buyer::Business,
+            promotion_code: promotion_code.clone(),
+            expires_at: expires.map(|at| at.timestamp()),
         })
         .await
         .map_err(|err| unavailable(&err))?;
@@ -744,7 +797,13 @@ async fn exchange(
     )
     .execute(&mut *tx)
     .await?;
-    Ok(session.url)
+    // The offer's place held until the session expires; any other checkout
+    // expired the organization's previous one, and its hold goes with it.
+    offer::hold(&mut *tx, org, expires).await?;
+    Ok(Opened {
+        url: session.url,
+        offered: promotion_code.is_some(),
+    })
 }
 
 fn already_subscribed() -> ApiError {
@@ -772,7 +831,7 @@ fn already_subscribed() -> ApiError {
         (status = 200, body = BillingRedirect),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload", body = ErrorBody),
+        (status = 409, description = "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload; `offer_ended`: the founding-team offer has no place left; `offer_used`: this organization had the founding-team offer already", body = ErrorBody),
         (status = 422, description = "`validation` naming the field: no buyer chosen, the Terms or a box not ticked, a business's name or country missing, or Free", body = ErrorBody),
         (status = 503, description = "`billing_unavailable`: Stripe did not answer", body = ErrorBody),
     )
@@ -813,7 +872,7 @@ async fn checkout(
         .price(lookup_key)
         .await
         .map_err(|err| unavailable(&err))?;
-    let url = open_checkout(
+    let opened = open_checkout(
         &state,
         inner,
         &Order {
@@ -823,6 +882,7 @@ async fn checkout(
             price: &price,
             statement: &statement,
             copy_version: &body.copy_version,
+            offer: body.offer,
         },
     )
     .await?;
@@ -856,6 +916,9 @@ async fn checkout(
                         .then_some(true),
                     copy_version: Some(body.copy_version.clone()),
                     locale: Some(statement.locale.tag().to_owned()),
+                    offer: opened
+                        .offered
+                        .then(|| super::plans::FOUNDING.slug.to_owned()),
                     ..BillingAudit::default()
                 }),
                 ..AuditDetails::default()
@@ -863,8 +926,8 @@ async fn checkout(
         },
     )
     .await?;
-    tracing::info!(org = %member.org.slug, plan = ?body.plan, interval = ?body.interval, "billing: checkout started");
-    Ok(Json(BillingRedirect { url }))
+    tracing::info!(org = %member.org.slug, plan = ?body.plan, interval = ?body.interval, offer = opened.offered, "billing: checkout started");
+    Ok(Json(BillingRedirect { url: opened.url }))
 }
 
 /// A Customer Portal session: payment method, invoices, plan changes

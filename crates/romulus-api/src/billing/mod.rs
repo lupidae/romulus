@@ -22,6 +22,9 @@
 //! - [`withdrawal`]: a consumer's withdrawal within 14 days (cancelled at
 //!   once, the unused part refunded, Free).
 //! - [`copy`]: the checkout boxes' words (shared with the web app).
+//! - [`offer`]: the founding-team offer (Team at €29 a month while it stays
+//!   on Team, the first 20 teams, once per organization): its promotion
+//!   codes, the places left and held, the coupon put right by webhooks.
 //! - [`setup`]: `romulus-api stripe-setup`, products, prices and the portal.
 //!
 //! Endpoints (who may call them in brackets; see `auth::member`):
@@ -37,6 +40,8 @@
 //! - `GET /orgs/{org}/billing/invoices` [admin].
 //! - `POST /billing/webhook` [Stripe, signed]: subscription and invoice
 //!   events, idempotent by event id, each re-reading the subscription.
+//! - `GET /billing/offers/founding` [anyone]: the founding-team offer and
+//!   how many places are left (the homepage's Team card).
 //!
 //! Tables: `org_billing`, `billing_events`, `playground_usage`,
 //! `billing_notices`, `withdrawals`; the checkout's records in
@@ -50,6 +55,7 @@ pub mod countries;
 pub mod events;
 pub mod hours;
 pub mod notices;
+pub mod offer;
 pub mod plans;
 pub mod setup;
 pub mod state;
@@ -92,6 +98,8 @@ pub struct Inner {
     /// Where links in emails and redirects point.
     pub public_url: url::Url,
     pub db: sqlx::PgPool,
+    /// The founding-team offer's last count (`offer::left`).
+    pub founding: offer::Counter,
 }
 
 impl Billing {
@@ -115,6 +123,7 @@ impl Billing {
             }
             StripeKeys::Fake { .. } => {
                 let fake = Fake::new(&config.public_origin());
+                with_offers(&fake, billing);
                 (Arc::new(fake.clone()), Some(fake))
             }
         };
@@ -125,6 +134,7 @@ impl Billing {
             fake,
             public_url: config.public_url.clone(),
             db,
+            founding: offer::Counter::default(),
         })))
     }
 
@@ -136,6 +146,7 @@ impl Billing {
         db: sqlx::PgPool,
         stripe: Fake,
     ) -> Self {
+        with_offers(&stripe, &config);
         Self(Some(Arc::new(Inner {
             config,
             legal,
@@ -143,6 +154,7 @@ impl Billing {
             fake: Some(stripe),
             public_url,
             db,
+            founding: offer::Counter::default(),
         })))
     }
 
@@ -180,6 +192,34 @@ impl Billing {
     }
 }
 
+/// The fake's promotion codes for the configured offer, as `stripe-setup`
+/// makes them in Stripe (those it has already are kept: tests set theirs).
+fn with_offers(fake: &Fake, config: &BillingConfig) {
+    let Some(codes) = &config.founding else {
+        return;
+    };
+    for interval in [Interval::Month, Interval::Year] {
+        let id = codes.of(interval);
+        if !fake.state().promotion_codes.contains_key(id) {
+            let coupon = plans::FOUNDING.coupon_id(interval);
+            fake.add_coupon(stripe::Discount {
+                coupon: coupon.clone(),
+                offer: Some(plans::FOUNDING.slug.to_owned()),
+                amount_off: Some(i64::from(plans::FOUNDING.amount_off(interval))),
+                percent_off: None,
+                forever: true,
+                products: plans::FOUNDING.plan.product_id().map(|p| vec![p]),
+            });
+            fake.add_promotion_code(
+                id,
+                &plans::FOUNDING.code(interval),
+                &coupon,
+                i64::from(plans::FOUNDING.teams),
+            );
+        }
+    }
+}
+
 /// Billing's background tasks: Stripe's webhook events past 90 days swept
 /// every hour, billing on or off (those of a past configuration go too);
 /// when it is on, playground hours metered every minute, the emails it
@@ -205,7 +245,7 @@ pub async fn stored(db: impl PgExecutor<'_>, org: Uuid) -> Result<Stored, sqlx::
     let row = sqlx::query!(
         r#"SELECT customer_id, subscription_id, plan AS "plan: Plan",
                   interval AS "interval: Interval", status, current_period_end,
-                  cancel_at_period_end, amount_cents, currency, past_due_since,
+                  cancel_at_period_end, amount_cents, discount_cents, currency, past_due_since,
                   scheduled_plan AS "scheduled_plan: Plan",
                   scheduled_interval AS "scheduled_interval: Interval", scheduled_at, updated_at,
                   acceptance_id, started_at, withdrawn_at
@@ -229,6 +269,7 @@ pub async fn stored(db: impl PgExecutor<'_>, org: Uuid) -> Result<Stored, sqlx::
             current_period_end: r.current_period_end,
             cancel_at_period_end: r.cancel_at_period_end,
             amount_cents: r.amount_cents,
+            discount_cents: r.discount_cents,
             currency: r.currency,
             past_due_since: r.past_due_since,
             scheduled_plan: r.scheduled_plan,

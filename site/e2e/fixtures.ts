@@ -9,7 +9,7 @@ export const ANALYTICS = "https://stats.lupidae.com";
  * on, and that is romulus.lupidae.com, not this server), and what was
  * asked of it is `analytics`.
  */
-export const test = base.extend<{ analytics: string[] }>({
+export const test = base.extend<{ analytics: string[]; foundingOffer: void }>({
   analytics: [
     async ({ context }, use) => {
       const asked: string[] = [];
@@ -18,6 +18,16 @@ export const test = base.extend<{ analytics: string[] }>({
         return route.fulfill({ status: 200, contentType: "text/javascript", body: "" });
       });
       await use(asked);
+    },
+    { auto: true },
+  ],
+  // The homepage asks the API how many founding-offer places are left
+  // (app.js); this server has no API: none are (a test answers otherwise
+  // with its own page.route, which comes first).
+  foundingOffer: [
+    async ({ context }, use) => {
+      await context.route("**/api/billing/offers/founding", (route) => route.fulfill({ json: { left: 0 } }));
+      await use();
     },
     { auto: true },
   ],

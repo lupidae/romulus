@@ -1197,10 +1197,23 @@ docs/MVP.md "Billing" has the decisions.
   `Billing::shown`/`shown_number` for one version: 402 when hidden).
 - **Stripe** is behind `billing::stripe::StripeApi` (`Http`, one pinned API
   version, leniently parsed; `Fake` in memory: `Billing::with_stripe` in
-  tests, its checkout page at `/api/billing/fake/checkout/{id}`). Webhooks
-  (`billing::webhook`, exempt from CSRF: `csrf::WEBHOOK`) re-read the
-  subscription under `billing::lock_org` and store event ids; tests sign
-  bodies with `billing::webhook::sign`.
+  tests, its checkout page at `/api/billing/fake/checkout/{id}`).
+- **The founding-team offer** (`billing::offer`, `plans::FOUNDING`, Terms
+  7.11): a promotion code per interval (`ROMULUS_FOUNDING_PROMO_MONTHLY`/
+  `_YEARLY`, made by `stripe-setup --founding-offer`; the fake makes them
+  and their coupons itself), applied by checkout for Team when the body says
+  `offer: founding` (the homepage's `?offer=founding`, carried by
+  `features/billing/subscribe.ts`): `offer::reserve` in the checkout's
+  transaction (once per org: `founding_offer_used_at`, 409 `offer_used`;
+  places left less open offered checkouts' holds, `checkout_offer_until`,
+  409 `offer_ended`); the webhook's `offer::correct` swaps the coupon on an
+  interval change and removes it off Team, `offer::note` records the use,
+  `close_when_full` switches the codes off at 20. Places left at
+  `GET /api/billing/offers/founding` (no session, Stripe cached five
+  minutes, 3 s timeout). A subscription's cost is `Stored::paid_cents`
+  (`amount_cents` less `discount_cents`: forever coupons applying to its
+  item's product, `Subscription::discount_cents`): show that, compare
+  prices with `amount_cents`.
 - **Background tasks** (billing on): `hours::meter` (every minute, playground
   time per organization and UTC month, 80 % email, stop at 100 % through
   `Backend::stop` with a reason) and `notices::run` (hourly: renewal

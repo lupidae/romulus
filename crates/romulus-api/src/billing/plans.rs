@@ -155,6 +155,72 @@ impl Plan {
     }
 }
 
+/// A price below a plan's own, for as long as the subscription runs (a
+/// Stripe coupon of duration `forever` per interval, its promotion code
+/// applied at checkout), for the first [`Offer::teams`] organizations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offer {
+    /// `founding`: the `?offer=` the homepage's link carries, and the API's.
+    pub slug: &'static str,
+    pub plan: Plan,
+    /// Euro cents a month instead of the plan's; a year costs
+    /// [`YEARLY_MONTHS`] of them, as the plan's own yearly price.
+    pub monthly_cents: u32,
+    /// How many organizations get it, every interval together.
+    pub teams: u32,
+}
+
+/// The founding-team offer: Team at €29 a month (€290 a year) instead of
+/// €49 while the subscription stays on Team (Terms 7.11), for the first 20
+/// teams, once per organization. On only when its promotion codes are
+/// configured (`ROMULUS_FOUNDING_PROMO_MONTHLY`, `_YEARLY`).
+pub const FOUNDING: Offer = Offer {
+    slug: "founding",
+    plan: Plan::Team,
+    monthly_cents: 2_900,
+    teams: 20,
+};
+
+impl Offer {
+    /// Euro cents per `interval` with the offer.
+    pub const fn price_cents(self, interval: Interval) -> u32 {
+        match interval {
+            Interval::Month => self.monthly_cents,
+            Interval::Year => self.monthly_cents * YEARLY_MONTHS,
+        }
+    }
+
+    /// What its coupon for `interval` takes off every period: the plan's
+    /// price less the offer's.
+    pub fn amount_off(self, interval: Interval) -> u32 {
+        self.plan
+            .price_cents(interval)
+            .unwrap_or_default()
+            .saturating_sub(self.price_cents(interval))
+    }
+
+    /// The id of its coupon for `interval` (`romulus-api stripe-setup` makes
+    /// it): `founding_team_monthly`, `founding_team_yearly`.
+    pub fn coupon_id(self, interval: Interval) -> String {
+        format!(
+            "{}_{}_{}",
+            self.slug,
+            self.plan.slug(),
+            interval_word(interval)
+        )
+    }
+
+    /// The code of its promotion code for `interval`, as Stripe's page shows
+    /// it once applied: `FOUNDINGTEAM`, `FOUNDINGTEAMYEARLY`.
+    pub fn code(self, interval: Interval) -> String {
+        let base = format!("{}{}", self.slug, self.plan.slug()).to_ascii_uppercase();
+        match interval {
+            Interval::Month => base,
+            Interval::Year => format!("{base}YEARLY"),
+        }
+    }
+}
+
 const fn interval_word(interval: Interval) -> &'static str {
     match interval {
         Interval::Month => "monthly",
@@ -186,6 +252,20 @@ pub fn size_allowed(largest: PlaygroundSize, size: PlaygroundSize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_founding_offer_is_team_at_29_a_month_for_20_teams() {
+        assert_eq!(FOUNDING.plan, Plan::Team);
+        assert_eq!(FOUNDING.teams, 20);
+        assert_eq!(FOUNDING.price_cents(Interval::Month), 2_900);
+        assert_eq!(FOUNDING.price_cents(Interval::Year), 29_000);
+        assert_eq!(FOUNDING.amount_off(Interval::Month), 2_000);
+        assert_eq!(FOUNDING.amount_off(Interval::Year), 20_000);
+        assert_eq!(FOUNDING.coupon_id(Interval::Month), "founding_team_monthly");
+        assert_eq!(FOUNDING.coupon_id(Interval::Year), "founding_team_yearly");
+        assert_eq!(FOUNDING.code(Interval::Month), "FOUNDINGTEAM");
+        assert_eq!(FOUNDING.code(Interval::Year), "FOUNDINGTEAMYEARLY");
+    }
 
     #[test]
     fn plans_are_ordered_and_each_lifts_what_the_one_before_caps() {

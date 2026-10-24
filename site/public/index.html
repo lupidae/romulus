@@ -765,6 +765,13 @@
           "monthly": 49,
           "recommended": true,
           "action": "Subscribe to Team",
+          "offer": {
+            "id": "founding",
+            "label": "Founding teams",
+            "monthly": 29,
+            "teams": 20,
+            "count": "/api/billing/offers/founding"
+          },
           "limits": {
             "members": "Unlimited",
             "databases": "10",
@@ -862,6 +869,10 @@
         <div class="plan-actions">
           <a class="button primary per-month" href="/app/signup?plan=team&amp;interval=month" data-umami-event="signup_started" data-umami-event-plan="team" data-umami-event-interval="month">Subscribe to Team</a>
           <a class="button primary per-year" href="/app/signup?plan=team&amp;interval=year" data-umami-event="signup_started" data-umami-event-plan="team" data-umami-event-interval="year">Subscribe to Team</a>
+          <p class="plan-offer" data-offer="/api/billing/offers/founding" hidden>
+            <a class="per-month" href="/app/signup?plan=team&amp;interval=month&amp;offer=founding" data-umami-event="signup_started" data-umami-event-plan="team" data-umami-event-interval="month" data-umami-event-offer="founding"><b>Founding teams:</b> 29&nbsp;€ a month for as long as you stay subscribed, <span data-offer-left>20</span>&nbsp;of&nbsp;20&nbsp;left</a>
+            <a class="per-year" href="/app/signup?plan=team&amp;interval=year&amp;offer=founding" data-umami-event="signup_started" data-umami-event-plan="team" data-umami-event-interval="year" data-umami-event-offer="founding"><b>Founding teams:</b> 290&nbsp;€ a year for as long as you stay subscribed, <span data-offer-left>20</span>&nbsp;of&nbsp;20&nbsp;left</a>
+          </p>
         </div>
         <dl class="plan-limits">
           <div><dt>Members</dt><dd>Unlimited</dd></div>

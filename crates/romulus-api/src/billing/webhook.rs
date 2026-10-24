@@ -402,6 +402,8 @@ pub async fn apply_subscription(
         return Ok(());
     }
     let mut cancelled: Option<Cancelled> = None;
+    // The founding offer's coupon put right in Stripe once (then read again).
+    let mut corrected = false;
     // The organization, when the subscription is known already: its row is
     // looked at *before* Stripe is read, so a write made while Stripe
     // answers is seen at the lock.
@@ -451,6 +453,15 @@ pub async fn apply_subscription(
             // Read again: cancelled now.
             continue;
         }
+        // A founding subscription moved to the other interval gets its
+        // coupon; one moved off Team loses it (Terms 7.11). Read again.
+        if let Some(read) = &read
+            && !corrected
+            && super::offer::correct(inner, read).await?
+        {
+            corrected = true;
+            continue;
+        }
         let looked = look(inner, &seen, read.as_ref(), invoice.as_ref(), kind).await?;
 
         let mut tx = state.db.begin().await?;
@@ -483,9 +494,13 @@ pub async fn apply_subscription(
         }
         let mut failure = None;
         let mut letters = Letters::default();
+        let mut redeemed = false;
         if let Some(next) = next_state(&before, read.as_ref(), id, looked.due) {
             letters = Letters::of(&before, &next);
             event.store(&mut tx, &before, &next).await?;
+            if let Some(read) = &read {
+                redeemed = super::offer::note(&mut tx, org, read).await?;
+            }
             event
                 .payments(&mut tx, &next, invoice.as_ref(), looked.failure_stands)
                 .await?;
@@ -516,6 +531,9 @@ pub async fn apply_subscription(
             );
         }
         tx.commit().await?;
+        if redeemed {
+            super::offer::close_when_full(inner).await;
+        }
         if let Some(duplicate) = cancelled {
             notices::duplicate_cancelled(
                 state,
@@ -654,16 +672,17 @@ impl Applied<'_> {
             "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, interval, status,
                                       current_period_end, cancel_at_period_end, amount_cents, currency,
                                       past_due_since, scheduled_plan, scheduled_interval, scheduled_at,
-                                      acceptance_id, started_at, withdrawn_at)
+                                      acceptance_id, started_at, withdrawn_at, discount_cents)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17)
+                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17, $18)
              ON CONFLICT (org_id) DO UPDATE SET
                  customer_id = coalesce(EXCLUDED.customer_id, org_billing.customer_id),
                  subscription_id = EXCLUDED.subscription_id, plan = EXCLUDED.plan,
                  interval = EXCLUDED.interval, status = EXCLUDED.status,
                  current_period_end = EXCLUDED.current_period_end,
                  cancel_at_period_end = EXCLUDED.cancel_at_period_end,
-                 amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency,
+                 amount_cents = EXCLUDED.amount_cents, discount_cents = EXCLUDED.discount_cents,
+                 currency = EXCLUDED.currency,
                  past_due_since = EXCLUDED.past_due_since, scheduled_plan = EXCLUDED.scheduled_plan,
                  scheduled_interval = EXCLUDED.scheduled_interval, scheduled_at = EXCLUDED.scheduled_at,
                  acceptance_id = EXCLUDED.acceptance_id, started_at = EXCLUDED.started_at,
@@ -686,6 +705,7 @@ impl Applied<'_> {
             next.acceptance_id,
             next.started_at,
             next.withdrawn_at,
+            next.discount_cents,
         )
         .execute(&mut *tx)
         .await?;
@@ -821,6 +841,7 @@ fn from_subscription(
             .item
             .as_ref()
             .and_then(|i| i.unit_amount.map(|a| a * i.quantity.max(1))),
+        discount_cents: read.discount_cents(),
         currency: read.item.as_ref().and_then(|i| i.currency.clone()),
         past_due_since: state::past_due_since(before.past_due_since, &read.status, due, now),
         scheduled_plan: scheduled.map(|s| s.0),

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
-import { price, readPlans, subscribeHref, withPlans } from "../tools/pricing.mjs";
+import { offerLine, price, readPlans, subscribeHref, withPlans } from "../tools/pricing.mjs";
 import { ANALYTICS, expect, test } from "./fixtures";
 
 const publicFile = (name: string) =>
@@ -237,6 +237,70 @@ test("the billing switch shows monthly or yearly prices", async ({ page }) => {
   await period.getByText("Monthly").click();
   expect(await shown("Team")).toBe("49 € per month");
 });
+
+/** The API's founding-offer count, as the homepage reads it (`billing::offer`). */
+async function foundingOffer(page: Page, answer: { left: number } | number) {
+  await page.route("**/api/billing/offers/founding", (route) =>
+    typeof answer === "number"
+      ? route.fulfill({ status: answer, json: { code: "billing_unavailable", message: "Down" } })
+      : route.fulfill({
+          json: {
+            plan: "team",
+            monthly_cents: 2900,
+            yearly_cents: 29000,
+            list_monthly_cents: 4900,
+            list_yearly_cents: 49000,
+            teams: 20,
+            ...answer,
+          },
+        }),
+  );
+}
+
+test("the founding offer shows on Team while places are left, and leads to its checkout", async ({ page }) => {
+  const plans = readPlans(publicFile("index.html"));
+  const team = plans.plans.find((p: { id: string }) => p.id === "team");
+  // The offer is the plan table's (billing::plans::FOUNDING).
+  const planTable = repoFile("crates/romulus-api/src/billing/plans.rs");
+  const rust = (n: number) => n.toLocaleString("en-US").replace(/,/g, "_");
+  expect(planTable).toContain(`monthly_cents: ${rust(team.offer.monthly * 100)},`);
+  expect(planTable).toContain(`teams: ${team.offer.teams},`);
+  expect(planTable).toContain(`slug: "${team.offer.id}",`);
+
+  await foundingOffer(page, { left: 7 });
+  await page.goto("/#pricing");
+  const pricing = page.locator("#pricing");
+  const card = pricing.getByRole("article", { name: "Team", exact: true });
+  const line = offerLine(plans, team.offer, "month", 7).replace(/\s/g, " ");
+  const link = card.getByRole("link", { name: line });
+  await expect(link).toBeVisible();
+  expect(line).toBe("Founding teams: 29 € a month for as long as you stay subscribed, 7 of 20 left");
+  await expect(link).toHaveAttribute("href", "/app/signup?plan=team&interval=month&offer=founding");
+  // No other plan has it.
+  await expect(pricing.locator("[data-offer]")).toHaveCount(1);
+
+  await pricing.getByRole("group", { name: "Billing period" }).getByText(/^Yearly/).click();
+  const yearly = card.getByRole("link", { name: "Founding teams: 290 € a year for as long as you stay subscribed, 7 of 20 left" });
+  await expect(yearly).toBeVisible();
+  await expect(yearly).toHaveAttribute("href", "/app/signup?plan=team&interval=year&offer=founding");
+  await expect(link).toBeHidden();
+});
+
+for (const [why, answer] of [
+  ["no place is left", { left: 0 }],
+  ["the count fails", 503],
+  ["billing is off", 404],
+] as const) {
+  test(`the founding offer stays hidden when ${why}`, async ({ page }) => {
+    await foundingOffer(page, answer);
+    const counted = page.waitForResponse("**/api/billing/offers/founding");
+    await page.goto("/#pricing");
+    await counted;
+    const card = page.locator("#pricing").getByRole("article", { name: "Team", exact: true });
+    await expect(card.locator("[data-offer]")).toBeHidden();
+    await expect(card.getByRole("link", { name: /Founding teams/ })).toHaveCount(0);
+  });
+}
 
 test("each paid plan subscribes to itself for the period shown, Free signs up", async ({ page }) => {
   const plans = readPlans(publicFile("index.html"));
@@ -603,13 +667,16 @@ test("the visit count: one tag, its one origin in the CSP, the sign-up buttons c
       plan: a.getAttribute("data-umami-event-plan"),
     })),
   );
-  const signUps = events.filter((e) => /^(Start free|Subscribe to )/.test(e.text));
-  expect(signUps.length).toBe(9);
+  // The founding offer's line on Team (one per period) subscribes too.
+  const signUps = events.filter((e) => /^(Start free|Subscribe to |Founding teams:)/.test(e.text));
+  expect(signUps.length).toBe(11);
   for (const e of signUps) expect(e.event, e.text).toBe("signup_started");
   expect(signUps.filter((e) => e.plan).map((e) => e.plan)).toEqual([
     "free",
     "starter",
     "starter",
+    "team",
+    "team",
     "team",
     "team",
     "business",

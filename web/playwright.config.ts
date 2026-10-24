@@ -175,6 +175,9 @@ export default defineConfig({
             // Anyone may create a password account (e2e/billing/subscribe:
             // a plan chosen before signing up follows the emailed link).
             ROMULUS_SIGNUP: "open",
+            // The founding-team offer on (the fake makes these codes).
+            ROMULUS_FOUNDING_PROMO_MONTHLY: "promo_e2e_founding_monthly",
+            ROMULUS_FOUNDING_PROMO_YEARLY: "promo_e2e_founding_yearly",
           }),
         ]
       : []),

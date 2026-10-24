@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT amount_cents, discount_cents FROM org_billing WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "amount_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "discount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "discount_cents"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "1bdecaf7ad35e45fdf58bd23ac8b5cab75b8d60ecb35fd0ab1f2cade94acdcc3"
+}

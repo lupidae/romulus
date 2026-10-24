@@ -1116,6 +1116,62 @@ cancelled. Nothing was charged."). An unknown or Free plan, or billing off
 An organization already subscribed is told so, the plan picker showing the
 period asked, and changes plan through the portal as usual.
 
+### The founding-team offer (decided 2026-10-24, built: task MKT-OFFER)
+
+Team at €29 a month (€290 a year) instead of €49, a fixed price for as long
+as the subscription stays active on Team without interruption, for the first
+20 teams, once per organization (`billing::plans::FOUNDING`, the plan
+table's; the Terms' 7.11 since version 1.1). Stripe-native: a coupon per
+interval of duration `forever` (€20 off a month, €200 off a year: a fixed
+amount cannot serve both), Team's product only, marked `romulus_offer:
+founding`, no cap of its own, and a promotion code of each, capped at 20
+redemptions; `romulus-api stripe-setup --founding-offer` makes them (never
+again once made, even switched off: switching a code off in the Dashboard is
+how the offer ends early) and prints their ids, which configuration names
+(`ROMULUS_FOUNDING_PROMO_MONTHLY`, `_YEARLY`; unset, the offer is off).
+
+- **The link** is the subscribe link plus `&offer=founding`, carried like
+  `plan` and `interval` (sign-in, the Terms, `/new`, the billing page) and
+  dropped for any plan but Team. The checkout dialog and the plan picker show
+  the founding price against Team's own; the checkout applies the interval's
+  promotion code (`discounts[0][promotion_code]`, no code field on Stripe's
+  page). Asked for with another plan, or with the offer off, it is ignored.
+- **Places left**: 20 less both codes' `times_redeemed` (none once a code is
+  off or at its cap) less the places held by open offered checkouts. An
+  offered session expires 32 minutes after it is asked for
+  (`expires_at`); its organization holds a place until then
+  (`org_billing.checkout_offer_until`, released when a subscription is
+  stored). A checkout decides under the offer's advisory lock, Stripe read
+  fresh: 409 `offer_ended` when none is left (the dialog then shows Team's
+  price), 409 `offer_used` for an organization that had it. The homepage's
+  `GET /api/billing/offers/founding` (no session) reads Stripe at most every
+  five minutes, within 3 s (a failure remembered 30 s), the holds counted
+  live. The webhook switches both codes off once 20 were redeemed.
+- **Once per organization, ending for good**: the first subscription stored
+  with the offer's coupon records `org_billing.founding_offer_used_at`. A
+  subscription moving off Team loses the coupon (the webhook removes it, so
+  coming back to Team is at its price); cancelled or withdrawn, it ends with
+  the subscription; either way the organization never gets the offer again.
+  Stripe's `first_time_transaction` restriction is not used: it refuses a
+  customer that paid for anything before (an organization that had Starter),
+  which the offer does not, and its refusal is a failed session the dialog
+  could not explain.
+- **Monthly and yearly**: a founding subscription moved to the other
+  interval in the portal gets that interval's coupon from the webhook
+  (`offer::correct`). The invoice Stripe makes at the switch itself is
+  computed before the webhook (monthly to yearly is charged at once, prorated,
+  with the monthly coupon); later ones are right.
+- **What a subscription costs** is its price less its forever coupons that
+  apply to its item's product (`org_billing.discount_cents`, read from the
+  subscription's `discounts`, their `applies_to` expanded): the billing page,
+  the confirmation and the renewal reminder say €29 (€290); `amount_cents`
+  stays the price's own, so a price change is never owed to a founding team,
+  and the operator's MRR stays at list price.
+- **The homepage**: the Team card's line "Founding teams: 29 € a month for
+  as long as you stay subscribed, N of 20 left", hidden in the HTML and shown
+  by `app.js` only while the count says places are left (none, off, or no
+  answer: hidden).
+
 ## Legal: terms, checkout, withdrawal (decided 2026-10-21, built: task COMPLY)
 
 The hosted service's contract, as its documents (published by the homepage,
@@ -1123,8 +1179,9 @@ The hosted service's contract, as its documents (published by the homepage,
 `ROMULUS_LEGAL_URL`, the site, and `ROMULUS_LEGAL_CONTACT`, the seller's
 address); billing needs it; a self-hosted install has no Terms at all. The
 hosted service runs `ROMULUS_TERMS_VERSION=1.0` (the documents' version
-1.0 of 21 October 2026); a new version of the documents is a new value, and
-its PDFs (`crates/romulus-api/legal`, `just site-legal`).
+1.0 of 21 October 2026; 1.1 of 24 October 2026 adds the founding-team offer,
+7.11); a new version of the documents is a new value, and its PDFs
+(`crates/romulus-api/legal`, `just site-legal`).
 
 - **Two editions of the Terms.** Launch: professionals only, on every plan
   (`ROMULUS_CONSUMER_SALES` off, the default): the professional edition at

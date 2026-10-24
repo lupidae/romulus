@@ -9,7 +9,7 @@ import type { LegalLinks, TermsStatus } from "@/features/legal/queries";
 import boxes from "../checkout-boxes.json";
 import type * as mutations from "../mutations";
 import { goTo } from "../mutations";
-import type { PlanOffer } from "../queries";
+import type { FoundingOffer, PlanOffer } from "../queries";
 import { CheckoutDialog } from "./checkout-dialog";
 
 vi.mock("../mutations", async (original) => ({
@@ -36,6 +36,24 @@ const starter: PlanOffer = {
   },
 };
 
+const team: PlanOffer = {
+  ...starter,
+  plan: "team",
+  name: "Team",
+  monthly_cents: 4900,
+  yearly_cents: 49000,
+};
+
+const founding: FoundingOffer = {
+  plan: "team",
+  monthly_cents: 2900,
+  yearly_cents: 29000,
+  list_monthly_cents: 4900,
+  list_yearly_cents: 49000,
+  teams: 20,
+  left: 4,
+};
+
 function documents(consumerSales: boolean): LegalLinks {
   const base = consumerSales ? "/legal/full" : "/legal";
   return {
@@ -60,10 +78,17 @@ function documents(consumerSales: boolean): LegalLinks {
 function setup({
   consumerSales = false,
   locale = "en",
-}: { consumerSales?: boolean; locale?: "en" | "fr" } = {}) {
-  const fetch = vi.fn((_request: Request) =>
-    Promise.resolve(Response.json({ url: "https://checkout.stripe.com/c/pay/cs_test" })),
-  );
+  plan = starter,
+  offer = null,
+  answer = Response.json({ url: "https://checkout.stripe.com/c/pay/cs_test" }),
+}: {
+  consumerSales?: boolean;
+  locale?: "en" | "fr";
+  plan?: PlanOffer;
+  offer?: FoundingOffer | null;
+  answer?: Response;
+} = {}) {
+  const fetch = vi.fn((_request: Request) => Promise.resolve(answer.clone()));
   vi.stubGlobal("fetch", fetch);
   // Radix's radio cards measure themselves; jsdom has no ResizeObserver.
   vi.stubGlobal(
@@ -88,7 +113,8 @@ function setup({
     <QueryClientProvider client={client}>
       <CheckoutDialog
         org="acme"
-        offer={starter}
+        offer={plan}
+        founding={offer}
         interval="year"
         documents={documents(consumerSales)}
         onOpenChange={() => {}}
@@ -172,7 +198,50 @@ describe("CheckoutDialog, businesses only (consumer sales off)", () => {
       withdrawal_acknowledged: false,
       copy_version: boxes.professional.version,
       locale: "en",
+      offer: null,
     });
+  });
+});
+
+describe("CheckoutDialog with the founding offer", () => {
+  const priced = { ...team, monthly_cents: 2900, yearly_cents: 29000 };
+
+  async function tick(user: ReturnType<typeof userEvent.setup>) {
+    await business(user);
+    await user.click(screen.getByRole("checkbox", { name: /I have read and accept the/ }));
+    await user.click(screen.getByRole("checkbox", { name: /I am not subscribing as a consumer/ }));
+    await user.click(screen.getByRole("button", { name: "Continue to payment" }));
+  }
+
+  it("says the founding price against the plan's own and asks for the offer", async () => {
+    const { fetch, user } = setup({ plan: priced, offer: founding });
+    expect(screen.getByRole("dialog", { name: "Upgrade to Team" })).toHaveAccessibleDescription(
+      /€290 a year, renewed every year until you cancel.*Founding team offer: €290 instead of €490, for as long as the subscription stays on this plan\./,
+    );
+    await tick(user);
+    await vi.waitFor(() => expect(goTo).toHaveBeenCalled());
+    const body = (await fetch.mock.calls[0]![0].json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ plan: "team", interval: "year", offer: "founding" });
+  });
+
+  it.each([
+    [
+      "offer_ended",
+      "The founding team offer has just ended: the plan is at its usual price, shown above.",
+    ],
+    [
+      "offer_used",
+      "This organization has had the founding team offer already (once per organization): the plan is at its usual price, shown above.",
+    ],
+  ])("says so when the API answers %s", async (code, said) => {
+    const { user } = setup({
+      plan: priced,
+      offer: founding,
+      answer: Response.json({ code, message: "Refused." }, { status: 409 }),
+    });
+    await tick(user);
+    expect(await screen.findByRole("alert")).toHaveTextContent(said);
+    expect(goTo).not.toHaveBeenCalled();
   });
 });
 

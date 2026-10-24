@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, plan AS \"plan: Plan\", current_period_end AS \"period_end!\", amount_cents, currency,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at\n           FROM org_billing\n           WHERE interval = 'year' AND status IN ('active', 'trialing') AND NOT cancel_at_period_end\n             AND withdrawn_at IS NULL\n             AND current_period_end > $1 AND current_period_end <= $1 + make_interval(days => $2)",
+  "query": "SELECT org_id, plan AS \"plan: Plan\", current_period_end AS \"period_end!\",\n                  greatest(amount_cents - coalesce(discount_cents, 0), 0) AS amount_cents, currency,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at\n           FROM org_billing\n           WHERE interval = 'year' AND status IN ('active', 'trialing') AND NOT cancel_at_period_end\n             AND withdrawn_at IS NULL\n             AND current_period_end > $1 AND current_period_end <= $1 + make_interval(days => $2)",
   "describe": {
     "columns": [
       {
@@ -52,12 +52,7 @@
         "ordinal": 3,
         "name": "amount_cents",
         "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "org_billing",
-            "name": "amount_cents"
-          }
-        }
+        "origin": "Expression"
       },
       {
         "ordinal": 4,
@@ -136,12 +131,12 @@
       false,
       false,
       true,
-      true,
+      null,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "727c868c20c36ed66bdf87a4ed8bbfc437691e5d81a97ab795ea77e28000b483"
+  "hash": "f1791e50e5518047f24ac8afe288b2e5127c705609bc4718a88a21d6a1862f39"
 }
