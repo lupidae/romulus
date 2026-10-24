@@ -11,6 +11,11 @@
 //!   draft first.
 //! - A draft whose SQL does not compile has none: 422 `compile_failed`, with
 //!   the diagnostics.
+//! - In migration mode, the migration is the one written: its statements
+//!   as written, in order (data statements included), laid out for the
+//!   tool, exactly what a test of the draft runs; the down migration (where
+//!   the tool has one) is planned from the base to the draft's model, as a
+//!   test's generated down is.
 //! - Renames: the ones its text runs beyond its base (`ALTER … RENAME`,
 //!   graph edits included) are known; detected ones are on or off as the
 //!   draft's doc says (`renames`, what its editors chose), and `renames` in
@@ -32,7 +37,7 @@ use crate::{
     ApiError, ApiResult, AppState,
     auth::Member,
     databases,
-    domain::DraftStatus,
+    domain::{DraftMode, DraftStatus},
     error::ErrorBody,
     extract::{Json, Path, Query},
     versions::{
@@ -69,7 +74,7 @@ pub struct Reviewed {
         (status = 400, description = "`bad_request`: an unknown format, no `sha256`, `renames` that is not a JSON object of booleans", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first", body = ErrorBody),
-        (status = 422, description = "`compile_failed`: the SQL has errors (`details.diagnostics`)", body = ErrorBody),
+        (status = 422, description = "`compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse", body = ErrorBody),
         (status = 503, description = "The compiler is unavailable", body = ErrorBody),
     )
 )]
@@ -137,6 +142,7 @@ pub(super) async fn draft_migration(
         database: format!("{org}/{db_slug}"),
         major: content.major,
         renames: content.rename_choices(Some(&decisions)),
+        written: (content.mode == DraftMode::Migration).then(|| content.migration.clone()),
     };
     Ok(Json(build(sides, options).await?))
 }

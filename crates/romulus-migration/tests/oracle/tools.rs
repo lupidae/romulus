@@ -954,3 +954,93 @@ pub async fn check_tools(compiler: &Compiler, cases: Vec<ToolCase>) {
         );
     }
 }
+
+/// A migration written by hand (a draft's in migration mode): a column
+/// backfilled before it becomes NOT NULL, in the author's transaction, an
+/// index built concurrently, then a constraint using it.
+const WRITTEN: &str = "\
+BEGIN;
+ALTER TABLE public.customers ADD COLUMN email text;
+
+-- Backfill before NOT NULL.
+UPDATE public.customers SET email = 'customer' || id || '@example.com' WHERE email IS NULL;
+ALTER TABLE public.customers ALTER COLUMN email SET NOT NULL;
+COMMIT;
+CREATE UNIQUE INDEX CONCURRENTLY customers_email ON public.customers (email);
+ALTER TABLE public.customers ADD CONSTRAINT customers_email_key UNIQUE USING INDEX customers_email;
+";
+
+const CUSTOMERS: &str = "CREATE TABLE public.customers (id bigint PRIMARY KEY, name text);";
+const CUSTOMER_ROWS: &str =
+    "INSERT INTO public.customers VALUES (1, 'Ada'), (2, 'Grace'), (3, 'Edsger');";
+
+#[test]
+fn a_written_migration_s_files_run_on_rows_as_each_tool_runs_them() {
+    crate::with_compiler(|compiler| async move {
+        let admin = admin_url().expect("checked by with_compiler");
+        let up = romulus_migration_check::statements::layout(WRITTEN).expect("it parses");
+        // The two schemas, from the migration run on an empty table.
+        let (name, mut db) = scratch(&admin).await.expect("a scratch database");
+        let sides = async {
+            script(&mut db, CUSTOMERS).await?;
+            let old = introspect(&mut db).await?;
+            statements(&mut db, WRITTEN).await?;
+            Ok::<_, String>((old, introspect(&mut db).await?))
+        }
+        .await;
+        drop_scratch(&admin, &name, db).await;
+        let (old, new) = sides.expect("the written migration runs on an empty table");
+        let options = crate::options_for(&compiler, &Options::default());
+        let planned = migration(&old, &new, &options);
+        let down = romulus_migration::down(&old, &new, &planned);
+
+        // What the files were before: planned from the schemas, they lose
+        // the backfill, and fail on the rows it was written for.
+        let (name, mut db) = scratch(&admin).await.expect("a scratch database");
+        let regenerated = async {
+            script(&mut db, CUSTOMERS).await?;
+            script(&mut db, CUSTOMER_ROWS).await?;
+            Ok::<_, String>(statements(&mut db, &planned.script()).await)
+        }
+        .await;
+        drop_scratch(&admin, &name, db).await;
+        let failed = regenerated.expect("the setup runs");
+        assert!(
+            failed.as_ref().is_err_and(|e| e.contains("null values")),
+            "{failed:?}\n{}",
+            planned.script()
+        );
+
+        let mut failures = Vec::new();
+        for format in Format::ALL {
+            let laid = files(&up, &down, format, &meta(format));
+            let (name, mut db) = scratch(&admin).await.expect("a scratch database");
+            let result = async {
+                script(&mut db, CUSTOMERS).await?;
+                script(&mut db, CUSTOMER_ROWS).await?;
+                apply(&mut db, format, &laid, false).await?;
+                let filled: String =
+                    sqlx::query("SELECT string_agg(email, ',' ORDER BY id) FROM public.customers")
+                        .fetch_one(&mut db)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .get(0);
+                if filled != "customer1@example.com,customer2@example.com,customer3@example.com" {
+                    return Err(format!("the rows after up: {filled}"));
+                }
+                compare("after up", &up, introspect(&mut db).await?, &new)?;
+                if format.has_down() {
+                    apply(&mut db, format, &laid, true).await?;
+                    compare("after down", &down, introspect(&mut db).await?, &old)?;
+                }
+                Ok(())
+            }
+            .await;
+            drop_scratch(&admin, &name, db).await;
+            if let Err(error) = result {
+                failures.push(format!("{format:?}: {error}\n{}", listing(&laid)));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    });
+}
