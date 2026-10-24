@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" class="light">
+<head>
+<meta charset="utf-8">
+<title>romulus page social image</title>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  /* 1200×630, a comparison's or a guide's: its kicker and title, then the
+     picture of romulus the page shows (assets.mjs fills the three in). */
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body { position: relative; isolation: isolate; }
+  body::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image: radial-gradient(var(--border-strong) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: radial-gradient(ellipse 80% 90% at 70% 70%, black 20%, transparent 80%);
+    opacity: 0.8;
+  }
+  .og-top {
+    position: absolute;
+    top: 52px;
+    left: 72px;
+    right: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .og-top .wordmark { font-size: 26px; gap: 12px; }
+  .og-top .wordmark .mark { width: 36px; height: 36px; }
+  .og-top p { color: var(--primary); font-size: 22px; font-weight: 600; }
+  h1 {
+    position: absolute;
+    top: 124px;
+    left: 72px;
+    width: 1056px;
+    font-size: 58px;
+    font-weight: 640;
+    line-height: 1.04;
+    letter-spacing: -0.042em;
+  }
+  .og-shot {
+    position: absolute;
+    top: 300px;
+    left: 72px;
+    width: 1056px;
+    height: 400px;
+    overflow: hidden;
+    border-radius: 16px;
+    background: var(--card);
+    box-shadow: var(--elevation-4);
+    color: var(--foreground);
+  }
+  .og-shot img { display: block; width: 100%; height: auto; }
+  .og-shot pre {
+    margin: 0;
+    padding: 28px 32px;
+    font-family: var(--font-mono);
+    font-size: 19px;
+    line-height: 1.6;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+<!-- sprite -->
+<div class="og-top">
+  <span class="wordmark"><svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg><span>romulus</span></span>
+  <p><!-- kicker --></p>
+</div>
+<h1><!-- title --></h1>
+<div class="og-shot<!-- shot-class -->">
+  <!-- shot -->
+</div>
+</body>
+</html>

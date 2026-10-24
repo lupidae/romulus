@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How to diff two Postgres schemas: tools and pitfalls</title>
+<meta name="description" content="Compare what Postgres made of two schemas, not their text: pg_dump and diff, pgAdmin, migra, pg-schema-diff, Atlas, Supabase and romulus, with what each needs.">
+<link rel="canonical" href="https://romulus.lupidae.com/guides/postgres-schema-diff">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+<script>
+  // Before first paint: the theme the visitor chose here or in the app (same
+  // key; without one, tokens.css follows the system), and a flag for the CSS
+  // that waits on app.js.
+  (function (root) {
+    root.classList.add("js");
+    try {
+      var t = localStorage.getItem("romulus-theme");
+      if (t === "light" || t === "dark") root.classList.add(t);
+    } catch (e) {}
+  })(document.documentElement);
+</script>
+<link rel="preload" href="/fonts/inter-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="romulus">
+<meta property="og:url" content="https://romulus.lupidae.com/guides/postgres-schema-diff">
+<meta property="og:title" content="How to diff two Postgres schemas: tools and pitfalls">
+<meta property="og:description" content="Compare what Postgres made of two schemas, not their text: pg_dump and diff, pgAdmin, migra, pg-schema-diff, Atlas, Supabase and romulus, with what each needs.">
+<meta property="og:image" content="https://romulus.lupidae.com/og/guide-postgres-schema-diff.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="How to diff two Postgres schemas, with romulus comparing two versions of a billing schema on the table graph.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to diff two Postgres schemas: tools and pitfalls">
+<meta name="twitter:description" content="Compare what Postgres made of two schemas, not their text: pg_dump and diff, pgAdmin, migra, pg-schema-diff, Atlas, Supabase and romulus, with what each needs.">
+<meta name="twitter:image" content="https://romulus.lupidae.com/og/guide-postgres-schema-diff.png">
+<meta name="twitter:image:alt" content="How to diff two Postgres schemas, with romulus comparing two versions of a billing schema on the table graph.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "How to diff two Postgres schemas",
+  "description": "Compare what Postgres made of two schemas, not their text: pg_dump and diff, pgAdmin, migra, pg-schema-diff, Atlas, Supabase and romulus, with what each needs.",
+  "url": "https://romulus.lupidae.com/guides/postgres-schema-diff",
+  "image": "https://romulus.lupidae.com/og/guide-postgres-schema-diff.png",
+  "datePublished": "2026-10-24",
+  "dateModified": "2026-10-24",
+  "author": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  }
+}
+</script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <!-- Iconoir, the app's icon set (web/src/components/icons). -->
+  <symbol id="i-mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" class="mark-bg"/><path d="M11.5 23V13.75A4.75 4.75 0 0 1 16.25 9H17" fill="none" stroke-width="2.75" stroke-linecap="round" class="mark-fg-stroke"/><circle cx="21.5" cy="9" r="2.4" class="mark-fg"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M16 22.027v-2.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7a5.44 5.44 0 0 0-1.5-3.75a5.07 5.07 0 0 0-.09-3.77s-1.18-.35-3.91 1.48a13.4 13.4 0 0 0-7 0c-2.73-1.83-3.91-1.48-3.91-1.48A5.07 5.07 0 0 0 5 5.797a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7a3.37 3.37 0 0 0-.94 2.58v2.87"/><path d="M9 20.027c-3 .973-5.5 0-7-3"/></g></symbol>
+  <symbol id="i-computer" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 21h15m4 0h1"/><path d="M2 16.4V3.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v12.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18a6 6 0 1 0 0-12a6 6 0 0 0 0 12m10-6h1M12 2V1m0 22v-1m8-2l-1-1m1-15l-1 1M4 20l1-1M4 4l1 1m-4 7h1"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 11.507a9.493 9.493 0 0 0 18 4.219c-8.507 0-12.726-4.22-12.726-12.726A9.49 9.49 0 0 0 3 11.507"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"><path d="M4 19V5a2 2 0 0 1 2-2h13.4a.6.6 0 0 1 .6.6v13.114M6 17h14M6 21h14"/><path stroke-linejoin="round" d="M6 21a2 2 0 1 1 0-4"/><path d="M9 7h6"/></g></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18.01l.01-.011M6 6.01l.01-.011"/><path d="M2 9.4V2.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Zm0 12v-6.8a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M19.4 20H9.6a.6.6 0 0 1-.6-.6V9.6a.6.6 0 0 1 .6-.6h9.8a.6.6 0 0 1 .6.6v9.8a.6.6 0 0 1-.6.6"/><path d="M15 9V4.6a.6.6 0 0 0-.6-.6H4.6a.6.6 0 0 0-.6.6v9.8a.6.6 0 0 0 .6.6H9"/></g></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 17h7M5 7l5 5l-5 5"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" data-header>
+  <div class="container header-inner">
+    <a class="wordmark" href="/" aria-label="romulus, home">
+      <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+      <span>romulus</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/#versions">Product</a>
+      <a href="/#ci">CI</a>
+      <a href="/#mcp">MCP</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/#self-host">Self-host</a>
+      <a href="/#faq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <a class="button ghost header-github" href="https://github.com/lupidae/romulus" aria-label="romulus on GitHub"><svg class="icon" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+      <a class="button ghost" href="/app/signin">Sign in</a>
+      <a class="button secondary header-cta" href="/app/signin">Start free</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="container article">
+  <article class="article-inner">
+    <p class="kicker">Guide</p>
+    <h1>How to diff two Postgres schemas</h1>
+    <p class="answer">Compare what Postgres made of each schema, not the text you wrote. You can point a tool at two live databases (pgAdmin's Schema Diff, migra, pgquarrel), let a tool load SQL files into a scratch database and compare the catalogs (Atlas, pg-schema-diff, <code>supabase db diff</code>), or keep every version in romulus, which compiles each one in a sandboxed Postgres and shows any two side by side: as a list of changes, on the table graph, and as SQL, with the migration between them. A text diff of two <code>pg_dump --schema-only</code> files works in a pinch, with the flags below to cut its noise.</p>
+    <p class="article-meta"><span>Written <time datetime="2026-10-24">October 24, 2026</time>, against PostgreSQL 18's documentation and each tool's own pages</span><a href="#sources">Sources</a></p>
+
+    <h2 id="pg-dump">The quick way: two dumps and <code>diff</code></h2>
+    <p>Dump the schema of each database as plain SQL, without the lines that differ for reasons other than the schema, then compare the files:</p>
+    <div class="terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>Two schemas, as text</span></span>
+        <button class="copy-button" type="button" data-copy="#pg-dump-diff" aria-label="Copy the dump and diff commands"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span data-copy-label>Copy</span></button>
+      </div>
+<pre class="terminal-body"><code id="pg-dump-diff"><span class="cl">pg_dump --schema-only --no-owner <span class="nw">--no-privileges \</span></span><!--
+--><span class="cl">  --restrict-key=diff <span class="ts">"$OLD_URL"</span> <span class="nw">&gt; old.sql</span></span><!--
+--><span class="cl">pg_dump --schema-only --no-owner <span class="nw">--no-privileges \</span></span><!--
+--><span class="cl">  --restrict-key=diff <span class="ts">"$NEW_URL"</span> <span class="nw">&gt; new.sql</span></span><!--
+--><span class="cl">diff -u old.sql new.sql</span></code></pre>
+    </div>
+    <ul>
+      <li><code>--no-owner</code> and <code>--no-privileges</code> leave out the <code>ALTER … OWNER</code> and <code>GRANT</code> lines, which differ between environments.</li>
+      <li><code>--restrict-key</code> fixes the key of the <code>\restrict</code> line recent versions of <code>pg_dump</code> write; without it the key is random, so every dump differs on that line.</li>
+      <li>What it can't tell you: <code>pg_dump</code> sorts objects by type, then by name, and prints columns in their physical order, so a column added later sits last in one dump and wherever you wrote it in the other. A rename reads as one table removed and another added. And the output is a text diff, not a migration.</li>
+    </ul>
+
+    <h2 id="tools">Tools that compare the catalog</h2>
+    <p>These read what Postgres knows (columns, types, constraints, indexes, and, depending on the tool, views, functions, policies) and say what differs, most of them as the SQL that gets from one to the other.</p>
+    <div class="table-frame" role="region" aria-labelledby="tools" tabindex="0">
+      <table>
+        <thead>
+          <tr><th scope="col">Tool</th><th scope="col">Compares</th><th scope="col">Gives you</th><th scope="col">Status</th><th scope="col">License</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row"><a href="https://www.pgadmin.org/docs/pgadmin4/latest/schema_diff.html">pgAdmin Schema Diff</a></th><td>Two databases, or two schemas, on servers of the same major</td><td>A script, in its UI</td><td>Maintained</td><td>PostgreSQL</td></tr>
+          <tr><th scope="row"><a href="https://github.com/djrobstep/migra">migra</a></th><td>Two databases</td><td>SQL</td><td>Deprecated since 2022</td><td>Unlicense</td></tr>
+          <tr><th scope="row"><a href="https://github.com/eulerto/pgquarrel">pgquarrel</a></th><td>Two databases</td><td>SQL</td><td>Last release in 2020</td><td>BSD-3-Clause</td></tr>
+          <tr><th scope="row"><a href="https://github.com/fordfrog/apgdiff">apgdiff</a></th><td>Two dump files, parsed</td><td>DDL</td><td>Mainly unmaintained, its README says</td><td>MIT</td></tr>
+          <tr><th scope="row"><a href="https://github.com/stripe/pg-schema-diff">pg-schema-diff</a></th><td>A database and a directory of SQL (checked on a temporary database)</td><td>A plan, its hazards flagged</td><td>Maintained (Postgres 14 to 17)</td><td>MIT</td></tr>
+          <tr><th scope="row"><a href="https://atlasgo.io/declarative/diff">Atlas <code>schema diff</code></a></th><td>Any two of: a database, HCL or SQL files, a migration directory (files through a dev database)</td><td>SQL; views, functions, triggers and more with Atlas Pro</td><td>Maintained</td><td>Apache-2.0 community build</td></tr>
+          <tr><th scope="row"><a href="https://supabase.com/docs/reference/cli/supabase-db-diff"><code>supabase db diff</code></a></th><td>Your database and a shadow database built from your migrations</td><td>A migration file (<code>-f</code>)</td><td>Maintained; pg-delta by default for new projects, migra on older ones</td><td>MIT</td></tr>
+          <tr><th scope="row"><a href="/">romulus</a></th><td>Any two versions of a database: SQL uploads, imported migrations, CI pushes, compiled in a sandboxed Postgres of your major</td><td>A list of changes, the graph, both SQLs side by side, and the migration (with renames detected) for six tools</td><td>Maintained</td><td>AGPL-3.0</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Most need a connection to a running database, and some a second, empty one they can write to. That is fine on a laptop; in CI or against production it means credentials and network access. romulus works from SQL text alone: it never connects to your database.</p>
+
+    <h2 id="romulus">Diffing in romulus</h2>
+    <ol>
+      <li>Create a database (Postgres 15, 16, 17 or 18) and give it its versions: upload SQL (a <code>pg_dump --schema-only</code> works as is), import your migrations folder, or push from CI with <a href="https://remus.lupidae.com">remus</a>.</li>
+      <li>On the History tab, pick two versions and open the comparison. The address keeps both numbers (<code>…/diff/1...2</code>), so a link to it is the review.</li>
+      <li>Read it as a list of changes, on the graph (added, removed and changed tables and columns, colored and labelled), or as the two SQLs merged. The Migration view gives the SQL that gets from one to the other, for plain SQL, sqlx, Flyway, Prisma, dbmate or golang-migrate.</li>
+    </ol>
+    <p>Because both sides are compiled models, a reformatted file or reordered statements show no change, while a column becoming <code>NOT NULL</code> or a default changing does. Renames are detected and scored, and you choose which ones the migration applies.</p>
+    <figure class="shot" data-og-shift="220">
+      <img src="/img/romulus-diff.webp" width="1600" height="1000" loading="lazy" alt="romulus comparing v1 and v2 of a billing schema: on the left, 5 changes (1 table added, 2 changed, 1 removed, 1 enum added) with each column change listed; in the middle, the table graph with customers and invoices marked Changed, notes Removed and refunds Added; on the right, the two SQLs merged, the new enum and the renamed column highlighted.">
+      <figcaption>Two versions of a sample billing schema in a local install of romulus on October 24, 2026. A banner says the rename below reads as removed and added in the list, and that the migration keeps its data.</figcaption>
+    </figure>
+
+    <h2 id="pitfalls">What to look for in a schema diff</h2>
+    <ul>
+      <li><strong>Renames that read as drop and add.</strong> A tool that compares by name drops the old column and adds a new, empty one. pg-schema-diff says so in its README; check any generated migration for a <code>DROP COLUMN</code> next to an <code>ADD COLUMN</code> of the same type.</li>
+      <li><strong>Changes that fail on rows.</strong> A new <code>NOT NULL</code>, a unique index, a narrower type or a check constraint is a one-line diff and an error on the first row that breaks it. romulus marks those statements, and can run the migration on generated rows (<a href="/guides/test-prisma-migrations">how, with Prisma</a>).</li>
+      <li><strong>What your tool leaves out.</strong> Views, functions, triggers, policies and extensions are not compared by every tool (or edition). A diff that shows nothing has only compared what it reads.</li>
+      <li><strong>The Postgres major.</strong> The same SQL can mean different things on 15 and 18; pgAdmin requires both servers on the same major. romulus compiles each database on the major it targets.</li>
+    </ul>
+
+    <h2 id="sources">Sources</h2>
+    <p>Each tool's own documentation or repository, read on October 24, 2026.</p>
+    <ol class="sources">
+      <li><a href="https://www.postgresql.org/docs/current/app-pgdump.html">pg_dump</a> (PostgreSQL 18): <code>--no-owner</code>, <code>--no-privileges</code>, <code>--restrict-key</code>; <a href="https://github.com/postgres/postgres/blob/master/src/bin/pg_dump/pg_dump_sort.c">pg_dump_sort.c</a> on the order of objects.</li>
+      <li><a href="https://www.pgadmin.org/docs/pgadmin4/latest/schema_diff.html">pgAdmin 4 Schema Diff</a>: two databases or schemas, the same major.</li>
+      <li><a href="https://github.com/djrobstep/migra">migra</a>: deprecated, final release September 18, 2022.</li>
+      <li><a href="https://github.com/eulerto/pgquarrel">pgquarrel</a> and <a href="https://github.com/fordfrog/apgdiff">apgdiff</a>.</li>
+      <li><a href="https://github.com/stripe/pg-schema-diff">stripe/pg-schema-diff</a>: plans validated on a temporary database, hazards, renames as drop and add.</li>
+      <li><a href="https://atlasgo.io/declarative/diff">Atlas schema diff</a> and <a href="https://atlasgo.io/community-edition">its Community Edition</a>.</li>
+      <li><a href="https://supabase.com/docs/reference/cli/supabase-db-diff">supabase db diff</a>: the shadow database, pg-delta and migra.</li>
+    </ol>
+
+    <section class="cta-panel" aria-labelledby="cta-title">
+      <h2 id="cta-title">Diff your own schema</h2>
+      <p>Upload two versions of your schema as SQL, or import your migrations, and compare any two as a list, on the graph and as SQL. Free for one person; flat plans for teams; or the whole product on your own servers.</p>
+      <div class="cta-row">
+        <a class="button primary large" href="/app/signin">Start free</a>
+        <a class="button secondary large" href="https://github.com/lupidae/romulus/tree/main/docs/self-host"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg>Self-host it</a>
+      </div>
+    </section>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a class="wordmark" href="/" aria-label="romulus, home">
+        <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+        <span>romulus</span>
+      </a>
+      <p>Made by <a href="https://github.com/lupidae">lupidae</a>, with its twin, <a href="https://remus.lupidae.com">remus</a>.</p>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="https://github.com/lupidae/romulus">GitHub</a>
+      <a href="https://github.com/lupidae/romulus/tree/main/docs/self-host">Self-host docs</a>
+      <a href="https://github.com/lupidae/romulus/blob/main/SECURITY.md">Security policy</a>
+      <a href="mailto:romulus@lupidae.com">Contact</a>
+      <a href="/app/signin">Sign in</a>
+    </nav>
+    <fieldset class="theme-switch" data-theme-switch>
+      <legend class="sr-only">Theme</legend>
+      <label title="System"><input type="radio" name="theme" value="system" checked><svg class="icon" aria-hidden="true"><use href="#i-computer"/></svg><span class="sr-only">System</span></label>
+      <label title="Light"><input type="radio" name="theme" value="light"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></label>
+      <label title="Dark"><input type="radio" name="theme" value="dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></label>
+    </fieldset>
+  </div>
+  <div class="container">
+    <nav class="footer-more" aria-label="Comparisons and guides">
+      <a href="/compare/atlas">romulus vs Atlas</a>
+      <a href="/compare/bytebase">romulus vs Bytebase</a>
+      <a href="/guides/test-prisma-migrations">Test Prisma migrations</a>
+      <a href="/guides/postgres-schema-diff" aria-current="page">Postgres schema diff</a>
+    </nav>
+  </div>
+  <div class="container footer-base">
+    <p>romulus is open source, under the <a href="https://github.com/lupidae/romulus/blob/main/LICENSE">AGPL-3.0</a>.</p>
+    <nav class="footer-legal" aria-label="Legal">
+      <a href="/legal-notice">Legal notice</a>
+      <a href="/legal/terms">Terms</a>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/legal/dpa">DPA (for businesses)</a>
+    </nav>
+  </div>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

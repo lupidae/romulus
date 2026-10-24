@@ -24,5 +24,7 @@
   Cache-Control: public, max-age=2592000
 /*.png
   Cache-Control: public, max-age=2592000
+/img/*
+  Cache-Control: public, max-age=2592000
 /favicon.*
   Cache-Control: public, max-age=2592000

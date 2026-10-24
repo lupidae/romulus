@@ -537,6 +537,14 @@
         <li><strong>A new database from a dump</strong><span>Hand it a <code>pg_dump --schema-only</code> or remus's output: it creates the database with that first version, then hands you the CI step that keeps it current. Or point it at your migrations folder: it imports one version per migration.</span></li>
         <li><strong>It acts as you, with your role</strong><span>A read-only token can't change anything. Approvals, required tests and the rules for publishing apply to agents too.</span></li>
       </ul>
+      <div class="terminal dark agent-prompt">
+        <div class="terminal-bar">
+          <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-sparks"/></svg><span>Tell your agent</span></span>
+          <button class="copy-button" type="button" data-copy="#agent-prompt" aria-label="Copy the sentence for your agent"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span data-copy-label>Copy</span></button>
+        </div>
+        <p class="agent-prompt-body" id="agent-prompt">Add the romulus MCP server at https://romulus.lupidae.com/api/mcp (HTTP transport; I'll sign in through my browser), then help me import my schema.</p>
+        <p class="install-note">Any MCP client: it finds how to sign in from the URL. Every client’s setup, and access tokens for CI: <a href="https://github.com/lupidae/romulus/blob/main/docs/mcp.md">docs/mcp.md</a>.</p>
+      </div>
     </div>
 
     <div class="visual agent-stack">
@@ -1075,6 +1083,14 @@
       <label title="Light"><input type="radio" name="theme" value="light"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></label>
       <label title="Dark"><input type="radio" name="theme" value="dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></label>
     </fieldset>
+  </div>
+  <div class="container">
+    <nav class="footer-more" aria-label="Comparisons and guides">
+      <a href="/compare/atlas">romulus vs Atlas</a>
+      <a href="/compare/bytebase">romulus vs Bytebase</a>
+      <a href="/guides/test-prisma-migrations">Test Prisma migrations</a>
+      <a href="/guides/postgres-schema-diff">Postgres schema diff</a>
+    </nav>
   </div>
   <div class="container footer-base">
     <p>romulus is open source, under the <a href="https://github.com/lupidae/romulus/blob/main/LICENSE">AGPL-3.0</a>.</p>

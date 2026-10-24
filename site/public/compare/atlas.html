@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>romulus vs Atlas: Postgres schema review or schema as code</title>
+<meta name="description" content="Atlas applies schema-as-code across engines from CI; romulus is where a Postgres team versions, diffs, reviews and tests schema changes. An honest table, dated.">
+<link rel="canonical" href="https://romulus.lupidae.com/compare/atlas">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+<script>
+  // Before first paint: the theme the visitor chose here or in the app (same
+  // key; without one, tokens.css follows the system), and a flag for the CSS
+  // that waits on app.js.
+  (function (root) {
+    root.classList.add("js");
+    try {
+      var t = localStorage.getItem("romulus-theme");
+      if (t === "light" || t === "dark") root.classList.add(t);
+    } catch (e) {}
+  })(document.documentElement);
+</script>
+<link rel="preload" href="/fonts/inter-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="romulus">
+<meta property="og:url" content="https://romulus.lupidae.com/compare/atlas">
+<meta property="og:title" content="romulus vs Atlas: Postgres schema review or schema as code">
+<meta property="og:description" content="Atlas applies schema-as-code across engines from CI; romulus is where a Postgres team versions, diffs, reviews and tests schema changes. An honest table, dated.">
+<meta property="og:image" content="https://romulus.lupidae.com/og/compare-atlas.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="romulus vs Atlas, with the migration romulus wrote for a change, each risky statement marked.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="romulus vs Atlas: Postgres schema review or schema as code">
+<meta name="twitter:description" content="Atlas applies schema-as-code across engines from CI; romulus is where a Postgres team versions, diffs, reviews and tests schema changes. An honest table, dated.">
+<meta name="twitter:image" content="https://romulus.lupidae.com/og/compare-atlas.png">
+<meta name="twitter:image:alt" content="romulus vs Atlas, with the migration romulus wrote for a change, each risky statement marked.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "romulus vs Atlas",
+  "description": "Atlas applies schema-as-code across engines from CI; romulus is where a Postgres team versions, diffs, reviews and tests schema changes. An honest table, dated.",
+  "url": "https://romulus.lupidae.com/compare/atlas",
+  "image": "https://romulus.lupidae.com/og/compare-atlas.png",
+  "datePublished": "2026-10-24",
+  "dateModified": "2026-10-24",
+  "author": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  }
+}
+</script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <!-- Iconoir, the app's icon set (web/src/components/icons). -->
+  <symbol id="i-mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" class="mark-bg"/><path d="M11.5 23V13.75A4.75 4.75 0 0 1 16.25 9H17" fill="none" stroke-width="2.75" stroke-linecap="round" class="mark-fg-stroke"/><circle cx="21.5" cy="9" r="2.4" class="mark-fg"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M16 22.027v-2.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7a5.44 5.44 0 0 0-1.5-3.75a5.07 5.07 0 0 0-.09-3.77s-1.18-.35-3.91 1.48a13.4 13.4 0 0 0-7 0c-2.73-1.83-3.91-1.48-3.91-1.48A5.07 5.07 0 0 0 5 5.797a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7a3.37 3.37 0 0 0-.94 2.58v2.87"/><path d="M9 20.027c-3 .973-5.5 0-7-3"/></g></symbol>
+  <symbol id="i-computer" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 21h15m4 0h1"/><path d="M2 16.4V3.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v12.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18a6 6 0 1 0 0-12a6 6 0 0 0 0 12m10-6h1M12 2V1m0 22v-1m8-2l-1-1m1-15l-1 1M4 20l1-1M4 4l1 1m-4 7h1"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 11.507a9.493 9.493 0 0 0 18 4.219c-8.507 0-12.726-4.22-12.726-12.726A9.49 9.49 0 0 0 3 11.507"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"><path d="M4 19V5a2 2 0 0 1 2-2h13.4a.6.6 0 0 1 .6.6v13.114M6 17h14M6 21h14"/><path stroke-linejoin="round" d="M6 21a2 2 0 1 1 0-4"/><path d="M9 7h6"/></g></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18.01l.01-.011M6 6.01l.01-.011"/><path d="M2 9.4V2.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Zm0 12v-6.8a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M19.4 20H9.6a.6.6 0 0 1-.6-.6V9.6a.6.6 0 0 1 .6-.6h9.8a.6.6 0 0 1 .6.6v9.8a.6.6 0 0 1-.6.6"/><path d="M15 9V4.6a.6.6 0 0 0-.6-.6H4.6a.6.6 0 0 0-.6.6v9.8a.6.6 0 0 0 .6.6H9"/></g></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 17h7M5 7l5 5l-5 5"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" data-header>
+  <div class="container header-inner">
+    <a class="wordmark" href="/" aria-label="romulus, home">
+      <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+      <span>romulus</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/#versions">Product</a>
+      <a href="/#ci">CI</a>
+      <a href="/#mcp">MCP</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/#self-host">Self-host</a>
+      <a href="/#faq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <a class="button ghost header-github" href="https://github.com/lupidae/romulus" aria-label="romulus on GitHub"><svg class="icon" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+      <a class="button ghost" href="/app/signin">Sign in</a>
+      <a class="button secondary header-cta" href="/app/signin">Start free</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="container article">
+  <article class="article-inner">
+    <p class="kicker">Comparison</p>
+    <h1>romulus vs Atlas</h1>
+    <p class="answer">Atlas is a schema-as-code command line: you describe the schema in HCL, SQL or your ORM, and it plans, lints and applies migrations to your databases, on many engines. romulus is where a Postgres team keeps, compares, designs and reviews its schema together, and tests each migration on rows before it merges; it hands you the files and never connects to your database. Pick Atlas to automate migrations across engines and environments, romulus to review schema changes as a team.</p>
+    <p class="article-meta"><span>Compared on <time datetime="2026-10-24">October 24, 2026</time>, from Atlas's own pages</span><a href="#sources">Sources</a></p>
+
+    <h2 id="short">In short</h2>
+    <ul>
+      <li><strong>Atlas automates; romulus is a workspace.</strong> Atlas lives in your terminal and your pipelines and applies changes itself. romulus is a web app (hosted or on your servers) with an MCP server and a small CLI for CI; it writes migration files and leaves deploying to you.</li>
+      <li><strong>Atlas covers more ground.</strong> More engines, ORMs as schema sources, a Terraform provider, a Kubernetes operator, drift detection and over 50 lint analyzers.</li>
+      <li><strong>romulus is built around people reviewing a change.</strong> Live drafts in SQL and on a table graph, threads on the column in question, approvals, and every migration run up and down on generated rows, without writing a test.</li>
+    </ul>
+
+    <h2 id="table">Side by side</h2>
+    <div class="table-frame" role="region" aria-labelledby="table" tabindex="0">
+      <table>
+        <thead>
+          <tr><th scope="col">What</th><th scope="col">romulus</th><th scope="col">Atlas</th><th scope="col">Stronger</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Databases</th><td>Postgres only, majors 15, 16, 17 and 18.</td><td>PostgreSQL, MySQL, MariaDB, SQLite, TiDB and LibSQL in the open drivers; SQL Server, ClickHouse, Oracle, Snowflake, CockroachDB and more with Pro.</td><td><span class="edge them">Atlas</span></td></tr>
+          <tr><th scope="row">Where the schema comes from</th><td>SQL (an upload or a <code>pg_dump --schema-only</code>), your migration files (sqlx, Flyway, Prisma, dbmate, golang-migrate, node-pg-migrate, and Rails, Django or Alembic through their SQL), or a push from CI.</td><td>HCL, SQL, a database URL, a migration directory, or an ORM's models (Prisma, Django, SQLAlchemy, GORM, Hibernate and others).</td><td><span class="edge them">Atlas</span></td></tr>
+          <tr><th scope="row">Applying changes</th><td>Does not apply anything: writes the migration for plain SQL, sqlx, Flyway, Prisma, dbmate or golang-migrate.</td><td>Applies them: <code>schema apply</code> (declarative) and <code>migrate apply</code> (versioned), a Terraform provider, a Kubernetes operator.</td><td><span class="edge them">Atlas</span></td></tr>
+          <tr><th scope="row">Postgres objects</th><td>Tables, enums, domains, partitions, row-level security policies, identity and generated columns, constraints, partial and expression indexes, views, comments. Functions and triggers are not modelled.</td><td>Tables, indexes, constraints, foreign keys, enums and comments in the open build; partitions, views, functions, sequences, extensions, policies and triggers with Pro.</td><td><span class="edge them">Atlas (Pro)</span></td></tr>
+          <tr><th scope="row">Designing a change</th><td>A draft the team edits at once, in SQL and on the table graph, compiled in a real Postgres of your major on each change.</td><td>You edit the schema files in your editor; an ERD of a schema or a diff is drawn in Atlas Cloud (<code>-w</code>, Pro).</td><td><span class="edge us">romulus</span></td></tr>
+          <tr><th scope="row">Review</th><td>Threads on a table, a column, a statement or a spot on the graph; required approvals; the discussion kept with the version.</td><td>In your pull requests: Atlas posts its lint report, or the plan, as a comment, and an approval step can pause a deploy. A reviewer role in Atlas Cloud.</td><td><span class="edge">Different</span></td></tr>
+          <tr><th scope="row">Checks on a migration</th><td>Each statement marked when it deletes data, can fail on existing rows, or widens access through row-level security; locks and rewrites measured when it is tested.</td><td>Over 50 analyzers: destructive, backward-incompatible and data-dependent changes in the open build; missing <code>CONCURRENTLY</code>, table locks and rewrites with Pro.</td><td><span class="edge them">Atlas</span></td></tr>
+          <tr><th scope="row">Testing on data</th><td>Every migration can run up and down on a Postgres 17 playground of generated rows, nothing to write: rows counted and compared, statements timed. <code>romulus test</code> in CI.</td><td><code>migrate test</code> and <code>schema test</code> (Pro): tests you write in HCL and SQL, on seed data you provide.</td><td><span class="edge">Different</span></td></tr>
+          <tr><th scope="row">Drift</th><td>No drift alerts. A CI push with remus records the real schema as a version, so the diff shows what changed.</td><td>Drift detection and schema monitoring (paid), from an agent in your network or a GitHub Action.</td><td><span class="edge them">Atlas</span></td></tr>
+          <tr><th scope="row">History and diffs</th><td>Every version kept, never edited; any two compared as a list, on the graph and in SQL; a time machine over the whole history.</td><td><code>schema diff</code> between any two states (databases, files, migration directories); history and a registry in Atlas Cloud (90 days on Pro).</td><td><span class="edge">Even</span></td></tr>
+          <tr><th scope="row">AI agents</th><td>An MCP server at <code>/api/mcp</code>: the agent reads schemas, drafts, tests and asks for review under your roles.</td><td>Agent skills for Claude Code, Codex, Cursor and Copilot that drive the CLI. No MCP server in its docs.</td><td><span class="edge">Different</span></td></tr>
+          <tr><th scope="row">License</th><td>AGPL-3.0, the whole product.</td><td>Apache-2.0 for the Community Edition, a minimal build; the standard binary, with the Pro features, is under Ariga's MSA.</td><td><span class="edge">Different</span></td></tr>
+          <tr><th scope="row">Self-hosting the UI</th><td>Free, the whole product, one organization per install.</td><td>Atlas Cloud is a hosted product; Enterprise lists an air-gapped deployment.</td><td><span class="edge us">romulus</span></td></tr>
+          <tr><th scope="row">Price</th><td>Free for one person; then €19, €49 or €149 a month per organization, members unlimited.</td><td>Starter free; Pro $9 per user a month, plus $59 a month per CI/CD project (2 target databases, $39 per extra one) and $39 a month per monitored database; Enterprise custom.</td><td><span class="edge">Depends on use</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="atlas-better">Where Atlas is the better choice</h2>
+    <ul>
+      <li>Your schemas span several engines, or live in an ORM you want to stay the source of truth.</li>
+      <li>You want the tool to apply changes itself, from Terraform, a Kubernetes operator or a pipeline, declaratively or from versioned migrations.</li>
+      <li>You want a broad lint suite, drift detection on production, and tests you write for functions, triggers and data migrations.</li>
+      <li>Your team works in files and pull requests and wants nothing else to open.</li>
+    </ul>
+
+    <h2 id="romulus-better">Where romulus is the better choice</h2>
+    <ul>
+      <li>You are on Postgres and want the schema as something the whole team reads, comments and designs together, not only files in a repository.</li>
+      <li>You want each migration tried on rows before merge without writing tests: a <code>NOT NULL</code> on a column with nulls fails there, not in production (<a href="/guides/test-prisma-migrations">an example with Prisma</a>).</li>
+      <li>You don't want a tool holding credentials to your databases. romulus reads SQL text, never a connection.</li>
+      <li>You want the whole product open source, self-hosted for free, or a flat price whatever the team's size.</li>
+    </ul>
+
+    <h2 id="seen">A migration in romulus</h2>
+    <p>The migration romulus wrote for a change, captured from a local install: each statement marked with what it can do to existing rows, ready to download for your tool.</p>
+    <figure class="shot" data-og-shift="400">
+      <img src="/img/romulus-migration.webp" width="1600" height="1325" loading="lazy" alt="romulus's Migration view between two versions of a billing schema: the tool picker set to Plain SQL, 9 statements of which 2 destructive, a detected rename of customers.name to full_name switched on, two warnings, then the SQL file with a text-to-enum conversion tinted as CAN FAIL and the removal of the notes table marked DESTRUCTIVE.">
+      <figcaption>A sample billing schema, v1 to v2, in a local install of romulus on October 24, 2026. The rename is detected, not guessed from a drop and an add; each statement says what it can do to existing rows.</figcaption>
+    </figure>
+
+    <h2 id="together">Using both</h2>
+    <p>Atlas reads a migration directory as a state, and romulus writes migrations as plain SQL files. A team can design and review a change in romulus, commit its migration, and keep Atlas for linting and applying it.</p>
+
+    <h2 id="sources">Sources</h2>
+    <p>Atlas's own pages, read on October 24, 2026. Atlas's plans and features change: check them for what is current.</p>
+    <ol class="sources">
+      <li><a href="https://atlasgo.io/pricing">atlasgo.io/pricing</a>: plans, seats, CI/CD projects, monitoring, what each plan includes.</li>
+      <li><a href="https://atlasgo.io/features">Features</a>: drivers, Postgres objects and analyzers in the open build and in Pro.</li>
+      <li><a href="https://atlasgo.io/community-edition">Community Edition</a> and <a href="https://github.com/ariga/atlas/blob/master/LICENSE">LICENSE</a>: Apache-2.0, the MSA, the trial.</li>
+      <li><a href="https://atlasgo.io/docs">Docs</a>, <a href="https://atlasgo.io/declarative/apply">schema apply</a>, <a href="https://atlasgo.io/versioned/diff">migrate diff</a>, <a href="https://atlasgo.io/declarative/diff">schema diff</a>, <a href="https://atlasgo.io/concepts/dev-database">dev database</a>.</li>
+      <li><a href="https://atlasgo.io/lint/analyzers">Lint analyzers</a>, <a href="https://atlasgo.io/testing/migrate">migrate test</a>, <a href="https://atlasgo.io/testing/schema">schema test</a>.</li>
+      <li><a href="https://atlasgo.io/integrations/kubernetes">Kubernetes operator</a>, <a href="https://atlasgo.io/integrations/terraform-provider">Terraform provider</a>, <a href="https://atlasgo.io/integrations/github-actions/pre-approval">pre-approval</a> and <a href="https://atlasgo.io/integrations/github-actions/ad-hoc-approval">ad-hoc approval</a>, <a href="https://atlasgo.io/guides/reviewed-approved-migrations">reviewed and approved migrations</a>.</li>
+      <li><a href="https://atlasgo.io/monitoring/drift-detection">Drift detection</a> and <a href="https://atlasgo.io/guides/ai-tools">AI tools</a>.</li>
+      <li>romulus: <a href="/#pricing">pricing</a>, <a href="https://github.com/lupidae/romulus">the repository</a> and <a href="https://github.com/lupidae/romulus/tree/main/docs">its docs</a>.</li>
+    </ol>
+
+    <section class="cta-panel" aria-labelledby="cta-title">
+      <h2 id="cta-title">Try romulus on your schema</h2>
+      <p>Upload a <code>pg_dump --schema-only</code> or import your migrations folder, and your team can open the first draft on it. Free for one person; flat plans for teams; or the whole product on your own servers.</p>
+      <div class="cta-row">
+        <a class="button primary large" href="/app/signin">Start free</a>
+        <a class="button secondary large" href="https://github.com/lupidae/romulus/tree/main/docs/self-host"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg>Self-host it</a>
+      </div>
+    </section>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a class="wordmark" href="/" aria-label="romulus, home">
+        <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+        <span>romulus</span>
+      </a>
+      <p>Made by <a href="https://github.com/lupidae">lupidae</a>, with its twin, <a href="https://remus.lupidae.com">remus</a>.</p>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="https://github.com/lupidae/romulus">GitHub</a>
+      <a href="https://github.com/lupidae/romulus/tree/main/docs/self-host">Self-host docs</a>
+      <a href="https://github.com/lupidae/romulus/blob/main/SECURITY.md">Security policy</a>
+      <a href="mailto:romulus@lupidae.com">Contact</a>
+      <a href="/app/signin">Sign in</a>
+    </nav>
+    <fieldset class="theme-switch" data-theme-switch>
+      <legend class="sr-only">Theme</legend>
+      <label title="System"><input type="radio" name="theme" value="system" checked><svg class="icon" aria-hidden="true"><use href="#i-computer"/></svg><span class="sr-only">System</span></label>
+      <label title="Light"><input type="radio" name="theme" value="light"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></label>
+      <label title="Dark"><input type="radio" name="theme" value="dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></label>
+    </fieldset>
+  </div>
+  <div class="container">
+    <nav class="footer-more" aria-label="Comparisons and guides">
+      <a href="/compare/atlas" aria-current="page">romulus vs Atlas</a>
+      <a href="/compare/bytebase">romulus vs Bytebase</a>
+      <a href="/guides/test-prisma-migrations">Test Prisma migrations</a>
+      <a href="/guides/postgres-schema-diff">Postgres schema diff</a>
+    </nav>
+  </div>
+  <div class="container footer-base">
+    <p>romulus is open source, under the <a href="https://github.com/lupidae/romulus/blob/main/LICENSE">AGPL-3.0</a>.</p>
+    <nav class="footer-legal" aria-label="Legal">
+      <a href="/legal-notice">Legal notice</a>
+      <a href="/legal/terms">Terms</a>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/legal/dpa">DPA (for businesses)</a>
+    </nav>
+  </div>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

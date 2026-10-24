@@ -3305,6 +3305,331 @@ code {
   }
 }
 
+/* ---- Tell your agent: a sentence to paste into any agent (#mcp) ---------- */
+.copy > .agent-prompt {
+  max-width: 34rem;
+  margin-top: 2rem;
+}
+.agent-prompt-body {
+  padding: 1rem 1.25rem 0.875rem;
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.agent-prompt-body code {
+  font-size: 0.875em;
+}
+
+/* ---- A welcome under the header (?ref=hn, ?ref=producthunt; app.js) ------ */
+.welcome-line {
+  border-bottom: 0.0625rem solid var(--border);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+}
+.welcome-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.5rem;
+}
+.welcome-inner p {
+  flex: 1;
+  padding-block: 0.375rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+.welcome-close {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.welcome-close:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.welcome-close .icon {
+  width: 1rem;
+  height: 1rem;
+}
+@media (pointer: coarse) {
+  .welcome-close::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 2.75rem;
+    height: 2.75rem;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* ---- Footer: comparisons and guides ------------------------------------ */
+.footer-more {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 1.25rem;
+  margin-top: 1.25rem;
+  font-size: 0.8125rem;
+}
+.footer-more a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+.footer-more a:hover,
+.footer-more a[aria-current="page"] {
+  color: var(--foreground);
+}
+@media (pointer: coarse) {
+  .footer-more a {
+    min-height: 2.75rem;
+  }
+}
+
+/* ---- Comparisons and guides (compare/*.html, guides/*.html) ------------- */
+/* A page of prose at a reading measure, its tables and pictures wider. */
+.article {
+  padding-block: clamp(2.5rem, 1.5rem + 4vw, 5rem) calc(var(--section-space) / 2);
+}
+.article-inner {
+  max-width: 62rem;
+}
+.article-inner > :not(.table-frame, .shot, .terminal) {
+  max-width: 46rem;
+}
+.article .kicker {
+  color: var(--primary);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.article h1 {
+  margin-top: 0.75rem;
+  font-size: var(--text-h2);
+  font-weight: 640;
+  line-height: 1.1;
+  letter-spacing: -0.032em;
+}
+.article .answer {
+  margin-top: 1.25rem;
+  color: var(--foreground);
+  font-size: var(--text-lead);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin-top: 1.25rem;
+  color: var(--faint-foreground);
+  font-size: var(--text-small);
+}
+.article-meta a {
+  color: var(--muted-foreground);
+}
+.article h2 {
+  margin-top: clamp(2.5rem, 2rem + 2vw, 3.5rem);
+  font-size: 1.375rem;
+  font-weight: 620;
+  line-height: 1.25;
+  letter-spacing: -0.022em;
+}
+.article h3 {
+  margin-top: 1.75rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.article-inner > p,
+.article-inner > ul,
+.article-inner > ol {
+  margin-top: 0.875rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.65;
+  text-wrap: pretty;
+  overflow-wrap: break-word;
+}
+.article-inner > ul,
+.article-inner > ol {
+  display: grid;
+  gap: 0.5rem;
+  padding-left: 1.25rem;
+}
+.article-inner > :is(p, ul, ol) strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.article :is(li, td, th) a,
+.article .article-meta a {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 0.0625rem;
+  text-underline-offset: 0.2em;
+}
+.article :is(li, td, th) a:hover,
+.article .article-meta a:hover {
+  text-decoration-color: currentColor;
+}
+.article-inner > :is(p, ul, ol) code,
+.article td code {
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+.article-inner > .terminal,
+.article-inner > .shot,
+.article-inner > .table-frame,
+.article-inner > .cta-panel {
+  margin-top: 1.5rem;
+}
+.article .terminal-body {
+  overflow-x: auto;
+}
+/* Program output as printed: kept on its lines, scrolling sideways in its
+   own box on a phone rather than wrapping into something it never printed. */
+.terminal-body.output {
+  white-space: pre;
+  font-size: clamp(0.6875rem, 0.62rem + 0.25vw, 0.78125rem);
+  line-height: 1.65;
+}
+.t-pass {
+  color: var(--success);
+  font-weight: 600;
+}
+.t-fail {
+  color: var(--destructive);
+  font-weight: 600;
+}
+.t-dim {
+  color: var(--faint-foreground);
+}
+
+/* A screenshot of romulus, framed like a window. */
+.shot {
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--elevation-3);
+}
+.shot img {
+  width: 100%;
+  height: auto;
+  border-bottom: 0.0625rem solid var(--border);
+}
+.shot figcaption {
+  padding: 0.75rem 1rem;
+  color: var(--muted-foreground);
+  font-size: var(--text-small);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/* The comparison: scrolls inside its frame when the screen is narrower. */
+.table-frame {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.table-frame table {
+  width: 100%;
+  min-width: 38rem;
+  border-collapse: collapse;
+  font-size: var(--text-small);
+  line-height: 1.55;
+}
+.table-frame caption {
+  padding: 0.75rem 0.875rem 0;
+  color: var(--muted-foreground);
+  text-align: left;
+}
+.table-frame :is(th, td) {
+  padding: 0.625rem 0.875rem;
+  border-top: 0.0625rem solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.table-frame caption + thead :is(th, td) {
+  border-top: 0;
+}
+.table-frame thead th {
+  background: var(--muted);
+  color: var(--foreground);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.table-frame tbody th {
+  min-width: 9rem;
+  color: var(--foreground);
+  font-weight: 550;
+}
+.table-frame td {
+  color: var(--muted-foreground);
+}
+/* Who does it better, as a word (never only a color). */
+.edge {
+  display: inline-block;
+  padding: 0 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.edge.them {
+  background: color-mix(in oklab, var(--info) 14%, transparent);
+  color: color-mix(in oklab, var(--info) 62%, var(--foreground));
+}
+.edge.us {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+  color: color-mix(in oklab, var(--primary) 62%, var(--foreground));
+}
+
+/* Sign up or self-host: the page's one call to action. */
+.cta-panel {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+}
+.article .cta-panel h2 {
+  margin-top: 0;
+  font-size: 1.25rem;
+}
+.cta-panel p {
+  color: var(--muted-foreground);
+  font-size: var(--text-body);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.cta-panel .cta-row {
+  margin-top: 0.75rem;
+}
+
+.sources {
+  font-size: var(--text-small) !important;
+}
+
 /* ---- 404 ---------------------------------------------------------------- */
 .not-found {
   display: grid;
