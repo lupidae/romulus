@@ -27,7 +27,8 @@ public/            what Cloudflare Pages serves
   og/              their share images, rendered by tools/assets.mjs --pages
   styles.css       layout and the marketing type scale (colors only from tokens)
   tokens.css       generated from web/src/styles/globals.css: do not edit
-  app.js           header hairline, the launch welcome, hero playback, loading the live hero, copy buttons, theme switch
+  app.js           header hairline, the launch welcome, hero playback, loading the live hero, copy buttons
+                   (announced in a status region), theme switch
   hero/            the live hero, built by tools/hero.mjs: do not edit
   _headers         CSP (with the inline theme script's hash), HSTS, caching
   404.html, robots.txt, sitemap.xml, site.webmanifest, og.png, icons

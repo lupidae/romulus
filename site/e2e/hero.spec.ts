@@ -212,7 +212,7 @@ test("when the island cannot load, the picture stays", async ({ page }) => {
   await page.reload();
   await page.getByRole("button", { name: "Try it live" }).click();
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
-  await expect(page.getByRole("status")).toHaveText("The live editor did not load.");
+  await expect(page.getByRole("status").and(page.locator("[data-hero-status]"))).toHaveText("The live editor did not load.");
   await expect(page.getByRole("img", { name: /romulus draft of a billing schema/ })).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -333,13 +333,13 @@ test("an engine that cannot start again takes the island down, and the picture c
   await page.keyboard.type("  plan       text,\n");
   await expect(page.locator(".hero-stage.is-live")).not.toBeAttached();
   await expect(page.getByRole("img", { name: /romulus draft of a billing schema/ })).toBeVisible();
-  await expect(page.getByRole("status")).toHaveText(/ran into a problem and stopped/);
+  await expect(page.getByRole("status").and(page.locator("[data-hero-status]"))).toHaveText(/ran into a problem and stopped/);
   // What it kept is forgotten: trying again starts from the seed.
   expect(await page.evaluate(() => localStorage.getItem("romulus:hero:1"))).toBeNull();
   await setFlags(page, { traps: 0, resetFails: false });
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.locator(".hero-stage.is-live")).toBeAttached(LOADED);
-  await expect(page.getByRole("status")).toHaveText("");
+  await expect(page.getByRole("status").and(page.locator("[data-hero-status]"))).toHaveText("");
   const again = page.locator("[data-hero-live]");
   await expect(again.getByTestId("compile-status")).toHaveText("Checked");
   await expect(node(again, "customers")).not.toContainText("phone");

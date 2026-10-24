@@ -174,6 +174,18 @@ if (stage) {
 // Copy buttons: the text of the element named by data-copy, line by line as
 // rendered (innerText: each block is a line, a wrap on a phone is not).
 const isMac = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? "");
+// What a copy did, for screen readers: the button's own label changes too, but
+// a label change is not announced. One region, there before it is written to.
+const copyStatus = document.createElement("p");
+copyStatus.className = "sr-only";
+copyStatus.setAttribute("role", "status");
+document.body.append(copyStatus);
+let statusReset;
+const announce = (text) => {
+  clearTimeout(statusReset);
+  copyStatus.textContent = text;
+  statusReset = setTimeout(() => (copyStatus.textContent = ""), 4000);
+};
 for (const button of document.querySelectorAll("[data-copy]")) {
   const label = button.querySelector("[data-copy-label]");
   let reset;
@@ -184,9 +196,11 @@ for (const button of document.querySelectorAll("[data-copy]")) {
       await navigator.clipboard.writeText(source.innerText.trim() + "\n");
       button.setAttribute("data-copied", "");
       if (label) label.textContent = "Copied";
+      announce("Copied to the clipboard.");
     } catch {
       // No clipboard access: select the text and say how to copy it here.
       if (label) label.textContent = isMac ? "Press ⌘C" : "Press Ctrl+C";
+      announce(`The text is selected: press ${isMac ? "Command C" : "Control C"} to copy it.`);
       const range = document.createRange();
       range.selectNodeContents(source);
       getSelection()?.removeAllRanges();

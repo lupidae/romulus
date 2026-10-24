@@ -108,14 +108,14 @@
   <article class="article-inner">
     <p class="kicker">Comparison</p>
     <h1>romulus vs Bytebase</h1>
-    <p class="answer">Pick Bytebase if you want one tool that connects to your databases, on any of 25 engines, and takes every change through review, environments and rollout, with a SQL editor and data masking. Pick romulus if your team is on Postgres and wants to design and review the schema itself: every version kept, any two compared, the next one drafted together in SQL and on the table graph, its migration tested on generated rows. romulus never connects to your database.</p>
+    <p class="answer">Pick Bytebase if you want one tool that connects to your databases, on any of 25 engines, and takes every change through review, environments and rollout, with a SQL editor and data masking. Pick romulus if your team is on Postgres and wants to design and review the schema itself: every version kept, any two compared, the next one drafted together in SQL and on the table graph, its migration tested on generated rows (Postgres 17 databases for now). romulus never connects to your database.</p>
     <p class="article-meta"><span>Compared on <time datetime="2026-10-24">October 24, 2026</time>, against Bytebase 3.24.0</span><a href="#sources">Sources</a></p>
 
     <h2 id="short">In short</h2>
     <ul>
       <li><strong>Bytebase runs the change; romulus shapes it.</strong> Bytebase holds credentials for each database instance and executes the SQL you approved, environment by environment. romulus never sees a connection string: it writes the migration files for the tool you already deploy with.</li>
       <li><strong>Bytebase is broader.</strong> 25 engines, a web SQL editor, data masking, just-in-time access, a large set of lint rules. romulus does one engine, Postgres 15 to 18.</li>
-      <li><strong>romulus goes deeper into the schema.</strong> Live co-editing in SQL and on a graph, a compile in a real Postgres of your major on every change, diffs of any two versions, and migrations run up and down on generated rows before anyone merges them.</li>
+      <li><strong>romulus goes deeper into the schema.</strong> Live co-editing in SQL and on a graph, a compile in a real Postgres of your major on every change, diffs of any two versions, and migrations run up and down on generated rows before anyone merges them (on Postgres 17 databases for now).</li>
     </ul>
 
     <h2 id="table">Side by side</h2>
@@ -131,10 +131,10 @@
           <tr><th scope="row">Writing the change</th><td>A draft the whole team edits at once, in SQL and on the table graph, compiled in a real Postgres on each change. Rename, add or drop on the graph and romulus writes the SQL.</td><td>SQL written in a plan. A Schema Editor (a tree and a grid of columns, for MySQL, TiDB and PostgreSQL) generates DDL.</td><td><span class="edge us">romulus</span></td></tr>
           <tr><th scope="row">Review</th><td>Threads on a table, a column, a statement or a spot on the graph; mentions; required approvals (1 on Starter, up to 10 on Team).</td><td>Line comments on a plan's SQL, with replies and resolve (since 3.23.0). Approval workflows and risk assessment are on Enterprise.</td><td><span class="edge">Even</span></td></tr>
           <tr><th scope="row">Checks before deploy</th><td>Every generated statement is marked when it deletes data, can fail on existing rows, or widens access through row-level security. No configurable rule set.</td><td>SQL review with over 200 rules (its count across engines), with their severity configured in a policy attached to environments or projects.</td><td><span class="edge them">Bytebase</span></td></tr>
-          <tr><th scope="row">Testing on data</th><td>Runs a migration up and down on a Postgres 17 playground filled with generated rows: locks, rewrites, timing, rows counted and compared. <code>romulus test</code> does it from CI.</td><td>No equivalent in the pages we read: changes are tried on your own environments (test, then production).</td><td><span class="edge us">romulus</span></td></tr>
+          <tr><th scope="row">Testing on data</th><td>On a database targeting Postgres 17, runs a migration up and down on a playground filled with generated rows: locks, rewrites, timing, rows counted and compared; <code>romulus test</code> does it from CI. Playgrounds run 17 only for now: on 15, 16 or 18, migrations compile and diff but are not tested on rows.</td><td>No equivalent in the pages we read: changes are tried on your own environments (test, then production).</td><td><span class="edge us">romulus</span></td></tr>
           <tr><th scope="row">History and diffs</th><td>Every version kept and never edited; any two compared as a list, on the graph and in SQL; a time machine over the whole history.</td><td>A changelog per database; schema sync compares a source database with targets and generates the DDL; an ER diagram in the SQL editor.</td><td><span class="edge us">romulus</span></td></tr>
           <tr><th scope="row">SQL editor and data access</th><td>None on your databases: a read-only console on playgrounds only.</td><td>A web SQL editor on all plans; dynamic data masking, just-in-time access and data classification on Enterprise.</td><td><span class="edge them">Bytebase</span></td></tr>
-          <tr><th scope="row">AI agents</th><td>An MCP server at <code>/api/mcp</code>, signing in with OAuth or a token: an agent reads, drafts, tests and asks for review, under your roles and rules.</td><td>An MCP server on all plans, signing in with OAuth, read only or read and write (rollouts, DML and DDL); an AI assistant in the SQL editor.</td><td><span class="edge">Even</span></td></tr>
+          <tr><th scope="row">AI agents</th><td>An MCP server at <code>/api/mcp</code>, signing in with OAuth or a token: an agent reads, drafts, tests and asks for review, under your roles and rules.</td><td>An MCP server on all plans, signing in with OAuth, read only or read and write. Read and write runs rollouts, DML and DDL, and since 3.24.0 lets an agent approve or reject issues and access requests and request just-in-time access, within the user's own permissions and confirmed in the client. An AI assistant in the SQL editor.</td><td><span class="edge">Even</span></td></tr>
           <tr><th scope="row">License</th><td>AGPL-3.0, the whole product.</td><td>MIT, except directories named “enterprise” and the code that enables plans and features, under a proprietary license.</td><td><span class="edge">Different</span></td></tr>
           <tr><th scope="row">Self-hosting</th><td>Free, the whole product, one organization per install: an install script (Docker) or a Helm chart.</td><td>Docker or Helm. Free on Community (20 users, 10 instances); larger installs need an Enterprise license. Pro is cloud only.</td><td><span class="edge">Even</span></td></tr>
           <tr><th scope="row">Hosted price</th><td>Free for one person; then €19, €49 or €149 a month per organization, members unlimited.</td><td>Community free (20 users, 10 instances); Pro $20 per user a month; Enterprise on quote, yearly.</td><td><span class="edge">Depends on team size</span></td></tr>
@@ -155,7 +155,7 @@
     <ul>
       <li>You are on Postgres and the hard part is the design: deciding the next schema together, seeing it as a graph, arguing about a column in a thread on that column.</li>
       <li>You don't want a SaaS holding credentials to production. romulus reads SQL text, never your database.</li>
-      <li>You want proof before merge: the migration run up and down on rows, with locks and data loss reported, in the pull request (<a href="/guides/test-prisma-migrations">how it works with Prisma</a>).</li>
+      <li>You want proof before merge: the migration run up and down on rows, with locks and data loss reported, in the pull request (<a href="/guides/test-prisma-migrations">how it works with Prisma</a>). For now this needs a database targeting Postgres 17: other majors compile and diff, and their playgrounds are planned.</li>
       <li>You want the whole product open source and free to self-host, or a flat price whatever the team's size.</li>
     </ul>
 
@@ -180,6 +180,7 @@
       <li><a href="https://docs.bytebase.com/gitops/overview">GitOps overview</a>: migration-based and state-based workflows.</li>
       <li><a href="https://docs.bytebase.com/sql-review/review-policy">SQL Review policy</a>: rules and severities, attached to environments or projects.</li>
       <li><a href="https://docs.bytebase.com/integrations/mcp">MCP</a> and <a href="https://docs.bytebase.com/changelog/bytebase-3-23-0">3.23.0 release notes</a>: OAuth, the access policy, line comments on plan review.</li>
+      <li><a href="https://docs.bytebase.com/changelog/bytebase-3-24-0">3.24.0 release notes</a> (October 22, 2026): in read and write mode, agents approve or reject issues and access requests and request just-in-time access.</li>
       <li><a href="https://github.com/bytebase/bytebase/blob/main/LICENSE">LICENSE</a> and <a href="https://github.com/bytebase/bytebase/blob/main/LICENSE.enterprise">LICENSE.enterprise</a>.</li>
       <li>romulus: <a href="/#pricing">pricing</a>, <a href="https://github.com/lupidae/romulus">the repository</a> and <a href="https://github.com/lupidae/romulus/tree/main/docs">its docs</a>.</li>
     </ol>

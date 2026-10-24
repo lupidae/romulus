@@ -166,6 +166,29 @@ test("the comparisons are dated and say where the other tool is stronger", async
   }
 });
 
+test("without clipboard access, a copy selects the text and says how to copy it", async ({ page }) => {
+  await page.route("**/hero/**", (route) => route.abort());
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+    });
+  });
+  await page.goto("/#mcp");
+  await page.getByRole("button", { name: "Copy the sentence for your agent" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "selected" })).toHaveText(
+    /^The text is selected: press (Command|Control) C to copy it\.$/,
+  );
+  expect(await page.evaluate(() => getSelection()?.toString())).toBe(AGENT_SENTENCE);
+});
+
+test("wherever a page promises tests on rows, it says playgrounds run Postgres 17 only", async ({ page }) => {
+  for (const article of pages) {
+    await page.goto(article.path);
+    const text = await page.locator("main").innerText();
+    if (/generated rows/.test(text)) expect(text, article.path).toMatch(/Postgres 17 (databases )?for now|run (Postgres )?17 only|targeting Postgres 17/);
+  }
+});
+
 test("each page's inline theme script is the homepage's, allowed by the CSP", async ({ request }) => {
   const csp = (await request.get("/")).headers()["content-security-policy"];
   for (const article of pages) {
@@ -187,6 +210,8 @@ test("the sentence for an agent copies from the keyboard, with the MCP docs besi
   await expect(button).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(button).toContainText("Copied");
+  // Said to screen readers too: a status region, not only the label.
+  await expect(page.getByRole("status").filter({ hasText: "Copied" })).toHaveText("Copied to the clipboard.");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${AGENT_SENTENCE}\n`);
   await expect(button).toContainText("Copy", { timeout: 4000 });
   await page.keyboard.press("Space");

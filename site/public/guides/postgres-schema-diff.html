@@ -144,7 +144,7 @@
           <tr><th scope="row"><a href="https://github.com/fordfrog/apgdiff">apgdiff</a></th><td>Two dump files, parsed</td><td>DDL</td><td>Mainly unmaintained, its README says</td><td>MIT</td></tr>
           <tr><th scope="row"><a href="https://github.com/stripe/pg-schema-diff">pg-schema-diff</a></th><td>A database and a directory of SQL (checked on a temporary database)</td><td>A plan, its hazards flagged</td><td>Maintained (Postgres 14 to 17)</td><td>MIT</td></tr>
           <tr><th scope="row"><a href="https://atlasgo.io/declarative/diff">Atlas <code>schema diff</code></a></th><td>Any two of: a database, HCL or SQL files, a migration directory (files through a dev database)</td><td>SQL; views, functions, triggers and more with Atlas Pro</td><td>Maintained</td><td>Apache-2.0 community build</td></tr>
-          <tr><th scope="row"><a href="https://supabase.com/docs/reference/cli/supabase-db-diff"><code>supabase db diff</code></a></th><td>Your database and a shadow database built from your migrations</td><td>A migration file (<code>-f</code>)</td><td>Maintained; pg-delta by default for new projects, migra on older ones</td><td>MIT</td></tr>
+          <tr><th scope="row"><a href="https://supabase.com/docs/reference/cli/supabase-db-diff"><code>supabase db diff</code></a></th><td>Your database and a shadow database built from your migrations</td><td>A migration file (<code>-f</code>)</td><td>Maintained; pg-delta when enabled in <code>config.toml</code> (experimental), migra otherwise</td><td>MIT</td></tr>
           <tr><th scope="row"><a href="/">romulus</a></th><td>Any two versions of a database: SQL uploads, imported migrations, CI pushes, compiled in a sandboxed Postgres of your major</td><td>A list of changes, the graph, both SQLs side by side, and the migration (with renames detected) for six tools</td><td>Maintained</td><td>AGPL-3.0</td></tr>
         </tbody>
       </table>
@@ -166,7 +166,7 @@
     <h2 id="pitfalls">What to look for in a schema diff</h2>
     <ul>
       <li><strong>Renames that read as drop and add.</strong> A tool that compares by name drops the old column and adds a new, empty one. pg-schema-diff says so in its README; check any generated migration for a <code>DROP COLUMN</code> next to an <code>ADD COLUMN</code> of the same type.</li>
-      <li><strong>Changes that fail on rows.</strong> A new <code>NOT NULL</code>, a unique index, a narrower type or a check constraint is a one-line diff and an error on the first row that breaks it. romulus marks those statements, and can run the migration on generated rows (<a href="/guides/test-prisma-migrations">how, with Prisma</a>).</li>
+      <li><strong>Changes that fail on rows.</strong> A new <code>NOT NULL</code>, a unique index, a narrower type or a check constraint is a one-line diff and an error on the first row that breaks it. romulus marks those statements, and, for a database targeting Postgres 17, can run the migration on generated rows (<a href="/guides/test-prisma-migrations">how, with Prisma</a>).</li>
       <li><strong>What your tool leaves out.</strong> Views, functions, triggers, policies and extensions are not compared by every tool (or edition). A diff that shows nothing has only compared what it reads.</li>
       <li><strong>The Postgres major.</strong> The same SQL can mean different things on 15 and 18; pgAdmin requires both servers on the same major. romulus compiles each database on the major it targets.</li>
     </ul>

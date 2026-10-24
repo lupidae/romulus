@@ -132,7 +132,7 @@
 
     <h2 id="ci">A CI step that runs the new migrations on rows</h2>
     <p>You can build it yourself: a Postgres service in the CI job, a schema and rows that look like production (a sanitized dump, or a seed you maintain), <code>prisma migrate deploy</code>, then queries that check what you care about. It works; the cost is keeping the rows realistic as the schema grows.</p>
-    <p>Or use <code>romulus test</code>, the command line of romulus (open source, also a GitHub Action). Import your <code>prisma/migrations</code> folder into a romulus database once; then, on each pull request, it sends the folder, keeps only the migrations romulus has not imported, and runs them on a playground: a Postgres 17 holding your latest version and generated rows. It fails the job on a statement that fails, on a table rewrite or an index build that blocks writes, and on data that changes without a statement saying so.</p>
+    <p>Or use <code>romulus test</code>, the command line of romulus (open source, also a GitHub Action). Import your <code>prisma/migrations</code> folder into a romulus database once; then, on each pull request, it sends the folder, keeps only the migrations romulus has not imported, and runs them on a playground: a Postgres 17 holding your latest version and generated rows. Playgrounds run Postgres 17 only for now: for a database targeting 15, 16 or 18, romulus compiles and diffs the migrations but cannot test them on rows, and <code>romulus test</code> stops with <code>tests_unavailable</code> (exit 2). It fails the job on a statement that fails, on a table rewrite or an index build that blocks writes, and on data that changes without a statement saying so.</p>
     <div class="terminal dark">
       <div class="terminal-bar">
         <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>.github/workflows/migrations.yml</span></span>
@@ -244,7 +244,7 @@ Draft:  https://romulus.example.com/app/acme/shop/drafts/01a16d92… (PR #42: us
 
     <section class="cta-panel" aria-labelledby="cta-title">
       <h2 id="cta-title">Test your next migration on rows</h2>
-      <p>Import your <code>prisma/migrations</code> folder once, add the action to your pull requests, and each new migration runs up on generated rows before it merges. Free for one person, or self-hosted with playgrounds.</p>
+      <p>Import your <code>prisma/migrations</code> folder once, add the action to your pull requests, and each new migration runs up on generated rows before it merges (on Postgres 17 databases for now). Free for one person, or self-hosted with playgrounds.</p>
       <div class="cta-row">
         <a class="button primary large" href="/app/signin">Start free</a>
         <a class="button secondary large" href="https://github.com/lupidae/romulus/tree/main/docs/self-host"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg>Self-host it</a>
