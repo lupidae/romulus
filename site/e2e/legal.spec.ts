@@ -513,8 +513,8 @@ test("every privacy policy says what the audience measurement and the signup sou
     await expect(page.getByRole("main"), policy.path).not.toContainText("romulus.source");
   }
   expect(repoFile("web/src/features/marketing/analytics.ts")).toContain('const ONCE_KEY = "romulus.analytics.once";');
-  // The homepage's app.js keeps the theme only; the app's source module nothing.
-  expect(repoFile("site/public/app.js").match(/localStorage\.setItem\([^,]+/g)).toEqual(["localStorage.setItem(KEY"]);
+  // Neither the homepage's app.js nor the app's source module keeps the source.
+  expect(repoFile("site/public/app.js")).not.toMatch(/romulus\.source|setItem\([^)]*(utm|ref_origin|source)/);
   expect(repoFile("web/src/features/marketing/source.ts")).not.toMatch(/localStorage|sessionStorage/);
 });
 
