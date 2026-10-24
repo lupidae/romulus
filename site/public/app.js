@@ -247,37 +247,63 @@ if (switcher) {
   });
 }
 
-// Where this visit came from, for the sign-up that may follow: the campaign
-// parameters (utm_source, utm_medium, utm_campaign, utm_content) and the
-// referring site's origin, first touch wins, for 30 days, in this origin's
-// local storage, where the app (same origin) reads it and reports it once
-// signed in. The same key and shape as web/src/features/marketing/source.ts:
-// keep them in step. Nothing else about the visitor is kept.
-{
-  const SOURCE_KEY = "romulus.source";
-  const TTL = 30 * 24 * 60 * 60 * 1000;
-  const now = Date.now();
+// Where this visit came from, for a sign-up: the campaign parameters of this
+// page's address (utm_source, utm_medium, utm_campaign, utm_content) and the
+// referring site's origin (as ref_origin), added to the links into the app,
+// which carries them through sign-in and reports them with the sign-up
+// (web/src/features/marketing/source.ts: the same parameters). In URLs only:
+// nothing is stored in the browser.
+const UTM = ["utm_source", "utm_medium", "utm_campaign", "utm_content"];
+/** The origin of `url` when it is another site's http(s) page. */
+const otherOrigin = (url) => {
   try {
-    let kept = null;
-    try {
-      kept = JSON.parse(localStorage.getItem(SOURCE_KEY));
-    } catch {}
-    const fresh = kept && kept.v === 1 && typeof kept.at === "number" && kept.at <= now && now - kept.at <= TTL;
-    if (!fresh) {
-      const params = new URLSearchParams(location.search);
-      const source = { v: 1, at: now };
-      for (const field of ["utm_source", "utm_medium", "utm_campaign", "utm_content"]) {
-        const value = params.get(field)?.trim().slice(0, 200);
-        if (value) source[field] = value;
-      }
-      try {
-        const from = new URL(document.referrer);
-        if ((from.protocol === "http:" || from.protocol === "https:") && from.origin !== location.origin)
-          source.referrer = from.origin;
-      } catch {}
-      localStorage.setItem(SOURCE_KEY, JSON.stringify(source));
-    }
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.origin === location.origin ? null : parsed.origin;
   } catch {
-    // Storage refused (a private window): nothing is kept.
+    return null;
+  }
+};
+{
+  const params = new URLSearchParams(location.search);
+  const source = [];
+  for (const field of UTM) {
+    const value = params.get(field)?.trim().slice(0, 200);
+    if (value) source.push([field, value]);
+  }
+  const from = otherOrigin(document.referrer);
+  if (from) source.push(["ref_origin", from]);
+  if (source.length) {
+    for (const link of document.querySelectorAll('a[href^="/app/signin"], a[href^="/app/signup"]')) {
+      const url = new URL(link.getAttribute("href"), location.origin);
+      for (const [name, value] of source) url.searchParams.set(name, value);
+      link.setAttribute("href", `${url.pathname}${url.search}${url.hash}`);
+    }
   }
 }
+
+// The audience measurement's payloads (index.html: data-before-send), as the
+// app sends its own: the page's address with its campaign parameters only,
+// the referrer reduced to another site's origin.
+window.romulusBeforeSend = (type, payload) => {
+  if (!payload) return payload;
+  if (typeof payload.url === "string") {
+    try {
+      const url = new URL(payload.url, location.origin);
+      const kept = new URLSearchParams();
+      for (const field of UTM) {
+        const value = url.searchParams.get(field);
+        if (value) kept.set(field, value.slice(0, 200));
+      }
+      const query = kept.toString();
+      payload.url = `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    } catch {
+      payload.url = location.origin + "/";
+    }
+  }
+  if ("referrer" in payload) {
+    const referrer = String(payload.referrer ?? "");
+    payload.referrer = referrer.startsWith("/") ? "" : (otherOrigin(referrer) ?? "");
+  }
+  return payload;
+};

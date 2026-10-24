@@ -1,8 +1,9 @@
--- Where people came from before signing up (docs/MVP.md "Signup sources"):
--- the first visit's campaign parameters and referring site, as the browser
--- kept them (first touch, 30 days), reported once by the app after sign-up
--- (`POST /api/me/signup-source`). Nothing else about the visitor: no address,
--- no page, no time of the visit. Deleted with the account. Operators read it
+-- Where people came from when they signed up (docs/MVP.md "Signup sources
+-- and analytics"): the campaign parameters and the referring site's origin
+-- the sign-up's URLs carried (never kept in the browser), reported by the
+-- app after signing in (`POST /api/me/signup-source`) or sent with a
+-- password sign-up's form. Nothing else about the visitor: no address, no
+-- page, no time of the visit. Deleted with the account. Operators read it
 -- with `romulus-api signups` (CSV).
 CREATE TABLE signup_sources (
     user_id uuid PRIMARY KEY REFERENCES users ON DELETE CASCADE,
@@ -20,8 +21,13 @@ CREATE TABLE signup_sources (
 );
 
 COMMENT ON TABLE signup_sources IS
-    'One row per account whose sign-up the app reported; every field NULL: a direct visit (or one the browser did not keep).';
+    'One row per account whose sign-up was told; every field NULL: a direct visit (or one whose URLs carried nothing).';
 COMMENT ON COLUMN signup_sources.referrer IS
     'The referring site''s origin only (scheme, host, port), never its path or query; NULL when it was this site or none.';
 COMMENT ON COLUMN signup_sources.created_at IS
-    'When the app reported it (shortly after the account was made), not when the visit happened.';
+    'When the sign-up told it (as the account was made), not when the visit happened.';
+
+-- A password sign-up's source, from its form, until the emailed link makes
+-- the account (signups::Source as JSON; the link is deleted a day after it
+-- expires).
+ALTER TABLE auth_links ADD COLUMN signup_source jsonb;

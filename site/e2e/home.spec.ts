@@ -590,6 +590,7 @@ test("the visit count: one tag, its one origin in the CSP, the sign-up buttons c
     domains: "romulus.lupidae.com",
     doNotTrack: "true",
     excludeHash: "true",
+    beforeSend: "romulusBeforeSend",
     defer: true,
   });
   expect(analytics).toEqual([`${ANALYTICS}/script.js`]);
@@ -617,35 +618,62 @@ test("the visit count: one tag, its one origin in the CSP, the sign-up buttons c
   for (const e of events.filter((e) => !signUps.includes(e))) expect(e.event, e.text).toBeNull();
 });
 
-test("the first visit's source is kept for the app on this origin, first touch wins", async ({ page, baseURL }) => {
+test("the visit's source rides on the links into the app, never in storage", async ({ page, baseURL }) => {
   await withoutLiveHero(page);
-  const kept = () => page.evaluate(() => JSON.parse(localStorage.getItem("romulus.source") ?? "null"));
+  const appLinks = () =>
+    page
+      .locator('a[href^="/app/signin"], a[href^="/app/signup"]')
+      .evaluateAll((links) => links.map((a) => a.getAttribute("href")!));
+  // No source: the links are the page's own.
+  await page.goto("/");
+  const plain = await appLinks();
+  expect(plain).toContain("/app/signin");
+  expect(plain.every((href) => !href.includes("utm_") && !href.includes("ref_origin"))).toBe(true);
+
   await page.goto("/?utm_source=newsletter&utm_campaign=launch&utm_content=hero&gclid=abc&email=a@b.c", {
     referer: "https://news.example.org/item?id=42",
   });
-  const first = await kept();
-  expect(first).toEqual({
-    v: 1,
-    at: expect.any(Number),
-    utm_source: "newsletter",
-    utm_campaign: "launch",
-    utm_content: "hero",
-    referrer: "https://news.example.org",
-  });
-  await page.goto("/?utm_source=ads&utm_medium=cpc", { referer: "https://ads.example.com/" });
-  expect(await kept()).toEqual(first);
+  const carried = await appLinks();
+  expect(carried.length).toBe(plain.length);
+  const source = "utm_source=newsletter&utm_campaign=launch&utm_content=hero&ref_origin=https%3A%2F%2Fnews.example.org";
+  for (const [i, href] of carried.entries()) {
+    expect(href).toBe(`${plain[i]}${plain[i].includes("?") ? "&" : "?"}${source}`);
+  }
+  expect(carried).toContain(`/app/signup?plan=team&interval=year&${source}`);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k !== "romulus-theme"))).toEqual([]);
 
-  // The app is this origin's /app (the Function proxies it): it reads the same
-  // record. Here a page standing in for it says what it finds.
+  // The app, on this origin's /app (the Function proxies it), receives them.
   await page.route("**/app/**", (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body: "<!doctype html><title>app</title><pre id=kept></pre><script>document.getElementById('kept').textContent = localStorage.getItem('romulus.source')</script>",
-    }),
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><title>app</title>" }),
   );
   await page.locator(".hero").getByRole("link", { name: "Start free" }).click();
-  await expect(page).toHaveURL(`${baseURL}/app/signin`);
-  expect(JSON.parse((await page.locator("#kept").textContent())!)).toEqual(first);
+  await expect(page).toHaveURL(`${baseURL}/app/signin?${source}`);
+});
+
+test("the visit count keeps only the campaign parameters and the referrer's origin", async ({ page }) => {
+  await withoutLiveHero(page);
+  await page.goto("/");
+  const sent = await page.evaluate(() => {
+    const send = (window as unknown as { romulusBeforeSend: (t: string, p: object) => object }).romulusBeforeSend;
+    return [
+      send("event", {
+        url: "https://romulus.lupidae.com/?utm_source=hn&gclid=abc&email=a@b.c#pricing",
+        referrer: "https://news.example.org/item?id=42&token=x",
+        name: "signup_started",
+      }),
+      send("event", { url: "https://romulus.lupidae.com/fr/legal/confidentialite", referrer: "/pricing" }),
+      send("event", { url: "http://", referrer: "android-app://com.example/" }),
+    ];
+  });
+  expect(sent).toEqual([
+    { url: "https://romulus.lupidae.com/?utm_source=hn", referrer: "https://news.example.org", name: "signup_started" },
+    { url: "https://romulus.lupidae.com/fr/legal/confidentialite", referrer: "" },
+    { url: expect.stringMatching(/^http:\/\/localhost:\d+\/$/), referrer: "" },
+  ]);
+  await expect(page.locator(`script[src="${ANALYTICS}/script.js"]`)).toHaveAttribute(
+    "data-before-send",
+    "romulusBeforeSend",
+  );
 });
 
 test("share metadata, icons, robots and sitemap all resolve", async ({ page, request }) => {

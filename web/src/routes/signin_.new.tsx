@@ -25,6 +25,7 @@ import {
 } from "@/features/auth/password";
 import { authMethodsQuery, instanceQuery } from "@/features/auth/queries";
 import { afterSignIn, appPath, rememberSignUpNext } from "@/features/auth/session";
+import { currentSource, withoutSource } from "@/features/marketing/source";
 import { afterSignInLine, subscribeInNext } from "@/features/billing/subscribe";
 import { copyVersions } from "@/features/billing/copy";
 import { TermsBoxes } from "@/features/legal/components/terms-boxes";
@@ -218,6 +219,8 @@ function SignUpForm({
               email: email.trim(),
               password: mail ? undefined : password,
               invitation: token,
+              // Where this visit came from, kept with the account.
+              source: currentSource(next),
               terms: legal
                 ? {
                     version: legal.terms_version,
@@ -238,7 +241,8 @@ function SignUpForm({
               },
               onSuccess: (result) => {
                 if (result.outcome === "email_sent") {
-                  rememberSignUpNext(next);
+                  // The emailed link finishes it; its source went with the form.
+                  rememberSignUpNext(withoutSource(next));
                   return setSentTo(email.trim());
                 }
                 if (result.org) {

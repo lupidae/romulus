@@ -1,28 +1,31 @@
-//! Where sign-ups come from (docs/MVP.md "Signup sources"), so marketing
-//! channels can be compared: the first visit's campaign parameters
+//! Where sign-ups come from (docs/MVP.md "Signup sources and analytics"),
+//! so marketing channels can be compared: the campaign parameters
 //! (`utm_source`, `utm_medium`, `utm_campaign`, `utm_content`) and the
-//! referring site, which the homepage and the app keep in the browser (first
-//! touch, 30 days: `web/src/features/marketing/source.ts`, the homepage's
-//! `app.js`) and the app reports once after signing in. Nothing else about
-//! the visitor is ever stored.
+//! referring site's origin of the visit that signed up. They ride in URLs
+//! only, never in the browser's storage: the homepage adds them to its links
+//! into the app (`ref_origin` for the referrer), the sign-in page carries
+//! them through `next`, and the page signing in lands on reports them
+//! (`web/src/features/marketing/source.ts`). Nothing else about the visitor
+//! is ever stored.
 //!
-//! Endpoint: `POST /me/signup-source` (the person, signed in). Table:
-//! `signup_sources`, one row per reported account, deleted with it. Export:
+//! Endpoint: `POST /me/signup-source` (the person, signed in). A password
+//! sign-up sends them with its form instead (`PasswordSignUp::source`, kept
+//! on the emailed link until the account exists: [`store`]). Table:
+//! `signup_sources`, one row per account reported, deleted with it. Export:
 //! [`export`] and [`write_csv`], the operator's `romulus-api signups`.
 //!
-//! A report counts only for an account made in the last
-//! [`REPORT_WINDOW_DAYS`] days, from a visit seen before the account was
-//! (the browser says how long ago, so its clock does not matter); the first
-//! report that carries something wins. Its answer tells the app whether the
-//! account is new ([`SignupReported::new_account`]: its first report, within
-//! an hour of sign-up), which the app counts as a completed sign-up.
+//! A report counts only for an account made within [`REPORT_WINDOW`]; the
+//! first that carries something wins over an empty one (a direct visit, or
+//! a page load without the parameters). Its answer tells the app whether
+//! this report made the account's row ([`SignupReported::new_account`]),
+//! which the app counts as a completed sign-up.
 
 use std::io::{self, Write};
 
 use axum::extract::State;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use utoipa::ToSchema;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use uuid::Uuid;
@@ -36,43 +39,39 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(report))
 }
 
-/// An account older than this reports nothing: what its browser kept is not
-/// how it signed up.
-pub const REPORT_WINDOW_DAYS: i64 = 7;
-/// A sign-up counts as just completed for the app's analytics this long.
-const NEW_ACCOUNT: Duration = Duration::hours(1);
-/// A visit seen this long after the account was made still counts (the
-/// report's age is in whole seconds, the request takes a moment).
-const SLACK: Duration = Duration::minutes(1);
+/// An account older than this reports nothing: the parameters of a later
+/// visit are not how it signed up. The report follows the sign-up's own
+/// landing (the identity provider's way back, or a password sign-up's
+/// link): well within it.
+pub const REPORT_WINDOW: Duration = Duration::hours(1);
 /// Each campaign parameter is cut to this many characters.
 const UTM_MAX: usize = 200;
 
-/// What this browser kept of the visit that brought the person here.
-#[derive(Debug, Default, Deserialize, ToSchema)]
+/// The source of the visit signing up, as its URL carried it.
+#[derive(Debug, Default, Clone, Deserialize, ToSchema)]
 pub struct SignupSource {
     pub utm_source: Option<String>,
     pub utm_medium: Option<String>,
     pub utm_campaign: Option<String>,
     pub utm_content: Option<String>,
-    /// The page that linked here (`document.referrer`); only its origin is
-    /// kept, and nothing when it is this site.
+    /// The site that linked here (the homepage's `ref_origin`, or
+    /// `document.referrer`); only its origin is kept, and nothing when it
+    /// is this site.
     pub referrer: Option<String>,
-    /// How long ago the browser first saw that visit, in seconds.
-    pub seen_seconds_ago: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SignupReported {
-    /// The source was stored (this was the account's first report that
-    /// counts).
+    /// The source was stored.
     pub recorded: bool,
-    /// The account was made within the hour and this is its first report:
-    /// a sign-up just completed.
+    /// This report made the account's row (its first, within the hour of
+    /// signing up): a sign-up just completed.
     pub new_account: bool,
 }
 
-/// The source of a sign-up, cleaned: what is stored.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// The source of a sign-up, cleaned: what is stored (and kept on a password
+/// sign-up's link, as JSON).
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     pub utm_source: Option<String>,
     pub utm_medium: Option<String>,
@@ -147,9 +146,7 @@ async fn report(
         });
     }
     let source = Source::clean(&reported, &state.config.public_origin());
-    Ok(Json(
-        record(&state.db, user.id, &source, reported.seen_seconds_ago).await?,
-    ))
+    Ok(Json(record(&state.db, user.id, &source).await?))
 }
 
 /// Stores `source` for `user` if it counts (see the module docs).
@@ -157,36 +154,43 @@ pub async fn record(
     db: &PgPool,
     user: Uuid,
     source: &Source,
-    seen_seconds_ago: u32,
 ) -> Result<SignupReported, sqlx::Error> {
+    let refused = SignupReported {
+        recorded: false,
+        new_account: false,
+    };
     let Some(created_at) = sqlx::query_scalar!("SELECT created_at FROM users WHERE id = $1", user)
         .fetch_optional(db)
         .await?
     else {
-        return Ok(SignupReported {
-            recorded: false,
-            new_account: false,
-        });
+        return Ok(refused);
     };
-    let now = Utc::now();
-    if now - created_at > Duration::days(REPORT_WINDOW_DAYS) {
-        return Ok(SignupReported {
-            recorded: false,
-            new_account: false,
-        });
+    if Utc::now() - created_at > REPORT_WINDOW {
+        return Ok(refused);
     }
-    // A visit after the account was made did not bring it: a row still
-    // says the account reported (a direct sign-up, as far as we know).
-    let seen_at = now - Duration::seconds(i64::from(seen_seconds_ago));
-    let empty = Source::default();
-    let source = if seen_at <= created_at + SLACK {
-        source
-    } else {
-        &empty
-    };
-    // The first report carrying something wins; an empty one (a direct
-    // visit) gives way to a later one from a browser that kept a source.
-    let written = sqlx::query_scalar!(
+    let mut db = db.acquire().await?;
+    let written = upsert(&mut db, user, source).await?;
+    Ok(SignupReported {
+        recorded: written.is_some() && !source.is_empty(),
+        new_account: written == Some(true),
+    })
+}
+
+/// The account's row for a sign-up that brought its source along (a
+/// password sign-up's form), in the account's transaction: written even
+/// empty, so the app's report that follows finds the sign-up told.
+pub async fn store(db: &mut PgConnection, user: Uuid, source: &Source) -> Result<(), sqlx::Error> {
+    upsert(db, user, source).await.map(drop)
+}
+
+/// Inserts the row (`Some(true)`), fills an empty one (`Some(false)`), or
+/// leaves one that has something (`None`).
+async fn upsert(
+    db: &mut PgConnection,
+    user: Uuid,
+    source: &Source,
+) -> Result<Option<bool>, sqlx::Error> {
+    sqlx::query_scalar!(
         r#"INSERT INTO signup_sources
                (user_id, utm_source, utm_medium, utm_campaign, utm_content, referrer)
            VALUES ($1, $2, $3, $4, $5, $6)
@@ -210,12 +214,8 @@ pub async fn record(
         source.utm_content,
         source.referrer,
     )
-    .fetch_optional(db)
-    .await?;
-    Ok(SignupReported {
-        recorded: written.is_some() && !source.is_empty(),
-        new_account: written == Some(true) && now - created_at <= NEW_ACCOUNT,
-    })
+    .fetch_optional(&mut *db)
+    .await
 }
 
 /// One account, for the operators' export.

@@ -199,13 +199,15 @@ from the API.
 - Analytics: the homepage counts visits with Umami at
   `https://stats.lupidae.com` (the tag in `index.html`, its website id
   committed: not a secret; `data-domains="romulus.lupidae.com"`, so
-  previews and local runs send nothing; Do Not Track honoured), the one
-  other origin in `_headers` (`script-src`, `connect-src`). The sign-up
-  buttons (Start free, Subscribe) carry `data-umami-event="signup_started"`
-  and the plan (`tools/pricing.mjs` writes the cards'). `app.js` keeps the
-  first visit's `utm_*` and referrer origin in `localStorage`
-  (`romulus.source`, 30 days, first touch wins) for the app, which reports
-  it after sign-up (docs/MVP.md, "Signup sources and analytics"). The e2e
+  previews and local runs send nothing; Do Not Track honoured;
+  `data-before-send="romulusBeforeSend"`, in `app.js`, keeps the address's
+  `utm_*` only and the referrer's origin), the one other origin in
+  `_headers` (`script-src`, `connect-src`). The sign-up buttons (Start free,
+  Subscribe) carry `data-umami-event="signup_started"` and the plan
+  (`tools/pricing.mjs` writes the cards'). `app.js` adds this page's `utm_*`
+  and the referrer's origin (`ref_origin`) to the links into the app, which
+  reports them with the sign-up (docs/MVP.md, "Signup sources and
+  analytics"): in URLs only, nothing in the browser's storage. The e2e
   tests import `test` from `e2e/fixtures.ts`, which answers
   stats.lupidae.com with an empty script: no test ever reaches it.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows

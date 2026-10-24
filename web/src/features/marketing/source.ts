@@ -1,140 +1,117 @@
-// Where a visitor came from, kept in this browser for the sign-up that may
-// follow (docs/MVP.md "Signup sources"): the first visit's campaign
-// parameters and the referring site's origin, first touch wins, for 30 days.
-// The homepage's app.js writes the same record (same origin, same key and
-// shape: keep them in step); the app writes it on a first visit straight to
-// /app. After signing in, the app reports it once per account
-// (`POST /api/me/signup-source`), which also says whether the account is new.
-// Nothing else about the visitor is kept.
+// Where a sign-up came from (docs/MVP.md "Signup sources and analytics"):
+// the campaign parameters (utm_*) and the referring site's origin, carried in
+// URLs only, never in the browser's storage. The homepage adds them to its
+// links into the app (app.js: the referrer as `ref_origin`); a page of the
+// app reads them from the address it was loaded at (or the referrer, when
+// the visit came straight from another site) and keeps them in memory for
+// its life; the sign-in page puts them in `next`, so the identity
+// provider's way back (or a password sign-in) lands on a page that has them,
+// which reports them once signed in (`POST /api/me/signup-source`). A
+// password sign-up sends them with its form instead. First touch across
+// visits is not kept.
 
 import { api, unwrap } from "@/api/client";
+import { safePath } from "@/lib/safe-path";
 
-import { externalOrigin, track, UTM_FIELDS } from "./analytics";
+import { externalOrigin, REF_ORIGIN, track, UTM_FIELDS } from "./analytics";
 
-export const SOURCE_KEY = "romulus.source";
-export const SOURCE_TTL = 30 * 24 * 60 * 60 * 1000;
+export { REF_ORIGIN };
+/** Every query parameter a source is made of. */
+export const SOURCE_PARAMS = [...UTM_FIELDS, REF_ORIGIN] as const;
 const MAX = 200;
+const BASE = "http://romulus.invalid";
 
 type UtmField = (typeof UTM_FIELDS)[number];
 
-export interface KeptSource extends Partial<Record<UtmField, string>> {
-  v: 1;
+/** A source as the API takes it (`SignupSource`). */
+export interface Source extends Partial<Record<UtmField, string>> {
   /** The referring site's origin, when it was another site. */
   referrer?: string;
-  /** When this browser first saw the visit (ms since the epoch). */
-  at: number;
-  /** The accounts that already reported it. */
-  reported?: string[];
 }
 
-/** localStorage, or nothing where reading it throws (blocked storage). */
-function browserStorage(): Storage | undefined {
+/** What the URL `href` carries, else the referrer's origin when it is another site's. */
+export function sourceOf(href: string, referrer = ""): Source | undefined {
+  let url: URL;
   try {
-    return window.localStorage;
+    url = new URL(href, BASE);
   } catch {
     return undefined;
   }
-}
-
-/** The visit `href` came from, as it is kept. */
-export function sourceOf(href: string, referrer: string, now: number): KeptSource {
-  const url = new URL(href);
-  const kept: KeptSource = { v: 1, at: now };
+  const source: Source = {};
   for (const field of UTM_FIELDS) {
     const value = url.searchParams.get(field)?.trim().slice(0, MAX);
-    if (value) kept[field] = value;
+    if (value) source[field] = value;
   }
-  const origin = externalOrigin(referrer, url.origin);
-  if (origin) kept.referrer = origin;
-  return kept;
+  const origin =
+    externalOrigin(url.searchParams.get(REF_ORIGIN) ?? "", url.origin) ??
+    externalOrigin(referrer, url.origin);
+  if (origin) source.referrer = origin;
+  return Object.keys(source).length ? source : undefined;
 }
 
-/** The kept record, if it reads and is younger than 30 days. */
-export function readSource(storage: Storage, now: number): KeptSource | undefined {
-  try {
-    const raw = storage.getItem(SOURCE_KEY);
-    if (!raw) return undefined;
-    const kept = JSON.parse(raw) as Partial<KeptSource> | null;
-    if (kept?.v !== 1 || typeof kept.at !== "number" || now - kept.at > SOURCE_TTL)
-      return undefined;
-    if (now < kept.at) return undefined;
-    const clean: KeptSource = { v: 1, at: kept.at };
-    for (const field of [...UTM_FIELDS, "referrer"] as const) {
-      const value = kept[field];
-      if (typeof value === "string" && value) clean[field] = value.slice(0, MAX);
-    }
-    if (Array.isArray(kept.reported))
-      clean.reported = kept.reported.filter((id) => typeof id === "string").slice(-5);
-    return clean;
-  } catch {
-    return undefined;
+/** `path` (an app path, `/app/…?…#…`) with `source`'s parameters, unless it has some already. */
+export function withSource(path: string, source: Source | undefined): string {
+  if (!source) return path;
+  const url = new URL(path, BASE);
+  if (SOURCE_PARAMS.some((param) => url.searchParams.has(param))) return path;
+  for (const field of UTM_FIELDS) {
+    const value = source[field];
+    if (value) url.searchParams.set(field, value);
   }
+  if (source.referrer) url.searchParams.set(REF_ORIGIN, source.referrer);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
-/**
- * On every page load: keeps this visit as the source unless a younger one is
- * kept already (first touch wins). Storage refused: nothing is kept.
- */
-export function captureSource(
-  storage = browserStorage(),
-  href = window.location.href,
-  referrer = document.referrer,
-  now = Date.now(),
-): void {
-  if (!storage) return;
-  try {
-    if (readSource(storage, now)) return;
-    storage.setItem(SOURCE_KEY, JSON.stringify(sourceOf(href, referrer, now)));
-  } catch {
-    // A private window, or storage blocked: no source.
-  }
+/** `path` without a source's parameters: what may be kept in storage. */
+export function withoutSource(path: string | undefined): string | undefined {
+  if (!path) return path;
+  const url = new URL(path, BASE);
+  for (const param of SOURCE_PARAMS) url.searchParams.delete(param);
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
-/** What to report for `userId`, or nothing when it already did. */
-export function pendingReport(storage: Storage | undefined, userId: string, now: number) {
-  const kept = storage ? readSource(storage, now) : undefined;
-  if (kept?.reported?.includes(userId)) return undefined;
-  return {
-    utm_source: kept?.utm_source,
-    utm_medium: kept?.utm_medium,
-    utm_campaign: kept?.utm_campaign,
-    utm_content: kept?.utm_content,
-    referrer: kept?.referrer,
-    // Nothing kept (storage refused, or it expired): a visit seen now.
-    seen_seconds_ago: kept ? Math.max(0, Math.floor((now - kept.at) / 1000)) : 0,
-  };
+/** The source of the address this page was loaded at (main.tsx reads it once). */
+let landing: Source | undefined;
+
+export function captureLanding(href = window.location.href, referrer = document.referrer): void {
+  landing = sourceOf(href, referrer);
 }
 
-function markReported(storage: Storage | undefined, userId: string, now: number) {
-  if (!storage) return;
-  try {
-    const kept = readSource(storage, now) ?? sourceOf(window.location.href, "", now);
-    kept.reported = [...(kept.reported ?? []), userId].slice(-5);
-    storage.setItem(SOURCE_KEY, JSON.stringify(kept));
-  } catch {
-    // Reported again next time: the server answers it the same.
-  }
+/** This page load's source, else the one `next` carries (a sign-up page opened with it). */
+export function currentSource(next?: string): Source | undefined {
+  const path = safePath(next);
+  return landing ?? (path ? sourceOf(path) : undefined);
+}
+
+/** The sign-in page's `next`: where it was going (home by default), with this visit's source. */
+export function nextWithSource(next: string | undefined): string | undefined {
+  const source = currentSource(next);
+  return source ? withSource(next ?? "/app/", source) : next;
 }
 
 /** The accounts this page load reported (or is reporting). */
 const reporting = new Set<string>();
 
 /**
- * Once per account in this browser, after signing in: reports the kept
- * source; a sign-up the server says just completed is counted.
+ * Once per page load and account, after signing in: reports this page's
+ * source (or that it has none). The server keeps it only for an account made
+ * within the hour, so for anyone else it is one look-up; a sign-up the server
+ * says just completed is counted.
  */
-export async function reportSignup(userId: string, storage = browserStorage()): Promise<void> {
+export async function reportSignup(userId: string): Promise<void> {
   if (reporting.has(userId)) return;
-  const body = pendingReport(storage, userId, Date.now());
-  if (!body) return;
-  // Once per page load at most, even where storage is blocked.
   reporting.add(userId);
   try {
-    const result = await unwrap(api.POST("/api/me/signup-source", { body }));
-    markReported(storage, userId, Date.now());
+    const result = await unwrap(api.POST("/api/me/signup-source", { body: landing ?? {} }));
     if (result.new_account) track("signup_completed");
   } catch {
     // Tried again on the next navigation.
     reporting.delete(userId);
   }
+}
+
+/** Tests only: a page load without a source, nothing reported. */
+export function resetSource(): void {
+  landing = undefined;
+  reporting.clear();
 }

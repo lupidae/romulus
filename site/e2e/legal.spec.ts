@@ -82,9 +82,10 @@ const legalLinks = {
 // edition (consumers included), published under /legal/full/ for later.
 const terms = { meta: ["Version: 1.0", "Effective date: 21 October 2026"] };
 const conditions = { meta: ["Version\u00a0: 1.0", "Date d'entrée en vigueur\u00a0: 21 octobre 2026"] };
-// The privacy policy's own version: 1.1 added the emails' retention.
-const privacy = { meta: ["Version: 1.1", "Effective date: 22 October 2026"] };
-const confidentialite = { meta: ["Version\u00a0: 1.1", "Date d'entrée en vigueur\u00a0: 22 octobre 2026"] };
+// The privacy policy's own version: 1.1 added the emails' retention, 1.2 the
+// audience measurement and the signup source.
+const privacy = { meta: ["Version: 1.2", "Effective date: 24 October 2026"] };
+const confidentialite = { meta: ["Version\u00a0: 1.2", "Date d'entrée en vigueur\u00a0: 24 octobre 2026"] };
 const documents = [
   {
     path: "/legal/terms",
@@ -505,13 +506,16 @@ test("every privacy policy says what the audience measurement and the signup sou
       await expect(rows, `${policy.path}: ${data}`).toHaveCount(2);
       await expect(rows.nth(1).getByRole("cell"), policy.path).toContainText(policy.kept[i]);
     }
-    // The keys the homepage and the app write (app.js, web/src/features/marketing).
-    for (const key of ["romulus.source", "romulus.analytics.once", "stats.lupidae.com"])
+    // The one key the measurement keeps (web/src/features/marketing/analytics.ts), and its server.
+    for (const key of ["romulus.analytics.once", "stats.lupidae.com", "ref_origin"])
       await expect(page.getByRole("main"), policy.path).toContainText(key);
+    // The source rides in URLs: no storage key for it (it would need consent).
+    await expect(page.getByRole("main"), policy.path).not.toContainText("romulus.source");
   }
-  expect(repoFile("site/public/app.js")).toContain('const SOURCE_KEY = "romulus.source";');
-  expect(repoFile("web/src/features/marketing/source.ts")).toContain('export const SOURCE_KEY = "romulus.source";');
   expect(repoFile("web/src/features/marketing/analytics.ts")).toContain('const ONCE_KEY = "romulus.analytics.once";');
+  // The homepage's app.js keeps the theme only; the app's source module nothing.
+  expect(repoFile("site/public/app.js").match(/localStorage\.setItem\([^,]+/g)).toEqual(["localStorage.setItem(KEY"]);
+  expect(repoFile("web/src/features/marketing/source.ts")).not.toMatch(/localStorage|sessionStorage/);
 });
 
 test("the sitemap lists the notices and the documents in force, never the full edition", async ({ request }) => {

@@ -4901,6 +4901,7 @@ export interface components {
        *     chosen on the page the emailed link opens.
        */
       password?: string | null;
+      source?: components["schemas"]["SignupSource"] | null;
       terms?: components["schemas"]["AcceptTerms"] | null;
     };
     Person: {
@@ -5934,28 +5935,21 @@ export interface components {
     };
     SignupReported: {
       /**
-       * @description The account was made within the hour and this is its first report:
-       *     a sign-up just completed.
+       * @description This report made the account's row (its first, within the hour of
+       *     signing up): a sign-up just completed.
        */
       new_account: boolean;
-      /**
-       * @description The source was stored (this was the account's first report that
-       *     counts).
-       */
+      /** @description The source was stored. */
       recorded: boolean;
     };
-    /** @description What this browser kept of the visit that brought the person here. */
+    /** @description The source of the visit signing up, as its URL carried it. */
     SignupSource: {
       /**
-       * @description The page that linked here (`document.referrer`); only its origin is
-       *     kept, and nothing when it is this site.
+       * @description The site that linked here (the homepage's `ref_origin`, or
+       *     `document.referrer`); only its origin is kept, and nothing when it
+       *     is this site.
        */
       referrer?: string | null;
-      /**
-       * Format: int32
-       * @description How long ago the browser first saw that visit, in seconds.
-       */
-      seen_seconds_ago: number;
       utm_campaign?: string | null;
       utm_content?: string | null;
       utm_medium?: string | null;

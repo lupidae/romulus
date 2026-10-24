@@ -41,6 +41,9 @@ pub struct NewLink<'a> {
     /// A sign-up's: the Terms accepted on its form (`legal::SignUpTerms`),
     /// recorded once the account exists.
     pub accepted_terms: Option<serde_json::Value>,
+    /// A sign-up's: where it came from (`signups::Source`), stored with
+    /// the account.
+    pub signup_source: Option<serde_json::Value>,
 }
 
 /// Stores `link` and answers its token. A reset link retires the account's
@@ -52,8 +55,8 @@ pub async fn create(db: &mut PgConnection, link: NewLink<'_>) -> Result<String, 
     let token = token::generate();
     sqlx::query!(
         "INSERT INTO auth_links (token_hash, purpose, user_id, email, name, invitation_id, expires_at,
-                                 accepted_terms)
-         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8)",
+                                 accepted_terms, signup_source)
+         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8, $9)",
         token::hash(&token),
         link.purpose as LinkPurpose,
         link.user_id,
@@ -62,6 +65,7 @@ pub async fn create(db: &mut PgConnection, link: NewLink<'_>) -> Result<String, 
         link.invitation_id,
         link.ttl.as_secs_f64(),
         link.accepted_terms,
+        link.signup_source,
     )
     .execute(&mut *db)
     .await?;
@@ -93,6 +97,8 @@ pub struct Link {
     pub first_password: bool,
     /// A sign-up's: the Terms accepted on its form.
     pub accepted_terms: Option<serde_json::Value>,
+    /// A sign-up's: where it came from.
+    pub signup_source: Option<serde_json::Value>,
 }
 
 /// The live (unused, unexpired) link `token` names, without using it.
@@ -109,7 +115,7 @@ pub async fn find(
         r#"SELECT purpose AS "purpose: LinkPurpose", user_id, email, name, invitation_id, expires_at,
                   NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)
                     AS "first_password!",
-                  accepted_terms
+                  accepted_terms, signup_source
            FROM auth_links l
            WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > now()"#,
         token::hash(token),
@@ -137,7 +143,7 @@ pub async fn consume(
            RETURNING purpose AS "purpose: LinkPurpose", user_id, email, name, invitation_id, expires_at,
                      NOT EXISTS (SELECT 1 FROM password_credentials c WHERE c.user_id = l.user_id)
                        AS "first_password!",
-                     accepted_terms"#,
+                     accepted_terms, signup_source"#,
         token::hash(token),
         purpose as LinkPurpose,
     )

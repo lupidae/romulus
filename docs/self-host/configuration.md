@@ -231,9 +231,11 @@ honoured, then sends:
   organizations and databases; only the `utm_*` parameters of the URL, the
   title `romulus`, and the referring site's origin on the first page;
 - `signup_started` (a password sign-up's form sent, with `method`),
-  `signup_completed` (an account's first sign-in, within its first hour)
-  and `first_draft_compiled` (this browser's first edit of a draft that
-  compiled).
+  `signup_completed` (a password account made, or an account's first
+  sign-in, within its first hour) and `first_draft_compiled` (this
+  browser's first edit of a draft that compiled: the one thing the app
+  keeps in the browser for analytics, `romulus.analytics.once`, written
+  only when such an event is sent).
 
 The app's Content-Security-Policy is `frame-ancestors 'none'` only: it
 restricts no script or connection, so nothing needs allowing there. If a
@@ -243,15 +245,19 @@ Tell your users in your own privacy notice.
 
 ### Signup sources
 
-Whatever the analytics setting, the app keeps in the browser's local
-storage where a visitor first came from (`romulus.source`: the `utm_source`,
-`utm_medium`, `utm_campaign` and `utm_content` of the URL, and the
-referring site's origin, never its path; the first visit wins, for 30
-days), and after signing in reports it once (`POST /api/me/signup-source`).
-The API stores it with the account (`signup_sources`) only for an account
-made in the last 7 days, from a visit before the account was made, and
-deletes it with the account. Nothing else about the visitor is kept, and
-nothing goes anywhere but your API. `romulus-api signups` exports it
+Whatever the analytics setting, the app records where a sign-up came from:
+the `utm_source`, `utm_medium`, `utm_campaign` and `utm_content` of the
+address the visit arrived at, and the referring site's origin (never its
+path; `ref_origin` in the address when a site of yours links into the app,
+else the browser's referrer). They ride in URLs only, never in the
+browser's storage: the sign-in page carries them through the identity
+provider and back (in `next`), and the page signing in reports them
+(`POST /api/me/signup-source`); a password sign-up sends them with its form,
+kept on the emailed link until the account exists. The API stores them with
+the account (`signup_sources`) only for an account made within the hour,
+and deletes them with it. Nothing else about the visitor is kept, nothing
+goes anywhere but your API, and a visitor who leaves and comes back later
+is attributed to that later visit. `romulus-api signups` exports them
 (below): `activated_7d` is true when, within 7 days of signing up, the
 person edited a draft or made a version (an upload, a push with their
 token, a publish, an import); `plan` is the best plan in force among their

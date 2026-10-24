@@ -27,8 +27,9 @@
 <link rel="stylesheet" href="/styles.css">
 <!-- Cookieless audience measurement (Umami, our own server): page views and the
      sign-up buttons' clicks, counted only on romulus.lupidae.com, never with Do
-     Not Track. _headers allows this one origin. -->
-<script defer src="https://stats.lupidae.com/script.js" data-website-id="00e44160-7141-4b01-a9d2-4b4bf27d8236" data-domains="romulus.lupidae.com" data-do-not-track="true" data-exclude-hash="true"></script>
+     Not Track; app.js's romulusBeforeSend keeps only the campaign parameters of
+     the address and the referrer's origin. _headers allows this one origin. -->
+<script defer src="https://stats.lupidae.com/script.js" data-website-id="00e44160-7141-4b01-a9d2-4b4bf27d8236" data-domains="romulus.lupidae.com" data-do-not-track="true" data-exclude-hash="true" data-before-send="romulusBeforeSend"></script>
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">

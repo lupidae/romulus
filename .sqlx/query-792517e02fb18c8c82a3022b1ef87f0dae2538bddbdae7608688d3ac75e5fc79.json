@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO auth_links (token_hash, purpose, user_id, email, name, invitation_id, expires_at,\n                                 accepted_terms)\n         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8)",
+  "query": "INSERT INTO auth_links (token_hash, purpose, user_id, email, name, invitation_id, expires_at,\n                                 accepted_terms, signup_source)\n         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8, $9)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -22,10 +22,11 @@
         "Text",
         "Uuid",
         "Float8",
+        "Jsonb",
         "Jsonb"
       ]
     },
     "nullable": []
   },
-  "hash": "9d752f54af3f0221df013498355f49289ed7de93a682be2d327bce39d990e3a3"
+  "hash": "792517e02fb18c8c82a3022b1ef87f0dae2538bddbdae7608688d3ac75e5fc79"
 }

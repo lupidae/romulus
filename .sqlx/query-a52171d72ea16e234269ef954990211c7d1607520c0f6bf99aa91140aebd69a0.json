@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT signup_source FROM auth_links WHERE purpose = 'sign_up'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "signup_source",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "auth_links",
+            "name": "signup_source"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a52171d72ea16e234269ef954990211c7d1607520c0f6bf99aa91140aebd69a0"
+}

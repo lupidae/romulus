@@ -9,7 +9,7 @@ import { ApiError } from "./api/client";
 import { instanceQuery, meQuery } from "./features/auth/queries";
 import { termsQuery } from "./features/legal/queries";
 import { startAnalytics, trackPageView } from "./features/marketing/analytics";
-import { captureSource } from "./features/marketing/source";
+import { captureLanding } from "./features/marketing/source";
 import { orgKeys } from "./features/orgs/queries";
 import { routeTree } from "./routeTree.gen";
 
@@ -86,8 +86,9 @@ declare module "@tanstack/react-router" {
   }
 }
 
-// Where this visit came from, before anything moves the URL (first touch).
-captureSource();
+// Where this visit came from, as its address says, before the router moves it
+// (kept in memory only: features/marketing/source.ts).
+captureLanding();
 
 // A page view per route reached, by pattern (features/marketing/analytics.ts);
 // nothing leaves unless this server sets an analytics script.

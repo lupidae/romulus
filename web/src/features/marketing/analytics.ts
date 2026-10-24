@@ -7,12 +7,16 @@
 // referring site's origin on the first page. Do Not Track is honoured.
 //
 // Events: `signup_started` (a password sign-up's form sent), `signup_completed`
-// (the server says the account is new: source.ts), `first_draft_compiled`
-// (this browser's first edit of a draft that compiled), each with no data
-// beyond what is listed here.
+// (a password account made, or the server saying the account signing in is
+// new: source.ts), `first_draft_compiled` (this browser's first edit of a
+// draft that compiled), each with no data beyond what is listed here. The
+// one thing kept in the browser is which one-time events it sent
+// (`romulus.analytics.once`), written as one goes: never with analytics off.
 
 /** The campaign parameters kept and sent (never any other part of a URL). */
 export const UTM_FIELDS = ["utm_source", "utm_medium", "utm_campaign", "utm_content"] as const;
+/** The query parameter the homepage names the referring site's origin with. */
+export const REF_ORIGIN = "ref_origin";
 
 /** The referrer's origin if it is another site's http(s) page. */
 export function externalOrigin(referrer: string, ownOrigin: string): string | undefined {
@@ -81,11 +85,15 @@ export function pageUrl(pattern: string, search: string): string {
   return `/app${path}${query ? `?${query}` : ""}`;
 }
 
-function send(build: (props: Payload) => Payload) {
+/** Runs `call` with the tracker once it is loaded; never when analytics are off. */
+function whenOn(call: (umami: Umami) => void) {
   if (state === "off") return;
-  const call = (umami: Umami) => void umami.track(build);
   if (state === "on" && window.umami) call(window.umami);
   else queue.push(call);
+}
+
+function send(build: (props: Payload) => Payload) {
+  whenOn((umami) => void umami.track(build));
 }
 
 /**
@@ -127,8 +135,11 @@ export function startAnalytics(config: AnalyticsConfig | null | undefined): void
 export function trackPageView(pattern: string, search = window.location.search): void {
   const url = pageUrl(pattern, search);
   page = url;
+  // The homepage names the site before it (`ref_origin`): it is the referrer here.
   const referrer = firstView
-    ? (externalOrigin(document.referrer, window.location.origin) ?? "")
+    ? (externalOrigin(new URLSearchParams(search).get(REF_ORIGIN) ?? "", window.location.origin) ??
+      externalOrigin(document.referrer, window.location.origin) ??
+      "")
     : "";
   firstView = false;
   send((props) => ({ ...props, url, title: TITLE, referrer }));
@@ -140,19 +151,34 @@ export function track(name: AnalyticsEvent, data?: Record<string, string>): void
   send((props) => ({ ...props, url, title: TITLE, referrer: "", name, data }));
 }
 
-/** An event this browser sends once ever (`first_*`). */
-export function trackOnce(name: AnalyticsEvent): void {
-  if (state === "off") return;
+/**
+ * Claims `name` in this browser's list of one-time events: true when it was
+ * not there and is now. Without storage (blocked, a private window), "once"
+ * cannot be kept, so never.
+ */
+function claimOnce(name: AnalyticsEvent): boolean {
   try {
     const sent = JSON.parse(localStorage.getItem(ONCE_KEY) ?? "[]") as unknown;
     const names = Array.isArray(sent) ? sent.filter((n) => typeof n === "string") : [];
-    if (names.includes(name)) return;
+    if (names.includes(name)) return false;
     localStorage.setItem(ONCE_KEY, JSON.stringify([...names, name]));
+    return true;
   } catch {
-    // Without storage, "once" cannot be kept: not sent.
-    return;
+    return false;
   }
-  track(name);
+}
+
+/**
+ * An event this browser sends once ever (`first_*`). Its flag is written only
+ * once analytics are on and the event goes: with them off, or before they
+ * load, nothing is stored.
+ */
+export function trackOnce(name: AnalyticsEvent): void {
+  const url = page;
+  whenOn((umami) => {
+    if (!claimOnce(name)) return;
+    void umami.track((props) => ({ ...props, url, title: TITLE, referrer: "", name }));
+  });
 }
 
 /** Tests only: back to before `startAnalytics`. */

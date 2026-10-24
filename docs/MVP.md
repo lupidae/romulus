@@ -1535,7 +1535,9 @@ compared, without cookies and without anything about a visitor beyond that.
   kind of script only when the server sets `ROMULUS_ANALYTICS_SCRIPT_URL`
   and `ROMULUS_ANALYTICS_WEBSITE_ID` (`GET /api/instance` `analytics`): a
   self-hosted install makes no third-party call. The hosted app uses the
-  homepage's website id (one origin, one site).
+  homepage's website id (one origin, one site). The homepage's payloads go
+  through `romulusBeforeSend` (`data-before-send`, in `app.js`): the address
+  keeps its `utm_*` only, the referrer its origin, as the app's.
 - **What the app sends** (`web/src/features/marketing/analytics.ts`): the
   tracker's own page views are off; a page view per route is the route's
   pattern (`/app/$org/$db`), never the address (organization and database
@@ -1545,22 +1547,29 @@ compared, without cookies and without anything about a visitor beyond that.
   the homepage's buttons, since Zitadel's login is out of our pages),
   `signup_completed` (the server says the account is new, below) and
   `first_draft_compiled` (the activation moment: this browser's first edit
-  of a draft that compiled, once ever). The app's CSP is
+  of a draft that compiled, once ever: its flag, `romulus.analytics.once`,
+  is written only once analytics are on and the event goes, the one thing
+  the measurement keeps in the browser). The app's CSP is
   `frame-ancestors` only: nothing to allow there.
-- **Signup sources**: the first visit's `utm_source`, `utm_medium`,
-  `utm_campaign`, `utm_content` and the referrer's origin (never its path:
-  a referring URL can carry anything), kept in `localStorage`
-  (`romulus.source`, first touch wins, 30 days) by the homepage's `app.js`
-  and by the app on a first visit straight to `/app` (same origin, same key
-  and shape). A direct visit is a touch too. After signing in, the app
-  reports it once per account (`POST /api/me/signup-source`, any way in:
-  single sign-on, password, invitation), with how long ago it was seen (the
-  browser's clock never matters). Stored (`signup_sources`, deleted with
-  the account) only for an account made in the last 7 days and a visit
-  before it; the first report carrying something wins over an empty one.
-  Its answer's `new_account` (first report, within the hour) is what the
-  app counts as `signup_completed`. On the user, not the organization: an
-  organization has many people, a sign-up one.
+- **Signup sources** (revised in review: no browser storage, which would
+  need consent): the `utm_source`, `utm_medium`, `utm_campaign`,
+  `utm_content` and the referrer's origin (never its path: a referring URL
+  can carry anything) ride in URLs only. The homepage's `app.js` adds the
+  page's to its links into the app (the referrer as `ref_origin`); a page of
+  the app reads its own address once (or the referrer, straight from
+  another site) and keeps it in memory; the sign-in page puts it in `next`,
+  so the identity provider's way back lands on a page that has it, which
+  reports it once signed in (`POST /api/me/signup-source`, any way in:
+  single sign-on, password, invitation). A password sign-up sends it with
+  its form (`PasswordSignUp::source`), kept on the emailed link
+  (`auth_links.signup_source`) until the account exists, and leaves it out
+  of the `next` it keeps for that link. Stored (`signup_sources`, deleted
+  with the account) only for an account made within the hour; the first
+  report carrying something wins over an empty one. The report's
+  `new_account` (it made the row) is the app's `signup_completed`, and a
+  password account made is one too. First touch across visits is lost:
+  accepted. On the user, not the organization: an organization has many
+  people, a sign-up one.
 - **The operators' export** is a command, like the other operator tooling:
   `romulus-api signups [--since DAY]`, CSV (created_at, the five fields,
   plan, activated_7d, paying), the ignored domains left out, formulas
@@ -1570,8 +1579,10 @@ compared, without cookies and without anything about a visitor beyond that.
   person's organizations; paying: one of them on a live paid subscription,
   not a trial.
 - **Privacy policy 1.2** lists both (data, purpose on legitimate interest,
-  Umami run by us, retention, the two local storage keys); the legal notice
-  says the homepage counts visits with our own measurement.
+  Umami run by us, retention): the measurement under the CNIL's exemption
+  for audience measurement (no cookie, statistics for us only, its one
+  local storage key), the source as data sent with the sign-up; the legal
+  notice says the homepage counts visits with our own measurement.
 
 ## Decided
 

@@ -52,9 +52,23 @@ test("a new account's source is reported once and its sign-up counted, by route 
     referer: "https://news.example.org/item?id=1",
   });
   await expect(page.getByRole("heading", { name: "Sign in to romulus" })).toBeVisible();
+  // Every way in from here comes back to where it was going, with the source
+  // in the address (the dev sign-in's link, as the identity provider's way
+  // back would); nothing of it is stored in the browser.
+  const via = new URL(
+    (await page.getByRole("link", { name: "alice" }).getAttribute("href"))!,
+    page.url(),
+  );
+  const next = via.searchParams.get("next")!;
+  expect(next).toBe(
+    "/app/new?utm_source=e2e&utm_campaign=launch&ref_origin=https%3A%2F%2Fnews.example.org",
+  );
+  expect(
+    await page.evaluate(() => Object.keys(localStorage).filter((k) => !k.startsWith("romulus:"))),
+  ).toEqual([]);
 
   const reported = page.waitForResponse((r) => r.url().endsWith("/api/me/signup-source"));
-  await devSignIn(page, email, "/app/new");
+  await devSignIn(page, email, next);
   const report = await reported;
   expect(report.request().postDataJSON()).toMatchObject({
     utm_source: "e2e",
@@ -66,7 +80,7 @@ test("a new account's source is reported once and its sign-up counted, by route 
   // The page view and the event, in whichever order they were ready.
   await expect
     .poll(async () => (await sent(page)).map((s) => s.name ?? s.url).sort())
-    .toEqual(["/app/new", "signup_completed"]);
+    .toEqual(["/app/new?utm_source=e2e&utm_campaign=launch", "signup_completed"]);
   seen.push(...(await sent(page)));
   expect(await page.evaluate(() => (window as unknown as { __script: object }).__script)).toEqual({
     websiteId: "site-e2e",
@@ -88,17 +102,15 @@ test("a new account's source is reported once and its sign-up counted, by route 
     expect(s.title).toBe("romulus");
   }
 
-  // Signing in again reports nothing, and counts no second sign-up.
-  const again: string[] = [];
-  page.on("request", (r) => {
-    if (r.url().endsWith("/api/me/signup-source")) again.push(r.url());
-  });
+  // A later page load reports again (nothing in the browser remembers it):
+  // the server finds the sign-up told, and no second one is counted.
+  const again = page.waitForResponse((r) => r.url().endsWith("/api/me/signup-source"));
   await page.reload();
+  expect(await (await again).json()).toEqual({ recorded: false, new_account: false });
   await expect
     .poll(async () => (await sent(page)).map((s) => s.name ?? s.url))
     .toContain("/app/$org");
   expect((await sent(page)).filter((s) => s.name)).toEqual([]);
-  expect(again).toEqual([]);
 });
 
 test("without a tracker the app loads nothing from another origin", async ({ page }) => {

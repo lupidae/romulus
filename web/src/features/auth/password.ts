@@ -65,7 +65,10 @@ export function useSignUp() {
       unwrap(api.POST("/api/auth/password/sign-up", { body })),
     onSuccess: async (result) => {
       track("signup_started", { method: "password" });
-      if (result.outcome === "signed_in") await signedIn();
+      if (result.outcome === "signed_in") {
+        track("signup_completed", { method: "password" });
+        await signedIn();
+      }
     },
   });
 }
@@ -83,7 +86,10 @@ export function useFinishSignUp() {
   return useMutation({
     mutationFn: (body: { token: string; name: string; password: string }) =>
       unwrap(api.POST("/api/auth/password/sign-up/finish", { body })),
-    onSuccess: signedIn,
+    onSuccess: async () => {
+      track("signup_completed", { method: "password" });
+      await signedIn();
+    },
   });
 }
 

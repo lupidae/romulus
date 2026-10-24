@@ -17120,6 +17120,17 @@
             ],
             "description": "Only when the server sends no email (`mail` false in\n`GET /api/instance`): the password, set now. Otherwise ignored: it is\nchosen on the page the emailed link opens."
           },
+          "source": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SignupSource",
+                "description": "Where the sign-up came from, as the page's URL carried it\n(`signups`): stored with the account."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "terms": {
             "oneOf": [
               {
@@ -19873,33 +19884,24 @@
         "properties": {
           "new_account": {
             "type": "boolean",
-            "description": "The account was made within the hour and this is its first report:\na sign-up just completed."
+            "description": "This report made the account's row (its first, within the hour of\nsigning up): a sign-up just completed."
           },
           "recorded": {
             "type": "boolean",
-            "description": "The source was stored (this was the account's first report that\ncounts)."
+            "description": "The source was stored."
           }
         }
       },
       "SignupSource": {
         "type": "object",
-        "description": "What this browser kept of the visit that brought the person here.",
-        "required": [
-          "seen_seconds_ago"
-        ],
+        "description": "The source of the visit signing up, as its URL carried it.",
         "properties": {
           "referrer": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The page that linked here (`document.referrer`); only its origin is\nkept, and nothing when it is this site."
-          },
-          "seen_seconds_ago": {
-            "type": "integer",
-            "format": "int32",
-            "description": "How long ago the browser first saw that visit, in seconds.",
-            "minimum": 0
+            "description": "The site that linked here (the homepage's `ref_origin`, or\n`document.referrer`); only its origin is kept, and nothing when it\nis this site."
           },
           "utm_campaign": {
             "type": [

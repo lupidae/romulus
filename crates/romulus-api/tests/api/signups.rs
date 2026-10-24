@@ -1,6 +1,7 @@
 //! Signup sources: what the app reports after a sign-up (`POST
-//! /api/me/signup-source`: once, first with something wins, only for new
-//! accounts and visits before them) and the operators' CSV.
+//! /api/me/signup-source`: once, first with something wins, only for an
+//! account made within the hour) and the operators' CSV. A password
+//! sign-up's own (its form, its link): `passwords.rs`.
 
 use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
@@ -23,7 +24,6 @@ fn newsletter() -> Value {
         "utm_campaign": "launch",
         "utm_content": "header",
         "referrer": "https://news.example.org/item?id=42&email=someone@example.org",
-        "seen_seconds_ago": 600,
     })
 }
 
@@ -71,7 +71,7 @@ async fn a_new_account_records_where_it_came_from_once(db: PgPool) {
     // First touch wins, and the sign-up completes once.
     let again = app
         .as_user(&alice)
-        .post(PATH, &json!({"utm_source": "ads", "seen_seconds_ago": 5}))
+        .post(PATH, &json!({"utm_source": "ads"}))
         .await;
     assert_eq!(
         again.json(),
@@ -84,11 +84,11 @@ async fn a_new_account_records_where_it_came_from_once(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn a_direct_visit_gives_way_to_a_browser_that_kept_a_source(db: PgPool) {
+async fn a_direct_visit_gives_way_to_a_page_load_that_carries_a_source(db: PgPool) {
     let app = TestApp::new(db.clone());
     let alice = signed_in(&db, "Alice").await;
     // This site as the referrer is no source.
-    let direct = json!({"referrer": "http://localhost:41000/pricing", "seen_seconds_ago": 30});
+    let direct = json!({"referrer": "http://localhost:41000/pricing"});
 
     let first = app.as_user(&alice).post(PATH, &direct).await;
     assert_eq!(
@@ -103,9 +103,9 @@ async fn a_direct_visit_gives_way_to_a_browser_that_kept_a_source(db: PgPool) {
         )
     );
 
-    let from_laptop = app.as_user(&alice).post(PATH, &newsletter()).await;
+    let with_params = app.as_user(&alice).post(PATH, &newsletter()).await;
     assert_eq!(
-        from_laptop.json(),
+        with_params.json(),
         json!({"recorded": true, "new_account": false})
     );
     assert_eq!(
@@ -115,7 +115,7 @@ async fn a_direct_visit_gives_way_to_a_browser_that_kept_a_source(db: PgPool) {
 
     let later = app
         .as_user(&alice)
-        .post(PATH, &json!({"utm_source": "ads", "seen_seconds_ago": 1}))
+        .post(PATH, &json!({"utm_source": "ads"}))
         .await;
     assert_eq!(
         later.json(),
@@ -128,38 +128,23 @@ async fn a_direct_visit_gives_way_to_a_browser_that_kept_a_source(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
-async fn only_visits_before_a_recent_account_count(db: PgPool) {
+async fn only_an_account_made_within_the_hour_reports(db: PgPool) {
     let app = TestApp::new(db.clone());
-
-    // Made two days ago; a campaign seen ten minutes ago did not bring it.
+    // A campaign link followed by someone who signed up two hours ago is
+    // not how they signed up.
     let bob = signed_in(&db, "Bob").await;
-    age(&db, bob.user, Duration::days(2)).await;
+    age(&db, bob.user, Duration::hours(2)).await;
     let late = app.as_user(&bob).post(PATH, &newsletter()).await;
     assert_eq!(
         late.json(),
         json!({"recorded": false, "new_account": false})
     );
-    assert_eq!(
-        stored(&db, bob.user).await.unwrap()["utm_source"],
-        Value::Null
-    );
-    // Seen three days ago, before the account: it did.
-    let mut early = newsletter();
-    early["seen_seconds_ago"] = json!(3 * 24 * 3600);
-    let early = app.as_user(&bob).post(PATH, &early).await;
-    assert_eq!(
-        early.json(),
-        json!({"recorded": true, "new_account": false})
-    );
+    assert_eq!(stored(&db, bob.user).await, None);
 
-    // Past the window nothing is written.
     let carol = signed_in(&db, "Carol").await;
-    age(&db, carol.user, Duration::days(8)).await;
-    let mut old = newsletter();
-    old["seen_seconds_ago"] = json!(30 * 24 * 3600);
-    let old = app.as_user(&carol).post(PATH, &old).await;
-    assert_eq!(old.json(), json!({"recorded": false, "new_account": false}));
-    assert_eq!(stored(&db, carol.user).await, None);
+    age(&db, carol.user, Duration::minutes(50)).await;
+    let soon = app.as_user(&carol).post(PATH, &newsletter()).await;
+    assert_eq!(soon.json(), json!({"recorded": true, "new_account": true}));
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
@@ -184,24 +169,16 @@ async fn reports_need_the_person_signed_in_and_a_well_formed_body(db: PgPool) {
     assert_eq!(bearer.status, StatusCode::UNAUTHORIZED);
 
     let alice = signed_in(&db, "Alice").await;
-    let missing = app
+    let wrong = app
         .as_user(&alice)
-        .post(PATH, &json!({"utm_source": "x"}))
+        .post(PATH, &json!({"utm_source": 5}))
         .await;
-    assert_eq!(missing.status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(missing.code(), "validation");
-    let negative = app
-        .as_user(&alice)
-        .post(PATH, &json!({"seen_seconds_ago": -1}))
-        .await;
-    assert_eq!(negative.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(wrong.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(wrong.code(), "validation");
     // Overlong values are cut, never refused: they come from links.
     let long = app
         .as_user(&alice)
-        .post(
-            PATH,
-            &json!({"utm_campaign": "x".repeat(5000), "seen_seconds_ago": 1}),
-        )
+        .post(PATH, &json!({"utm_campaign": "x".repeat(5000)}))
         .await;
     assert_eq!(long.json()["recorded"], true);
     assert_eq!(

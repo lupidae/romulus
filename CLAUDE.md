@@ -1502,19 +1502,27 @@ docs/self-host/configuration.md ("Analytics") the operator's side.
   (it names organizations and databases), no data beyond the event's own.
   A new event is a name in `AnalyticsEvent` and a line in the privacy
   policy if it says something new about people.
-- **The source** (`source.ts`, the homepage's `app.js`: one key,
-  `romulus.source`, one shape: change both) is reported by `signedIn`
-  (`reportSignup`, once per account and browser) to `POST
-  /api/me/signup-source`, whose `new_account` is `signup_completed`.
-  Nothing but the four `utm_*` and the referrer's origin is kept.
+- **The source** (`source.ts`, the homepage's `app.js`: the same
+  parameters, `utm_*` and `ref_origin`) rides in URLs only, never in
+  browser storage (it would need consent): `captureLanding` reads the
+  page's address once, the sign-in page puts it in `next`
+  (`nextWithSource`), `signedIn` reports it (`reportSignup`, once per page
+  load) to `POST /api/me/signup-source`, whose `new_account` is
+  `signup_completed`; a password sign-up sends it with its form
+  (`PasswordSignUp::source`, `auth_links.signup_source`) and keeps
+  `withoutSource(next)` for its link. Nothing but the four `utm_*` and the
+  referrer's origin is kept.
 - **The homepage** loads Umami from `stats.lupidae.com` (`index.html`, the
-  CSP in `_headers`); its sign-up links carry `data-umami-event`
-  (`tools/pricing.mjs` writes the plans'). The site's Playwright tests run
+  CSP in `_headers`; its payloads through `app.js`'s `romulusBeforeSend`);
+  its sign-up links carry `data-umami-event` (`tools/pricing.mjs` writes
+  the plans'). The site's Playwright tests run
   on `e2e/fixtures.ts`'s `test`, which answers that origin with an empty
   script: import `test` from there, never from `@playwright/test`.
 - **Tests**: `tests/api/signups.rs`, `signups` unit tests (cleaning, CSV),
   `features/marketing/source.test.ts`, `site/e2e/home.spec.ts` (the tag,
-  the CSP, the first touch read on `/app`), `site/e2e/legal.spec.ts`.
+  the CSP, the source on the links into `/app`, `romulusBeforeSend`),
+  `site/e2e/legal.spec.ts`, `web/e2e/analytics.spec.ts` (the source through
+  sign-in), the password sign-up tests in `tests/api/passwords.rs`.
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 
