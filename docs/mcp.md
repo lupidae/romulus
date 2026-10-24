@@ -161,7 +161,7 @@ token is offered only the others.
 | `ci_setup` | how to push from CI with remus, filled in for a database, with the link to create its token | |
 | `import_migrations` | a repository's migration files as the database's history, one version per migration, as the web import does; the agent reads the files and sends them. Where changes are reviewed, only into a database without versions | yes |
 | `get_import` | an import's progress, then the versions it created, the statements it skipped and the files it ignored, or where it stopped | |
-| `get_migration_files` | a draft's migration, or between two versions, as the files a migration tool expects, exactly as the web app downloads them, with where they go | |
+| `get_migration_files` | a draft's migration, or between two versions, as the files a migration tool expects, with where they go; a draft in migration mode gets its own statements as written | |
 
 Long work never holds a request open: `test_migration`,
 `create_playground` and `import_migrations` wait 40 seconds at most, then
@@ -242,9 +242,10 @@ affected.
 into my repo", or the `write_draft_migration` prompt). The agent finds the
 repository's migration tool and folder, then asks `get_migration_files` for
 the draft's migration (or one between two versions) in that tool's format.
-The files are the web app's download, byte for byte: same names, same
-content, same down migration where the tool has one. The answer says where
-the tool expects them:
+The files are the ones romulus lays out for that tool: same names, same
+content, same down migration where the tool has one, as the web app's
+download of a generated migration. The answer says where the tool expects
+them:
 
 | format | files | where |
 |---|---|---|
@@ -254,6 +255,17 @@ the tool expects them:
 | `prisma` | `<timestamp>_<name>/migration.sql` | `prisma/migrations/` |
 | `dbmate` | `<version>_<name>.sql`, up and down sections | `db/migrations/` |
 | `golang_migrate` | `<version>_<name>.up.sql` and `.down.sql` | the folder given to `migrate -path` |
+
+A draft in migration mode (written by hand: `ALTER …`, and data statements
+such as an `UPDATE` backfilling a column before its `SET NOT NULL`) gets its
+own statements, as written and in its order, each with the comment written
+above it: exactly what `test_migration` runs on rows. Its `BEGIN` and
+`COMMIT` give way to the tool's transaction; where the tool runs a file in
+one transaction, a statement that cannot run in one (`CREATE INDEX
+CONCURRENTLY`) gets a file of its own, the statements after it a next part.
+romulus flags only the statements it plans, so none of these is marked; the
+down migration, where the tool has one, is romulus's, planned from the
+draft's schema back to its base.
 
 The agent passes `version` when the repository numbers its files its own way
 (Flyway's next `V<n>`, a golang-migrate sequence), so the new files sort

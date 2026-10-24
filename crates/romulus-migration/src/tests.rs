@@ -812,6 +812,163 @@ fn every_tool_gets_its_file_names() {
     );
 }
 
+/// A migration written by hand: a column backfilled before NOT NULL, an
+/// index built concurrently, then a constraint using it (order matters).
+fn written() -> Migration {
+    let statement = |sql: &str, stage: Stage| Statement {
+        sql: sql.to_owned(),
+        kind: Kind::Written,
+        hazard: None,
+        destructive: false,
+        note: None,
+        alternative: None,
+        stage,
+        section: Section::Written,
+    };
+    Migration {
+        statements: vec![
+            statement(
+                "ALTER TABLE users ADD COLUMN name text;",
+                Stage::Transaction,
+            ),
+            statement(
+                "-- Backfill first.\nUPDATE users SET name = '';",
+                Stage::Transaction,
+            ),
+            statement(
+                "ALTER TABLE users ALTER COLUMN name SET NOT NULL;",
+                Stage::Transaction,
+            ),
+            statement(
+                "create unique index concurrently if not exists users_name on users (name);",
+                Stage::Concurrent,
+            ),
+            statement(
+                "ALTER TABLE users ADD CONSTRAINT users_name_key UNIQUE USING INDEX users_name;",
+                Stage::Transaction,
+            ),
+        ],
+        major: Some(17),
+        written: true,
+        ..Migration::default()
+    }
+}
+
+#[test]
+fn a_written_migration_keeps_its_order_split_around_what_cannot_run_in_a_transaction() {
+    let (_, down) = with_index_concurrently();
+    let up = written();
+    let laid = |format: Format| files(&up, &down, format, &meta_for(format));
+    let paths =
+        |format: Format| -> Vec<String> { laid(format).into_iter().map(|f| f.path).collect() };
+    assert_eq!(
+        paths(Format::Sqlx),
+        [
+            "20261016093000_add_names.sql",
+            "20261016093001_add_names_create_index_users_name.sql",
+            "20261016093002_add_names_part_2.sql",
+        ]
+    );
+    assert_eq!(
+        paths(Format::Flyway),
+        [
+            "V5__add_names.sql",
+            "V5.1__add_names_create_index_users_name.sql",
+            "V5.1__add_names_create_index_users_name.sql.conf",
+            "V5.2__add_names_part_2.sql",
+        ]
+    );
+    assert_eq!(
+        paths(Format::GolangMigrate),
+        [
+            "20261016093000_add_names.up.sql",
+            "20261016093000_add_names.down.sql",
+            "20261016093001_add_names_create_index_users_name.up.sql",
+            "20261016093001_add_names_create_index_users_name.down.sql",
+            "20261016093002_add_names_part_2.up.sql",
+            "20261016093002_add_names_part_2.down.sql",
+        ]
+    );
+    // The down migration, planned, goes with the first part.
+    let golang = laid(Format::GolangMigrate);
+    assert!(
+        golang[1].content.contains("DROP COLUMN name"),
+        "{}",
+        golang[1].content
+    );
+    assert!(
+        golang[5]
+            .content
+            .contains("Undone by the first part's down.")
+    );
+    let dbmate = laid(Format::Dbmate);
+    assert!(
+        dbmate[1]
+            .content
+            .contains("-- migrate:up transaction:false")
+    );
+    assert!(
+        dbmate[2]
+            .content
+            .contains("Undone by the first part's down.")
+    );
+
+    // Plain SQL: each part in its transaction, in the order written.
+    let plain = &laid(Format::Plain)[0].content;
+    assert!(
+        plain.starts_with(
+            "-- Migration of acme/app from v4 to v5 for PostgreSQL 17, written by hand in\n\
+             -- romulus; laid out on 2026-10-16.\n"
+        ),
+        "{plain}"
+    );
+    assert!(plain.contains("-- 5 statements.\n"), "{plain}");
+    assert!(
+        !plain.contains("-- Written by hand\n"),
+        "no heading: {plain}"
+    );
+    let at = |needle: &str| {
+        plain
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {plain}"))
+    };
+    let order = [
+        at("BEGIN;"),
+        at("ADD COLUMN name"),
+        at("-- Backfill first.\nUPDATE users"),
+        at("SET NOT NULL"),
+        at("COMMIT;"),
+        at("concurrently if not exists"),
+        plain.rfind("BEGIN;").unwrap(),
+        at("USING INDEX"),
+        plain.rfind("COMMIT;").unwrap(),
+    ];
+    assert!(order.is_sorted(), "{order:?}: {plain}");
+    assert_eq!(plain.matches("BEGIN;").count(), 2, "{plain}");
+    // Nothing flagged, nothing marked.
+    assert!(laid(Format::Sqlx).iter().all(|f| f.marks.is_empty()));
+}
+
+#[test]
+fn a_written_migration_of_concurrent_statements_only_still_has_its_down() {
+    let (_, down) = with_index_concurrently();
+    let mut up = written();
+    up.statements.retain(|s| s.stage == Stage::Concurrent);
+    let golang = files(&up, &down, Format::GolangMigrate, &meta());
+    let paths: Vec<&str> = golang.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "20261016093000_add_names.up.sql",
+            "20261016093000_add_names.down.sql",
+            "20261016093001_add_names_create_index_users_name.up.sql",
+            "20261016093001_add_names_create_index_users_name.down.sql",
+        ]
+    );
+    assert!(golang[0].content.contains("-- Nothing to do."));
+    assert!(golang[1].content.contains("DROP COLUMN name"));
+}
+
 #[test]
 fn plain_sql_wraps_the_transaction_and_runs_concurrent_indexes_after_it() {
     let (up, down) = with_index_concurrently();

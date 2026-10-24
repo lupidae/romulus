@@ -4237,7 +4237,8 @@ export interface components {
       | "views"
       | "security"
       | "comments"
-      | "removals";
+      | "removals"
+      | "written";
     /**
      * @description When a statement runs relative to the migration's transaction.
      * @enum {string}
@@ -4305,7 +4306,8 @@ export interface components {
       | "alter_policy"
       | "drop_policy"
       | "row_level_security"
-      | "comment";
+      | "comment"
+      | "written";
     /**
      * @description Where a migration stands against the database's imports.
      * @enum {string}
@@ -5718,7 +5720,8 @@ export interface components {
       pg_major: components["schemas"]["PgMajor"];
       /**
        * @description Every rename considered, known or detected, applied or not: what a
-       *     person turns on or off (`renames` in the request, by `key`).
+       *     person turns on or off (`renames` in the request, by `key`). For a
+       *     migration written by hand, they shape its down migration only.
        */
       renames: components["schemas"]["RenameCandidate"][];
       /** @description In order; the same whatever the format. */
@@ -5734,6 +5737,14 @@ export interface components {
        *     possible rename, a type recreated…).
        */
       warnings: components["schemas"]["MigrationWarning"][];
+      /**
+       * @description The up migration is a draft's, written by hand (migration mode):
+       *     `statements` and the files' up migration are its statements as
+       *     written, in its order (data statements included, its `BEGIN` and
+       *     `COMMIT` left to the tool), none flagged; the down migration, where
+       *     the tool has one, is still planned from the schemas.
+       */
+      written: boolean;
     };
     SearchResults: {
       hits: components["schemas"]["SchemaHit"][];
@@ -9762,7 +9773,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `compile_failed`: the SQL has errors (`details.diagnostics`) */
+      /** @description `compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse */
       422: {
         headers: {
           [name: string]: unknown;

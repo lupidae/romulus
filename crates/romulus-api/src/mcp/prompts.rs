@@ -254,7 +254,8 @@ fn write_migration(draft: &str) -> String {
         "Write the migration of the romulus draft {draft} into this repository.\n\
          1. get_draft {draft}: check that it compiles and is not stale (if it is, stop and \
          tell me). Before writing anything, tell me every statement of its migration flagged \
-         DELETES DATA, CAN FAIL or WIDENS ACCESS.\n\
+         DELETES DATA, CAN FAIL or WIDENS ACCESS (a draft in migration mode is written by hand \
+         and none of it is flagged: tell me instead what each statement does to existing rows).\n\
          2. Find how this repository migrates its database: the tool (Flyway, Prisma, sqlx, \
          dbmate, golang-migrate, plain SQL files; or Rails, Django, Alembic), its migrations \
          folder, and how the files there are named and numbered.\n\

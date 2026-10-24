@@ -4,7 +4,8 @@
 //! files a migration tool expects (sqlx, Flyway, Prisma, dbmate,
 //! golang-migrate or plain SQL), with a best-effort down migration where the
 //! tool has one. A draft's migration ([`crate::drafts::migration`]) shares
-//! [`SchemaMigration`] and [`build`].
+//! [`SchemaMigration`] and [`build`]; one written by hand (migration mode)
+//! is laid out as written, its down migration planned.
 //!
 //! Renames: the versions in the range keep the renames they were
 //! published with (`versions.renames`, see [`stored_renames`]); they are
@@ -128,8 +129,15 @@ pub struct SchemaMigration {
     /// The Postgres major it is written for: the database's.
     pub pg_major: PgMajor,
     /// Every rename considered, known or detected, applied or not: what a
-    /// person turns on or off (`renames` in the request, by `key`).
+    /// person turns on or off (`renames` in the request, by `key`). For a
+    /// migration written by hand, they shape its down migration only.
     pub renames: Vec<Candidate>,
+    /// The up migration is a draft's, written by hand (migration mode):
+    /// `statements` and the files' up migration are its statements as
+    /// written, in its order (data statements included, its `BEGIN` and
+    /// `COMMIT` left to the tool), none flagged; the down migration, where
+    /// the tool has one, is still planned from the schemas.
+    pub written: bool,
 }
 
 /// The two sides, for [`build`].
@@ -150,6 +158,9 @@ pub(crate) struct Sides<'a> {
     pub major: PgMajor,
     /// The renames to plan with.
     pub renames: RenameChoices,
+    /// The up migration as written (a draft in migration mode): laid out
+    /// instead of the planned one, which still gives the down migration.
+    pub written: Option<String>,
 }
 
 /// Plans the migration and lays it out (off the async workers: a few
@@ -189,8 +200,9 @@ pub(crate) async fn build(
     let concurrently = options.concurrently;
     let major = Some(sides.major.number());
     let renames = sides.renames;
+    let written = sides.written;
     let (up, files) = tokio::task::spawn_blocking(move || {
-        let up = migration(
+        let planned = migration(
             &old,
             &new,
             &Options {
@@ -200,20 +212,37 @@ pub(crate) async fn build(
             },
         );
         let down = if format.has_down() {
-            romulus_migration::down(&old, &new, &up)
+            romulus_migration::down(&old, &new, &planned)
         } else {
             romulus_migration::Migration::default()
         };
+        let up = match written {
+            // The statements a test of the draft runs, as written.
+            Some(text) => romulus_migration_check::statements::layout(&text).map(|up| {
+                romulus_migration::Migration {
+                    major,
+                    renames: planned.renames,
+                    ..up
+                }
+            })?,
+            None => planned,
+        };
         let files = files(&up, &down, format, &meta);
-        (up, files)
+        Ok::<_, String>((up, files))
     })
     .await
-    .map_err(ApiError::internal)?;
+    .map_err(ApiError::internal)?
+    .map_err(|error| ApiError::Unprocessable {
+        code: "migration_unreadable",
+        message: format!("The migration does not parse ({error}): fix it to see its files."),
+        details: None,
+    })?;
     Ok(SchemaMigration {
         from: sides.from,
         to: sides.to,
         format,
         destructive: up.destructive(),
+        written: up.written,
         statements: up.statements,
         warnings: up.warnings,
         files,
@@ -368,6 +397,7 @@ async fn version_migration(
         database: format!("{org}/{slug}"),
         major: database.pg_major,
         renames,
+        written: None,
     };
     Ok(Json(build(sides, options).await?))
 }

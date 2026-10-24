@@ -75,17 +75,10 @@ impl Statement {
     /// The statements of a migration written by hand, or why it does not
     /// split (a syntax error, located).
     pub fn split(text: &str) -> Result<Vec<Self>, String> {
-        let parsed = romulus_sandbox::parse(text);
-        if let Some(error) = parsed.errors.first() {
-            return Err(match error.span {
-                Some(span) => format!("line {}: {}", span.from.line, error.message),
-                None => error.message.clone(),
-            });
-        }
-        Ok(parsed
+        Ok(parsed(text)?
             .statements
             .iter()
-            .map(|s| Self::written(format!("{};", s.text(text))))
+            .map(|s| Self::written(as_run(s, text)))
             .collect())
     }
 
@@ -138,6 +131,79 @@ pub enum Progress {
     Done(Box<StatementResult>),
 }
 
+/// `text` parsed, or its first syntax error.
+fn parsed(text: &str) -> Result<romulus_sandbox::ParsedSql, String> {
+    let parsed = romulus_sandbox::parse(text);
+    if let Some(error) = parsed.errors.first() {
+        return Err(match error.span {
+            Some(span) => format!("line {}: {}", span.from.line, error.message),
+            None => error.message.clone(),
+        });
+    }
+    Ok(parsed)
+}
+
+/// A written statement as a run sends it: its text and a `;`.
+fn as_run(statement: &romulus_sandbox::Statement, text: &str) -> String {
+    format!("{};", statement.text(text))
+}
+
+/// A migration written by hand as romulus-migration lays a migration out
+/// in a tool's files ([`romulus_migration::files`]): each statement
+/// [`Statement::split`] reads, as a run sends it, in order, with the
+/// comment block written right above it and a comment after its `;`;
+/// transaction control left out (the tool's transaction, or the plain
+/// file's `BEGIN`/`COMMIT`, stands for it, as a run skips it); a statement
+/// that cannot run in a transaction on [`romulus_migration::Stage::Concurrent`],
+/// so that per-file-transaction tools give it a file of its own. None is
+/// flagged: romulus planned none of them.
+pub fn layout(text: &str) -> Result<romulus_migration::Migration, String> {
+    use romulus_migration::{Kind, Section, Stage};
+    let statements = parsed(text)?
+        .statements
+        .iter()
+        .filter_map(|s| {
+            let (control, outside) = shape_of(s.node());
+            if control {
+                return None;
+            }
+            let mut sql = String::new();
+            let above = text[s.extent.start..s.span.start].trim_end();
+            if !above.is_empty() {
+                sql.push_str(above);
+                sql.push('\n');
+            }
+            sql.push_str(&as_run(s, text));
+            let after = text[s.span.end..s.extent.end.max(s.span.end)].trim_start();
+            if let Some(comment) = after.strip_prefix(';').map(str::trim)
+                && !comment.is_empty()
+            {
+                sql.push(' ');
+                sql.push_str(comment);
+            }
+            Some(romulus_migration::Statement {
+                sql,
+                kind: Kind::Written,
+                hazard: None,
+                destructive: false,
+                note: None,
+                alternative: None,
+                stage: if outside {
+                    Stage::Concurrent
+                } else {
+                    Stage::Transaction
+                },
+                section: Section::Written,
+            })
+        })
+        .collect();
+    Ok(romulus_migration::Migration {
+        statements,
+        written: true,
+        ..romulus_migration::Migration::default()
+    })
+}
+
 /// How a statement must run: transaction control (skipped), or outside a
 /// transaction.
 pub(crate) fn shape(sql: &str) -> (bool, bool) {
@@ -145,8 +211,13 @@ pub(crate) fn shape(sql: &str) -> (bool, bool) {
     let Some(statement) = parsed.statements.first() else {
         return (false, false);
     };
-    let transaction_control = matches!(statement.node(), NodeEnum::TransactionStmt(_));
-    let outside = match statement.node() {
+    shape_of(statement.node())
+}
+
+/// [`shape`], of a statement parsed.
+fn shape_of(node: &NodeEnum) -> (bool, bool) {
+    let transaction_control = matches!(node, NodeEnum::TransactionStmt(_));
+    let outside = match node {
         NodeEnum::IndexStmt(s) => s.concurrent,
         NodeEnum::DropStmt(s) => s.concurrent,
         NodeEnum::ReindexStmt(s) => s
@@ -612,6 +683,59 @@ mod tests {
         assert_eq!(shape("COMMIT"), (true, false));
         assert_eq!(shape("DROP INDEX CONCURRENTLY i"), (false, true));
         assert_eq!(shape("ALTER TABLE t ADD COLUMN b int;"), (false, false));
+    }
+
+    #[test]
+    fn a_written_migration_is_laid_out_as_a_run_sends_it_comments_kept() {
+        use romulus_migration::Stage::{Concurrent, Transaction};
+
+        let text = "-- acme/shop: migration from v1, written by hand.\n\n\
+                    BEGIN;\n\
+                    ALTER TABLE users ADD COLUMN email text;\n\n\
+                    -- Backfill before NOT NULL.\n\
+                    UPDATE users SET email = 'x' WHERE email IS NULL; -- every row\n\
+                    ALTER TABLE users ALTER COLUMN email SET NOT NULL\n;\n\
+                    COMMIT;\n\
+                    create unique index concurrently users_email on users (email);\n\
+                    ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE USING INDEX users_email\n";
+        let laid = layout(text).unwrap();
+        assert!(laid.written);
+        let sql: Vec<&str> = laid.statements.iter().map(|s| s.sql.as_str()).collect();
+        assert_eq!(
+            sql,
+            [
+                "ALTER TABLE users ADD COLUMN email text;",
+                "-- Backfill before NOT NULL.\nUPDATE users SET email = 'x' WHERE email IS NULL; -- every row",
+                "ALTER TABLE users ALTER COLUMN email SET NOT NULL;",
+                "create unique index concurrently users_email on users (email);",
+                "ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE USING INDEX users_email;",
+            ]
+        );
+        let stages: Vec<_> = laid.statements.iter().map(|s| s.stage).collect();
+        assert_eq!(
+            stages,
+            [
+                Transaction,
+                Transaction,
+                Transaction,
+                Concurrent,
+                Transaction
+            ]
+        );
+        assert!(laid.statements.iter().all(|s| s.hazard.is_none()));
+        // The statements a test runs, transaction control aside, are these
+        // without their comments.
+        let ran: Vec<String> = Statement::split(text)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.sql)
+            .filter(|sql| !shape(sql).0)
+            .collect();
+        assert_eq!(ran.len(), laid.statements.len());
+        for (ran, laid) in ran.iter().zip(&laid.statements) {
+            assert!(laid.sql.contains(ran.as_str()), "{ran:?} in {:?}", laid.sql);
+        }
+        assert!(layout("ALTER TABLE users ADD;").is_err());
     }
 
     #[test]
