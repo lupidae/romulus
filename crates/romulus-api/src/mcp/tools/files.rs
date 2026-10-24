@@ -931,8 +931,10 @@ async fn get_migration_files(ctx: &Ctx, a: FilesArgs) -> Result<Output, ToolErro
             out.push_str(
                 "Written by hand in the draft (migration mode): the up files hold its statements \
                  as written, in order, data statements included, exactly what test_migration \
-                 runs; romulus flags none of them. The down migration, where the tool has one, \
-                 is romulus's, planned from the schemas.\n",
+                 runs, split where it commits and around what cannot run in a transaction; what \
+                 each can do to existing rows is read from the statement. The down migration, \
+                 where the tool has one, is romulus's, planned from the schemas, in the first \
+                 part's files (the later ones have none of their own).\n",
             );
         }
         if view.destructive > 0 {

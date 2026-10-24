@@ -3974,7 +3974,7 @@
             }
           },
           "422": {
-            "description": "`compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse",
+            "description": "`compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse, or holds a `ROLLBACK` or a savepoint",
             "content": {
               "application/json": {
                 "schema": {
@@ -19327,7 +19327,7 @@
           },
           "written": {
             "type": "boolean",
-            "description": "The up migration is a draft's, written by hand (migration mode):\n`statements` and the files' up migration are its statements as\nwritten, in its order (data statements included, its `BEGIN` and\n`COMMIT` left to the tool), none flagged; the down migration, where\nthe tool has one, is still planned from the schemas."
+            "description": "The up migration is a draft's, written by hand (migration mode):\n`statements` and the files' up migration are its statements as\nwritten, in its order (data statements included; its `BEGIN` and\n`COMMIT` left to the tool, the files split where it commits), each\none's hazard (and `destructive`) read from what it does to existing\nrows rather than planned; the down migration, where the tool has\none, is still planned from the schemas, in the first part's files."
           }
         }
       },

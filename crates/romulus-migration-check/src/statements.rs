@@ -19,10 +19,12 @@
 
 use std::{collections::HashMap, time::Duration};
 
+use remus_core::Schema;
 use romulus_sandbox::pg_query::NodeEnum;
 use tokio::time::Instant;
 
 use crate::{
+    effects::{Effect, Walk},
     report::{
         Lock, MigrationReport, Offending, SqlError, StatementResult, StatementStatus, TextSpan,
     },
@@ -149,59 +151,201 @@ fn as_run(statement: &romulus_sandbox::Statement, text: &str) -> String {
 }
 
 /// A migration written by hand as romulus-migration lays a migration out
-/// in a tool's files ([`romulus_migration::files`]): each statement
-/// [`Statement::split`] reads, as a run sends it, in order, with the
-/// comment block written right above it and a comment after its `;`;
-/// transaction control left out (the tool's transaction, or the plain
-/// file's `BEGIN`/`COMMIT`, stands for it, as a run skips it); a statement
-/// that cannot run in a transaction on [`romulus_migration::Stage::Concurrent`],
-/// so that per-file-transaction tools give it a file of its own. None is
-/// flagged: romulus planned none of them.
-pub fn layout(text: &str) -> Result<romulus_migration::Migration, String> {
+/// in a tool's files ([`romulus_migration::files`]), from the base schema
+/// it runs on: each statement [`Statement::split`] reads, as a run sends
+/// it (its text byte for byte, then `;`), in order. Every comment goes
+/// with the statement after it (the last ones with the last statement),
+/// and a comment after a `;` with its statement. Its `BEGIN`, `START
+/// TRANSACTION` and `COMMIT` are left out (the tool's transaction, or the
+/// plain file's, stands for them, as a run skips them) but kept as where
+/// it commits ([`romulus_migration::Migration::commits`]), as is an enum
+/// value added; `ROLLBACK`, savepoints and prepared transactions are
+/// refused (files run whole). A statement that cannot run in a transaction
+/// is on [`romulus_migration::Stage::Concurrent`], so that
+/// per-file-transaction tools give it a file of its own. Each one's hazard
+/// is read from what it does ([`hazard_of`]): romulus planned none of them.
+pub fn layout(text: &str, base: &Schema) -> Result<romulus_migration::Migration, String> {
     use romulus_migration::{Kind, Section, Stage};
-    let statements = parsed(text)?
-        .statements
-        .iter()
-        .filter_map(|s| {
-            let (control, outside) = shape_of(s.node());
-            if control {
-                return None;
+    use romulus_sandbox::pg_query::protobuf::{ObjectType, TransactionStmtKind as T};
+
+    let parsed = parsed(text)?;
+    let mut walk = Walk::new(base);
+    let mut statements: Vec<romulus_migration::Statement> = Vec::new();
+    let mut commits: Vec<usize> = Vec::new();
+    // Comments not yet given to a statement.
+    let mut pending = String::new();
+    let mut cursor = 0;
+    for s in &parsed.statements {
+        let end = s.extent.end.max(s.span.end);
+        comments(&mut pending, &text[cursor.min(s.span.start)..s.span.start]);
+        cursor = end;
+        let after = text[s.span.end..end].trim_start();
+        let trailing = after.strip_prefix(';').unwrap_or(after).trim();
+        if let NodeEnum::TransactionStmt(t) = s.node() {
+            match t.kind() {
+                T::TransStmtBegin | T::TransStmtStart | T::TransStmtCommit => {
+                    if let Some(last) = statements.len().checked_sub(1)
+                        && !commits.contains(&last)
+                    {
+                        commits.push(last);
+                    }
+                    comments(&mut pending, trailing);
+                    continue;
+                }
+                _ => {
+                    return Err(format!(
+                        "line {}: {} cannot go in a migration tool's files, which run whole: \
+                         remove it",
+                        s.span.from.line,
+                        s.text(text).trim()
+                    ));
+                }
             }
-            let mut sql = String::new();
-            let above = text[s.extent.start..s.span.start].trim_end();
-            if !above.is_empty() {
-                sql.push_str(above);
-                sql.push('\n');
-            }
-            sql.push_str(&as_run(s, text));
-            let after = text[s.span.end..s.extent.end.max(s.span.end)].trim_start();
-            if let Some(comment) = after.strip_prefix(';').map(str::trim)
-                && !comment.is_empty()
-            {
-                sql.push(' ');
-                sql.push_str(comment);
-            }
-            Some(romulus_migration::Statement {
-                sql,
-                kind: Kind::Written,
-                hazard: None,
-                destructive: false,
-                note: None,
-                alternative: None,
-                stage: if outside {
-                    Stage::Concurrent
-                } else {
-                    Stage::Transaction
-                },
-                section: Section::Written,
-            })
-        })
-        .collect();
+        }
+        let run = as_run(s, text);
+        let (_, outside) = shape_of(s.node());
+        let hazard = hazard_of(&walk.statement(&run), &walk).or_else(|| widens_access(s.node()));
+        let kind = match s.node() {
+            NodeEnum::IndexStmt(_) => Kind::CreateIndex,
+            NodeEnum::DropStmt(d) if d.remove_type() == ObjectType::ObjectIndex => Kind::DropIndex,
+            _ => Kind::Written,
+        };
+        let mut sql = std::mem::take(&mut pending);
+        sql.push_str(&run);
+        if !trailing.is_empty() {
+            sql.push(' ');
+            sql.push_str(trailing);
+        }
+        if let NodeEnum::AlterEnumStmt(e) = s.node()
+            && e.old_val.is_empty()
+        {
+            // An enum value added: Postgres refuses to use it before the
+            // transaction that added it commits.
+            commits.push(statements.len());
+        }
+        statements.push(romulus_migration::Statement {
+            sql,
+            kind,
+            hazard,
+            destructive: matches!(
+                hazard,
+                Some(romulus_migration::Hazard::DeletesData | romulus_migration::Hazard::CanFail)
+            ),
+            note: None,
+            alternative: None,
+            stage: if outside {
+                Stage::Concurrent
+            } else {
+                Stage::Transaction
+            },
+            section: Section::Written,
+        });
+    }
+    comments(&mut pending, &text[cursor.min(text.len())..]);
+    if let Some(last) = statements.last_mut()
+        && !pending.is_empty()
+    {
+        last.sql.push('\n');
+        last.sql.push_str(pending.trim_end());
+    }
+    commits.sort_unstable();
     Ok(romulus_migration::Migration {
         statements,
         written: true,
+        commits,
         ..romulus_migration::Migration::default()
     })
+}
+
+/// The comments between two statements (whatever lines separate them),
+/// added to `pending`.
+fn comments(pending: &mut String, gap: &str) {
+    let gap = gap.trim().trim_start_matches(';').trim();
+    if !gap.is_empty() {
+        pending.push_str(gap);
+        pending.push('\n');
+    }
+}
+
+/// What a written statement risks, from what it does to the rows of the
+/// tables it touches that existed before (a table the migration created
+/// has none): data deleted or changed (a table, column or rows dropped, an
+/// existing column's values updated), or a statement existing rows can
+/// make fail (a constraint, `NOT NULL`, a unique index, a conversion, a
+/// partition attached).
+pub fn hazard_of(effects: &[Effect], walk: &Walk) -> Option<romulus_migration::Hazard> {
+    use romulus_migration::Hazard;
+    let existed = |table: usize| walk.tables.get(table).is_some_and(|t| t.base.is_some());
+    let column_existed = |table: usize, column: usize| {
+        existed(table)
+            && walk
+                .tables
+                .get(table)
+                .and_then(|t| t.columns.get(column))
+                .is_some_and(|c| c.base.is_some())
+    };
+    // The strongest wins: data first, then failing on rows, then access.
+    let rank = |hazard: Option<Hazard>| match hazard {
+        Some(Hazard::DeletesData) => 3,
+        Some(Hazard::CanFail) => 2,
+        Some(Hazard::WidensAccess) => 1,
+        None => 0,
+    };
+    let mut worst = None;
+    for effect in effects {
+        let hazard = match effect {
+            Effect::TableDropped { table } | Effect::RowsDeleted { table, .. }
+                if existed(*table) =>
+            {
+                Some(Hazard::DeletesData)
+            }
+            Effect::ColumnDropped { table, column } if column_existed(*table, *column) => {
+                Some(Hazard::DeletesData)
+            }
+            Effect::ValuesChanged { table, columns } if existed(*table) => match columns {
+                Some(columns) if !columns.iter().any(|c| column_existed(*table, *c)) => None,
+                _ => Some(Hazard::DeletesData),
+            },
+            Effect::ColumnConverted { table, column, .. } if column_existed(*table, *column) => {
+                Some(Hazard::CanFail)
+            }
+            Effect::ColumnAdded {
+                table, rows: true, ..
+            }
+            | Effect::Altered { table, rows: true }
+                if existed(*table) =>
+            {
+                Some(Hazard::CanFail)
+            }
+            Effect::Attached { parent, child } if existed(*parent) || existed(*child) => {
+                Some(Hazard::CanFail)
+            }
+            _ => None,
+        };
+        if rank(hazard) > rank(worst) {
+            worst = hazard;
+        }
+    }
+    worst
+}
+
+/// Row level security turned off or unforced, a permissive policy created
+/// or changed: more rows to more roles.
+fn widens_access(node: &NodeEnum) -> Option<romulus_migration::Hazard> {
+    use romulus_sandbox::pg_query::protobuf::AlterTableType as A;
+    let widens = match node {
+        NodeEnum::AlterTableStmt(alter) => alter.cmds.iter().any(|cmd| {
+            matches!(
+                cmd.node.as_ref(),
+                Some(NodeEnum::AlterTableCmd(c))
+                    if matches!(c.subtype(), A::AtDisableRowSecurity | A::AtNoForceRowSecurity)
+            )
+        }),
+        NodeEnum::CreatePolicyStmt(policy) => policy.permissive,
+        NodeEnum::AlterPolicyStmt(_) => true,
+        _ => false,
+    };
+    widens.then_some(romulus_migration::Hazard::WidensAccess)
 }
 
 /// How a statement must run: transaction control (skipped), or outside a
@@ -685,30 +829,75 @@ mod tests {
         assert_eq!(shape("ALTER TABLE t ADD COLUMN b int;"), (false, false));
     }
 
+    /// `users (id, name)`, `orders (id, status)`, the enum `status`.
+    fn base() -> Schema {
+        let column = |name: &str, ty: &str, kind: &str| {
+            serde_json::json!({
+                "name": name, "type": ty, "type_schema": if kind == "e" { "public" } else { "pg_catalog" },
+                "type_name": ty, "type_kind": kind, "not_null": false, "default": null,
+                "identity": null, "generated": null, "comment": null
+            })
+        };
+        let table = |name: &str, columns: Vec<serde_json::Value>| {
+            serde_json::json!({
+                "schema": "public", "name": name, "kind": "r", "comment": null,
+                "partition_key": null, "view_definition": null, "columns": columns
+            })
+        };
+        Schema::from_json(
+            &serde_json::json!({
+                "remus_version": "0.2", "database": "t", "server_version": "17",
+                "entities": [
+                    table("users", vec![column("id", "integer", "b"), column("name", "text", "b")]),
+                    table("orders", vec![column("id", "integer", "b"), column("status", "status", "e")]),
+                ],
+                "enums": [{"schema": "public", "name": "status", "labels": ["open", "closed"], "comment": null}]
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    fn laid(text: &str) -> romulus_migration::Migration {
+        layout(text, &base()).unwrap()
+    }
+
+    fn sqls(m: &romulus_migration::Migration) -> Vec<&str> {
+        m.statements.iter().map(|s| s.sql.as_str()).collect()
+    }
+
     #[test]
     fn a_written_migration_is_laid_out_as_a_run_sends_it_comments_kept() {
         use romulus_migration::Stage::{Concurrent, Transaction};
 
         let text = "-- acme/shop: migration from v1, written by hand.\n\n\
-                    BEGIN;\n\
+                    -- The email, backfilled.\n\
+                    BEGIN; -- one transaction\n\
                     ALTER TABLE users ADD COLUMN email text;\n\n\
-                    -- Backfill before NOT NULL.\n\
+                    -- Backfill before NOT NULL.\n\n\
+                    -- (every row)\n\
                     UPDATE users SET email = 'x' WHERE email IS NULL; -- every row\n\
                     ALTER TABLE users ALTER COLUMN email SET NOT NULL\n;\n\
+                    -- Done.\n\
                     COMMIT;\n\
                     create unique index concurrently users_email on users (email);\n\
-                    ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE USING INDEX users_email\n";
-        let laid = layout(text).unwrap();
+                    ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE USING INDEX users_email -- last\n\
+                    -- The end.\n";
+        let laid = laid(text);
         assert!(laid.written);
-        let sql: Vec<&str> = laid.statements.iter().map(|s| s.sql.as_str()).collect();
         assert_eq!(
-            sql,
+            sqls(&laid),
             [
-                "ALTER TABLE users ADD COLUMN email text;",
-                "-- Backfill before NOT NULL.\nUPDATE users SET email = 'x' WHERE email IS NULL; -- every row",
+                "-- acme/shop: migration from v1, written by hand.\n\n\
+                 -- The email, backfilled.\n\
+                 -- one transaction\n\
+                 ALTER TABLE users ADD COLUMN email text;",
+                "-- Backfill before NOT NULL.\n\n-- (every row)\n\
+                 UPDATE users SET email = 'x' WHERE email IS NULL; -- every row",
                 "ALTER TABLE users ALTER COLUMN email SET NOT NULL;",
-                "create unique index concurrently users_email on users (email);",
-                "ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE USING INDEX users_email;",
+                "-- Done.\ncreate unique index concurrently users_email on users (email);",
+                "ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE USING INDEX users_email; -- last\n\
+                 -- The end.",
             ]
         );
         let stages: Vec<_> = laid.statements.iter().map(|s| s.stage).collect();
@@ -722,7 +911,8 @@ mod tests {
                 Transaction
             ]
         );
-        assert!(laid.statements.iter().all(|s| s.hazard.is_none()));
+        // It commits where its author did.
+        assert_eq!(laid.commits, [2]);
         // The statements a test runs, transaction control aside, are these
         // without their comments.
         let ran: Vec<String> = Statement::split(text)
@@ -735,7 +925,112 @@ mod tests {
         for (ran, laid) in ran.iter().zip(&laid.statements) {
             assert!(laid.sql.contains(ran.as_str()), "{ran:?} in {:?}", laid.sql);
         }
-        assert!(layout("ALTER TABLE users ADD;").is_err());
+        assert!(layout("ALTER TABLE users ADD;", &base()).is_err());
+    }
+
+    #[test]
+    fn an_enum_value_added_is_committed_before_it_is_used() {
+        // Each statement in its transaction, as a test runs them: the
+        // files must commit the value before the UPDATE uses it.
+        let laid = laid(
+            "BEGIN; ALTER TYPE status ADD VALUE 'archived'; COMMIT;\n\
+             BEGIN; UPDATE orders SET status = 'archived' WHERE id < 10; COMMIT;\n",
+        );
+        assert_eq!(laid.commits, [0, 1]);
+        // Without its author's transactions too.
+        let bare = laid_bare();
+        assert_eq!(bare.commits, [0]);
+    }
+
+    fn laid_bare() -> romulus_migration::Migration {
+        laid("ALTER TYPE status ADD VALUE 'archived';\nUPDATE orders SET status = 'archived';\n")
+    }
+
+    #[test]
+    fn transaction_control_starts_and_ends_parts_and_rollbacks_are_refused() {
+        let laid = laid(
+            "ALTER TABLE users ADD COLUMN a text;\n\
+             START TRANSACTION;\n\
+             ALTER TABLE users ADD COLUMN b text;\n\
+             ALTER TABLE users ADD COLUMN c text;\n\
+             END;\n",
+        );
+        assert_eq!(laid.statements.len(), 3);
+        assert_eq!(laid.commits, [0, 2]);
+        for refused in [
+            "ALTER TABLE users ADD COLUMN a text;\nROLLBACK;\n",
+            "BEGIN;\nSAVEPOINT s;\nALTER TABLE users ADD COLUMN a text;\nROLLBACK TO s;\nCOMMIT;\n",
+            "ALTER TABLE users ADD COLUMN a text;\nRELEASE SAVEPOINT s;\n",
+        ] {
+            let error = layout(refused, &base()).unwrap_err();
+            assert!(
+                error.contains("cannot go in a migration tool's files"),
+                "{error}"
+            );
+        }
+        assert!(
+            layout("ALTER TABLE users ADD COLUMN a text;\nROLLBACK;\n", &base())
+                .unwrap_err()
+                .starts_with("line 2: ROLLBACK")
+        );
+    }
+
+    #[test]
+    fn bodies_holding_begin_or_semicolons_stay_whole_and_byte_for_byte() {
+        let function = "CREATE FUNCTION public.touch() RETURNS trigger LANGUAGE plpgsql AS $body$\r\n\
+                        BEGIN\r\n  NEW.name := 'a;b';\r\n  COMMIT;\r\n  RETURN NEW;\r\nEND\r\n$body$";
+        let block = "DO $$ BEGIN UPDATE users SET name = 'x\r\ny'; END $$";
+        let laid = laid(&format!("{function};\r\n{block};\r\n"));
+        assert_eq!(sqls(&laid), [format!("{function};"), format!("{block};")]);
+        assert_eq!(laid.commits, Vec::<usize>::new());
+    }
+
+    #[test]
+    fn hazards_are_read_from_what_each_statement_does_to_existing_rows() {
+        use romulus_migration::{
+            Hazard::{self, CanFail, DeletesData, WidensAccess},
+            Kind,
+        };
+
+        let laid = laid(
+            "ALTER TABLE users ADD COLUMN email text;\n\
+             UPDATE users SET email = 'x';\n\
+             UPDATE users SET name = upper(name);\n\
+             ALTER TABLE users ALTER COLUMN email SET NOT NULL;\n\
+             ALTER TABLE users DROP COLUMN name;\n\
+             CREATE TABLE notes (id int);\n\
+             DROP TABLE notes;\n\
+             DELETE FROM orders WHERE id < 0;\n\
+             ALTER TABLE orders ALTER COLUMN id TYPE bigint;\n\
+             CREATE INDEX CONCURRENTLY orders_status ON orders (status);\n\
+             /* old */ DROP INDEX CONCURRENTLY IF EXISTS orders_old;\n\
+             ALTER TABLE orders DISABLE ROW LEVEL SECURITY;\n",
+        );
+        let hazards: Vec<Option<Hazard>> = laid.statements.iter().map(|s| s.hazard).collect();
+        assert_eq!(
+            hazards,
+            [
+                None,
+                // A column the migration added: no data of before changed.
+                None,
+                Some(DeletesData),
+                Some(CanFail),
+                Some(DeletesData),
+                None,
+                // A table the migration created: no rows of before.
+                None,
+                Some(DeletesData),
+                Some(CanFail),
+                None,
+                None,
+                Some(WidensAccess),
+            ]
+        );
+        assert_eq!(laid.destructive(), 5);
+        let kinds: Vec<Kind> = laid.statements.iter().map(|s| s.kind).collect();
+        assert_eq!(kinds[9], Kind::CreateIndex);
+        assert_eq!(kinds[10], Kind::DropIndex);
+        assert_eq!(kinds[0], Kind::Written);
     }
 
     #[test]

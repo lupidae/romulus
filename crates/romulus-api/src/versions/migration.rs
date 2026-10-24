@@ -134,9 +134,11 @@ pub struct SchemaMigration {
     pub renames: Vec<Candidate>,
     /// The up migration is a draft's, written by hand (migration mode):
     /// `statements` and the files' up migration are its statements as
-    /// written, in its order (data statements included, its `BEGIN` and
-    /// `COMMIT` left to the tool), none flagged; the down migration, where
-    /// the tool has one, is still planned from the schemas.
+    /// written, in its order (data statements included; its `BEGIN` and
+    /// `COMMIT` left to the tool, the files split where it commits), each
+    /// one's hazard (and `destructive`) read from what it does to existing
+    /// rows rather than planned; the down migration, where the tool has
+    /// one, is still planned from the schemas, in the first part's files.
     pub written: bool,
 }
 
@@ -218,7 +220,7 @@ pub(crate) async fn build(
         };
         let up = match written {
             // The statements a test of the draft runs, as written.
-            Some(text) => romulus_migration_check::statements::layout(&text).map(|up| {
+            Some(text) => romulus_migration_check::statements::layout(&text, &old).map(|up| {
                 romulus_migration::Migration {
                     major,
                     renames: planned.renames,
@@ -234,7 +236,7 @@ pub(crate) async fn build(
     .map_err(ApiError::internal)?
     .map_err(|error| ApiError::Unprocessable {
         code: "migration_unreadable",
-        message: format!("The migration does not parse ({error}): fix it to see its files."),
+        message: format!("This migration's files cannot be written: {error}."),
         details: None,
     })?;
     Ok(SchemaMigration {

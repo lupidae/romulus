@@ -5740,9 +5740,11 @@ export interface components {
       /**
        * @description The up migration is a draft's, written by hand (migration mode):
        *     `statements` and the files' up migration are its statements as
-       *     written, in its order (data statements included, its `BEGIN` and
-       *     `COMMIT` left to the tool), none flagged; the down migration, where
-       *     the tool has one, is still planned from the schemas.
+       *     written, in its order (data statements included; its `BEGIN` and
+       *     `COMMIT` left to the tool, the files split where it commits), each
+       *     one's hazard (and `destructive`) read from what it does to existing
+       *     rows rather than planned; the down migration, where the tool has
+       *     one, is still planned from the schemas, in the first part's files.
        */
       written: boolean;
     };
@@ -9773,7 +9775,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse */
+      /** @description `compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse, or holds a `ROLLBACK` or a savepoint */
       422: {
         headers: {
           [name: string]: unknown;

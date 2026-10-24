@@ -946,6 +946,10 @@ async fn a_written_migration_s_files_are_its_statements_as_written(db: PgPool) {
         generated.contains("written by hand in the draft: 6 statements"),
         "{generated}"
     );
+    assert!(
+        generated.contains("[CAN FAIL on existing rows]"),
+        "{generated}"
+    );
     in_order(&generated, &WRITTEN_IN_ORDER);
 }
 

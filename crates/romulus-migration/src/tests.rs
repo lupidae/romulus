@@ -839,10 +839,14 @@ fn written() -> Migration {
                 "ALTER TABLE users ALTER COLUMN name SET NOT NULL;",
                 Stage::Transaction,
             ),
-            statement(
-                "create unique index concurrently if not exists users_name on users (name);",
-                Stage::Concurrent,
-            ),
+            Statement {
+                kind: Kind::CreateIndex,
+                ..statement(
+                    "-- concurrently, says this comment\n\
+                     create unique index concurrently if not exists users_name on users (name);",
+                    Stage::Concurrent,
+                )
+            },
             statement(
                 "ALTER TABLE users ADD CONSTRAINT users_name_key UNIQUE USING INDEX users_name;",
                 Stage::Transaction,
@@ -922,7 +926,10 @@ fn a_written_migration_keeps_its_order_split_around_what_cannot_run_in_a_transac
         ),
         "{plain}"
     );
-    assert!(plain.contains("-- 5 statements.\n"), "{plain}");
+    assert!(
+        plain.contains("-- 5 statements, none flagged.\n"),
+        "{plain}"
+    );
     assert!(
         !plain.contains("-- Written by hand\n"),
         "no heading: {plain}"
@@ -947,6 +954,123 @@ fn a_written_migration_keeps_its_order_split_around_what_cannot_run_in_a_transac
     assert_eq!(plain.matches("BEGIN;").count(), 2, "{plain}");
     // Nothing flagged, nothing marked.
     assert!(laid(Format::Sqlx).iter().all(|f| f.marks.is_empty()));
+}
+
+#[test]
+fn a_written_migration_is_split_where_it_commits() {
+    // `BEGIN; ALTER TYPE status ADD VALUE 'archived'; COMMIT; BEGIN; UPDATE
+    // … 'archived' …; COMMIT;`: the value must be committed before the
+    // UPDATE uses it, as a test (a transaction per statement) runs it.
+    let (_, down) = with_index_concurrently();
+    let mut up = written();
+    up.statements.truncate(2);
+    up.statements[0].sql = "ALTER TYPE status ADD VALUE 'archived';".to_owned();
+    up.statements[1].sql = "UPDATE orders SET status = 'archived' WHERE id < 10;".to_owned();
+    up.commits = vec![0, 1];
+    let paths = |format: Format| -> Vec<String> {
+        files(&up, &down, format, &meta_for(format))
+            .into_iter()
+            .filter(|f| f.role != FileRole::Config)
+            .map(|f| f.path)
+            .collect()
+    };
+    assert_eq!(
+        paths(Format::Sqlx),
+        [
+            "20261016093000_add_names.sql",
+            "20261016093001_add_names_part_2.sql"
+        ]
+    );
+    assert_eq!(
+        paths(Format::Flyway),
+        ["V5__add_names.sql", "V5.1__add_names_part_2.sql"]
+    );
+    let plain = &files(&up, &down, Format::Plain, &meta())[0].content;
+    let value = plain.find("ADD VALUE").unwrap();
+    let first_commit = plain.find("COMMIT;").unwrap();
+    let update = plain.find("UPDATE orders").unwrap();
+    assert!(value < first_commit && first_commit < update, "{plain}");
+    assert_eq!(plain.matches("BEGIN;").count(), 2, "{plain}");
+    let sqlx = files(&up, &down, Format::Sqlx, &meta_for(Format::Sqlx));
+    assert!(
+        sqlx[1].content.contains("split where it commits"),
+        "{}",
+        sqlx[1].content
+    );
+}
+
+#[test]
+fn a_written_statement_keeps_its_bytes_and_marks_its_hazard() {
+    let (_, down) = with_index_concurrently();
+    let mut up = written();
+    up.statements[1].sql = "UPDATE users SET name = E'a\r\nb'\r\n  WHERE name IS NULL;".to_owned();
+    up.statements[2].hazard = Some(Hazard::CanFail);
+    up.statements[2].destructive = true;
+    let sqlx = files(&up, &down, Format::Sqlx, &meta_for(Format::Sqlx));
+    assert!(
+        sqlx[0]
+            .content
+            .contains("UPDATE users SET name = E'a\r\nb'\r\n  WHERE name IS NULL;\n"),
+        "{:?}",
+        sqlx[0].content
+    );
+    assert!(
+        sqlx[0]
+            .content
+            .contains("1 can fail on existing rows (CAN FAIL), each marked"),
+        "{}",
+        sqlx[0].content
+    );
+    assert!(
+        sqlx[0]
+            .content
+            .contains("-- CAN FAIL.\nALTER TABLE users ALTER COLUMN name SET NOT NULL;"),
+        "{}",
+        sqlx[0].content
+    );
+    assert_eq!(sqlx[0].marks.len(), 1);
+}
+
+#[test]
+fn concurrent_files_are_named_from_the_statement_s_kind_past_its_comments() {
+    let statement = |sql: &str, kind: Kind| Statement {
+        sql: sql.to_owned(),
+        kind,
+        hazard: None,
+        destructive: false,
+        note: None,
+        alternative: None,
+        stage: Stage::Concurrent,
+        section: Section::Written,
+    };
+    let up = Migration {
+        statements: vec![
+            statement(
+                "/* concurrently, the old one */ DROP INDEX CONCURRENTLY public.users_old;",
+                Kind::DropIndex,
+            ),
+            statement(
+                "CREATE INDEX /* CONCURRENTLY? */ CONCURRENTLY users_new ON users (name); -- concurrently",
+                Kind::CreateIndex,
+            ),
+            statement("REINDEX INDEX CONCURRENTLY users_new;", Kind::Written),
+        ],
+        written: true,
+        ..Migration::default()
+    };
+    let paths: Vec<String> = files(&up, &Migration::default(), Format::Sqlx, &meta())
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "20261016093000_add_names.sql",
+            "20261016093001_add_names_drop_index_users_old.sql",
+            "20261016093002_add_names_create_index_users_new.sql",
+            "20261016093003_add_names_reindex_index.sql",
+        ]
+    );
 }
 
 #[test]

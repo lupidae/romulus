@@ -3016,6 +3016,7 @@ impl<'a> Planner<'a> {
             renames: self.candidates,
             applied: self.applied,
             written: false,
+            commits: Vec::new(),
         }
     }
 }

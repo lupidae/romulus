@@ -258,14 +258,22 @@ them:
 
 A draft in migration mode (written by hand: `ALTER …`, and data statements
 such as an `UPDATE` backfilling a column before its `SET NOT NULL`) gets its
-own statements, as written and in its order, each with the comment written
-above it: exactly what `test_migration` runs on rows. Its `BEGIN` and
-`COMMIT` give way to the tool's transaction; where the tool runs a file in
-one transaction, a statement that cannot run in one (`CREATE INDEX
-CONCURRENTLY`) gets a file of its own, the statements after it a next part.
-romulus flags only the statements it plans, so none of these is marked; the
-down migration, where the tool has one, is romulus's, planned from the
-draft's schema back to its base.
+own statements, as written and in its order, byte for byte, each with the
+comments written before it: exactly what `test_migration` runs on rows. Its
+transactions are kept: its `BEGIN`, `START TRANSACTION` and `COMMIT` give
+way to the tool's own, and the files are split where it commits (and after
+an `ALTER TYPE … ADD VALUE`, since Postgres refuses to use a new enum value
+in the transaction that added it), each part a transaction of its own
+(`<name>_part_2`…). Where the tool runs a file in one transaction, a
+statement that cannot run in one (`CREATE INDEX CONCURRENTLY`) gets a file
+of its own. A `ROLLBACK` or a savepoint is refused: files run whole. What
+each statement can do to existing rows (delete or change data, fail on
+them, widen access) is read from the statement itself, since romulus did not
+plan it, and marked in the files as in a generated migration. The down
+migration, where the tool has one, is romulus's, planned from the draft's
+schema back to its base: it is in the first part's files, and undoes the
+whole migration; the later parts and the concurrent files have no down of
+their own (their down sections say so).
 
 The agent passes `version` when the repository numbers its files its own way
 (Flyway's next `V<n>`, a golang-migrate sequence), so the new files sort

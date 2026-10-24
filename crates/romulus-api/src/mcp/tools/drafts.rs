@@ -382,7 +382,7 @@ static GET_DRAFT: Tool = Tool {
                   each problem's line, its review state (approvals, review requested, who has \
                   it open), and its migration from its base version (`migration`: false to leave it \
                   out): generated, with every statement that can lose data, fail on existing rows \
-                  or widen access flagged; or, in migration mode, its statements as written. Its reviewed_sha256 is what \
+                  or widen access flagged; or, in migration mode, its statements as written, flagged from what each does. Its reviewed_sha256 is what \
                   publish_draft takes.",
     writes: false,
     destructive: false,
@@ -481,7 +481,8 @@ pub struct MigrationView {
     pub destructive: usize,
     pub files: Vec<File>,
     pub renames: Vec<Candidate>,
-    /// A draft's, written by hand: its statements as written, unflagged.
+    /// A draft's, written by hand: its statements as written, flagged from
+    /// what each does.
     #[serde(default)]
     pub written: bool,
 }
@@ -495,12 +496,14 @@ pub fn migration_text(m: &MigrationView, files: bool) -> String {
     let mut out = if m.written {
         format!(
             "Migration {from} → v{}, written by hand in the draft: {} statement{} as written, in \
-             order, data statements included. romulus flags the statements it plans, not these: \
-             read them for what they do to existing rows, and test_migration runs them on rows. \
-             The down migration, where the tool has one, is romulus's, planned from the schemas.\n",
+             order, data statements included; {} that can lose data or fail on existing rows, \
+             read from what each statement does (romulus did not plan them: test_migration runs \
+             them on rows). The down migration, where the tool has one, is romulus's, planned \
+             from the schemas.\n",
             m.to,
             m.statements.len(),
             if m.statements.len() == 1 { "" } else { "s" },
+            m.destructive
         )
     } else {
         format!(

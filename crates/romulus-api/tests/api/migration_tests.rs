@@ -1382,16 +1382,38 @@ async fn a_written_migration_s_files_hold_its_statements_as_the_test_runs_them(d
             "{format}: {up}"
         );
         assert!(up.contains("written by hand"), "{format}: {up}");
-        // The author's BEGIN and COMMIT give way to the tool's own.
+        // The author's BEGIN and COMMIT give way to the tool's own, one
+        // per part: before the BEGIN, inside, after the concurrent index.
         let transactions = up.matches("BEGIN;").count();
         let expected = if matches!(format, "plain" | "golang_migrate") {
-            2
+            3
         } else {
             0
         };
         assert_eq!(transactions, expected, "{format}: {up}");
         assert_eq!(migration["written"], true, "{format}");
-        assert_eq!(migration["destructive"], 0, "{format}");
+        // Read from the statements: SET NOT NULL, the unique index and the
+        // constraint can fail on existing rows; the backfill of a column
+        // the migration added changes nothing that was there.
+        let hazards: Vec<&Value> = migration["statements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| &s["hazard"])
+            .collect();
+        assert_eq!(
+            hazards,
+            [
+                &Value::Null,
+                &Value::Null,
+                &Value::Null,
+                &json!("can_fail"),
+                &json!("can_fail"),
+                &json!("can_fail"),
+            ],
+            "{format}"
+        );
+        assert_eq!(migration["destructive"], 3, "{format}");
         let statements: Vec<&str> = migration["statements"]
             .as_array()
             .unwrap()
@@ -1410,20 +1432,22 @@ async fn a_written_migration_s_files_hold_its_statements_as_the_test_runs_them(d
             assert!(all.contains("DROP TABLE public.coupons"), "{format}: {all}");
         }
     }
-    // Where the tool runs each file in one transaction, the concurrent
-    // index has a file of its own, between the parts it came between.
+    // Where the tool runs each file in one transaction: a part per
+    // transaction the author wrote, the concurrent index in a file of its
+    // own, in order.
     let sqlx = dev.get(&migration_of("sqlx")).await.json();
     let paths: Vec<String> = files(&sqlx, "up").into_iter().map(|(p, _)| p).collect();
     assert_eq!(
         paths,
         [
             "20261024090000_migration_from_v1.sql",
-            "20261024090001_migration_from_v1_create_index_customers_email.sql",
-            "20261024090002_migration_from_v1_part_2.sql",
+            "20261024090001_migration_from_v1_part_2.sql",
+            "20261024090002_migration_from_v1_create_index_customers_email.sql",
+            "20261024090003_migration_from_v1_part_3.sql",
         ],
         "{sqlx}"
     );
-    let concurrent = &files(&sqlx, "up")[1].1;
+    let concurrent = &files(&sqlx, "up")[2].1;
     assert!(
         concurrent.starts_with("-- no-transaction\n"),
         "{concurrent}"
@@ -1447,6 +1471,30 @@ async fn a_written_migration_s_files_hold_its_statements_as_the_test_runs_them(d
         .collect();
     in_order(plain, &ran);
     assert_eq!(ran.len(), 6, "{run:?}");
+
+    // A ROLLBACK has no place in files that run whole: refused, said why.
+    write_source(
+        &mut editor,
+        true,
+        "ALTER TABLE public.customers ADD COLUMN note text;\nROLLBACK;\n",
+    )
+    .await;
+    let (_, sha) = preview_of(&app, &team, &draft).await;
+    let refused = dev
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{draft}/migration?format=sqlx&sha256={sha}"
+        )))
+        .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.code(), "migration_unreadable");
+    assert!(
+        refused.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("line 2: ROLLBACK cannot go in a migration tool's files"),
+        "{}",
+        refused.json()
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

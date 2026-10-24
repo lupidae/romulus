@@ -74,7 +74,7 @@ pub struct Reviewed {
         (status = 400, description = "`bad_request`: an unknown format, no `sha256`, `renames` that is not a JSON object of booleans", body = ErrorBody),
         (status = 404, body = ErrorBody),
         (status = 409, description = "`draft_published`: its version has the migration now; `draft_changed`: not the text reviewed (`sha256`); `stale_base`: update the draft first", body = ErrorBody),
-        (status = 422, description = "`compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse", body = ErrorBody),
+        (status = 422, description = "`compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse, or holds a `ROLLBACK` or a savepoint", body = ErrorBody),
         (status = 503, description = "The compiler is unavailable", body = ErrorBody),
     )
 )]

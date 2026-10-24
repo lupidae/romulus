@@ -955,10 +955,27 @@ pub async fn check_tools(compiler: &Compiler, cases: Vec<ToolCase>) {
     }
 }
 
-/// A migration written by hand (a draft's in migration mode): a column
-/// backfilled before it becomes NOT NULL, in the author's transaction, an
-/// index built concurrently, then a constraint using it.
-const WRITTEN: &str = "\
+/// A migration written by hand (a draft's in migration mode), its base
+/// schema and rows, and what its rows must read after it.
+struct WrittenCase {
+    name: &'static str,
+    base: &'static str,
+    rows: &'static str,
+    written: &'static str,
+    query: &'static str,
+    after: &'static str,
+    /// Its down migration runs back on these rows.
+    down: bool,
+}
+
+const WRITTEN_CASES: &[WrittenCase] = &[
+    // A column backfilled before it becomes NOT NULL, in the author's
+    // transaction, an index built concurrently, then a constraint using it.
+    WrittenCase {
+        name: "backfill",
+        base: "CREATE TABLE public.customers (id bigint PRIMARY KEY, name text);",
+        rows: "INSERT INTO public.customers VALUES (1, 'Ada'), (2, 'Grace'), (3, 'Edsger');",
+        written: "\
 BEGIN;
 ALTER TABLE public.customers ADD COLUMN email text;
 
@@ -968,38 +985,109 @@ ALTER TABLE public.customers ALTER COLUMN email SET NOT NULL;
 COMMIT;
 CREATE UNIQUE INDEX CONCURRENTLY customers_email ON public.customers (email);
 ALTER TABLE public.customers ADD CONSTRAINT customers_email_key UNIQUE USING INDEX customers_email;
-";
+",
+        query: "SELECT string_agg(email, ',' ORDER BY id) FROM public.customers",
+        after: "customer1@example.com,customer2@example.com,customer3@example.com",
+        down: true,
+    },
+    // An enum value committed before an UPDATE uses it: one transaction
+    // would refuse it ("unsafe use of new value").
+    WrittenCase {
+        name: "enum value",
+        base: "CREATE TYPE public.status AS ENUM ('open', 'closed');
+               CREATE TABLE public.orders (id bigint PRIMARY KEY, status public.status NOT NULL);",
+        rows: "INSERT INTO public.orders VALUES (1, 'open'), (2, 'closed'), (20, 'open');",
+        written: "\
+BEGIN; ALTER TYPE public.status ADD VALUE 'archived'; COMMIT;
+BEGIN; UPDATE public.orders SET status = 'archived' WHERE id < 10; COMMIT;
+",
+        query: "SELECT string_agg(status::text, ',' ORDER BY id) FROM public.orders",
+        after: "archived,archived,open",
+        // Going back cannot remove the value the rows now hold.
+        down: false,
+    },
+];
 
-const CUSTOMERS: &str = "CREATE TABLE public.customers (id bigint PRIMARY KEY, name text);";
-const CUSTOMER_ROWS: &str =
-    "INSERT INTO public.customers VALUES (1, 'Ada'), (2, 'Grace'), (3, 'Edsger');";
+/// The two schemas of a written case: its migration run on empty tables.
+async fn written_sides(admin: &str, case: &WrittenCase) -> (Schema, Schema) {
+    let (name, mut db) = scratch(admin).await.expect("a scratch database");
+    let sides = async {
+        script(&mut db, case.base).await?;
+        let old = introspect(&mut db).await?;
+        statements(&mut db, case.written).await?;
+        Ok::<_, String>((old, introspect(&mut db).await?))
+    }
+    .await;
+    drop_scratch(admin, &name, db).await;
+    sides.unwrap_or_else(|e| panic!("{}: the migration runs on empty tables: {e}", case.name))
+}
 
 #[test]
 fn a_written_migration_s_files_run_on_rows_as_each_tool_runs_them() {
     crate::with_compiler(|compiler| async move {
         let admin = admin_url().expect("checked by with_compiler");
-        let up = romulus_migration_check::statements::layout(WRITTEN).expect("it parses");
-        // The two schemas, from the migration run on an empty table.
-        let (name, mut db) = scratch(&admin).await.expect("a scratch database");
-        let sides = async {
-            script(&mut db, CUSTOMERS).await?;
-            let old = introspect(&mut db).await?;
-            statements(&mut db, WRITTEN).await?;
-            Ok::<_, String>((old, introspect(&mut db).await?))
-        }
-        .await;
-        drop_scratch(&admin, &name, db).await;
-        let (old, new) = sides.expect("the written migration runs on an empty table");
         let options = crate::options_for(&compiler, &Options::default());
-        let planned = migration(&old, &new, &options);
-        let down = romulus_migration::down(&old, &new, &planned);
+        let mut failures = Vec::new();
+        for case in WRITTEN_CASES {
+            let (old, new) = written_sides(&admin, case).await;
+            let up = romulus_migration_check::statements::layout(case.written, &old)
+                .expect("it lays out");
+            let planned = migration(&old, &new, &options);
+            let down = romulus_migration::down(&old, &new, &planned);
+            for format in Format::ALL {
+                let laid = files(&up, &down, format, &meta(format));
+                let (name, mut db) = scratch(&admin).await.expect("a scratch database");
+                let result = async {
+                    script(&mut db, case.base).await?;
+                    script(&mut db, case.rows).await?;
+                    apply(&mut db, format, &laid, false).await?;
+                    let got: String = sqlx::query(case.query)
+                        .fetch_one(&mut db)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .get(0);
+                    if got != case.after {
+                        return Err(format!("the rows after up: {got}"));
+                    }
+                    compare("after up", &up, introspect(&mut db).await?, &new)?;
+                    if case.down && format.has_down() {
+                        apply(&mut db, format, &laid, true).await?;
+                        compare("after down", &down, introspect(&mut db).await?, &old)?;
+                    }
+                    Ok(())
+                }
+                .await;
+                drop_scratch(&admin, &name, db).await;
+                if let Err(error) = result {
+                    failures.push(format!(
+                        "{} with {format:?}: {error}\n{}",
+                        case.name,
+                        listing(&laid)
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    });
+}
 
-        // What the files were before: planned from the schemas, they lose
-        // the backfill, and fail on the rows it was written for.
+/// What the files were before the written text was used: a migration
+/// planned from the schemas loses the backfill and fails on the rows it
+/// was written for; and the enum case in one transaction fails too.
+#[test]
+fn a_written_migration_regenerated_or_in_one_transaction_fails_on_its_rows() {
+    crate::with_compiler(|compiler| async move {
+        let admin = admin_url().expect("checked by with_compiler");
+        let options = crate::options_for(&compiler, &Options::default());
+        let [backfill, enum_value] = WRITTEN_CASES else {
+            panic!("two cases");
+        };
+        let (old, new) = written_sides(&admin, backfill).await;
+        let planned = migration(&old, &new, &options);
         let (name, mut db) = scratch(&admin).await.expect("a scratch database");
         let regenerated = async {
-            script(&mut db, CUSTOMERS).await?;
-            script(&mut db, CUSTOMER_ROWS).await?;
+            script(&mut db, backfill.base).await?;
+            script(&mut db, backfill.rows).await?;
             Ok::<_, String>(statements(&mut db, &planned.script()).await)
         }
         .await;
@@ -1011,36 +1099,28 @@ fn a_written_migration_s_files_run_on_rows_as_each_tool_runs_them() {
             planned.script()
         );
 
-        let mut failures = Vec::new();
-        for format in Format::ALL {
-            let laid = files(&up, &down, format, &meta(format));
-            let (name, mut db) = scratch(&admin).await.expect("a scratch database");
-            let result = async {
-                script(&mut db, CUSTOMERS).await?;
-                script(&mut db, CUSTOMER_ROWS).await?;
-                apply(&mut db, format, &laid, false).await?;
-                let filled: String =
-                    sqlx::query("SELECT string_agg(email, ',' ORDER BY id) FROM public.customers")
-                        .fetch_one(&mut db)
-                        .await
-                        .map_err(|e| e.to_string())?
-                        .get(0);
-                if filled != "customer1@example.com,customer2@example.com,customer3@example.com" {
-                    return Err(format!("the rows after up: {filled}"));
-                }
-                compare("after up", &up, introspect(&mut db).await?, &new)?;
-                if format.has_down() {
-                    apply(&mut db, format, &laid, true).await?;
-                    compare("after down", &down, introspect(&mut db).await?, &old)?;
-                }
-                Ok(())
-            }
-            .await;
-            drop_scratch(&admin, &name, db).await;
-            if let Err(error) = result {
-                failures.push(format!("{format:?}: {error}\n{}", listing(&laid)));
-            }
+        let (name, mut db) = scratch(&admin).await.expect("a scratch database");
+        let together = async {
+            script(&mut db, enum_value.base).await?;
+            script(&mut db, enum_value.rows).await?;
+            Ok::<_, String>(
+                in_transaction(
+                    &mut db,
+                    "ALTER TYPE public.status ADD VALUE 'archived';
+                     UPDATE public.orders SET status = 'archived' WHERE id < 10;",
+                    true,
+                )
+                .await,
+            )
         }
-        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+        .await;
+        drop_scratch(&admin, &name, db).await;
+        let failed = together.expect("the setup runs");
+        assert!(
+            failed
+                .as_ref()
+                .is_err_and(|e| e.contains("unsafe use of new value")),
+            "{failed:?}"
+        );
     });
 }
