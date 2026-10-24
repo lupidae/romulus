@@ -193,8 +193,21 @@ from the API.
   footer is `index.html`'s own, by hand: the notice, the terms, the privacy
   policy and the DPA (for business customers) at their canonical addresses. The notice links the privacy
   policy, and its data paragraph says the site sets no cookies and loads
-  nothing from another origin: `e2e/legal.spec.ts` checks both on every
-  legal page, so a change that breaks either must change the notice too.
+  nothing from another origin but the homepage's audience measurement:
+  `e2e/legal.spec.ts` checks both on every legal page, so a change that
+  breaks either must change the notice too.
+- Analytics: the homepage counts visits with Umami at
+  `https://stats.lupidae.com` (the tag in `index.html`, its website id
+  committed: not a secret; `data-domains="romulus.lupidae.com"`, so
+  previews and local runs send nothing; Do Not Track honoured), the one
+  other origin in `_headers` (`script-src`, `connect-src`). The sign-up
+  buttons (Start free, Subscribe) carry `data-umami-event="signup_started"`
+  and the plan (`tools/pricing.mjs` writes the cards'). `app.js` keeps the
+  first visit's `utm_*` and referrer origin in `localStorage`
+  (`romulus.source`, 30 days, first touch wins) for the app, which reports
+  it after sign-up (docs/MVP.md, "Signup sources and analytics"). The e2e
+  tests import `test` from `e2e/fixtures.ts`, which answers
+  stats.lupidae.com with an empty script: no test ever reaches it.
 - Mobile performance: no `filter: blur()` or `mask-image` layers (the glows
   are plain radial gradients) and no layout reads during load. Those three
   cost ~2.5 s of main thread on Lighthouse's throttled phone.

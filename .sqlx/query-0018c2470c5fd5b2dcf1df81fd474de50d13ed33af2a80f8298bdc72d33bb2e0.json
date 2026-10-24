@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO draft_editors (draft_id, user_id, first_edit_at) VALUES ($1, $2, now() - interval '2 days')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0018c2470c5fd5b2dcf1df81fd474de50d13ed33af2a80f8298bdc72d33bb2e0"
+}

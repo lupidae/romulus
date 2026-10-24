@@ -1520,6 +1520,59 @@ default: off, nothing written). The API's `operator` module.
   at once, waiting for the mail server; config refuses the variable without
   mail.
 
+## Signup sources and analytics (decided 2026-10-24, built: task MKT-TRACK)
+
+Where visitors and sign-ups come from, so marketing channels can be
+compared, without cookies and without anything about a visitor beyond that.
+
+- **Analytics are configuration, off by default.** The homepage (lupidae's
+  site only) loads Umami's script from `https://stats.lupidae.com` with its
+  website id committed in `index.html` (not a secret), counting only on
+  `romulus.lupidae.com` (`data-domains`: previews and local runs send
+  nothing), with Do Not Track honoured; `_headers` allows that one origin in
+  `script-src` and `connect-src`. Its sign-up buttons carry
+  `data-umami-event="signup_started"` (and the plan). The app loads the same
+  kind of script only when the server sets `ROMULUS_ANALYTICS_SCRIPT_URL`
+  and `ROMULUS_ANALYTICS_WEBSITE_ID` (`GET /api/instance` `analytics`): a
+  self-hosted install makes no third-party call. The hosted app uses the
+  homepage's website id (one origin, one site).
+- **What the app sends** (`web/src/features/marketing/analytics.ts`): the
+  tracker's own page views are off; a page view per route is the route's
+  pattern (`/app/$org/$db`), never the address (organization and database
+  names, a link's `#token=`), with only the `utm_*` parameters, the title
+  `romulus` and the referrer's origin on the first page. Events:
+  `signup_started` (a password sign-up's form sent; on the hosted service
+  the homepage's buttons, since Zitadel's login is out of our pages),
+  `signup_completed` (the server says the account is new, below) and
+  `first_draft_compiled` (the activation moment: this browser's first edit
+  of a draft that compiled, once ever). The app's CSP is
+  `frame-ancestors` only: nothing to allow there.
+- **Signup sources**: the first visit's `utm_source`, `utm_medium`,
+  `utm_campaign`, `utm_content` and the referrer's origin (never its path:
+  a referring URL can carry anything), kept in `localStorage`
+  (`romulus.source`, first touch wins, 30 days) by the homepage's `app.js`
+  and by the app on a first visit straight to `/app` (same origin, same key
+  and shape). A direct visit is a touch too. After signing in, the app
+  reports it once per account (`POST /api/me/signup-source`, any way in:
+  single sign-on, password, invitation), with how long ago it was seen (the
+  browser's clock never matters). Stored (`signup_sources`, deleted with
+  the account) only for an account made in the last 7 days and a visit
+  before it; the first report carrying something wins over an empty one.
+  Its answer's `new_account` (first report, within the hour) is what the
+  app counts as `signup_completed`. On the user, not the organization: an
+  organization has many people, a sign-up one.
+- **The operators' export** is a command, like the other operator tooling:
+  `romulus-api signups [--since DAY]`, CSV (created_at, the five fields,
+  plan, activated_7d, paying), the ignored domains left out, formulas
+  neutralised. Activated: a draft edited (each edit compiles) or a version
+  made within 7 days of signing up, read from `draft_editors` and
+  `versions` (no new tracking). Plan: the best plan in force among the
+  person's organizations; paying: one of them on a live paid subscription,
+  not a trial.
+- **Privacy policy 1.2** lists both (data, purpose on legitimate interest,
+  Umami run by us, retention, the two local storage keys); the legal notice
+  says the homepage counts visits with our own measurement.
+
 ## Decided
 
 - Uploads: SQL only (remus JSON accepted on the push endpoint).

@@ -31,6 +31,17 @@ pub struct Instance {
     /// the sign-in pages and the app's footer link them. `null` on a
     /// self-hosted install, which has none.
     pub legal: Option<LegalLinks>,
+    /// The cookieless analytics script the app loads (`ROMULUS_ANALYTICS_*`):
+    /// page views by route and a few events. `null` (the default): the app
+    /// loads nothing from another origin.
+    pub analytics: Option<Analytics>,
+}
+
+/// An Umami-compatible tracker: the script, and the website it counts for.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct Analytics {
+    pub script_url: String,
+    pub website_id: String,
 }
 
 /// Which romulus runs here, and where to read its source.
@@ -65,5 +76,9 @@ async fn instance(State(state): State<AppState>) -> Json<Instance> {
             url: state.config.source_at_commit(),
         },
         legal: state.config.legal.as_ref().map(LegalLinks::of),
+        analytics: state.config.analytics.as_ref().map(|a| Analytics {
+            script_url: a.script_url.to_string(),
+            website_id: a.website_id.clone(),
+        }),
     })
 }

@@ -1,7 +1,7 @@
 # Politique de confidentialité de romulus
 
-**Version :** 1.1
-**Date d'entrée en vigueur :** 22 octobre 2026
+**Version :** 1.2
+**Date d'entrée en vigueur :** 24 octobre 2026
 
 La présente Politique de confidentialité explique comment les données personnelles sont traitées lorsque vous utilisez le service hébergé romulus disponible à l'adresse **https://romulus.lupidae.com** (le « **Service** ») et son site internet. Elle est fournie en application des articles 13 et 14 du règlement (UE) 2016/679 (le « **RGPD** ») et de la loi n° 78-17 du 6 janvier 1978 (la « **loi Informatique et Libertés** »). Les termes commençant par une majuscule ont le sens que leur donnent les Conditions générales d'utilisation et de vente disponibles à l'adresse https://romulus.lupidae.com/fr/legal/conditions.
 
@@ -38,6 +38,8 @@ romulus ne se connecte jamais aux bases de données de ses clients. Nous ne rece
 | **Données de facturation** | Nom de l'Organisation, adresse e-mail de l'administrateur qui souscrit, nom et adresse de facturation, raison sociale et numéro de TVA s'ils sont renseignés, Offre, factures, statut des paiements. Nous ne recevons jamais les données complètes de votre carte : vous les saisissez sur la page de Stripe. Stripe nous communique des informations limitées sur le moyen de paiement (comme la marque de la carte, ses quatre derniers chiffres et sa date d'expiration) | Vous, via Stripe |
 | **Données d'acheminement des e-mails** | Adresse du destinataire, objet, statut de remise et de rejet des e-mails envoyés par le Service | Notre prestataire d'envoi d'e-mails |
 | **Données techniques et de sécurité** | Adresse IP (transmise par Cloudflare et utilisée pour limiter les requêtes abusives), méthode, chemin et identifiant des requêtes, identifiant de l'utilisateur, date et heure, erreurs | Générées par le Service et notre infrastructure |
+| **Origine de l'inscription** | D'où vous veniez avant de créer votre Compte, tel que votre navigateur l'a conservé depuis votre première visite : les paramètres de campagne du lien (utm_source, utm_medium, utm_campaign, utm_content) et le domaine du site d'où vous veniez (jamais la page) | Votre navigateur, lors de la création de votre Compte |
+| **Données de mesure d'audience** | Pages consultées (dans le Service, le type de page uniquement, jamais son adresse, qui nomme votre Organisation et vos bases de données), site d'origine, langue et taille d'écran du navigateur, clics sur les boutons d'inscription, et la première compilation d'un brouillon que vous avez modifié. Comptées sans cookie ni identifiant conservé dans votre navigateur ; votre adresse IP sert à compter les visites et à en déduire le pays, et n'est pas conservée | Votre navigateur, sur le site et dans le Service |
 | **Données de support et de signalement** | Vos messages et nos réponses, y compris les signalements de contenus illicites et de vulnérabilités | Vous |
 
 Votre navigateur conserve également vos préférences d'affichage en local (article 8).
@@ -54,6 +56,7 @@ Votre navigateur conserve également vos préférences d'affichage en local (art
 | Conclure le contrat et en conserver la preuve | Traces d'acceptation des Conditions | Obligation légale de conservation des contrats conclus par voie électronique (article L213-1 du Code de la consommation), art. 6.1.c ; intérêt légitime à prouver le contrat, art. 6.1.f |
 | Facturation et comptabilité | Données de facturation | Exécution du contrat, art. 6.1.b ; obligation légale (comptable et fiscale), art. 6.1.c |
 | Sécurité du Service, prévention de la fraude et des abus, respect des règles d'utilisation acceptable (y compris les abus de Playgrounds) | Données techniques et de sécurité, journal d'audit, données de Compte | Intérêt légitime à sécuriser le Service et ses utilisateurs, art. 6.1.f |
+| Mesurer l'audience du site et du Service, et comparer les canaux par lesquels on découvre romulus | Données de mesure d'audience, origine de l'inscription | Intérêt légitime à comprendre comment le Service est découvert et utilisé, pour l'améliorer, art. 6.1.f |
 | Répondre à vos demandes et assurer le support | Données de support, données de Compte | Exécution du contrat, art. 6.1.b, ou intérêt légitime à répondre aux demandes, art. 6.1.f |
 | Traiter les signalements de contenus illicites et les décisions qui en découlent | Contenu du signalement, données de son auteur et du Client concerné | Obligation légale (articles 16 et 17 du règlement (UE) 2022/2065, dit « règlement sur les services numériques »), art. 6.1.c |
 | Constatation, exercice ou défense de droits en justice | Données pertinentes | Intérêt légitime, art. 6.1.f |
@@ -88,6 +91,8 @@ Les données personnelles sont accessibles uniquement :
 
 **Service de connexion.** La connexion repose sur Zitadel, logiciel libre que nous exploitons nous-mêmes sur notre propre infrastructure en France. Son éditeur ne reçoit aucune de vos données et n'est pas sous-traitant.
 
+**Mesure d'audience.** Les visites sont comptées avec Umami, logiciel libre que nous exploitons nous-mêmes à l'adresse stats.lupidae.com. Son éditeur ne reçoit aucune de vos données et n'est pas sous-traitant.
+
 **GitHub.** Le code source du logiciel libre est publié sur GitHub. GitHub ne reçoit ni données de Compte ni contenu client du Service et n'est pas sous-traitant. Le Service ne propose pas de connexion via GitHub.
 
 ## 5. Transferts hors de l'Union européenne
@@ -115,6 +120,8 @@ Vous pouvez obtenir une copie de ces garanties en écrivant à romulus@lupidae.c
 | Traces d'acceptation des Conditions | 10 ans à compter de l'acceptation pour les Offres payantes (article L213-1 du Code de la consommation) ; à défaut, 5 ans à compter de la fin du contrat |
 | Données de facturation et factures | 10 ans à compter de la clôture de l'exercice (article L123-22 du Code de commerce). Notifications de paiement reçues de Stripe : 90 jours |
 | Journaux techniques et de sécurité (y compris les adresses IP) | 6 mois au plus |
+| Origine de l'inscription | Avec le Compte ; supprimée avec lui |
+| Données de mesure d'audience | 25 mois au plus |
 | Données de support et de signalement | 3 ans à compter du dernier échange, davantage si nécessaire pour un litige |
 | Sauvegardes | Les sauvegardes quotidiennes sont conservées 14 jours. Les données supprimées peuvent donc subsister dans les sauvegardes jusqu'à 30 jours |
 | Données nécessaires à un litige | Jusqu'à l'issue du litige et l'expiration des délais de prescription |
@@ -139,7 +146,7 @@ Pour les données personnelles figurant dans le contenu ou le journal d'audit d'
 
 ## 8. Cookies et traceurs
 
-**Nous utilisons uniquement des cookies et un stockage local strictement nécessaires au Service ou qui conservent des préférences que vous avez choisies.** Nous n'utilisons aucun cookie de mesure d'audience, de publicité, de réseaux sociaux ou autre traceur de suivi, et le Service ne charge aucun script ni aucune police de tiers.
+**Nous utilisons uniquement des cookies et un stockage local strictement nécessaires au Service ou qui conservent des préférences que vous avez choisies, ainsi que la mesure d'audience décrite ci-dessous, qui ne dépose aucun cookie.** Nous n'utilisons aucun cookie de mesure d'audience, de publicité, de réseaux sociaux ou autre traceur de suivi, et le Service ne charge aucun script ni aucune police de tiers.
 
 En application de l'article 82 de la loi Informatique et Libertés, qui transpose l'article 5.3 de la directive 2002/58/CE (dite « ePrivacy »), et comme le précisent les lignes directrices de la CNIL du 17 septembre 2020, le consentement n'est pas requis pour les opérations de lecture ou d'écriture sur votre terminal strictement nécessaires à la fourniture d'un service en ligne que vous avez expressément demandé. Tous les éléments listés ci-dessous relèvent de cette exemption. **C'est pourquoi le Service n'affiche pas de bandeau de consentement aux cookies.** Vous pouvez bloquer ou supprimer ces cookies dans votre navigateur, mais vous ne pourrez alors plus vous connecter.
 
@@ -161,6 +168,13 @@ En application de l'article 82 de la loi Informatique et Libertés, qui transpos
 - la dernière Organisation consultée (`romulus-last-org`) ;
 - des préférences d'affichage : barre latérale repliée ou non, tailles des panneaux et choix de vue, position des tables dans les diagrammes (clés commençant par `romulus:`) ;
 - sur la page d'accueil uniquement, le contenu de l'éditeur de démonstration (`romulus:hero:1`).
+
+**Mesure d'audience.** Le site et le Service chargent notre propre script de mesure d'audience depuis stats.lupidae.com (article 4). Il ne dépose aucun cookie, ne conserve rien dans votre navigateur et n'envoie rien lorsque votre navigateur demande à ne pas être suivi (Do Not Track). Le stockage local conserve en outre :
+
+- pendant 30 jours, l'origine de votre première visite (`romulus.source`) : les paramètres de campagne du lien qui vous a amené et le domaine du site d'où vous veniez. Elle ne nous est transmise qu'une fois, si vous créez un Compte, et conservée comme origine de l'inscription de votre Compte (article 2) ;
+- les mesures uniques que ce navigateur a déjà envoyées (`romulus.analytics.once`).
+
+Vous pouvez vous opposer à cette mesure (article 7), activer Do Not Track ou effacer ce stockage dans votre navigateur à tout moment.
 
 **Paiement.** Le paiement a lieu sur les pages de Stripe (checkout.stripe.com et billing.stripe.com). Les cookies qui y sont déposés relèvent de la politique de Stripe. Aucun script de Stripe n'est chargé sur les pages de romulus.
 

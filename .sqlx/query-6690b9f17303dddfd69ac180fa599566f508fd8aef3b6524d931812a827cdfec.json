@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO signup_sources\n               (user_id, utm_source, utm_medium, utm_campaign, utm_content, referrer)\n           VALUES ($1, $2, $3, $4, $5, $6)\n           ON CONFLICT (user_id) DO UPDATE SET\n               utm_source = EXCLUDED.utm_source,\n               utm_medium = EXCLUDED.utm_medium,\n               utm_campaign = EXCLUDED.utm_campaign,\n               utm_content = EXCLUDED.utm_content,\n               referrer = EXCLUDED.referrer\n           WHERE num_nonnulls(signup_sources.utm_source, signup_sources.utm_medium,\n                              signup_sources.utm_campaign, signup_sources.utm_content,\n                              signup_sources.referrer) = 0\n             AND num_nonnulls(EXCLUDED.utm_source, EXCLUDED.utm_medium,\n                              EXCLUDED.utm_campaign, EXCLUDED.utm_content,\n                              EXCLUDED.referrer) > 0\n           RETURNING (xmax = 0) AS \"inserted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inserted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6690b9f17303dddfd69ac180fa599566f508fd8aef3b6524d931812a827cdfec"
+}

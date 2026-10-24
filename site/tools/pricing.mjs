@@ -45,6 +45,14 @@ export function readPlans(html) {
 export const subscribeHref = (data, plan, interval) =>
   `${data.subscribe}?plan=${encodeURIComponent(plan.id)}&interval=${interval}`;
 
+/**
+ * The analytics event a sign-up button sends (Umami reads `data-umami-event`
+ * and its `data-umami-event-*` data on click): which plan, which period.
+ */
+export const signupEvent = (plan, interval) =>
+  ` data-umami-event="signup_started" data-umami-event-plan="${escape(plan.id)}"` +
+  (interval ? ` data-umami-event-interval="${interval}"` : "");
+
 /** "1,490 €": numbers written as the plans table writes them, the currency after, never on its own line. */
 export const price = (amount, currency) => `${amount.toLocaleString("en-US")}\u00a0${currency}`;
 
@@ -59,9 +67,9 @@ export function render(data) {
     const actions = plan.monthly
       ? ["month", "year"].map(
           (interval) =>
-            `<a class="button ${look} per-${interval}" href="${escape(subscribeHref(data, plan, interval))}">${escape(plan.action)}</a>`,
+            `<a class="button ${look} per-${interval}" href="${escape(subscribeHref(data, plan, interval))}"${signupEvent(plan, interval)}>${escape(plan.action)}</a>`,
         )
-      : [`<a class="button ${look}" href="${escape(data.signup)}">${escape(plan.action)}</a>`];
+      : [`<a class="button ${look}" href="${escape(data.signup)}"${signupEvent(plan)}>${escape(plan.action)}</a>`];
     if (plan.talk) actions.push(`<a class="plan-talk" href="${escape(data.talk)}">Talk to us</a>`);
     const lines = [
       `<article class="plan${plan.recommended ? " is-recommended" : ""}" aria-labelledby="${id}">`,

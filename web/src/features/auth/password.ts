@@ -2,6 +2,7 @@ import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query
 
 import { api, ApiError, succeed, unwrap } from "@/api/client";
 import type { components } from "@/api/schema.gen";
+import { track } from "@/features/marketing/analytics";
 
 import { meQuery } from "./queries";
 
@@ -63,6 +64,7 @@ export function useSignUp() {
     mutationFn: (body: components["schemas"]["PasswordSignUp"]) =>
       unwrap(api.POST("/api/auth/password/sign-up", { body })),
     onSuccess: async (result) => {
+      track("signup_started", { method: "password" });
       if (result.outcome === "signed_in") await signedIn();
     },
   });

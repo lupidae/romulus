@@ -6,8 +6,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ApiError } from "./api/client";
-import { meQuery } from "./features/auth/queries";
+import { instanceQuery, meQuery } from "./features/auth/queries";
 import { termsQuery } from "./features/legal/queries";
+import { startAnalytics, trackPageView } from "./features/marketing/analytics";
+import { captureSource } from "./features/marketing/source";
 import { orgKeys } from "./features/orgs/queries";
 import { routeTree } from "./routeTree.gen";
 
@@ -83,6 +85,21 @@ declare module "@tanstack/react-router" {
     fullBleed?: boolean;
   }
 }
+
+// Where this visit came from, before anything moves the URL (first touch).
+captureSource();
+
+// A page view per route reached, by pattern (features/marketing/analytics.ts);
+// nothing leaves unless this server sets an analytics script.
+router.subscribe("onResolved", () => {
+  const { matches } = router.state;
+  const notFound = matches.some((m) => m.status === "notFound");
+  trackPageView(notFound ? "/not-found" : (matches.at(-1)?.fullPath ?? "/"));
+});
+void queryClient.fetchQuery(instanceQuery).then(
+  (instance) => startAnalytics(instance.analytics),
+  () => startAnalytics(null),
+);
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html has no #root");

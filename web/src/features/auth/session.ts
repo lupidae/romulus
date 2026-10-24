@@ -3,6 +3,7 @@ import { redirect } from "@tanstack/react-router";
 
 import { api, ApiError, unwrap } from "@/api/client";
 import { needsTerms, termsQuery } from "@/features/legal/queries";
+import { reportSignup } from "@/features/marketing/source";
 import { safePath } from "@/lib/safe-path";
 
 import { meQuery } from "./queries";
@@ -128,7 +129,10 @@ export async function requireUser(queryClient: QueryClient, href: string) {
 /** The signed-in user (no Terms check: the Terms page itself), or sign-in. */
 export async function signedIn(queryClient: QueryClient, href: string) {
   try {
-    return await queryClient.ensureQueryData(meQuery);
+    const me = await queryClient.ensureQueryData(meQuery);
+    // Where this account came from, once (and whether it is new).
+    void reportSignup(me.id);
+    return me;
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       const next = appPath(href);

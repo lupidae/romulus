@@ -15,7 +15,8 @@ crates/romulus-api/   axum API (lib + bin): src/<module>/mod.rs per feature, tes
                       plans, Stripe; off unless configured), `legal` (the hosted Terms: first sign-in,
                       records, notices; legal/ = the Terms PDFs), `export` (ZIP of databases),
                       `retention` (deleting accounts and organizations, purges, inactive accounts),
-                      `operator` (emails to whoever runs the install: events, a daily digest)
+                      `operator` (emails to whoever runs the install: events, a daily digest), `signups`
+                      (where accounts came from: the app's report, `romulus-api signups` CSV)
 crates/romulus-diff/  model diff over remus-core, no I/O, builds for wasm; `utoipa` feature for the API;
                       `rename`: renames between two models (known, detected and scored, chosen)
 crates/romulus-wasm/  the homepage hero's engine (wasm-bindgen): libpg_query's parse tree → remus model
@@ -1487,6 +1488,33 @@ docs/self-host/configuration.md the operator's side.
 - **Tests**: `tests/api/operator.rs` (each event once and none when off,
   sent once and retried, the digest's numbers and once a day), unit tests in
   each module, `config.rs` (mail required).
+
+## Signup sources and analytics (`signups`, `features/marketing`)
+
+docs/MVP.md "Signup sources and analytics" has the decisions,
+docs/self-host/configuration.md ("Analytics") the operator's side.
+
+- **Analytics are off unless `ROMULUS_ANALYTICS_SCRIPT_URL` and
+  `ROMULUS_ANALYTICS_WEBSITE_ID`** (`Config::analytics`, `GET /api/instance`
+  `analytics`): then `startAnalytics` loads the Umami-compatible script with
+  its own page views off. Send only through `analytics.ts`
+  (`trackPageView`, `track`, `trackOnce`): route patterns, never the URL
+  (it names organizations and databases), no data beyond the event's own.
+  A new event is a name in `AnalyticsEvent` and a line in the privacy
+  policy if it says something new about people.
+- **The source** (`source.ts`, the homepage's `app.js`: one key,
+  `romulus.source`, one shape: change both) is reported by `signedIn`
+  (`reportSignup`, once per account and browser) to `POST
+  /api/me/signup-source`, whose `new_account` is `signup_completed`.
+  Nothing but the four `utm_*` and the referrer's origin is kept.
+- **The homepage** loads Umami from `stats.lupidae.com` (`index.html`, the
+  CSP in `_headers`); its sign-up links carry `data-umami-event`
+  (`tools/pricing.mjs` writes the plans'). The site's Playwright tests run
+  on `e2e/fixtures.ts`'s `test`, which answers that origin with an empty
+  script: import `test` from there, never from `@playwright/test`.
+- **Tests**: `tests/api/signups.rs`, `signups` unit tests (cleaning, CSV),
+  `features/marketing/source.test.ts`, `site/e2e/home.spec.ts` (the tag,
+  the CSP, the first touch read on `/app`), `site/e2e/legal.spec.ts`.
 
 ## The homepage's live hero (`web/src/hero`, `crates/romulus-wasm`)
 

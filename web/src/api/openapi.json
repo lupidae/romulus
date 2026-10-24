@@ -1638,6 +1638,55 @@
         }
       }
     },
+    "/api/me/signup-source": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Records where the signed-in person came from, once.",
+        "operationId": "report_signup_source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupSource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupReported"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`not_for_agents`: an access token's request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/me/terms": {
       "get": {
         "tags": [
@@ -9875,6 +9924,22 @@
           }
         }
       },
+      "Analytics": {
+        "type": "object",
+        "description": "An Umami-compatible tracker: the script, and the website it counts for.",
+        "required": [
+          "script_url",
+          "website_id"
+        ],
+        "properties": {
+          "script_url": {
+            "type": "string"
+          },
+          "website_id": {
+            "type": "string"
+          }
+        }
+      },
       "Anchor": {
         "oneOf": [
           {
@@ -14590,6 +14655,17 @@
           "source"
         ],
         "properties": {
+          "analytics": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Analytics",
+                "description": "The cookieless analytics script the app loads (`ROMULUS_ANALYTICS_*`):\npage views by route and a few events. `null` (the default): the app\nloads nothing from another origin."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "billing": {
             "type": "boolean",
             "description": "Plans and billing (the hosted service, `ROMULUS_BILLING`): the app\nshows the billing page and upgrade prompts."
@@ -19785,6 +19861,69 @@
           },
           "outcome": {
             "$ref": "#/components/schemas/SignUpOutcome"
+          }
+        }
+      },
+      "SignupReported": {
+        "type": "object",
+        "required": [
+          "recorded",
+          "new_account"
+        ],
+        "properties": {
+          "new_account": {
+            "type": "boolean",
+            "description": "The account was made within the hour and this is its first report:\na sign-up just completed."
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "The source was stored (this was the account's first report that\ncounts)."
+          }
+        }
+      },
+      "SignupSource": {
+        "type": "object",
+        "description": "What this browser kept of the visit that brought the person here.",
+        "required": [
+          "seen_seconds_ago"
+        ],
+        "properties": {
+          "referrer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The page that linked here (`document.referrer`); only its origin is\nkept, and nothing when it is this site."
+          },
+          "seen_seconds_ago": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long ago the browser first saw that visit, in seconds.",
+            "minimum": 0
+          },
+          "utm_campaign": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "utm_content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "utm_medium": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "utm_source": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

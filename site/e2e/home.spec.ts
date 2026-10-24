@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { price, readPlans, subscribeHref, withPlans } from "../tools/pricing.mjs";
+import { ANALYTICS, expect, test } from "./fixtures";
 
 const publicFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../public/${name}`, import.meta.url)), "utf8");
@@ -566,6 +567,85 @@ test("the CSP allows exactly the inline theme script", async ({ request }) => {
     const hash = createHash("sha256").update(scripts[0][1]).digest("base64");
     expect(csp, `${page}'s inline script hash is missing from _headers`).toContain(`'sha256-${hash}'`);
   }
+});
+
+test("the visit count: one tag, its one origin in the CSP, the sign-up buttons counted", async ({
+  page,
+  request,
+  analytics,
+}) => {
+  const csp = (await request.get("/")).headers()["content-security-policy"];
+  const directive = (name: string) => csp.split(";").map((d) => d.trim()).find((d) => d.startsWith(`${name} `));
+  expect(directive("script-src")).toContain(` ${ANALYTICS}`);
+  expect(directive("connect-src")).toBe(`connect-src 'self' ${ANALYTICS}`);
+  // No other origin anywhere in the policy.
+  expect(new Set(csp.match(/https?:\/\/[^\s;]+/g))).toEqual(new Set([ANALYTICS]));
+
+  await withoutLiveHero(page);
+  await page.goto("/");
+  const tag = page.locator(`script[src="${ANALYTICS}/script.js"]`);
+  await expect(tag).toHaveCount(1);
+  expect(await tag.evaluate((s: HTMLScriptElement) => ({ ...s.dataset, defer: s.defer }))).toEqual({
+    websiteId: "00e44160-7141-4b01-a9d2-4b4bf27d8236",
+    domains: "romulus.lupidae.com",
+    doNotTrack: "true",
+    excludeHash: "true",
+    defer: true,
+  });
+  expect(analytics).toEqual([`${ANALYTICS}/script.js`]);
+
+  // Every way to sign up says so (with the plan); signing in does not.
+  const events = await page.locator("a[href^='/app/']").evaluateAll((links) =>
+    links.map((a) => ({
+      text: a.textContent!.trim(),
+      event: a.getAttribute("data-umami-event"),
+      plan: a.getAttribute("data-umami-event-plan"),
+    })),
+  );
+  const signUps = events.filter((e) => /^(Start free|Subscribe to )/.test(e.text));
+  expect(signUps.length).toBe(9);
+  for (const e of signUps) expect(e.event, e.text).toBe("signup_started");
+  expect(signUps.filter((e) => e.plan).map((e) => e.plan)).toEqual([
+    "free",
+    "starter",
+    "starter",
+    "team",
+    "team",
+    "business",
+    "business",
+  ]);
+  for (const e of events.filter((e) => !signUps.includes(e))) expect(e.event, e.text).toBeNull();
+});
+
+test("the first visit's source is kept for the app on this origin, first touch wins", async ({ page, baseURL }) => {
+  await withoutLiveHero(page);
+  const kept = () => page.evaluate(() => JSON.parse(localStorage.getItem("romulus.source") ?? "null"));
+  await page.goto("/?utm_source=newsletter&utm_campaign=launch&utm_content=hero&gclid=abc&email=a@b.c", {
+    referer: "https://news.example.org/item?id=42",
+  });
+  const first = await kept();
+  expect(first).toEqual({
+    v: 1,
+    at: expect.any(Number),
+    utm_source: "newsletter",
+    utm_campaign: "launch",
+    utm_content: "hero",
+    referrer: "https://news.example.org",
+  });
+  await page.goto("/?utm_source=ads&utm_medium=cpc", { referer: "https://ads.example.com/" });
+  expect(await kept()).toEqual(first);
+
+  // The app is this origin's /app (the Function proxies it): it reads the same
+  // record. Here a page standing in for it says what it finds.
+  await page.route("**/app/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>app</title><pre id=kept></pre><script>document.getElementById('kept').textContent = localStorage.getItem('romulus.source')</script>",
+    }),
+  );
+  await page.locator(".hero").getByRole("link", { name: "Start free" }).click();
+  await expect(page).toHaveURL(`${baseURL}/app/signin`);
+  expect(JSON.parse((await page.locator("#kept").textContent())!)).toEqual(first);
 });
 
 test("share metadata, icons, robots and sitemap all resolve", async ({ page, request }) => {

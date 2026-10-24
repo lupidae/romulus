@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_billing (org_id, subscription_id, plan, interval, status)\n         VALUES ($1, $2, $3, 'month', $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "10487eed9ff29ff550455c5177be8f430e88abfad633c037162187f541490222"
+}

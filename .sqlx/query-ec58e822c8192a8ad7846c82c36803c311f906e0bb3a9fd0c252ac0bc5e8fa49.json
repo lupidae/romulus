@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO versions (database_id, number, model, source, source_kind, origin, created_by, created_at)\n         VALUES ($1, 1, $2, '', 'sql', 'upload', $3, now() - interval '1 day')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ec58e822c8192a8ad7846c82c36803c311f906e0bb3a9fd0c252ac0bc5e8fa49"
+}
