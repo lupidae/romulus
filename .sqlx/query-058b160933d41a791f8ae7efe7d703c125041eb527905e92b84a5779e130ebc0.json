@@ -1,0 +1,108 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.created_at,\n                  s.utm_source, s.utm_medium, s.utm_campaign, s.utm_content, s.referrer,\n                  (EXISTS (SELECT 1 FROM draft_editors e\n                           WHERE e.user_id = u.id\n                             AND e.first_edit_at < u.created_at + interval '7 days')\n                   OR EXISTS (SELECT 1 FROM versions v\n                              LEFT JOIN api_tokens t ON t.id = v.created_by_token\n                              WHERE (v.created_by = u.id OR t.created_by = u.id)\n                                AND v.created_at < u.created_at + interval '7 days')\n                  ) AS \"activated!\"\n           FROM users u LEFT JOIN signup_sources s ON s.user_id = u.id\n           WHERE ($1::timestamptz IS NULL OR u.created_at >= $1)\n             AND NOT email_in_domains(u.email, $2)\n           ORDER BY u.created_at, u.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "utm_source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signup_sources",
+            "name": "utm_source"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "utm_medium",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signup_sources",
+            "name": "utm_medium"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "utm_campaign",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signup_sources",
+            "name": "utm_campaign"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "utm_content",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signup_sources",
+            "name": "utm_content"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "referrer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signup_sources",
+            "name": "referrer"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "activated!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "058b160933d41a791f8ae7efe7d703c125041eb527905e92b84a5779e130ebc0"
+}

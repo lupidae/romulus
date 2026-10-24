@@ -6,8 +6,10 @@
 # site's e2e test fails if they drift apart. Inline style attributes position
 # the hero's graph nodes (static and live), hence style-src-attr. The live hero
 # compiles two WebAssembly modules (the parser, the engine): 'wasm-unsafe-eval'.
+# The homepage's audience measurement (index.html: Umami's script, and its
+# /api/send) is the one other origin: https://stats.lupidae.com.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-iP734kVzn25bH+W48aL1xXdobLCoh9E/E+HburCSrkQ='; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-iP734kVzn25bH+W48aL1xXdobLCoh9E/E+HburCSrkQ=' https://stats.lupidae.com; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://stats.lupidae.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'
   Strict-Transport-Security: max-age=31536000
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin

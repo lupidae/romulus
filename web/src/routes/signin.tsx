@@ -13,6 +13,7 @@ import { AuthPage, authLinkClass } from "@/features/auth/components/auth-page";
 import { PasswordSignInForm } from "@/features/auth/components/password-forms";
 import { authMethodsQuery, meQuery } from "@/features/auth/queries";
 import { afterSignIn, devSigninUrl, loginUrl } from "@/features/auth/session";
+import { nextWithSource } from "@/features/marketing/source";
 import { afterSignInLine, subscribeInNext } from "@/features/billing/subscribe";
 import { safePath } from "@/lib/safe-path";
 
@@ -95,12 +96,15 @@ export const Route = createFileRoute("/signin")({
 });
 
 function SignIn() {
-  const { next, error, email } = Route.useSearch();
+  const { next: asked, error, email } = Route.useSearch();
+  // Where to land, with this visit's campaign parameters and referrer, so
+  // the page signing in reports them (features/marketing/source.ts).
+  const next = nextWithSource(asked);
   const health = useQuery(healthQuery);
   const methods = useQuery(authMethodsQuery);
   const failure = error ? (errors[error] ?? fallbackError) : undefined;
   // From the homepage's plan buttons (/app/signup): what follows.
-  const subscribing = subscribeInNext(next);
+  const subscribing = subscribeInNext(asked);
   const password = methods.data?.password === true;
   // Single sign-on is offered when it works, or when it is the only way in
   // (then disabled, saying why).

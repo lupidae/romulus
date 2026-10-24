@@ -43,6 +43,7 @@ mod removal;
 mod renames;
 mod retention;
 mod schema;
+mod signups;
 mod tidy;
 mod timeline;
 mod tokens;

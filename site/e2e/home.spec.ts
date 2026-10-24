@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { price, readPlans, subscribeHref, withPlans } from "../tools/pricing.mjs";
+import { ANALYTICS, expect, test } from "./fixtures";
 
 const publicFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../public/${name}`, import.meta.url)), "utf8");
@@ -566,6 +567,113 @@ test("the CSP allows exactly the inline theme script", async ({ request }) => {
     const hash = createHash("sha256").update(scripts[0][1]).digest("base64");
     expect(csp, `${page}'s inline script hash is missing from _headers`).toContain(`'sha256-${hash}'`);
   }
+});
+
+test("the visit count: one tag, its one origin in the CSP, the sign-up buttons counted", async ({
+  page,
+  request,
+  analytics,
+}) => {
+  const csp = (await request.get("/")).headers()["content-security-policy"];
+  const directive = (name: string) => csp.split(";").map((d) => d.trim()).find((d) => d.startsWith(`${name} `));
+  expect(directive("script-src")).toContain(` ${ANALYTICS}`);
+  expect(directive("connect-src")).toBe(`connect-src 'self' ${ANALYTICS}`);
+  // No other origin anywhere in the policy.
+  expect(new Set(csp.match(/https?:\/\/[^\s;]+/g))).toEqual(new Set([ANALYTICS]));
+
+  await withoutLiveHero(page);
+  await page.goto("/");
+  const tag = page.locator(`script[src="${ANALYTICS}/script.js"]`);
+  await expect(tag).toHaveCount(1);
+  expect(await tag.evaluate((s: HTMLScriptElement) => ({ ...s.dataset, defer: s.defer }))).toEqual({
+    websiteId: "00e44160-7141-4b01-a9d2-4b4bf27d8236",
+    domains: "romulus.lupidae.com",
+    doNotTrack: "true",
+    excludeHash: "true",
+    beforeSend: "romulusBeforeSend",
+    defer: true,
+  });
+  expect(analytics).toEqual([`${ANALYTICS}/script.js`]);
+
+  // Every way to sign up says so (with the plan); signing in does not.
+  const events = await page.locator("a[href^='/app/']").evaluateAll((links) =>
+    links.map((a) => ({
+      text: a.textContent!.trim(),
+      event: a.getAttribute("data-umami-event"),
+      plan: a.getAttribute("data-umami-event-plan"),
+    })),
+  );
+  const signUps = events.filter((e) => /^(Start free|Subscribe to )/.test(e.text));
+  expect(signUps.length).toBe(9);
+  for (const e of signUps) expect(e.event, e.text).toBe("signup_started");
+  expect(signUps.filter((e) => e.plan).map((e) => e.plan)).toEqual([
+    "free",
+    "starter",
+    "starter",
+    "team",
+    "team",
+    "business",
+    "business",
+  ]);
+  for (const e of events.filter((e) => !signUps.includes(e))) expect(e.event, e.text).toBeNull();
+});
+
+test("the visit's source rides on the links into the app, never in storage", async ({ page, baseURL }) => {
+  await withoutLiveHero(page);
+  const appLinks = () =>
+    page
+      .locator('a[href^="/app/signin"], a[href^="/app/signup"]')
+      .evaluateAll((links) => links.map((a) => a.getAttribute("href")!));
+  // No source: the links are the page's own.
+  await page.goto("/");
+  const plain = await appLinks();
+  expect(plain).toContain("/app/signin");
+  expect(plain.every((href) => !href.includes("utm_") && !href.includes("ref_origin"))).toBe(true);
+
+  await page.goto("/?utm_source=newsletter&utm_campaign=launch&utm_content=hero&gclid=abc&email=a@b.c", {
+    referer: "https://news.example.org/item?id=42",
+  });
+  const carried = await appLinks();
+  expect(carried.length).toBe(plain.length);
+  const source = "utm_source=newsletter&utm_campaign=launch&utm_content=hero&ref_origin=https%3A%2F%2Fnews.example.org";
+  for (const [i, href] of carried.entries()) {
+    expect(href).toBe(`${plain[i]}${plain[i].includes("?") ? "&" : "?"}${source}`);
+  }
+  expect(carried).toContain(`/app/signup?plan=team&interval=year&${source}`);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k !== "romulus-theme"))).toEqual([]);
+
+  // The app, on this origin's /app (the Function proxies it), receives them.
+  await page.route("**/app/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><title>app</title>" }),
+  );
+  await page.locator(".hero").getByRole("link", { name: "Start free" }).click();
+  await expect(page).toHaveURL(`${baseURL}/app/signin?${source}`);
+});
+
+test("the visit count keeps only the campaign parameters and the referrer's origin", async ({ page }) => {
+  await withoutLiveHero(page);
+  await page.goto("/");
+  const sent = await page.evaluate(() => {
+    const send = (window as unknown as { romulusBeforeSend: (t: string, p: object) => object }).romulusBeforeSend;
+    return [
+      send("event", {
+        url: "https://romulus.lupidae.com/?utm_source=hn&gclid=abc&email=a@b.c#pricing",
+        referrer: "https://news.example.org/item?id=42&token=x",
+        name: "signup_started",
+      }),
+      send("event", { url: "https://romulus.lupidae.com/fr/legal/confidentialite", referrer: "/pricing" }),
+      send("event", { url: "http://", referrer: "android-app://com.example/" }),
+    ];
+  });
+  expect(sent).toEqual([
+    { url: "https://romulus.lupidae.com/?utm_source=hn", referrer: "https://news.example.org", name: "signup_started" },
+    { url: "https://romulus.lupidae.com/fr/legal/confidentialite", referrer: "" },
+    { url: expect.stringMatching(/^http:\/\/localhost:\d+\/$/), referrer: "" },
+  ]);
+  await expect(page.locator(`script[src="${ANALYTICS}/script.js"]`)).toHaveAttribute(
+    "data-before-send",
+    "romulusBeforeSend",
+  );
 });
 
 test("share metadata, icons, robots and sitemap all resolve", async ({ page, request }) => {

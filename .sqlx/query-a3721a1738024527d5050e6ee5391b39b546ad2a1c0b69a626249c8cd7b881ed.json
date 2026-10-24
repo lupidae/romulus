@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_jsonb(s) - 'user_id' - 'created_at' AS \"row!\"\n           FROM signup_sources s JOIN users u ON u.id = s.user_id\n           WHERE lower(u.email) = lower($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a3721a1738024527d5050e6ee5391b39b546ad2a1c0b69a626249c8cd7b881ed"
+}

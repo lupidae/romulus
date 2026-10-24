@@ -104,6 +104,75 @@ pub struct Config {
     /// `operator` module). `None` (unset or empty): nothing is written or
     /// sent. Needs mail.
     pub operator: Option<OperatorConfig>,
+    /// `ROMULUS_ANALYTICS_SCRIPT_URL` and `ROMULUS_ANALYTICS_WEBSITE_ID`: an
+    /// Umami-compatible, cookieless analytics script the web app loads
+    /// (page views and a few events: `instance::Analytics`). Both or
+    /// neither; neither (the default): the app loads nothing from anywhere
+    /// else.
+    pub analytics: Option<AnalyticsConfig>,
+}
+
+/// Where the web app sends its page views (`ROMULUS_ANALYTICS_*`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyticsConfig {
+    /// The tracker script, `https` (or `http` on a loopback host, for
+    /// trying one locally). Its origin also receives the events.
+    pub script_url: Url,
+    /// The website's id at that server: 1 to 64 ASCII letters, digits and
+    /// `-`, as Umami's ids are (it goes into an HTML attribute).
+    pub website_id: String,
+}
+
+impl AnalyticsConfig {
+    fn from_lookup(
+        get: &impl Fn(&'static str) -> Option<String>,
+    ) -> Result<Option<Self>, ConfigError> {
+        let (script, id) = match (
+            get("ROMULUS_ANALYTICS_SCRIPT_URL"),
+            get("ROMULUS_ANALYTICS_WEBSITE_ID"),
+        ) {
+            (None, None) => return Ok(None),
+            (Some(_), None) => return Err(ConfigError::Missing("ROMULUS_ANALYTICS_WEBSITE_ID")),
+            (None, Some(_)) => return Err(ConfigError::Missing("ROMULUS_ANALYTICS_SCRIPT_URL")),
+            (Some(script), Some(id)) => (script, id),
+        };
+        let invalid = |reason: &str| ConfigError::Invalid {
+            var: "ROMULUS_ANALYTICS_SCRIPT_URL",
+            reason: reason.to_owned(),
+        };
+        let script_url = Url::parse(script.trim()).map_err(|err| invalid(&err.to_string()))?;
+        let secure = script_url.scheme() == "https"
+            || (script_url.scheme() == "http" && is_loopback(&script_url));
+        if !secure || script_url.host().is_none() {
+            return Err(invalid(
+                "an https URL of the script, e.g. https://stats.example.com/script.js",
+            ));
+        }
+        if !script_url.username().is_empty() || script_url.password().is_some() {
+            return Err(invalid("a URL without credentials"));
+        }
+        let website_id = id.trim().to_owned();
+        let well_formed = (1..=64).contains(&website_id.len())
+            && website_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        if !well_formed {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_ANALYTICS_WEBSITE_ID",
+                reason: "the website's id at the analytics server: letters, digits and -"
+                    .to_owned(),
+            });
+        }
+        Ok(Some(Self {
+            script_url,
+            website_id,
+        }))
+    }
+
+    /// The origin the script comes from and sends to.
+    pub fn origin(&self) -> String {
+        self.script_url.origin().ascii_serialization()
+    }
 }
 
 /// The operators' notifications (`crate::operator`).
@@ -752,6 +821,7 @@ impl Config {
             source_url: Url::parse(DEFAULT_SOURCE_URL).expect("a valid default source URL"),
             legal: None,
             operator: None,
+            analytics: None,
         }
     }
 
@@ -999,6 +1069,7 @@ impl Config {
             source_url,
             legal,
             operator,
+            analytics: AnalyticsConfig::from_lookup(&get)?,
         })
     }
 
@@ -1706,6 +1777,74 @@ mod tests {
         vars.push(("ROMULUS_SMTP_HOST", "smtp.example.com"));
         vars.push(("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"));
         assert!(config(&vars).unwrap().delete_inactive_accounts);
+    }
+
+    #[test]
+    fn analytics_are_off_unless_both_the_script_and_the_website_are_set() {
+        assert_eq!(config(&BASE).unwrap().analytics, None);
+        assert_eq!(Config::for_tests().analytics, None);
+        let with = |extra: &[(&'static str, &str)]| {
+            let mut vars = BASE.to_vec();
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        let id = "00e44160-7141-4b01-a9d2-4b4bf27d8236";
+        let on = with(&[
+            (
+                "ROMULUS_ANALYTICS_SCRIPT_URL",
+                "https://stats.example.com/script.js",
+            ),
+            ("ROMULUS_ANALYTICS_WEBSITE_ID", id),
+        ])
+        .unwrap()
+        .analytics
+        .unwrap();
+        assert_eq!(
+            on.script_url.as_str(),
+            "https://stats.example.com/script.js"
+        );
+        assert_eq!(on.website_id, id);
+        assert_eq!(on.origin(), "https://stats.example.com");
+
+        assert!(matches!(
+            with(&[(
+                "ROMULUS_ANALYTICS_SCRIPT_URL",
+                "https://stats.example.com/script.js"
+            )]),
+            Err(ConfigError::Missing("ROMULUS_ANALYTICS_WEBSITE_ID"))
+        ));
+        assert!(matches!(
+            with(&[("ROMULUS_ANALYTICS_WEBSITE_ID", id)]),
+            Err(ConfigError::Missing("ROMULUS_ANALYTICS_SCRIPT_URL"))
+        ));
+        for (script, ok) in [
+            ("http://stats.example.com/script.js", false),
+            ("http://localhost:3000/script.js", true),
+            ("https://user:pw@stats.example.com/script.js", false),
+            ("javascript:alert(1)", false),
+            ("/script.js", false),
+        ] {
+            let result = with(&[
+                ("ROMULUS_ANALYTICS_SCRIPT_URL", script),
+                ("ROMULUS_ANALYTICS_WEBSITE_ID", id),
+            ]);
+            assert_eq!(result.is_ok(), ok, "{script}");
+        }
+        let long = "a".repeat(65);
+        for (website, ok) in [
+            ("abc-123", true),
+            ("a\"><script>", false),
+            (long.as_str(), false),
+        ] {
+            let result = with(&[
+                (
+                    "ROMULUS_ANALYTICS_SCRIPT_URL",
+                    "https://stats.example.com/script.js",
+                ),
+                ("ROMULUS_ANALYTICS_WEBSITE_ID", website),
+            ]);
+            assert_eq!(result.is_ok(), ok, "{website}");
+        }
     }
 
     #[test]

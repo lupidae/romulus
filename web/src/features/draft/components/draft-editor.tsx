@@ -21,6 +21,7 @@ import { useComments } from "@/features/comments/use-comments";
 import { useCommentsUi } from "@/features/comments/use-comments-ui";
 import type { MentionPerson } from "@/components/ui/mention-textarea";
 import { orgKeys, orgQuery } from "@/features/orgs/queries";
+import { trackOnce } from "@/features/marketing/analytics";
 import { canWrite } from "@/features/orgs/roles";
 import type { Schema } from "@/features/schema/model";
 import type { Editor } from "@/features/schema/text/codemirror";
@@ -438,6 +439,13 @@ export function Workspace({
   React.useEffect(() => {
     if (view) showDiagnostics(view, compile.diagnostics);
   }, [view, compile.diagnostics]);
+
+  // Activation, for the install's analytics: an edit of mine (something to
+  // undo) that compiled, the first time in this browser.
+  const editCompiled = canEdit && canUndo && compile.state === "ok" && !compile.stale;
+  React.useEffect(() => {
+    if (editCompiled) trackOnce("first_draft_compiled");
+  }, [editCompiled]);
 
   // Undo and redo wherever the focus is, as one history: CodeMirror handles
   // them itself when it has the focus.

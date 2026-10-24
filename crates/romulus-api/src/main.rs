@@ -35,6 +35,12 @@ password sign-in (ROMULUS_AUTH=password); links print on stdout, run on the serv
   mail-test EMAIL          sends a test message through ROMULUS_SMTP_*
   operator-test            sends a test notification and today's digest to
                            ROMULUS_OPERATOR_EMAILS now (the day's digest still goes)
+  signups [--since YYYY-MM-DD]
+                           every account made (since that day, UTC), oldest first,
+                           as CSV: created_at, where it came from (utm_source,
+                           utm_medium, utm_campaign, utm_content, referrer), plan,
+                           activated_7d, paying; ROMULUS_OPERATOR_IGNORE_DOMAINS
+                           left out
 
 deleting on request (both: --dry-run first says what would go; the address,
 or the admins, are emailed when it is done):
@@ -127,6 +133,9 @@ enum AdminCommand {
     },
     MailTest(String),
     OperatorTest,
+    Signups {
+        since: Option<chrono::NaiveDate>,
+    },
     DeleteUser {
         email: String,
         dry_run: bool,
@@ -328,6 +337,12 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
                 dry_run: on.contains(&"dry-run"),
             })
         }
+        Some("signups") => {
+            let flags = flags(rest, &["since"])?;
+            Command::Admin(AdminCommand::Signups {
+                since: flags.get("since").map(|d| date_flag(d)).transpose()?,
+            })
+        }
         Some("auth-events") => {
             let flags = flags(rest, &["email", "limit"])?;
             let limit = match flags.get("limit") {
@@ -517,6 +532,15 @@ async fn run_admin(command: AdminCommand) -> Result<(), MainError> {
         } => {
             let state = AppState::new(pool, config);
             price_change(&state, plan, from, dry_run, &mut stdout).await?;
+        }
+        AdminCommand::Signups { since } => {
+            let ignored = config
+                .operator
+                .as_ref()
+                .map_or(&[][..], |o| o.ignore_domains.as_slice());
+            let signups = romulus_api::signups::export(&pool, since, ignored).await?;
+            romulus_api::signups::write_csv(&signups, &mut stdout)?;
+            tracing::info!(accounts = signups.len(), "signups: done");
         }
         AdminCommand::OperatorTest => {
             let state = AppState::new(pool, config);
@@ -822,6 +846,29 @@ mod tests {
             parse(&args("operator-test ops@example.com")),
             Err(MainError::Usage)
         ));
+    }
+
+    #[test]
+    fn signups_take_an_optional_day() {
+        assert!(matches!(
+            parse(&args("signups")),
+            Ok(Command::Admin(AdminCommand::Signups { since: None }))
+        ));
+        assert!(matches!(
+            parse(&args("signups --since 2026-10-01")),
+            Ok(Command::Admin(AdminCommand::Signups { since: Some(day) }))
+                if day == chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        ));
+        for wrong in [
+            "signups --since yesterday",
+            "signups 2026-10-01",
+            "signups --until 2026-10-01",
+        ] {
+            assert!(
+                matches!(parse(&args(wrong)), Err(MainError::Usage)),
+                "{wrong}"
+            );
+        }
     }
 
     #[test]

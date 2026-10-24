@@ -1483,3 +1483,101 @@ async fn verify_email_vouches_for_password_accounts_only(db: PgPool) {
         assert_eq!(row.email_verified, row.id == password_account);
     }
 }
+
+// ---- Where the sign-up came from (signups) --------------------------------------
+
+async fn signup_source(db: &PgPool, email: &str) -> Option<Value> {
+    sqlx::query_scalar!(
+        r#"SELECT to_jsonb(s) - 'user_id' - 'created_at' AS "row!"
+           FROM signup_sources s JOIN users u ON u.id = s.user_id
+           WHERE lower(u.email) = lower($1)"#,
+        email,
+    )
+    .fetch_optional(db)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_password_sign_up_keeps_its_source_on_the_link_until_the_account_exists(db: PgPool) {
+    let (app, outbox) = app_with(db.clone(), true, SignUpPolicy::Open);
+    let sent = app
+        .post_json(
+            "/api/auth/password/sign-up",
+            &json!({
+                "email": "carol@acme.io",
+                "name": "Carol",
+                "source": {
+                    "utm_source": " newsletter ",
+                    "utm_campaign": "launch",
+                    "referrer": "https://news.example.org/item?id=42",
+                },
+            }),
+        )
+        .await;
+    assert_eq!(sent.status, StatusCode::ACCEPTED);
+    let token = token_in(&mail(&outbox, "carol@acme.io", 1).await[0].text);
+    // Cleaned already, on the link: never more than what is stored.
+    let kept =
+        sqlx::query_scalar!("SELECT signup_source FROM auth_links WHERE purpose = 'sign_up'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(kept.unwrap()["referrer"], "https://news.example.org");
+    assert_eq!(signup_source(&db, "carol@acme.io").await, None);
+
+    let done = app
+        .post_json(
+            "/api/auth/password/sign-up/finish",
+            &json!({ "token": token, "name": "Carol", "password": PASSWORD }),
+        )
+        .await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.json());
+    assert_eq!(
+        signup_source(&db, "carol@acme.io").await,
+        Some(json!({
+            "utm_source": "newsletter",
+            "utm_medium": null,
+            "utm_campaign": "launch",
+            "utm_content": null,
+            "referrer": "https://news.example.org",
+        }))
+    );
+    // The app's report on landing finds the sign-up told: not a second one.
+    let carol = Session {
+        user: password::find_account(&db, "carol@acme.io")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        token: done.cookie_value(COOKIE).unwrap(),
+    };
+    let report = app
+        .as_user(&carol)
+        .post("/api/me/signup-source", &json!({ "utm_source": "ads" }))
+        .await;
+    assert_eq!(
+        report.json(),
+        json!({ "recorded": false, "new_account": false })
+    );
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn without_mail_an_invited_sign_up_stores_its_source_at_once_even_empty(db: PgPool) {
+    let (_, link) = invited(&db, "bob@acme.io").await;
+    let (app, _) = app_with(db.clone(), false, SignUpPolicy::Invite);
+    let created = app
+        .post_json(
+            "/api/auth/password/sign-up",
+            &json!({ "email": "bob@acme.io", "name": "Bob", "password": PASSWORD, "invitation": link }),
+        )
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.json());
+    assert_eq!(
+        signup_source(&db, "bob@acme.io").await,
+        Some(
+            json!({ "utm_source": null, "utm_medium": null, "utm_campaign": null,
+                     "utm_content": null, "referrer": null })
+        )
+    );
+}

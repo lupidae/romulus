@@ -510,6 +510,23 @@ export interface paths {
     patch: operations["update_preferences"];
     trace?: never;
   };
+  "/api/me/signup-source": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Records where the signed-in person came from, once. */
+    post: operations["report_signup_source"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/me/terms": {
     parameters: {
       query?: never;
@@ -2108,6 +2125,11 @@ export interface components {
        * @description Pass as `before` for the next page; `null` on the last one.
        */
       next_before?: string | null;
+    };
+    /** @description An Umami-compatible tracker: the script, and the website it counts for. */
+    Analytics: {
+      script_url: string;
+      website_id: string;
     };
     /** @description What a thread is pinned to. */
     Anchor:
@@ -3851,6 +3873,7 @@ export interface components {
       status: components["schemas"]["Status"];
     };
     Instance: {
+      analytics?: components["schemas"]["Analytics"] | null;
       /**
        * @description Plans and billing (the hosted service, `ROMULUS_BILLING`): the app
        *     shows the billing page and upgrade prompts.
@@ -4878,6 +4901,7 @@ export interface components {
        *     chosen on the page the emailed link opens.
        */
       password?: string | null;
+      source?: components["schemas"]["SignupSource"] | null;
       terms?: components["schemas"]["AcceptTerms"] | null;
     };
     Person: {
@@ -5908,6 +5932,28 @@ export interface components {
     SignedUp: {
       org?: components["schemas"]["Org"] | null;
       outcome: components["schemas"]["SignUpOutcome"];
+    };
+    SignupReported: {
+      /**
+       * @description This report made the account's row (its first, within the hour of
+       *     signing up): a sign-up just completed.
+       */
+      new_account: boolean;
+      /** @description The source was stored. */
+      recorded: boolean;
+    };
+    /** @description The source of the visit signing up, as its URL carried it. */
+    SignupSource: {
+      /**
+       * @description The site that linked here (the homepage's `ref_origin`, or
+       *     `document.referrer`); only its origin is kept, and nothing when it
+       *     is this site.
+       */
+      referrer?: string | null;
+      utm_campaign?: string | null;
+      utm_content?: string | null;
+      utm_medium?: string | null;
+      utm_source?: string | null;
     };
     /**
      * @description Why a statement is not replayed.
@@ -8048,6 +8094,46 @@ export interface operations {
         };
       };
       /** @description `not_for_agents` */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  report_signup_source: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SignupSource"];
+      };
+    };
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SignupReported"];
+        };
+      };
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `not_for_agents`: an access token's request */
       403: {
         headers: {
           [name: string]: unknown;

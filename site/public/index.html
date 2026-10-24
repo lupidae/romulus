@@ -25,6 +25,11 @@
 <link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/styles.css">
+<!-- Cookieless audience measurement (Umami, our own server): page views and the
+     sign-up buttons' clicks, counted only on romulus.lupidae.com, never with Do
+     Not Track; app.js's romulusBeforeSend keeps only the campaign parameters of
+     the address and the referrer's origin. _headers allows this one origin. -->
+<script defer src="https://stats.lupidae.com/script.js" data-website-id="00e44160-7141-4b01-a9d2-4b4bf27d8236" data-domains="romulus.lupidae.com" data-do-not-track="true" data-exclude-hash="true" data-before-send="romulusBeforeSend"></script>
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -124,7 +129,7 @@
     <p class="lead">DBA as a service for Postgres teams. Keep every version, design the next one together, ship its migration.</p>
     <div class="cta-row">
       <a class="button primary large" href="#pricing">Choose a plan</a>
-      <a class="button secondary large" href="/app/signin">Start free</a>
+      <a class="button secondary large" href="/app/signin" data-umami-event="signup_started" data-umami-event-from="hero">Start free</a>
       <a class="button ghost large" href="/app/signin">Sign in</a>
     </div>
     <p class="fineprint"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>romulus never connects to your database.</p>
@@ -805,7 +810,7 @@
         </p>
         <p class="plan-alt">No card needed</p>
         <div class="plan-actions">
-          <a class="button secondary" href="/app/signin">Start free</a>
+          <a class="button secondary" href="/app/signin" data-umami-event="signup_started" data-umami-event-plan="free">Start free</a>
         </div>
         <dl class="plan-limits">
           <div><dt>Members</dt><dd>1</dd></div>
@@ -829,8 +834,8 @@
         </p>
         <p class="plan-alt"><span class="per-month">or 190&nbsp;€ a year</span><span class="per-year">or 19&nbsp;€ a month</span></p>
         <div class="plan-actions">
-          <a class="button secondary per-month" href="/app/signup?plan=starter&amp;interval=month">Subscribe to Starter</a>
-          <a class="button secondary per-year" href="/app/signup?plan=starter&amp;interval=year">Subscribe to Starter</a>
+          <a class="button secondary per-month" href="/app/signup?plan=starter&amp;interval=month" data-umami-event="signup_started" data-umami-event-plan="starter" data-umami-event-interval="month">Subscribe to Starter</a>
+          <a class="button secondary per-year" href="/app/signup?plan=starter&amp;interval=year" data-umami-event="signup_started" data-umami-event-plan="starter" data-umami-event-interval="year">Subscribe to Starter</a>
         </div>
         <dl class="plan-limits">
           <div><dt>Members</dt><dd>Unlimited</dd></div>
@@ -855,8 +860,8 @@
         </p>
         <p class="plan-alt"><span class="per-month">or 490&nbsp;€ a year</span><span class="per-year">or 49&nbsp;€ a month</span></p>
         <div class="plan-actions">
-          <a class="button primary per-month" href="/app/signup?plan=team&amp;interval=month">Subscribe to Team</a>
-          <a class="button primary per-year" href="/app/signup?plan=team&amp;interval=year">Subscribe to Team</a>
+          <a class="button primary per-month" href="/app/signup?plan=team&amp;interval=month" data-umami-event="signup_started" data-umami-event-plan="team" data-umami-event-interval="month">Subscribe to Team</a>
+          <a class="button primary per-year" href="/app/signup?plan=team&amp;interval=year" data-umami-event="signup_started" data-umami-event-plan="team" data-umami-event-interval="year">Subscribe to Team</a>
         </div>
         <dl class="plan-limits">
           <div><dt>Members</dt><dd>Unlimited</dd></div>
@@ -880,8 +885,8 @@
         </p>
         <p class="plan-alt"><span class="per-month">or 1,490&nbsp;€ a year</span><span class="per-year">or 149&nbsp;€ a month</span></p>
         <div class="plan-actions">
-          <a class="button secondary per-month" href="/app/signup?plan=business&amp;interval=month">Subscribe to Business</a>
-          <a class="button secondary per-year" href="/app/signup?plan=business&amp;interval=year">Subscribe to Business</a>
+          <a class="button secondary per-month" href="/app/signup?plan=business&amp;interval=month" data-umami-event="signup_started" data-umami-event-plan="business" data-umami-event-interval="month">Subscribe to Business</a>
+          <a class="button secondary per-year" href="/app/signup?plan=business&amp;interval=year" data-umami-event="signup_started" data-umami-event-plan="business" data-umami-event-interval="year">Subscribe to Business</a>
           <a class="plan-talk" href="mailto:romulus@lupidae.com?subject=romulus%20Business%20plan">Talk to us</a>
         </div>
         <dl class="plan-limits">
@@ -1053,7 +1058,7 @@
     <p>Upload your SQL, import your migrations or push from CI. Your team can open the first draft on it right away.</p>
     <div class="cta-row">
       <a class="button primary large" href="#pricing">Choose a plan</a>
-      <a class="button secondary large" href="/app/signin">Start free</a>
+      <a class="button secondary large" href="/app/signin" data-umami-event="signup_started" data-umami-event-from="closing">Start free</a>
       <a class="button ghost large" href="mailto:romulus@lupidae.com">Talk to us</a>
     </div>
   </div>

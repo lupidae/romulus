@@ -543,6 +543,10 @@ pub struct PasswordSignUp {
     /// a server without Terms.
     #[serde(default)]
     pub terms: Option<crate::legal::AcceptTerms>,
+    /// Where the sign-up came from, as the page's URL carried it
+    /// (`signups`): stored with the account.
+    #[serde(default)]
+    pub source: Option<crate::signups::SignupSource>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -596,6 +600,10 @@ async fn sign_up(
     let name = checked_name(&body.name)?;
     let email = checked_email(&body.email)?;
     let terms = crate::legal::sign_up_terms(&state.config, body.terms.as_ref())?;
+    let source = crate::signups::Source::clean(
+        &body.source.clone().unwrap_or_default(),
+        &state.config.public_origin(),
+    );
 
     let invitation = match body.invitation.as_deref() {
         Some(link) => {
@@ -627,7 +635,7 @@ async fn sign_up(
     };
 
     if state.mailer.is_on() {
-        sign_up_by_email(&state, ip, email, name, invitation, terms).await?;
+        sign_up_by_email(&state, ip, email, name, invitation, terms, source).await?;
         // The same answer whatever happened.
         return Ok((
             StatusCode::ACCEPTED,
@@ -660,6 +668,7 @@ async fn sign_up(
     if let Some(terms) = &terms {
         crate::legal::record_sign_up(&mut tx, &state.config, user_id, &email, &name, terms).await?;
     }
+    crate::signups::store(&mut tx, user_id, &source).await?;
     let org = invitations::claim_for(
         &state.billing,
         &mut tx,
@@ -720,6 +729,7 @@ async fn sign_up_by_email(
     name: String,
     invitation: Option<invitations::LiveInvitation>,
     terms: Option<crate::legal::SignUpTerms>,
+    source: crate::signups::Source,
 ) -> ApiResult<()> {
     let existing = find_account(&state.db, &email).await?;
     events::record(
@@ -757,6 +767,7 @@ async fn sign_up_by_email(
                     invitation_id: invitation.as_ref().map(|(id, _)| *id),
                     ttl: links::SIGN_UP_TTL,
                     accepted_terms: terms.and_then(|t| serde_json::to_value(t).ok()),
+                    signup_source: serde_json::to_value(&source).ok(),
                 },
             )
             .await?;
@@ -890,6 +901,12 @@ async fn finish_sign_up(
         crate::legal::record_sign_up(&mut tx, &state.config, user_id, &link.email, &name, &terms)
             .await?;
     }
+    let source = link
+        .signup_source
+        .clone()
+        .and_then(|value| serde_json::from_value::<crate::signups::Source>(value).ok())
+        .unwrap_or_default();
+    crate::signups::store(&mut tx, user_id, &source).await?;
     // Joined when the invitation still stands; the account exists either way.
     let org = match link.invitation_id {
         Some(id) => {
@@ -1005,6 +1022,7 @@ async fn forgot(
                     invitation_id: None,
                     ttl: links::RESET_TTL,
                     accepted_terms: None,
+                    signup_source: None,
                 },
             )
             .await?;

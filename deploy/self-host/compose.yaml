@@ -59,6 +59,10 @@ services:
       ROMULUS_OPERATOR_EMAILS: ${ROMULUS_OPERATOR_EMAILS:-}
       ROMULUS_OPERATOR_DIGEST_HOUR: ${ROMULUS_OPERATOR_DIGEST_HOUR:-}
       ROMULUS_OPERATOR_IGNORE_DOMAINS: ${ROMULUS_OPERATOR_IGNORE_DOMAINS:-}
+      # Cookieless page views from the app to your own Umami-compatible
+      # server (both, or neither). Empty: the app loads nothing from elsewhere.
+      ROMULUS_ANALYTICS_SCRIPT_URL: ${ROMULUS_ANALYTICS_SCRIPT_URL:-}
+      ROMULUS_ANALYTICS_WEBSITE_ID: ${ROMULUS_ANALYTICS_WEBSITE_ID:-}
       # Single sign-on with your own OpenID Connect provider (optional; add
       # `oidc` to ROMULUS_AUTH).
       ROMULUS_OIDC_ISSUER: ${ROMULUS_OIDC_ISSUER:-}

@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { documents as rendered, slug } from "../tools/legal.mjs";
+import { ANALYTICS, expect, test } from "./fixtures";
 
 const repoFile = (path: string) => readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8");
 
@@ -81,9 +82,10 @@ const legalLinks = {
 // edition (consumers included), published under /legal/full/ for later.
 const terms = { meta: ["Version: 1.0", "Effective date: 21 October 2026"] };
 const conditions = { meta: ["Version\u00a0: 1.0", "Date d'entrée en vigueur\u00a0: 21 octobre 2026"] };
-// The privacy policy's own version: 1.1 added the emails' retention.
-const privacy = { meta: ["Version: 1.1", "Effective date: 22 October 2026"] };
-const confidentialite = { meta: ["Version\u00a0: 1.1", "Date d'entrée en vigueur\u00a0: 22 octobre 2026"] };
+// The privacy policy's own version: 1.1 added the emails' retention, 1.2 the
+// audience measurement and the signup source.
+const privacy = { meta: ["Version: 1.2", "Effective date: 24 October 2026"] };
+const confidentialite = { meta: ["Version\u00a0: 1.2", "Date d'entrée en vigueur\u00a0: 24 octobre 2026"] };
 const documents = [
   {
     path: "/legal/terms",
@@ -446,7 +448,7 @@ test("the legal notice links the privacy policy in its own language", async ({ p
   }
 });
 
-test("what the notice says about data holds: no cookies, nothing from another origin", async ({ page, context, baseURL }) => {
+test("what the notice says about data holds: no cookies, nothing from another origin but the visit count", async ({ page, context, baseURL }) => {
   // The homepage with its live editor (it loads once the page is idle on a desktop), then every legal page.
   test.setTimeout(90_000);
   const origin = new URL(baseURL!).origin;
@@ -463,7 +465,9 @@ test("what the notice says about data holds: no cookies, nothing from another or
     await page.getByRole("group", { name: group }).getByRole("radio", { name: dark }).check();
     await expect(page.locator("html")).toHaveClass(/\bdark\b/);
   }
-  expect(elsewhere).toEqual([]);
+  // The homepage's audience measurement, from our own server (stubbed here):
+  // its script, nothing sent from localhost (it counts on romulus.lupidae.com).
+  expect(elsewhere).toEqual([`${ANALYTICS}/script.js`]);
   expect(await context.cookies()).toEqual([]);
 });
 
@@ -484,6 +488,34 @@ test("every privacy policy says how long the emails sent are kept (1.1)", async 
   expect(repoFile("crates/romulus-api/src/mail/outbox.rs")).toContain(
     "WHERE sent_at < now() - interval '30 days' OR failed_at < now() - interval '90 days'",
   );
+});
+
+test("every privacy policy says what the audience measurement and the signup source keep (1.2)", async ({ page }) => {
+  const policies = [
+    { path: "/legal/privacy", version: "Version: 1.2", rows: ["Signup source", "Audience measurement data"], kept: ["With the Account; deleted with it", "At most 25 months"] },
+    { path: "/legal/full/privacy", version: "Version: 1.2", rows: ["Signup source", "Audience measurement data"], kept: ["With the Account; deleted with it", "At most 25 months"] },
+    { path: "/fr/legal/confidentialite", version: "Version : 1.2", rows: ["Origine de l'inscription", "Données de mesure d'audience"], kept: ["Avec le Compte ; supprimée avec lui", "25 mois au plus"] },
+    { path: "/fr/legal/full/confidentialite", version: "Version : 1.2", rows: ["Origine de l'inscription", "Données de mesure d'audience"], kept: ["Avec le Compte ; supprimée avec lui", "25 mois au plus"] },
+  ];
+  for (const policy of policies) {
+    await page.goto(policy.path);
+    await expect(page.getByRole("main"), policy.path).toContainText(policy.version);
+    for (const [i, data] of policy.rows.entries()) {
+      // Section 2 (what it is) and Section 6 (how long it is kept).
+      const rows = page.getByRole("row").filter({ has: page.getByRole("rowheader", { name: data, exact: true }) });
+      await expect(rows, `${policy.path}: ${data}`).toHaveCount(2);
+      await expect(rows.nth(1).getByRole("cell"), policy.path).toContainText(policy.kept[i]);
+    }
+    // The one key the measurement keeps (web/src/features/marketing/analytics.ts), and its server.
+    for (const key of ["romulus.analytics.once", "stats.lupidae.com", "ref_origin"])
+      await expect(page.getByRole("main"), policy.path).toContainText(key);
+    // The source rides in URLs: no storage key for it (it would need consent).
+    await expect(page.getByRole("main"), policy.path).not.toContainText("romulus.source");
+  }
+  expect(repoFile("web/src/features/marketing/analytics.ts")).toContain('const ONCE_KEY = "romulus.analytics.once";');
+  // Neither the homepage's app.js nor the app's source module keeps the source.
+  expect(repoFile("site/public/app.js")).not.toMatch(/romulus\.source|setItem\([^)]*(utm|ref_origin|source)/);
+  expect(repoFile("web/src/features/marketing/source.ts")).not.toMatch(/localStorage|sessionStorage/);
 });
 
 test("the sitemap lists the notices and the documents in force, never the full edition", async ({ request }) => {

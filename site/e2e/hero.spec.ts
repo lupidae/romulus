@@ -1,4 +1,6 @@
-import { expect as base, type Locator, type Page, test } from "@playwright/test";
+import { expect as base, type Locator, type Page } from "@playwright/test";
+
+import { test } from "./fixtures";
 
 // The live hero (site/public/hero, built from web/src/hero): romulus's own
 // editor, graph, diff, migration and comments, running in the browser.

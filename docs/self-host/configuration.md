@@ -54,6 +54,7 @@ binary's; the bundle's own value is in the third column when it differs.
 | `ROMULUS_OPERATOR_EMAILS` | empty: off | `.env` | the people running this install, comma-separated: emailed as things happen and once a day ([Operator notifications](#operator-notifications)). Needs mail: the API refuses to start without it |
 | `ROMULUS_OPERATOR_DIGEST_HOUR` | `7` | `.env` | the hour (UTC, 0 to 23) from which the daily digest goes |
 | `ROMULUS_OPERATOR_IGNORE_DOMAINS` | empty: none | `.env` | email domains, comma-separated (`romulus.test,example.com`), whose accounts the notifications and the digest leave out: your team's, your tests' ([Ignored domains](#ignored-domains)) |
+| `ROMULUS_ANALYTICS_SCRIPT_URL`, `ROMULUS_ANALYTICS_WEBSITE_ID` | unset: off | `.env` | an Umami-compatible analytics server's script (https) and your website's id there: the app loads it and counts page views and a few events ([Analytics](#analytics)). Both or neither; neither, the app loads nothing from another origin |
 | `ROMULUS_SANDBOX_URL` | unset | the `sandbox` container | an admin connection to Postgres 17's sandbox, where SQL compiles. Unset: uploads answer 503 and drafts do not compile |
 | `ROMULUS_SANDBOX_URL_PG15`, `_PG16`, `_PG18` | unset | when enabled | the other majors' sandboxes. A major without one answers 503 for its databases only |
 | `ROMULUS_SANDBOX_PREFIX` | `romulus_sandbox` | | names the compile pool's roles and databases in the sandboxes. One API per prefix and sandbox |
@@ -214,6 +215,56 @@ An organization is judged by its members at the time: one with a single
 member from outside is told of and counted. Empty (the default) leaves
 nothing out.
 
+## Analytics
+
+Off unless you set both `ROMULUS_ANALYTICS_SCRIPT_URL` (the tracker's
+script, e.g. `https://stats.example.com/script.js`; `https`, or `http` on
+a loopback host to try one) and `ROMULUS_ANALYTICS_WEBSITE_ID` (your
+website's id on that server). Unset, the app loads no script and makes no
+request to any other origin. Set, `GET /api/instance` hands both to the
+app, which loads the script (an [Umami](https://umami.is)-compatible
+tracker, which sets no cookie) with its own page views off and Do Not Track
+honoured, then sends:
+
+- a page view per screen, as the route's pattern
+  (`/app/$org/$db/v/$number`), never the address in the bar, which names
+  organizations and databases; only the `utm_*` parameters of the URL, the
+  title `romulus`, and the referring site's origin on the first page;
+- `signup_started` (a password sign-up's form sent, with `method`),
+  `signup_completed` (a password account made, or an account's first
+  sign-in, within its first hour) and `first_draft_compiled` (this
+  browser's first edit of a draft that compiled: the one thing the app
+  keeps in the browser for analytics, `romulus.analytics.once`, written
+  only when such an event is sent).
+
+The app's Content-Security-Policy is `frame-ancestors 'none'` only: it
+restricts no script or connection, so nothing needs allowing there. If a
+reverse proxy of yours adds a stricter policy, allow the script's origin in
+`script-src` and `connect-src` (the tracker sends to `<origin>/api/send`).
+Tell your users in your own privacy notice.
+
+### Signup sources
+
+Whatever the analytics setting, the app records where a sign-up came from:
+the `utm_source`, `utm_medium`, `utm_campaign` and `utm_content` of the
+address the visit arrived at, and the referring site's origin (never its
+path; `ref_origin` in the address when a site of yours links into the app,
+else the browser's referrer). They ride in URLs only, never in the
+browser's storage: the sign-in page carries them through the identity
+provider and back (in `next`), and the page signing in reports them
+(`POST /api/me/signup-source`); a password sign-up sends them with its form,
+kept on the emailed link until the account exists. The API stores them with
+the account (`signup_sources`) only for an account made within the hour,
+and deletes them with it. Nothing else about the visitor is kept, nothing
+goes anywhere but your API, and a visitor who leaves and comes back later
+is attributed to that later visit. `romulus-api signups` exports them
+(below): `activated_7d` is true when, within 7 days of signing up, the
+person edited a draft or made a version (an upload, a push with their
+token, a publish, an import); `plan` is the best plan in force among their
+organizations (`free` without billing), and `paying` whether one of them
+pays for it (a live subscription, not a trial). Spreadsheet formulas in
+the values (`=`, `+`, `-`, `@` first) are written with a `'` before them.
+
 ## Admin commands
 
 The API image's binary runs these. From `deploy/self-host`:
@@ -231,6 +282,7 @@ docker compose exec api romulus-api <command>
 | `mail-test EMAIL` | sends a test message; non-zero with the server's error if it fails, exit 3 when mail is off |
 | `operator-test` | sends a test notification and today's digest to `ROMULUS_OPERATOR_EMAILS` now, one line per message; non-zero when one was not sent. The day's digest still goes at its hour |
 | `auth-events [--email EMAIL] [--limit N]` | recent sign-in events, as JSON lines |
+| `signups [--since YYYY-MM-DD]` | every account made (since that day, UTC), oldest first, as CSV on stdout: `created_at`, where it came from (`utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `referrer`), `plan`, `activated_7d`, `paying` ([Signup sources](#signup-sources)). `ROMULUS_OPERATOR_IGNORE_DOMAINS` are left out |
 | `delete-user EMAIL [--dry-run]` | deletes every account with that address and what it alone holds ([below](#retention-and-deletion)); `--dry-run` says what would go. Exit 4 while it is the only admin of an organization others belong to |
 | `delete-org SLUG [--dry-run]` | deletes the organization and everything in it; `--dry-run` says what would go |
 | `migrate` | applies pending migrations and exits (`serve` does it too) |

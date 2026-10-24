@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.user_id, b.plan AS \"plan: Plan\", b.status, b.past_due_since, b.withdrawn_at\n           FROM memberships m JOIN org_billing b ON b.org_id = m.org_id\n           JOIN users u ON u.id = m.user_id\n           WHERE ($1::timestamptz IS NULL OR u.created_at >= $1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "memberships",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "plan: Plan",
+        "type_info": {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "plan"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "past_due_since",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "past_due_since"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "withdrawn_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e03d51e97383cfb9eb031480bb8e5eabd5af753d24150243a8e39862b515bd16"
+}

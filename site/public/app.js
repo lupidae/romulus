@@ -1,6 +1,7 @@
 // The site's only script (the homepage, the comparisons and the guides): the
 // header border on scroll, a launch post's welcome, the hero scene starting
-// when it is seen, the live hero, the copy buttons and the theme switch.
+// when it is seen, the live hero, the copy buttons, the theme switch, the
+// visit's source on the links into the app, and what the visit count sends.
 // Everything works without it; it only adds behaviour.
 
 // Header: a hairline once the page scrolls under it.
@@ -245,3 +246,64 @@ if (switcher) {
     apply(theme);
   });
 }
+
+// Where this visit came from, for a sign-up: the campaign parameters of this
+// page's address (utm_source, utm_medium, utm_campaign, utm_content) and the
+// referring site's origin (as ref_origin), added to the links into the app,
+// which carries them through sign-in and reports them with the sign-up
+// (web/src/features/marketing/source.ts: the same parameters). In URLs only:
+// nothing is stored in the browser.
+const UTM = ["utm_source", "utm_medium", "utm_campaign", "utm_content"];
+/** The origin of `url` when it is another site's http(s) page. */
+const otherOrigin = (url) => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.origin === location.origin ? null : parsed.origin;
+  } catch {
+    return null;
+  }
+};
+{
+  const params = new URLSearchParams(location.search);
+  const source = [];
+  for (const field of UTM) {
+    const value = params.get(field)?.trim().slice(0, 200);
+    if (value) source.push([field, value]);
+  }
+  const from = otherOrigin(document.referrer);
+  if (from) source.push(["ref_origin", from]);
+  if (source.length) {
+    for (const link of document.querySelectorAll('a[href^="/app/signin"], a[href^="/app/signup"]')) {
+      const url = new URL(link.getAttribute("href"), location.origin);
+      for (const [name, value] of source) url.searchParams.set(name, value);
+      link.setAttribute("href", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }
+}
+
+// The audience measurement's payloads (index.html: data-before-send), as the
+// app sends its own: the page's address with its campaign parameters only,
+// the referrer reduced to another site's origin.
+window.romulusBeforeSend = (type, payload) => {
+  if (!payload) return payload;
+  if (typeof payload.url === "string") {
+    try {
+      const url = new URL(payload.url, location.origin);
+      const kept = new URLSearchParams();
+      for (const field of UTM) {
+        const value = url.searchParams.get(field);
+        if (value) kept.set(field, value.slice(0, 200));
+      }
+      const query = kept.toString();
+      payload.url = `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    } catch {
+      payload.url = location.origin + "/";
+    }
+  }
+  if ("referrer" in payload) {
+    const referrer = String(payload.referrer ?? "");
+    payload.referrer = referrer.startsWith("/") ? "" : (otherOrigin(referrer) ?? "");
+  }
+  return payload;
+};
