@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How to test Prisma migrations on real rows, in CI</title>
+<meta name="description" content="Prisma warns about data loss only from your dev database, and migrate deploy doesn't check at all. Run a pull request's new migrations on rows in CI, with a real run.">
+<link rel="canonical" href="https://romulus.lupidae.com/guides/test-prisma-migrations">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+<script>
+  // Before first paint: the theme the visitor chose here or in the app (same
+  // key; without one, tokens.css follows the system), and a flag for the CSS
+  // that waits on app.js.
+  (function (root) {
+    root.classList.add("js");
+    try {
+      var t = localStorage.getItem("romulus-theme");
+      if (t === "light" || t === "dark") root.classList.add(t);
+    } catch (e) {}
+  })(document.documentElement);
+</script>
+<link rel="preload" href="/fonts/inter-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="romulus">
+<meta property="og:url" content="https://romulus.lupidae.com/guides/test-prisma-migrations">
+<meta property="og:title" content="How to test Prisma migrations on real rows, in CI">
+<meta property="og:description" content="Prisma warns about data loss only from your dev database, and migrate deploy doesn't check at all. Run a pull request's new migrations on rows in CI, with a real run.">
+<meta property="og:image" content="https://romulus.lupidae.com/og/guide-test-prisma-migrations.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="How to test Prisma migrations, with the output of a romulus test run that caught a NOT NULL column on existing rows.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How to test Prisma migrations on real rows, in CI">
+<meta name="twitter:description" content="Prisma warns about data loss only from your dev database, and migrate deploy doesn't check at all. Run a pull request's new migrations on rows in CI, with a real run.">
+<meta name="twitter:image" content="https://romulus.lupidae.com/og/guide-test-prisma-migrations.png">
+<meta name="twitter:image:alt" content="How to test Prisma migrations, with the output of a romulus test run that caught a NOT NULL column on existing rows.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "How to test Prisma migrations before they reach production",
+  "description": "Prisma warns about data loss only from your dev database, and migrate deploy doesn't check at all. Run a pull request's new migrations on rows in CI, with a real run.",
+  "url": "https://romulus.lupidae.com/guides/test-prisma-migrations",
+  "image": "https://romulus.lupidae.com/og/guide-test-prisma-migrations.png",
+  "datePublished": "2026-10-24",
+  "dateModified": "2026-10-24",
+  "author": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  }
+}
+</script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <!-- Iconoir, the app's icon set (web/src/components/icons). -->
+  <symbol id="i-mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" class="mark-bg"/><path d="M11.5 23V13.75A4.75 4.75 0 0 1 16.25 9H17" fill="none" stroke-width="2.75" stroke-linecap="round" class="mark-fg-stroke"/><circle cx="21.5" cy="9" r="2.4" class="mark-fg"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M16 22.027v-2.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7a5.44 5.44 0 0 0-1.5-3.75a5.07 5.07 0 0 0-.09-3.77s-1.18-.35-3.91 1.48a13.4 13.4 0 0 0-7 0c-2.73-1.83-3.91-1.48-3.91-1.48A5.07 5.07 0 0 0 5 5.797a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7a3.37 3.37 0 0 0-.94 2.58v2.87"/><path d="M9 20.027c-3 .973-5.5 0-7-3"/></g></symbol>
+  <symbol id="i-computer" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 21h15m4 0h1"/><path d="M2 16.4V3.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v12.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18a6 6 0 1 0 0-12a6 6 0 0 0 0 12m10-6h1M12 2V1m0 22v-1m8-2l-1-1m1-15l-1 1M4 20l1-1M4 4l1 1m-4 7h1"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 11.507a9.493 9.493 0 0 0 18 4.219c-8.507 0-12.726-4.22-12.726-12.726A9.49 9.49 0 0 0 3 11.507"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"><path d="M4 19V5a2 2 0 0 1 2-2h13.4a.6.6 0 0 1 .6.6v13.114M6 17h14M6 21h14"/><path stroke-linejoin="round" d="M6 21a2 2 0 1 1 0-4"/><path d="M9 7h6"/></g></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18.01l.01-.011M6 6.01l.01-.011"/><path d="M2 9.4V2.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Zm0 12v-6.8a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M19.4 20H9.6a.6.6 0 0 1-.6-.6V9.6a.6.6 0 0 1 .6-.6h9.8a.6.6 0 0 1 .6.6v9.8a.6.6 0 0 1-.6.6"/><path d="M15 9V4.6a.6.6 0 0 0-.6-.6H4.6a.6.6 0 0 0-.6.6v9.8a.6.6 0 0 0 .6.6H9"/></g></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 17h7M5 7l5 5l-5 5"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13.5 6L10 18.5m-3.5-10L3 12l3.5 3.5m11-7L21 12l-3.5 3.5"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" data-header>
+  <div class="container header-inner">
+    <a class="wordmark" href="/" aria-label="romulus, home">
+      <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+      <span>romulus</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/#versions">Product</a>
+      <a href="/#ci">CI</a>
+      <a href="/#mcp">MCP</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/#self-host">Self-host</a>
+      <a href="/#faq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <a class="button ghost header-github" href="https://github.com/lupidae/romulus" aria-label="romulus on GitHub"><svg class="icon" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+      <a class="button ghost" href="/app/signin">Sign in</a>
+      <a class="button secondary header-cta" href="/app/signin">Start free</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="container article">
+  <article class="article-inner">
+    <p class="kicker">Guide</p>
+    <h1>How to test Prisma migrations before they reach production</h1>
+    <p class="answer">Run each new <code>migration.sql</code> on a database that has rows, in CI, before the pull request merges. Prisma's own checks don't do that: <code>prisma migrate dev</code> warns about data loss from what your development database happens to hold, and <code>prisma migrate deploy</code> applies the files without checking them. So a required column, a unique index or a narrowed enum passes on your laptop's empty tables and fails on production's rows. Below: what Prisma checks, what breaks on rows, and a real run of <code>romulus test</code> catching it from a Prisma folder.</p>
+    <p class="article-meta"><span>Written <time datetime="2026-10-24">October 24, 2026</time>, for Prisma ORM 7 (7.10.1) and PostgreSQL</span><a href="#sources">Sources</a></p>
+
+    <h2 id="prisma-checks">What Prisma checks, and what it doesn't</h2>
+    <ul>
+      <li><strong><code>prisma migrate dev</code></strong> replays your migration history in a shadow database (a temporary one it creates and deletes) to detect drift, generates the new migration, and warns about data loss before applying it: “You are about to drop the column … All the data in the column will be lost”, or “Added the required column … without a default value … This is not possible if the table is not empty.” The warnings are about the current datasource, your development database: on empty tables you get the generic wording, not the rows it would break. It is for development only, and stops in a non-interactive shell such as CI.</li>
+      <li><strong><code>prisma migrate deploy</code></strong>, the command for CI and production, applies pending migrations. Its documentation says it does not look for drift or changes in the Prisma schema and does not use a shadow database; the one warning it documents is a migration modified after it was applied.</li>
+      <li><strong><code>prisma migrate diff --exit-code</code></strong> compares two states, for instance <code>--from-migrations prisma/migrations --to-schema prisma/schema.prisma</code>, and exits 2 when they differ: a good CI check that the migrations match <code>schema.prisma</code>. It compares schemas, not data. (In Prisma 7, <code>--to-schema-datamodel</code> became <code>--to-schema</code> and the <code>--from-url</code>, <code>--to-url</code> and <code>--shadow-database-url</code> options gave way to the datasource in <code>prisma.config.ts</code>.)</li>
+      <li><strong><code>prisma migrate status</code></strong> exits 1 when migrations are unapplied, failed, or the history diverged: useful before a deploy.</li>
+    </ul>
+    <p>None of these runs a new migration against rows shaped like production's. That is the check to add.</p>
+
+    <h2 id="what-breaks">What breaks on rows</h2>
+    <ul>
+      <li><strong>A required field added to a model with rows.</strong> Prisma writes <code>ALTER TABLE "User" ADD COLUMN "phone" TEXT NOT NULL;</code>, which Postgres refuses on a table that has rows (error 23502). Add it optional, backfill, then make it required, or give it a default.</li>
+      <li><strong>A new <code>@unique</code></strong> on a column with duplicates: the index build fails. Prisma's own warning says “If there are existing duplicate values, this will fail.”</li>
+      <li><strong>An enum value removed</strong> while rows still use it: “If these variants are still used in the database, this will fail.”</li>
+      <li><strong>A rename</strong>: Prisma's docs say renaming a field produces a migration that creates the new column and drops the old one, with its data. Edit the generated file (<code>--create-only</code>) to <code>RENAME COLUMN</code>.</li>
+      <li><strong>An <code>@@index</code> on a busy table</strong>: <code>CREATE INDEX</code> without <code>CONCURRENTLY</code> holds a lock that makes every write to the table wait until the index is built. It succeeds, so no test that only checks for errors sees it.</li>
+    </ul>
+
+    <h2 id="ci">A CI step that runs the new migrations on rows</h2>
+    <p>You can build it yourself: a Postgres service in the CI job, a schema and rows that look like production (a sanitized dump, or a seed you maintain), <code>prisma migrate deploy</code>, then queries that check what you care about. It works; the cost is keeping the rows realistic as the schema grows.</p>
+    <p>Or use <code>romulus test</code>, the command line of romulus (open source, also a GitHub Action). Import your <code>prisma/migrations</code> folder into a romulus database once; then, on each pull request, it sends the folder, keeps only the migrations romulus has not imported, and runs them on a playground: a Postgres 17 holding your latest version and generated rows. Playgrounds run Postgres 17 only for now: for a database targeting 15, 16 or 18, romulus compiles and diffs the migrations but cannot test them on rows, and <code>romulus test</code> stops with <code>tests_unavailable</code> (exit 2). It fails the job on a statement that fails, on a table rewrite or an index build that blocks writes, and on data that changes without a statement saying so.</p>
+    <div class="terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>.github/workflows/migrations.yml</span></span>
+        <button class="copy-button" type="button" data-copy="#prisma-action" aria-label="Copy the GitHub Actions workflow"><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg><span data-copy-label>Copy</span></button>
+      </div>
+<pre class="terminal-body"><code id="prisma-action"><span class="cl">name: Migrations</span><!--
+--><span class="cl">on:</span><!--
+--><span class="cl">  pull_request:</span><!--
+--><span class="cl">    paths: [<span class="ts">"prisma/migrations/**"</span>]</span><!--
+--><span class="cl">jobs:</span><!--
+--><span class="cl">  test:</span><!--
+--><span class="cl">    runs-on: ubuntu-latest</span><!--
+--><span class="cl">    steps:</span><!--
+--><span class="cl">      - uses: actions/checkout@v7</span><!--
+--><span class="cl">      - uses: lupidae/romulus@v0.3.0</span><!--
+--><span class="cl">        with:</span><!--
+--><span class="cl">          migrations: prisma/migrations</span><!--
+--><span class="cl">          database: acme/shop</span><!--
+--><span class="cl">          token: <span class="ts">${{ secrets.ROMULUS_TOKEN }}</span></span></code></pre>
+      <p class="install-note">The token is a personal access token with write access. <a href="https://github.com/lupidae/romulus/blob/main/docs/cli.md">docs/cli.md</a> has the import on main, other CI systems and every option.</p>
+    </div>
+
+    <h2 id="run">A real run</h2>
+    <p>We ran it on October 24, 2026, against a local install of romulus: a shop database whose two Prisma migrations (<code>init</code>, <code>orders</code>) were imported, and a pull request adding two more, as <code>prisma migrate dev</code> writes them:</p>
+    <div class="terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg><span>The pull request's two migrations</span></span>
+      </div>
+<pre class="terminal-body output" tabindex="0" aria-label="The two new migration files"><span class="t-dim">-- prisma/migrations/20261020090000_user_phone/migration.sql</span>
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "phone" TEXT NOT NULL;
+
+<span class="t-dim">-- prisma/migrations/20261021090000_order_user_status_index/migration.sql</span>
+-- CreateIndex
+CREATE INDEX "Order_userId_status_idx" ON "Order"("userId", "status");</pre>
+    </div>
+    <p>The first run, <code>romulus test prisma/migrations --database acme/shop</code>, exits 1: the required column fails on the generated users, and the second migration never runs.</p>
+    <div class="terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>romulus test, run 1: exit 1</span></span>
+      </div>
+<pre class="terminal-body output" tabindex="0" aria-label="Output of the first run" data-og><span class="t-dim">Sending 5 files of prisma/migrations to romulus…</span>
+<span class="t-dim">Testing the new migrations on a playground…</span>
+<span class="t-dim">2 new migrations in draft "PR #42: user-phone".</span>
+romulus test: acme/shop, PR #42: user-phone
+2 new migrations (2 imported already), on v2 with 2049 generated rows:
+
+  <span class="t-fail">FAIL</span>  prisma/migrations/20261020090000_user_phone/migration.sql: statement 1 of 1 failed
+          ALTER TABLE "User" ADD COLUMN     "phone" TEXT NOT NULL;
+        <span class="t-fail">ERROR 23502:</span> column "phone" of relation "User" contains null values
+  <span class="t-dim">SKIP</span>  prisma/migrations/20261021090000_order_user_status_index/migration.sql (not run: a statement before it failed)
+
+<span class="t-fail">FAILED:</span> Failed at statement 1 of 2 of the up migration: column "phone" of relation "User" contains null values
+Report: https://romulus.example.com/app/acme/shop/tests/01a16d92…
+Draft:  https://romulus.example.com/app/acme/shop/drafts/01a16d92… (PR #42: user-phone)</pre>
+    </div>
+    <p>Making the field optional (<code>phone String?</code>, so <code>ADD COLUMN "phone" TEXT</code>) gets both migrations through, but the job still fails: the index build would block writes to <code>Order</code> while it runs.</p>
+    <div class="terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>romulus test, run 2: exit 1</span></span>
+      </div>
+<pre class="terminal-body output" tabindex="0" aria-label="Output of the second run"><span class="t-dim">Sending 5 files of prisma/migrations to romulus…</span>
+<span class="t-dim">Testing the new migrations on a playground…</span>
+<span class="t-dim">2 new migrations in draft "PR #42: user-phone" (reused).</span>
+romulus test: acme/shop, PR #42: user-phone
+2 new migrations (2 imported already), on v2 with 2037 generated rows:
+
+  <span class="t-pass">PASS</span>  prisma/migrations/20261020090000_user_phone/migration.sql (1 statement, 3 ms)
+  <span class="t-pass">PASS</span>  prisma/migrations/20261021090000_order_user_status_index/migration.sql (1 statement, 5 ms)
+
+Problems:
+  - prisma/migrations/20261021090000_order_user_status_index/migration.sql:2: builds an index on public.Order without CONCURRENTLY: writes to it wait until the index is built
+
+<span class="t-fail">FAILED:</span> Up ran on 2,037 rows and kept them. No down migration.
+Report: https://romulus.example.com/app/acme/shop/tests/01a16d92…
+Draft:  https://romulus.example.com/app/acme/shop/drafts/01a16d92… (PR #42: user-phone)</pre>
+    </div>
+    <p>With the index built concurrently (<code>CREATE INDEX CONCURRENTLY</code>, edited into the file; keep it alone in its migration, since Postgres refuses it inside a transaction), the job passes:</p>
+    <div class="terminal dark">
+      <div class="terminal-bar">
+        <span class="terminal-title"><svg class="icon" aria-hidden="true"><use href="#i-terminal"/></svg><span>romulus test, run 3: exit 0</span></span>
+      </div>
+<pre class="terminal-body output" tabindex="0" aria-label="Output of the third run"><span class="t-dim">Sending 5 files of prisma/migrations to romulus…</span>
+<span class="t-dim">Testing the new migrations on a playground…</span>
+<span class="t-dim">2 new migrations in draft "PR #42: user-phone" (reused).</span>
+romulus test: acme/shop, PR #42: user-phone
+2 new migrations (2 imported already), on v2 with 2034 generated rows:
+
+  <span class="t-pass">PASS</span>  prisma/migrations/20261020090000_user_phone/migration.sql (1 statement, 5 ms)
+  <span class="t-pass">PASS</span>  prisma/migrations/20261021090000_order_user_status_index/migration.sql (1 statement, 6 ms)
+
+<span class="t-pass">PASSED:</span> Up ran on 2,034 rows and kept them. No down migration.
+Report: https://romulus.example.com/app/acme/shop/tests/01a16d93…
+Draft:  https://romulus.example.com/app/acme/shop/drafts/01a16d92… (PR #42: user-phone)</pre>
+    </div>
+    <p class="sources">Output as printed, the local address replaced by romulus.example.com and the ids cut. The rows are generated per run, hence the counts.</p>
+    <p>Each run updated the same draft in romulus, named after the pull request, so the team can read the migrations and comment on them there; the report page lists every statement with its locks and timing.</p>
+
+    <h2 id="sources">Sources</h2>
+    <p>Prisma's and PostgreSQL's documentation and source, read on October 24, 2026. The romulus runs above were made the same day.</p>
+    <ol class="sources">
+      <li><a href="https://www.prisma.io/docs/cli/v7/migrate/dev">prisma migrate dev</a>, <a href="https://www.prisma.io/docs/cli/v7/migrate/deploy">migrate deploy</a>, <a href="https://www.prisma.io/docs/cli/v7/migrate/diff">migrate diff</a>, <a href="https://www.prisma.io/docs/cli/v7/migrate/status">migrate status</a> (Prisma 7).</li>
+      <li><a href="https://www.prisma.io/docs/orm/v7/prisma-migrate/understanding-prisma-migrate/shadow-database">The shadow database</a> and <a href="https://www.prisma.io/docs/orm/v7/prisma-migrate/workflows/development-and-production">development and production</a>.</li>
+      <li>The warnings' wording: <a href="https://github.com/prisma/prisma-engines/blob/main/schema-engine/connectors/sql-schema-connector/src/sql_destructive_change_checker/warning_check.rs">warning_check.rs</a> and <a href="https://github.com/prisma/prisma-engines/blob/main/schema-engine/connectors/sql-schema-connector/src/sql_destructive_change_checker/unexecutable_step_check.rs">unexecutable_step_check.rs</a>.</li>
+      <li><a href="https://www.prisma.io/docs/orm/v7/prisma-migrate/workflows/customizing-migrations">Customizing migrations</a>: renames as drop and add.</li>
+      <li><a href="https://www.postgresql.org/docs/current/sql-createindex.html">CREATE INDEX</a> (PostgreSQL): building indexes concurrently, and outside a transaction block.</li>
+      <li>romulus: <a href="https://github.com/lupidae/romulus/blob/main/docs/cli.md">docs/cli.md</a>, <code>romulus test</code> and the GitHub Action.</li>
+    </ol>
+
+    <section class="cta-panel" aria-labelledby="cta-title">
+      <h2 id="cta-title">Test your next migration on rows</h2>
+      <p>Import your <code>prisma/migrations</code> folder once, add the action to your pull requests, and each new migration runs up on generated rows before it merges (on Postgres 17 databases for now). Free for one person, or self-hosted with playgrounds.</p>
+      <div class="cta-row">
+        <a class="button primary large" href="/app/signin">Start free</a>
+        <a class="button secondary large" href="https://github.com/lupidae/romulus/tree/main/docs/self-host"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg>Self-host it</a>
+      </div>
+    </section>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a class="wordmark" href="/" aria-label="romulus, home">
+        <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+        <span>romulus</span>
+      </a>
+      <p>Made by <a href="https://github.com/lupidae">lupidae</a>, with its twin, <a href="https://remus.lupidae.com">remus</a>.</p>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="https://github.com/lupidae/romulus">GitHub</a>
+      <a href="https://github.com/lupidae/romulus/tree/main/docs/self-host">Self-host docs</a>
+      <a href="https://github.com/lupidae/romulus/blob/main/SECURITY.md">Security policy</a>
+      <a href="mailto:romulus@lupidae.com">Contact</a>
+      <a href="/app/signin">Sign in</a>
+    </nav>
+    <fieldset class="theme-switch" data-theme-switch>
+      <legend class="sr-only">Theme</legend>
+      <label title="System"><input type="radio" name="theme" value="system" checked><svg class="icon" aria-hidden="true"><use href="#i-computer"/></svg><span class="sr-only">System</span></label>
+      <label title="Light"><input type="radio" name="theme" value="light"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></label>
+      <label title="Dark"><input type="radio" name="theme" value="dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></label>
+    </fieldset>
+  </div>
+  <div class="container">
+    <nav class="footer-more" aria-label="Comparisons and guides">
+      <a href="/compare/atlas">romulus vs Atlas</a>
+      <a href="/compare/bytebase">romulus vs Bytebase</a>
+      <a href="/guides/test-prisma-migrations" aria-current="page">Test Prisma migrations</a>
+      <a href="/guides/postgres-schema-diff">Postgres schema diff</a>
+    </nav>
+  </div>
+  <div class="container footer-base">
+    <p>romulus is open source, under the <a href="https://github.com/lupidae/romulus/blob/main/LICENSE">AGPL-3.0</a>.</p>
+    <nav class="footer-legal" aria-label="Legal">
+      <a href="/legal-notice">Legal notice</a>
+      <a href="/legal/terms">Terms</a>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/legal/dpa">DPA (for businesses)</a>
+    </nav>
+  </div>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

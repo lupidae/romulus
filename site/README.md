@@ -19,15 +19,23 @@ public/            what Cloudflare Pages serves
                    the hosted service's terms, privacy policy and DPA in force (the professional
                    edition), rendered by tools/legal.mjs: do not edit
   legal/full/, fr/legal/full/   the full edition (consumers included), published, not in force
+  compare/atlas.html, compare/bytebase.html, guides/test-prisma-migrations.html,
+  guides/postgres-schema-diff.html
+                   the comparisons and guides (/compare/…, /guides/…): the homepage's header and
+                   footer, by hand
+  img/             their screenshots of romulus (WebP)
+  og/              their share images, rendered by tools/assets.mjs --pages
   styles.css       layout and the marketing type scale (colors only from tokens)
   tokens.css       generated from web/src/styles/globals.css: do not edit
-  app.js           header hairline, hero playback, loading the live hero, copy button, theme switch
+  app.js           header hairline, the launch welcome, hero playback, loading the live hero, copy buttons
+                   (announced in a status region), theme switch
   hero/            the live hero, built by tools/hero.mjs: do not edit
   _headers         CSP (with the inline theme script's hash), HSTS, caching
   404.html, robots.txt, sitemap.xml, site.webmanifest, og.png, icons
 tools/sync.mjs     copies tokens and fonts from web/ (--check for CI)
 tools/hero.mjs     builds public/hero/ (--check: is it built from the current sources?)
-tools/assets.mjs   renders og.png (tools/og.html + the hero window) and the icons
+tools/assets.mjs   renders og.png (tools/og.html + the hero window), the icons, and each comparison's
+                   and guide's og/<page>.png (tools/og-page.html: kicker, title, its picture or run)
 tools/pricing.mjs  renders the plan cards from the page's #plans-data (--check: do they match?)
 tools/legal.mjs    renders legal/*.md into the legal pages and prints the Terms PDFs the API attaches (--check)
 legal/             the legal documents' sources, as approved (legal/README.md), and the PDFs' manifest.json
@@ -105,6 +113,26 @@ from the API.
   the test's row count is in the range a Small test seeds for the hero's
   billing schema. Change it when the tools' answers change. Its command is Claude
   Code's, with the hosted URL; docs/mcp.md has the other clients.
+- The agents section also has a sentence to paste into any agent ("Tell your
+  agent": the MCP URL, HTTP, signing in through the browser, then importing
+  a schema), the same as at the top of the repository's README; the e2e test
+  checks the two agree and that docs/mcp.md still describes that flow.
+- Comparisons and guides (`compare/`, `guides/`): the answer is the first
+  paragraph; a comparison has a dated "Side by side" table whose last column
+  says in words which tool is stronger (the other tool wins rows, and has its
+  own "Where … is the better choice" section); every claim about another tool
+  comes from its own pages, linked under Sources with the day they were
+  read. Each page shows something made with romulus itself: a screenshot of a
+  local install (`img/`, sample data) or the output of a real `romulus test`
+  run, the local address replaced by romulus.example.com. Re-read the other
+  tool's pages and change the date when you edit a comparison. Each has its
+  own share image (`og/`, `npm --prefix site run assets -- --pages`), and is
+  in the sitemap and the homepage's footer ("Comparisons and guides").
+- A launch welcome: `?ref=hn`, `?ref=producthunt` (or the same
+  `utm_source`) add one line under the header (app.js: "Welcome, Hacker News:
+  self-host free, or try the founding-team offer"), on every page app.js
+  runs on; closing it is remembered in this browser (localStorage), nothing
+  else is.
 - Fonts are self-hosted (Inter with its optical-size axis, so large headings
   get Inter Display's shapes; JetBrains Mono for code), preloaded, `swap`.
 - Pricing: the plans live in one place, the JSON block `#plans-data` in

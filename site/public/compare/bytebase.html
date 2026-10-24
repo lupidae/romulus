@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>romulus vs Bytebase: designing the schema or running the change</title>
+<meta name="description" content="Bytebase connects to your databases and rolls changes out across 25 engines; romulus designs and reviews Postgres schemas without a connection. Dated comparison.">
+<link rel="canonical" href="https://romulus.lupidae.com/compare/bytebase">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">
+<script>
+  // Before first paint: the theme the visitor chose here or in the app (same
+  // key; without one, tokens.css follows the system), and a flag for the CSS
+  // that waits on app.js.
+  (function (root) {
+    root.classList.add("js");
+    try {
+      var t = localStorage.getItem("romulus-theme");
+      if (t === "light" || t === "dark") root.classList.add(t);
+    } catch (e) {}
+  })(document.documentElement);
+</script>
+<link rel="preload" href="/fonts/inter-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="romulus">
+<meta property="og:url" content="https://romulus.lupidae.com/compare/bytebase">
+<meta property="og:title" content="romulus vs Bytebase: designing the schema or running the change">
+<meta property="og:description" content="Bytebase connects to your databases and rolls changes out across 25 engines; romulus designs and reviews Postgres schemas without a connection. Dated comparison.">
+<meta property="og:image" content="https://romulus.lupidae.com/og/compare-bytebase.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="romulus vs Bytebase, with a romulus draft under review: the SQL, the table graph and a comment thread.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="romulus vs Bytebase: designing the schema or running the change">
+<meta name="twitter:description" content="Bytebase connects to your databases and rolls changes out across 25 engines; romulus designs and reviews Postgres schemas without a connection. Dated comparison.">
+<meta name="twitter:image" content="https://romulus.lupidae.com/og/compare-bytebase.png">
+<meta name="twitter:image:alt" content="romulus vs Bytebase, with a romulus draft under review: the SQL, the table graph and a comment thread.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": "romulus vs Bytebase",
+  "description": "Bytebase connects to your databases and rolls changes out across 25 engines; romulus designs and reviews Postgres schemas without a connection. Dated comparison.",
+  "url": "https://romulus.lupidae.com/compare/bytebase",
+  "image": "https://romulus.lupidae.com/og/compare-bytebase.png",
+  "datePublished": "2026-10-24",
+  "dateModified": "2026-10-24",
+  "author": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "lupidae",
+    "url": "https://github.com/lupidae"
+  }
+}
+</script>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <!-- Iconoir, the app's icon set (web/src/components/icons). -->
+  <symbol id="i-mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" class="mark-bg"/><path d="M11.5 23V13.75A4.75 4.75 0 0 1 16.25 9H17" fill="none" stroke-width="2.75" stroke-linecap="round" class="mark-fg-stroke"/><circle cx="21.5" cy="9" r="2.4" class="mark-fg"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M16 22.027v-2.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7a5.44 5.44 0 0 0-1.5-3.75a5.07 5.07 0 0 0-.09-3.77s-1.18-.35-3.91 1.48a13.4 13.4 0 0 0-7 0c-2.73-1.83-3.91-1.48-3.91-1.48A5.07 5.07 0 0 0 5 5.797a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7a3.37 3.37 0 0 0-.94 2.58v2.87"/><path d="M9 20.027c-3 .973-5.5 0-7-3"/></g></symbol>
+  <symbol id="i-computer" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 21h15m4 0h1"/><path d="M2 16.4V3.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v12.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 18a6 6 0 1 0 0-12a6 6 0 0 0 0 12m10-6h1M12 2V1m0 22v-1m8-2l-1-1m1-15l-1 1M4 20l1-1M4 4l1 1m-4 7h1"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 11.507a9.493 9.493 0 0 0 18 4.219c-8.507 0-12.726-4.22-12.726-12.726A9.49 9.49 0 0 0 3 11.507"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"><path d="M4 19V5a2 2 0 0 1 2-2h13.4a.6.6 0 0 1 .6.6v13.114M6 17h14M6 21h14"/><path stroke-linejoin="round" d="M6 21a2 2 0 1 1 0-4"/><path d="M9 7h6"/></g></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="m6 18.01l.01-.011M6 6.01l.01-.011"/><path d="M2 9.4V2.6a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Zm0 12v-6.8a.6.6 0 0 1 .6-.6h18.8a.6.6 0 0 1 .6.6v6.8a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6Z"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"><path d="M19.4 20H9.6a.6.6 0 0 1-.6-.6V9.6a.6.6 0 0 1 .6-.6h9.8a.6.6 0 0 1 .6.6v9.8a.6.6 0 0 1-.6.6"/><path d="M15 9V4.6a.6.6 0 0 0-.6-.6H4.6a.6.6 0 0 0-.6.6v9.8a.6.6 0 0 0 .6.6H9"/></g></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 17h7M5 7l5 5l-5 5"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header" data-header>
+  <div class="container header-inner">
+    <a class="wordmark" href="/" aria-label="romulus, home">
+      <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+      <span>romulus</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="/#versions">Product</a>
+      <a href="/#ci">CI</a>
+      <a href="/#mcp">MCP</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/#self-host">Self-host</a>
+      <a href="/#faq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <a class="button ghost header-github" href="https://github.com/lupidae/romulus" aria-label="romulus on GitHub"><svg class="icon" aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+      <a class="button ghost" href="/app/signin">Sign in</a>
+      <a class="button secondary header-cta" href="/app/signin">Start free</a>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="container article">
+  <article class="article-inner">
+    <p class="kicker">Comparison</p>
+    <h1>romulus vs Bytebase</h1>
+    <p class="answer">Pick Bytebase if you want one tool that connects to your databases, on any of 25 engines, and takes every change through review, environments and rollout, with a SQL editor and data masking. Pick romulus if your team is on Postgres and wants to design and review the schema itself: every version kept, any two compared, the next one drafted together in SQL and on the table graph, its migration tested on generated rows (Postgres 17 databases for now). romulus never connects to your database.</p>
+    <p class="article-meta"><span>Compared on <time datetime="2026-10-24">October 24, 2026</time>, against Bytebase 3.24.0</span><a href="#sources">Sources</a></p>
+
+    <h2 id="short">In short</h2>
+    <ul>
+      <li><strong>Bytebase runs the change; romulus shapes it.</strong> Bytebase holds credentials for each database instance and executes the SQL you approved, environment by environment. romulus never sees a connection string: it writes the migration files for the tool you already deploy with.</li>
+      <li><strong>Bytebase is broader.</strong> 25 engines, a web SQL editor, data masking, just-in-time access, a large set of lint rules. romulus does one engine, Postgres 15 to 18.</li>
+      <li><strong>romulus goes deeper into the schema.</strong> Live co-editing in SQL and on a graph, a compile in a real Postgres of your major on every change, diffs of any two versions, and migrations run up and down on generated rows before anyone merges them (on Postgres 17 databases for now).</li>
+    </ul>
+
+    <h2 id="table">Side by side</h2>
+    <div class="table-frame" role="region" aria-labelledby="table" tabindex="0">
+      <table>
+        <thead>
+          <tr><th scope="col">What</th><th scope="col">romulus</th><th scope="col">Bytebase</th><th scope="col">Stronger</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Databases</th><td>Postgres only, majors 15, 16, 17 and 18.</td><td>25 engines in its supported list, PostgreSQL 12 and above among them, plus MySQL, Oracle, SQL Server, MongoDB, Snowflake and more. Schema management covers the relational ones.</td><td><span class="edge them">Bytebase</span></td></tr>
+          <tr><th scope="row">Access to your databases</th><td>None. The schema arrives as SQL, as migration files, or pushed from CI by <a href="https://remus.lupidae.com">remus</a>.</td><td>Connects to each instance with its endpoint and credentials, to read metadata and run SQL. Bytebase Cloud needs each database reachable from the internet.</td><td><span class="edge">Different by design</span></td></tr>
+          <tr><th scope="row">Applying changes</th><td>Does not apply anything. Writes migration files for plain SQL, sqlx, Flyway, Prisma, dbmate or golang-migrate; you deploy them as you do today.</td><td>Plans, issues and rollouts across environments, scheduled or progressive; batch changes over groups of databases; a backup before a change and one-click rollback of <code>UPDATE</code> and <code>DELETE</code>.</td><td><span class="edge them">Bytebase</span></td></tr>
+          <tr><th scope="row">Writing the change</th><td>A draft the whole team edits at once, in SQL and on the table graph, compiled in a real Postgres on each change. Rename, add or drop on the graph and romulus writes the SQL.</td><td>SQL written in a plan. A Schema Editor (a tree and a grid of columns, for MySQL, TiDB and PostgreSQL) generates DDL.</td><td><span class="edge us">romulus</span></td></tr>
+          <tr><th scope="row">Review</th><td>Threads on a table, a column, a statement or a spot on the graph; mentions; required approvals (1 on Starter, up to 10 on Team).</td><td>Line comments on a plan's SQL, with replies and resolve (since 3.23.0). Approval workflows and risk assessment are on Enterprise.</td><td><span class="edge">Even</span></td></tr>
+          <tr><th scope="row">Checks before deploy</th><td>Every generated statement is marked when it deletes data, can fail on existing rows, or widens access through row-level security. No configurable rule set.</td><td>SQL review with over 200 rules (its count across engines), with their severity configured in a policy attached to environments or projects.</td><td><span class="edge them">Bytebase</span></td></tr>
+          <tr><th scope="row">Testing on data</th><td>On a database targeting Postgres 17, runs a migration up and down on a playground filled with generated rows: locks, rewrites, timing, rows counted and compared; <code>romulus test</code> does it from CI. Playgrounds run 17 only for now: on 15, 16 or 18, migrations compile and diff but are not tested on rows.</td><td>No equivalent in the pages we read: changes are tried on your own environments (test, then production).</td><td><span class="edge us">romulus</span></td></tr>
+          <tr><th scope="row">History and diffs</th><td>Every version kept and never edited; any two compared as a list, on the graph and in SQL; a time machine over the whole history.</td><td>A changelog per database; schema sync compares a source database with targets and generates the DDL; an ER diagram in the SQL editor.</td><td><span class="edge us">romulus</span></td></tr>
+          <tr><th scope="row">SQL editor and data access</th><td>None on your databases: a read-only console on playgrounds only.</td><td>A web SQL editor on all plans; dynamic data masking, just-in-time access and data classification on Enterprise.</td><td><span class="edge them">Bytebase</span></td></tr>
+          <tr><th scope="row">AI agents</th><td>An MCP server at <code>/api/mcp</code>, signing in with OAuth or a token: an agent reads, drafts, tests and asks for review, under your roles and rules.</td><td>An MCP server on all plans, signing in with OAuth, read only or read and write. Read and write runs rollouts, DML and DDL, and since 3.24.0 lets an agent approve or reject issues and access requests and request just-in-time access, within the user's own permissions and confirmed in the client. An AI assistant in the SQL editor.</td><td><span class="edge">Even</span></td></tr>
+          <tr><th scope="row">License</th><td>AGPL-3.0, the whole product.</td><td>MIT, except directories named “enterprise” and the code that enables plans and features, under a proprietary license.</td><td><span class="edge">Different</span></td></tr>
+          <tr><th scope="row">Self-hosting</th><td>Free, the whole product, one organization per install: an install script (Docker) or a Helm chart.</td><td>Docker or Helm. Free on Community (20 users, 10 instances); larger installs need an Enterprise license. Pro is cloud only.</td><td><span class="edge">Even</span></td></tr>
+          <tr><th scope="row">Hosted price</th><td>Free for one person; then €19, €49 or €149 a month per organization, members unlimited.</td><td>Community free (20 users, 10 instances); Pro $20 per user a month; Enterprise on quote, yearly.</td><td><span class="edge">Depends on team size</span></td></tr>
+          <tr><th scope="row">Compliance</th><td>No certification claimed.</td><td>SOC 2 Type 2 and HIPAA, per its pricing FAQ.</td><td><span class="edge them">Bytebase</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="bytebase-better">Where Bytebase is the better choice</h2>
+    <ul>
+      <li>You run more than Postgres, or want one place for MySQL, Oracle, SQL Server, MongoDB and your warehouse.</li>
+      <li>You want the tool itself to execute changes in each environment, with rollout policies, batch changes and rollback, rather than your existing deploy pipeline.</li>
+      <li>You need governed access to the data: a SQL editor for the team, masking, just-in-time grants, audit for compliance.</li>
+      <li>You want a broad, configurable lint rule set enforced before every deploy.</li>
+    </ul>
+
+    <h2 id="romulus-better">Where romulus is the better choice</h2>
+    <ul>
+      <li>You are on Postgres and the hard part is the design: deciding the next schema together, seeing it as a graph, arguing about a column in a thread on that column.</li>
+      <li>You don't want a SaaS holding credentials to production. romulus reads SQL text, never your database.</li>
+      <li>You want proof before merge: the migration run up and down on rows, with locks and data loss reported, in the pull request (<a href="/guides/test-prisma-migrations">how it works with Prisma</a>). For now this needs a database targeting Postgres 17: other majors compile and diff, and their playgrounds are planned.</li>
+      <li>You want the whole product open source and free to self-host, or a flat price whatever the team's size.</li>
+    </ul>
+
+    <h2 id="seen">A review in romulus</h2>
+    <p>The same change as it reaches review in romulus, captured from a local install: the draft's SQL on the left, its table graph on the right, and the discussion pinned to the table it is about, with a reviewer's reply.</p>
+    <figure class="shot">
+      <img src="/img/romulus-review.webp" width="1600" height="1000" loading="lazy" alt="A romulus draft named Refunds: a reason, and who. The table graph on the left, the SQL in the middle with a comment line above CREATE TABLE refunds, and the comments panel on the right: Ada Lovelace asks whether every refund should need a reason, and Sam Okafor, a reviewer, suggests backfilling old rows before setting NOT NULL.">
+      <figcaption>A sample draft in a local install of romulus on October 24, 2026: the thread was started by typing a <code>---</code> line above the statement, and lives with the draft, never in its SQL.</figcaption>
+    </figure>
+
+    <h2 id="together">Using both</h2>
+    <p>They don't exclude each other. Bytebase's migration-based GitOps workflow reads migration files from your repository; romulus writes those files (in plain SQL, or your tool's format) once a draft is reviewed. A team can design and test a change in romulus, commit its migration, and let Bytebase roll it out.</p>
+
+    <h2 id="sources">Sources</h2>
+    <p>Bytebase's own pages, read on October 24, 2026. Bytebase ships every two weeks or so: check them for what changed since.</p>
+    <ol class="sources">
+      <li><a href="https://www.bytebase.com/pricing">bytebase.com/pricing</a>: plans, prices, users and instances, the feature table, SOC 2 and HIPAA.</li>
+      <li><a href="https://docs.bytebase.com/introduction/supported-databases">Supported databases</a>: the 25 engines, PostgreSQL 12 and above.</li>
+      <li><a href="https://docs.bytebase.com/concepts/instance">Instance</a> and <a href="https://docs.bytebase.com/get-started/cloud">Bytebase Cloud</a>: connections, credentials, a publicly reachable host.</li>
+      <li><a href="https://docs.bytebase.com/get-started/self-host-vs-cloud">Self-host vs Cloud</a>: Pro is cloud only.</li>
+      <li><a href="https://docs.bytebase.com/change-database/batch-change">Batch change</a>, <a href="https://docs.bytebase.com/change-database/rollback-data-changes">rollback of data changes</a>, <a href="https://docs.bytebase.com/change-database/synchronize-schema">schema sync</a>, <a href="https://docs.bytebase.com/change-database/schema-editor">Schema Editor</a>, <a href="https://docs.bytebase.com/sql-editor/schema-diagram">schema diagram</a>.</li>
+      <li><a href="https://docs.bytebase.com/gitops/overview">GitOps overview</a>: migration-based and state-based workflows.</li>
+      <li><a href="https://docs.bytebase.com/sql-review/review-policy">SQL Review policy</a>: rules and severities, attached to environments or projects.</li>
+      <li><a href="https://docs.bytebase.com/integrations/mcp">MCP</a> and <a href="https://docs.bytebase.com/changelog/bytebase-3-23-0">3.23.0 release notes</a>: OAuth, the access policy, line comments on plan review.</li>
+      <li><a href="https://docs.bytebase.com/changelog/bytebase-3-24-0">3.24.0 release notes</a> (October 22, 2026): in read and write mode, agents approve or reject issues and access requests and request just-in-time access.</li>
+      <li><a href="https://github.com/bytebase/bytebase/blob/main/LICENSE">LICENSE</a> and <a href="https://github.com/bytebase/bytebase/blob/main/LICENSE.enterprise">LICENSE.enterprise</a>.</li>
+      <li>romulus: <a href="/#pricing">pricing</a>, <a href="https://github.com/lupidae/romulus">the repository</a> and <a href="https://github.com/lupidae/romulus/tree/main/docs">its docs</a>.</li>
+    </ol>
+
+    <section class="cta-panel" aria-labelledby="cta-title">
+      <h2 id="cta-title">Try romulus on your schema</h2>
+      <p>Upload a <code>pg_dump --schema-only</code> or import your migrations folder, and your team can open the first draft on it. Free for one person; flat plans for teams; or the whole product on your own servers.</p>
+      <div class="cta-row">
+        <a class="button primary large" href="/app/signin">Start free</a>
+        <a class="button secondary large" href="https://github.com/lupidae/romulus/tree/main/docs/self-host"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg>Self-host it</a>
+      </div>
+    </section>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <a class="wordmark" href="/" aria-label="romulus, home">
+        <svg class="mark" aria-hidden="true"><use href="#i-mark"/></svg>
+        <span>romulus</span>
+      </a>
+      <p>Made by <a href="https://github.com/lupidae">lupidae</a>, with its twin, <a href="https://remus.lupidae.com">remus</a>.</p>
+    </div>
+    <nav class="footer-links" aria-label="Footer">
+      <a href="https://github.com/lupidae/romulus">GitHub</a>
+      <a href="https://github.com/lupidae/romulus/tree/main/docs/self-host">Self-host docs</a>
+      <a href="https://github.com/lupidae/romulus/blob/main/SECURITY.md">Security policy</a>
+      <a href="mailto:romulus@lupidae.com">Contact</a>
+      <a href="/app/signin">Sign in</a>
+    </nav>
+    <fieldset class="theme-switch" data-theme-switch>
+      <legend class="sr-only">Theme</legend>
+      <label title="System"><input type="radio" name="theme" value="system" checked><svg class="icon" aria-hidden="true"><use href="#i-computer"/></svg><span class="sr-only">System</span></label>
+      <label title="Light"><input type="radio" name="theme" value="light"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg><span class="sr-only">Light</span></label>
+      <label title="Dark"><input type="radio" name="theme" value="dark"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg><span class="sr-only">Dark</span></label>
+    </fieldset>
+  </div>
+  <div class="container">
+    <nav class="footer-more" aria-label="Comparisons and guides">
+      <a href="/compare/atlas">romulus vs Atlas</a>
+      <a href="/compare/bytebase" aria-current="page">romulus vs Bytebase</a>
+      <a href="/guides/test-prisma-migrations">Test Prisma migrations</a>
+      <a href="/guides/postgres-schema-diff">Postgres schema diff</a>
+    </nav>
+  </div>
+  <div class="container footer-base">
+    <p>romulus is open source, under the <a href="https://github.com/lupidae/romulus/blob/main/LICENSE">AGPL-3.0</a>.</p>
+    <nav class="footer-legal" aria-label="Legal">
+      <a href="/legal-notice">Legal notice</a>
+      <a href="/legal/terms">Terms</a>
+      <a href="/legal/privacy">Privacy</a>
+      <a href="/legal/dpa">DPA (for businesses)</a>
+    </nav>
+  </div>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

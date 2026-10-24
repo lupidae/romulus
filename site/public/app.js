@@ -1,6 +1,7 @@
-// The homepage's only script: the header border on scroll, the hero scene
-// starting when it is seen, the live hero, the copy button and the theme
-// switch. Everything works without it; it only adds behaviour.
+// The site's only script (the homepage, the comparisons and the guides): the
+// header border on scroll, a launch post's welcome, the hero scene starting
+// when it is seen, the live hero, the copy buttons and the theme switch.
+// Everything works without it; it only adds behaviour.
 
 // Header: a hairline once the page scrolls under it.
 const header = document.querySelector("[data-header]");
@@ -20,6 +21,38 @@ if (header) {
   };
   queue();
   window.addEventListener("scroll", queue, { passive: true });
+}
+
+// A welcome under the header for visitors from a launch post (?ref=hn,
+// ?utm_source=producthunt…): one line, until they close it. Nothing is
+// recorded about the visit; only the closing is remembered, in this browser.
+const SOURCES = { hn: "Hacker News", producthunt: "Product Hunt" };
+const WELCOME_KEY = "romulus-welcome-closed";
+const params = new URLSearchParams(location.search);
+const ref = [params.get("ref"), params.get("utm_source")]
+  .map((value) => value?.trim().toLowerCase())
+  .find((value) => value && Object.hasOwn(SOURCES, value));
+const siteHeader = document.querySelector(".site-header");
+let closed = false;
+try {
+  closed = localStorage.getItem(WELCOME_KEY) === "1";
+} catch {}
+if (ref && siteHeader && !closed) {
+  const line = document.createElement("aside");
+  line.className = "welcome-line";
+  line.setAttribute("aria-label", "Welcome");
+  line.innerHTML = `<div class="container welcome-inner">
+  <p>Welcome, <span data-welcome-source></span>: <a href="/#self-host">self-host free</a>, or try the <a href="/#pricing">founding-team offer</a>.</p>
+  <button class="welcome-close" type="button" aria-label="Close the welcome"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.758 17.243L12.001 12m5.243-5.243L12 12m0 0L6.758 6.757M12.001 12l5.243 5.243"/></svg></button>
+</div>`;
+  line.querySelector("[data-welcome-source]").textContent = SOURCES[ref];
+  line.querySelector("button").addEventListener("click", () => {
+    try {
+      localStorage.setItem(WELCOME_KEY, "1");
+    } catch {}
+    line.remove();
+  });
+  siteHeader.after(line);
 }
 
 // The product scene holds its first frame until at least a third of it is on
@@ -141,6 +174,18 @@ if (stage) {
 // Copy buttons: the text of the element named by data-copy, line by line as
 // rendered (innerText: each block is a line, a wrap on a phone is not).
 const isMac = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform ?? navigator.platform ?? "");
+// What a copy did, for screen readers: the button's own label changes too, but
+// a label change is not announced. One region, there before it is written to.
+const copyStatus = document.createElement("p");
+copyStatus.className = "sr-only";
+copyStatus.setAttribute("role", "status");
+document.body.append(copyStatus);
+let statusReset;
+const announce = (text) => {
+  clearTimeout(statusReset);
+  copyStatus.textContent = text;
+  statusReset = setTimeout(() => (copyStatus.textContent = ""), 4000);
+};
 for (const button of document.querySelectorAll("[data-copy]")) {
   const label = button.querySelector("[data-copy-label]");
   let reset;
@@ -151,9 +196,11 @@ for (const button of document.querySelectorAll("[data-copy]")) {
       await navigator.clipboard.writeText(source.innerText.trim() + "\n");
       button.setAttribute("data-copied", "");
       if (label) label.textContent = "Copied";
+      announce("Copied to the clipboard.");
     } catch {
       // No clipboard access: select the text and say how to copy it here.
       if (label) label.textContent = isMac ? "Press ⌘C" : "Press Ctrl+C";
+      announce(`The text is selected: press ${isMac ? "Command C" : "Control C"} to copy it.`);
       const range = document.createRange();
       range.selectNodeContents(source);
       getSelection()?.removeAllRanges();

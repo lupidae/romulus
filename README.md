@@ -2,6 +2,15 @@
 
 **Design, version and review your Postgres schema together.**
 
+Tell your agent (Claude Code, Cursor, Claude Desktop or any MCP client):
+
+```text
+Add the romulus MCP server at https://romulus.lupidae.com/api/mcp (HTTP transport; I'll sign in through my browser), then help me import my schema.
+```
+
+It signs in to romulus through your browser (OAuth); nothing to install.
+[docs/mcp.md](docs/mcp.md) has each client's setup, and access tokens for CI.
+
 romulus keeps every version of your schema, compares any two, lets your
 team design the next one together, and writes its migration for the tool
 you already run. It is DBA as a service for teams on Postgres.
