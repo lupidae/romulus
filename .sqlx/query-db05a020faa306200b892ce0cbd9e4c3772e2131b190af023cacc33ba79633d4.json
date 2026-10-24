@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT plan::text AS \"plan!\", amount_cents, discount_cents FROM org_billing WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "plan!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "amount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "amount_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "discount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "discount_cents"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      true
+    ]
+  },
+  "hash": "db05a020faa306200b892ce0cbd9e4c3772e2131b190af023cacc33ba79633d4"
+}

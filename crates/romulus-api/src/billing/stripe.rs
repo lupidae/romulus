@@ -87,6 +87,60 @@ pub struct NewCheckout {
     /// A business buys: the payment page requires its name (the business
     /// named there is the Customer, Terms 3.5).
     pub business: bool,
+    /// An offer's promotion code (`promo_…`) applied to the subscription
+    /// (the founding-team offer), shown on the payment page.
+    pub promotion_code: Option<String>,
+    /// When the session expires (Unix seconds): an offered one holds its
+    /// place until then, 30 minutes or so; `None`, Stripe's default.
+    pub expires_at: Option<i64>,
+}
+
+/// A promotion code as romulus reads it: how often it was redeemed (the
+/// founding-team offer's count), and whether it still applies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionCode {
+    pub id: String,
+    pub code: String,
+    pub active: bool,
+    pub times_redeemed: i64,
+    pub max_redemptions: Option<i64>,
+    /// Its coupon's `amount_off`, in its currency's cents.
+    pub amount_off: Option<i64>,
+    /// Its coupon's id.
+    pub coupon: Option<String>,
+}
+
+/// A discount on a subscription, its coupon as Stripe reads it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discount {
+    pub coupon: String,
+    /// The coupon's `metadata.romulus_offer` (`founding`): an offer's.
+    pub offer: Option<String>,
+    pub amount_off: Option<i64>,
+    /// Hundredths of a percent (`percent_off` 40.5 is 4050).
+    pub percent_off: Option<i64>,
+    /// Of duration `forever`: every period, for as long as it runs.
+    pub forever: bool,
+    /// The products it is restricted to (`applies_to.products`); `None`:
+    /// every product.
+    pub products: Option<Vec<String>>,
+}
+
+impl Discount {
+    /// What it takes off a period of `price` cents of `product`: nothing
+    /// unless forever and it applies to that product.
+    pub fn off(&self, product: Option<&str>, price: Option<i64>) -> i64 {
+        let applies = match &self.products {
+            None => true,
+            Some(products) => product.is_some_and(|p| products.iter().any(|q| q == p)),
+        };
+        if !(self.forever && applies) {
+            return 0;
+        }
+        self.amount_off
+            .or_else(|| Some(price? * self.percent_off? / 10_000))
+            .unwrap_or(0)
+    }
 }
 
 /// A Checkout Session, as romulus keeps it.
@@ -205,6 +259,9 @@ pub struct Subscription {
     pub acceptance_id: Option<Uuid>,
     /// `start_date`: when the contract began.
     pub started: Option<DateTime<Utc>>,
+    /// Its discounts (the founding-team offer's coupon), as Stripe has
+    /// them: [`Subscription::discount_cents`] is what they take off.
+    pub discounts: Vec<Discount>,
     pub latest_invoice: Option<String>,
     /// A change Stripe will make (a downgrade at the period's end).
     pub scheduled: Option<Scheduled>,
@@ -232,6 +289,34 @@ pub struct Item {
     pub unit_amount: Option<i64>,
     pub currency: Option<String>,
     pub quantity: i64,
+    /// Its price's product (`romulus_team`).
+    pub product: Option<String>,
+}
+
+impl Subscription {
+    /// What its discounts take off every period for as long as it runs:
+    /// coupons of duration `forever` that apply to its item's product.
+    pub fn discount_cents(&self) -> Option<i64> {
+        let item = self.item.as_ref();
+        let off: i64 = self
+            .discounts
+            .iter()
+            .map(|d| {
+                d.off(
+                    item.and_then(|i| i.product.as_deref()),
+                    item.and_then(|i| i.unit_amount),
+                )
+            })
+            .sum();
+        (off > 0).then_some(off)
+    }
+
+    /// Its discounts of an offer (`founding`).
+    pub fn offer_discounts<'a>(&'a self, offer: &'a str) -> impl Iterator<Item = &'a Discount> {
+        self.discounts
+            .iter()
+            .filter(move |d| d.offer.as_deref() == Some(offer))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +395,17 @@ pub trait StripeApi: Send + Sync + 'static {
     fn invoice(&self, id: String) -> BoxFuture<'_, Result<Invoice, StripeError>>;
     /// The customer's newest invoices.
     fn invoices(&self, customer: String) -> BoxFuture<'_, Result<Vec<Invoice>, StripeError>>;
+    /// A promotion code, its redemptions counted.
+    fn promotion_code(&self, id: String) -> BoxFuture<'_, Result<PromotionCode, StripeError>>;
+    /// Switches a promotion code off: no checkout can use it any more.
+    fn deactivate_promotion_code(&self, id: String) -> BoxFuture<'_, Result<(), StripeError>>;
+    /// Replaces the subscription's discounts by these coupons' (none: no
+    /// discount left), with no proration.
+    fn set_discounts(
+        &self,
+        subscription: String,
+        coupons: Vec<String>,
+    ) -> BoxFuture<'_, Result<(), StripeError>>;
 }
 
 /// The real thing.
@@ -402,10 +498,20 @@ pub fn customer_key(org: Uuid) -> String {
 }
 
 /// The idempotency key of a checkout: the organization, the price, the
-/// language (the page's words), and the nonce kept until the session is
-/// known.
-pub fn checkout_key(org: Uuid, price: &str, locale: Locale, nonce: &str) -> String {
-    format!("romulus-checkout-{org}-{price}-{}-{nonce}", locale.tag())
+/// language (the page's words), the promotion code applied, and the nonce
+/// kept until the session is known.
+pub fn checkout_key(
+    org: Uuid,
+    price: &str,
+    locale: Locale,
+    promotion_code: Option<&str>,
+    nonce: &str,
+) -> String {
+    let promotion = promotion_code.map_or_else(String::new, |code| format!("-{code}"));
+    format!(
+        "romulus-checkout-{org}-{price}-{}{promotion}-{nonce}",
+        locale.tag()
+    )
 }
 
 /// Form pairs, Stripe's nested keys spelled out (`a[b][0]`).
@@ -563,6 +669,16 @@ fn checkout_form(checkout: &NewCheckout) -> Form {
         .set("automatic_tax[enabled]", "false")
         .set("success_url", &checkout.success_url)
         .set("cancel_url", &checkout.cancel_url);
+    // An offer's promotion code, applied without the buyer typing it (no
+    // promotion code field on the page: Stripe takes one or the other).
+    let form = match &checkout.promotion_code {
+        Some(code) => form.set("discounts[0][promotion_code]", code),
+        None => form,
+    };
+    let form = match checkout.expires_at {
+        Some(at) => form.set("expires_at", at.to_string()),
+        None => form,
+    };
     // A business's name, required on the page (Stripe refuses `optional`
     // without `enabled`, so a consumer's form names neither).
     if checkout.business {
@@ -571,6 +687,66 @@ fn checkout_form(checkout: &NewCheckout) -> Form {
     } else {
         form
     }
+}
+
+/// A discount's coupon: under `source` (API versions from basil on), else on
+/// the discount itself; `None` when not expanded.
+fn coupon_of(discount: &Value) -> Option<&Value> {
+    [&discount["source"]["coupon"], &discount["coupon"]]
+        .into_iter()
+        .find(|coupon| coupon.is_object())
+}
+
+/// A subscription's discounts (`discounts` expanded, else the older single
+/// `discount`): those whose coupon is not expanded are left out.
+fn parse_discounts(value: &Value) -> Vec<Discount> {
+    let discounts: Vec<&Value> = match value["discounts"].as_array() {
+        Some(list) if !list.is_empty() => list.iter().collect(),
+        _ => vec![&value["discount"]],
+    };
+    discounts
+        .into_iter()
+        .filter_map(coupon_of)
+        .filter_map(|coupon| {
+            Some(Discount {
+                coupon: text(&coupon["id"])?,
+                offer: text(&coupon["metadata"]["romulus_offer"]),
+                amount_off: coupon["amount_off"].as_i64(),
+                percent_off: coupon["percent_off"].as_f64().map(hundredths),
+                forever: coupon["duration"] == "forever",
+                products: coupon["applies_to"]["products"]
+                    .as_array()
+                    .filter(|products| !products.is_empty())
+                    .map(|products| products.iter().filter_map(text).collect()),
+            })
+        })
+        .collect()
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a percentage, far within i64"
+)]
+fn hundredths(percent: f64) -> i64 {
+    (percent * 100.0).round() as i64
+}
+
+/// A promotion code from Stripe's JSON (its coupon included, as Stripe
+/// sends it: `coupon`, or `promotion.coupon` in later versions).
+pub fn parse_promotion_code(value: &Value) -> Result<PromotionCode, StripeError> {
+    let coupon = [&value["coupon"], &value["promotion"]["coupon"]]
+        .into_iter()
+        .find(|coupon| coupon.is_object());
+    Ok(PromotionCode {
+        id: text(&value["id"])
+            .ok_or_else(|| StripeError::Unexpected("promotion code id".into()))?,
+        code: text(&value["code"]).unwrap_or_default(),
+        active: value["active"].as_bool().unwrap_or(false),
+        times_redeemed: value["times_redeemed"].as_i64().unwrap_or(0),
+        max_redemptions: value["max_redemptions"].as_i64(),
+        amount_off: coupon.and_then(|c| c["amount_off"].as_i64()),
+        coupon: coupon.and_then(|c| text(&c["id"])),
+    })
 }
 
 fn time(value: &Value) -> Option<DateTime<Utc>> {
@@ -597,6 +773,7 @@ pub fn parse_subscription(value: &Value) -> Result<Subscription, StripeError> {
         unit_amount: first["price"]["unit_amount"].as_i64(),
         currency: text(&first["price"]["currency"]),
         quantity: first["quantity"].as_i64().unwrap_or(1),
+        product: id_of(&first["price"]["product"]),
     });
     let schedule = &value["schedule"];
     let scheduled = schedule["phases"].as_array().and_then(|phases| {
@@ -627,6 +804,7 @@ pub fn parse_subscription(value: &Value) -> Result<Subscription, StripeError> {
             .as_str()
             .and_then(|id| id.parse().ok()),
         started: time(&value["start_date"]),
+        discounts: parse_discounts(value),
         latest_invoice: id_of(&value["latest_invoice"]),
         scheduled,
         cancellation: Some(Cancellation {
@@ -981,7 +1159,16 @@ impl StripeApi for Http {
             let value = self
                 .get(
                     &format!("subscriptions/{id}"),
-                    &[("expand[]".into(), "schedule.phases.items.price".into())],
+                    &[
+                        ("expand[]".into(), "schedule.phases.items.price".into()),
+                        // Their coupons, and the products each applies
+                        // to: what each period costs.
+                        ("expand[]".into(), "discounts.source.coupon".into()),
+                        (
+                            "expand[]".into(),
+                            "discounts.source.coupon.applies_to".into(),
+                        ),
+                    ],
                 )
                 .await?;
             parse_subscription(&value)
@@ -1006,6 +1193,46 @@ impl StripeApi for Http {
                 .flatten()
                 .map(parse_invoice)
                 .collect()
+        })
+    }
+
+    fn promotion_code(&self, id: String) -> BoxFuture<'_, Result<PromotionCode, StripeError>> {
+        Box::pin(async move {
+            parse_promotion_code(&self.get(&format!("promotion_codes/{id}"), &[]).await?)
+        })
+    }
+
+    fn deactivate_promotion_code(&self, id: String) -> BoxFuture<'_, Result<(), StripeError>> {
+        Box::pin(async move {
+            self.post(
+                &format!("promotion_codes/{id}"),
+                Form::new().set("active", "false").pairs(),
+            )
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn set_discounts(
+        &self,
+        subscription: String,
+        coupons: Vec<String>,
+    ) -> BoxFuture<'_, Result<(), StripeError>> {
+        Box::pin(async move {
+            // An empty value removes them all.
+            let mut form = Form::new();
+            if coupons.is_empty() {
+                form = form.set("discounts", "");
+            }
+            for (n, coupon) in coupons.into_iter().enumerate() {
+                form = form.set(format!("discounts[{n}][coupon]"), coupon);
+            }
+            self.post(
+                &format!("subscriptions/{subscription}"),
+                form.set("proration_behavior", "none").pairs(),
+            )
+            .await?;
+            Ok(())
         })
     }
 }
@@ -1046,6 +1273,17 @@ pub struct FakeState {
     pub subscriptions: HashMap<String, Subscription>,
     pub invoices: Vec<Invoice>,
     pub portals: Vec<NewPortal>,
+    /// Promotion code id → the code, its redemptions counted as checkouts
+    /// using it complete ([`Fake::add_promotion_code`]).
+    pub promotion_codes: HashMap<String, PromotionCode>,
+    /// Coupon id → the discount it makes (a promotion code's coupon).
+    pub coupons: HashMap<String, Discount>,
+    /// Promotion codes read so far (tests: the count is cached).
+    pub promotion_reads: usize,
+    /// Subscriptions' discounts changed by romulus (tests).
+    pub discount_changes: usize,
+    /// Promotion code reads fail (tests: Stripe down).
+    pub promotions_down: bool,
     /// Checkout session id → `open`, `complete` or `expired`.
     pub session_status: HashMap<String, String>,
     /// Idempotency key → what the first request with it made.
@@ -1091,6 +1329,34 @@ impl Fake {
         fake
     }
 
+    /// A promotion code `id` of a coupon taking `amount_off` cents off every
+    /// period, forever, at most `max_redemptions` times.
+    /// A promotion code `id` of `coupon` (as [`Fake::add_coupon`] made it),
+    /// at most `max_redemptions` times.
+    pub fn add_promotion_code(&self, id: &str, code: &str, coupon: &str, max_redemptions: i64) {
+        let mut state = self.state();
+        let amount_off = state.coupons.get(coupon).and_then(|c| c.amount_off);
+        state.promotion_codes.insert(
+            id.to_owned(),
+            PromotionCode {
+                id: id.to_owned(),
+                code: code.to_owned(),
+                active: true,
+                times_redeemed: 0,
+                max_redemptions: Some(max_redemptions),
+                amount_off,
+                coupon: Some(coupon.to_owned()),
+            },
+        );
+    }
+
+    /// A coupon: `discount`, under its own id.
+    pub fn add_coupon(&self, discount: Discount) {
+        self.state()
+            .coupons
+            .insert(discount.coupon.clone(), discount);
+    }
+
     pub fn state(&self) -> std::sync::MutexGuard<'_, FakeState> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1113,6 +1379,35 @@ impl Fake {
         let lookup_key = checkout.price.trim_start_matches("price_").to_owned();
         let year = lookup_key.ends_with("_yearly");
         let (plan, interval) = crate::domain::Plan::from_lookup_key(&lookup_key)?;
+        // An expired session cannot be paid.
+        if checkout
+            .expires_at
+            .is_some_and(|at| at <= Utc::now().timestamp())
+        {
+            self.state()
+                .session_status
+                .insert(session.to_owned(), "expired".into());
+            return None;
+        }
+        // Its promotion code redeemed, as Stripe counts it once paid; one
+        // used up or switched off refuses the payment.
+        let discounts = match &checkout.promotion_code {
+            None => Vec::new(),
+            Some(code) => {
+                let mut state = self.state();
+                let promotion = state.promotion_codes.get_mut(code)?;
+                if !promotion.active
+                    || promotion
+                        .max_redemptions
+                        .is_some_and(|max| promotion.times_redeemed >= max)
+                {
+                    return None;
+                }
+                promotion.times_redeemed += 1;
+                let coupon = promotion.coupon.clone()?;
+                vec![state.coupons.get(&coupon).cloned()?]
+            }
+        };
         let subscription = Subscription {
             id: id.clone(),
             customer: checkout.customer.clone(),
@@ -1128,10 +1423,12 @@ impl Fake {
                 unit_amount: plan.price_cents(interval).map(i64::from),
                 currency: Some("eur".into()),
                 quantity: 1,
+                product: plan.product_id(),
             }),
             org_id: Some(checkout.org_id),
             acceptance_id: Some(checkout.acceptance_id),
             started: Some(Utc::now()),
+            discounts,
             latest_invoice: None,
             scheduled: None,
             cancellation: None,
@@ -1149,7 +1446,8 @@ impl Fake {
                 .item
                 .as_ref()
                 .and_then(|i| i.unit_amount)
-                .unwrap_or(0),
+                .unwrap_or(0)
+                - subscription.discount_cents().unwrap_or(0),
             currency: "eur".into(),
             created: Utc::now(),
             due: Some(Utc::now()),
@@ -1469,6 +1767,70 @@ impl StripeApi for Fake {
             Ok(invoices)
         })
     }
+
+    fn promotion_code(&self, id: String) -> BoxFuture<'_, Result<PromotionCode, StripeError>> {
+        Box::pin(async move {
+            let mut state = self.state();
+            state.promotion_reads += 1;
+            if state.promotions_down {
+                return Err(StripeError::Unreachable("the fake is down".into()));
+            }
+            state
+                .promotion_codes
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| StripeError::Refused {
+                    status: 404,
+                    code: Some("resource_missing".into()),
+                    message: format!("No such promotion code: '{id}'"),
+                })
+        })
+    }
+
+    fn deactivate_promotion_code(&self, id: String) -> BoxFuture<'_, Result<(), StripeError>> {
+        Box::pin(async move {
+            if let Some(code) = self.state().promotion_codes.get_mut(&id) {
+                code.active = false;
+            }
+            Ok(())
+        })
+    }
+
+    fn set_discounts(
+        &self,
+        subscription: String,
+        coupons: Vec<String>,
+    ) -> BoxFuture<'_, Result<(), StripeError>> {
+        Box::pin(async move {
+            let mut state = self.state();
+            let discounts = coupons
+                .iter()
+                .map(|coupon| {
+                    state
+                        .coupons
+                        .get(coupon)
+                        .cloned()
+                        .ok_or_else(|| StripeError::Refused {
+                            status: 400,
+                            code: Some("resource_missing".into()),
+                            message: format!("No such coupon: '{coupon}'"),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let read =
+                state
+                    .subscriptions
+                    .get_mut(&subscription)
+                    .ok_or_else(|| StripeError::Refused {
+                        status: 404,
+                        code: Some("resource_missing".into()),
+                        message: format!("No such subscription: '{subscription}'"),
+                    })?;
+            read.discounts = discounts;
+            state.discount_changes += 1;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1621,11 +1983,13 @@ mod tests {
             price: "price_1".into(),
             success_url: "s".into(),
             cancel_url: "c".into(),
-            idempotency_key: checkout_key(Uuid::nil(), "price_1", Locale::Fr, "n"),
+            idempotency_key: checkout_key(Uuid::nil(), "price_1", Locale::Fr, None, "n"),
             acceptance_id: Uuid::from_u128(5),
             locale: Locale::Fr,
             edition: crate::domain::TermsEdition::Professional,
             business: true,
+            promotion_code: None,
+            expires_at: None,
         });
         let pairs: HashMap<_, _> = form.pairs().iter().cloned().collect();
         assert_eq!(pairs["mode"], "subscription");
@@ -1665,6 +2029,8 @@ mod tests {
                 locale: Locale::En,
                 edition: crate::domain::TermsEdition::Full,
                 business: true,
+                promotion_code: Some("promo_1".into()),
+                expires_at: Some(1_800_001_800),
             }
         });
         assert!(
@@ -1673,6 +2039,87 @@ mod tests {
                 .iter()
                 .all(|(key, _)| !key.starts_with("name_collection"))
         );
+        // An offer's promotion code is applied, not typed; none otherwise.
+        let consumer: HashMap<_, _> = consumer.pairs().iter().cloned().collect();
+        assert_eq!(consumer["discounts[0][promotion_code]"], "promo_1");
+        // An offered session holds its place for a while only.
+        assert_eq!(consumer["expires_at"], "1800001800");
+        assert!(!pairs.contains_key("expires_at"));
+        assert!(!pairs.contains_key("discounts[0][promotion_code]"));
+        assert!(!pairs.contains_key("allow_promotion_codes"));
+    }
+
+    #[test]
+    fn a_subscription_takes_off_what_its_forever_coupons_for_its_product_do() {
+        let item = json!({"data": [{"id": "si_1",
+            "price": {"id": "price_1", "unit_amount": 4900, "product": "romulus_team"}}]});
+        let founding = json!({"id": "founding_team_monthly", "amount_off": 2000,
+            "duration": "forever", "metadata": {"romulus_offer": "founding"},
+            "applies_to": {"products": ["romulus_team"]}});
+        let basil = json!({"id": "sub_1", "items": item, "discounts": [
+            {"id": "di_1", "source": {"type": "coupon", "coupon": founding}},
+            {"id": "di_2", "source": {"type": "coupon", "coupon": {"id": "welcome",
+                "amount_off": 500, "duration": "once"}}}
+        ]});
+        let read = parse_subscription(&basil).unwrap();
+        assert_eq!(read.discount_cents(), Some(2_000));
+        assert_eq!(
+            read.item.as_ref().unwrap().product.as_deref(),
+            Some("romulus_team")
+        );
+        assert_eq!(
+            read.offer_discounts("founding")
+                .map(|d| d.coupon.as_str())
+                .collect::<Vec<_>>(),
+            ["founding_team_monthly"]
+        );
+        // The same coupon on another product's item takes nothing off.
+        let business = json!({"data": [{"id": "si_1",
+            "price": {"id": "price_2", "unit_amount": 14900, "product": "romulus_business"}}]});
+        let moved = json!({"id": "sub_1", "items": business, "discounts": [
+            {"id": "di_1", "source": {"type": "coupon", "coupon": founding}}]});
+        assert_eq!(parse_subscription(&moved).unwrap().discount_cents(), None);
+        // Older versions: one discount, its coupon on it; no restriction.
+        let older = json!({"id": "sub_2", "items": item,
+            "discount": {"coupon": {"id": "c", "percent_off": 10.0, "duration": "forever"}}});
+        assert_eq!(
+            parse_subscription(&older).unwrap().discount_cents(),
+            Some(490)
+        );
+        // Not expanded, or none: nothing known to take off.
+        let ids = json!({"id": "sub_3", "items": item, "discounts": ["di_1"]});
+        assert_eq!(parse_subscription(&ids).unwrap().discount_cents(), None);
+        assert_eq!(
+            parse_subscription(&json!({"id": "sub_4", "items": item, "discounts": []}))
+                .unwrap()
+                .discount_cents(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_promotion_code_reads_its_redemptions_and_coupon() {
+        let basil = json!({"id": "promo_1", "code": "FOUNDINGTEAM", "active": true,
+            "times_redeemed": 3, "max_redemptions": 20,
+            "coupon": {"id": "founding_team_monthly", "amount_off": 2000}});
+        let read = parse_promotion_code(&basil).unwrap();
+        assert_eq!(
+            (
+                read.active,
+                read.times_redeemed,
+                read.max_redemptions,
+                read.amount_off
+            ),
+            (true, 3, Some(20), Some(2_000))
+        );
+        assert_eq!(read.coupon.as_deref(), Some("founding_team_monthly"));
+        let later = json!({"id": "promo_2", "active": false,
+            "promotion": {"type": "coupon", "coupon": {"amount_off": 20000}}});
+        let read = parse_promotion_code(&later).unwrap();
+        assert_eq!(
+            (read.active, read.times_redeemed, read.amount_off),
+            (false, 0, Some(20_000))
+        );
     }
 
     #[test]
@@ -1680,22 +2127,26 @@ mod tests {
         let org = Uuid::from_u128(7);
         assert_eq!(customer_key(org), customer_key(org));
         assert_ne!(customer_key(org), customer_key(Uuid::from_u128(8)));
-        let key = checkout_key(org, "price_team_yearly", Locale::En, "n1");
+        let key = checkout_key(org, "price_team_yearly", Locale::En, None, "n1");
         assert_eq!(
             key,
-            checkout_key(org, "price_team_yearly", Locale::En, "n1")
+            checkout_key(org, "price_team_yearly", Locale::En, None, "n1")
         );
         assert_ne!(
             key,
-            checkout_key(org, "price_team_monthly", Locale::En, "n1")
+            checkout_key(org, "price_team_monthly", Locale::En, None, "n1")
         );
         assert_ne!(
             key,
-            checkout_key(org, "price_team_yearly", Locale::En, "n2")
+            checkout_key(org, "price_team_yearly", Locale::En, None, "n2")
         );
         assert_ne!(
             key,
-            checkout_key(org, "price_team_yearly", Locale::Fr, "n1")
+            checkout_key(org, "price_team_yearly", Locale::Fr, None, "n1")
+        );
+        assert_ne!(
+            key,
+            checkout_key(org, "price_team_yearly", Locale::En, Some("promo_1"), "n1")
         );
         assert!(key.len() <= 255, "Stripe takes keys up to 255 characters");
     }

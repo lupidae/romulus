@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_billing SET checkout_offer_until = $2 WHERE org_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6717bfd51716edf4b3a303f42a1fdec0e760987fe39f3528295cbbf81da7a26"
+}

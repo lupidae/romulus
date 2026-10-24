@@ -44,6 +44,7 @@ pub(super) fn billing_config() -> BillingConfig {
         },
         invoice_footer: Some("VAT not applicable".to_owned()),
         invoice_fields: vec![("Seller".to_owned(), "Example EI".to_owned())],
+        founding: None,
     }
 }
 
@@ -110,12 +111,23 @@ pub(super) async fn billed_with_config(
     consumer_sales: bool,
     config: Config,
 ) -> Billed {
+    billed_with_billing(db, consumer_sales, config, billing_config()).await
+}
+
+/// [`billed_with_config`], billing configured with `billing` (the
+/// founding-team offer's codes, in `founding_offer.rs`).
+pub(super) async fn billed_with_billing(
+    db: &PgPool,
+    consumer_sales: bool,
+    config: Config,
+    billing: BillingConfig,
+) -> Billed {
     let stripe = Fake::new(ORIGIN);
     let host = FakeHost::default();
     let (mailer, outbox) = Mailer::memory();
     let live = live_app(db.clone(), quick());
     let billing = Billing::with_stripe(
-        billing_config(),
+        billing,
         legal_config(consumer_sales),
         config.public_url.clone(),
         db.clone(),
@@ -1779,6 +1791,7 @@ async fn a_checkout_retried_after_a_timeout_gets_the_same_session(db: PgPool) {
         b.team.org,
         "price_team_yearly",
         romulus_api::domain::Locale::En,
+        None,
         nonce,
     );
     b.stripe.state().keys.insert(key, session.clone());

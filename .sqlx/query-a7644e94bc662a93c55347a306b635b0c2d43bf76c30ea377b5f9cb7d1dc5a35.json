@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT details AS \"details!\" FROM audit_events WHERE action = 'terms_accepted'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "details!",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "audit_events",
+            "name": "details"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a7644e94bc662a93c55347a306b635b0c2d43bf76c30ea377b5f9cb7d1dc5a35"
+}

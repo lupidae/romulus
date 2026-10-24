@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT founding_offer_used_at FROM org_billing WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "founding_offer_used_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "founding_offer_used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "c45b0b60711898649dbdc1a3ff2455573575cce5bf6ff1734caa7a6c2622c065"
+}

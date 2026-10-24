@@ -61,6 +61,10 @@ export interface CheckoutCopy {
   consumerMissing: string;
   next: string;
   commitment: (interval: "month" | "year") => string;
+  /** The founding-team offer applied: its price and the plan's own. */
+  founding: (price: string, list: string) => string;
+  offerEnded: string;
+  offerUsed: string;
   submit: string;
   cancel: string;
   newTab: string;
@@ -120,6 +124,12 @@ export const checkoutCopy: Record<Locale, CheckoutCopy> = {
       interval === "month"
         ? "renewed every month until you cancel. Cancel any time in Billing: the plan stays until the end of the month."
         : "renewed every year until you cancel. We remind you about 40 days before each renewal. Cancel any time in Billing: the plan stays until the end of the year.",
+    founding: (price, list) =>
+      `Founding team offer: ${price} instead of ${list}, for as long as the subscription stays on this plan.`,
+    offerEnded:
+      "The founding team offer has just ended: the plan is at its usual price, shown above.",
+    offerUsed:
+      "This organization has had the founding team offer already (once per organization): the plan is at its usual price, shown above.",
     submit: "Continue to payment",
     cancel: "Cancel",
     newTab: "(opens in a new tab)",
@@ -179,6 +189,12 @@ export const checkoutCopy: Record<Locale, CheckoutCopy> = {
       interval === "month"
         ? "renouvelé chaque mois jusqu'à résiliation. Résiliable à tout moment dans la facturation : l'offre reste active jusqu'à la fin du mois."
         : "renouvelé chaque année jusqu'à résiliation. Nous vous le rappelons environ 40 jours avant chaque renouvellement. Résiliable à tout moment dans la facturation : l'offre reste active jusqu'à la fin de l'année.",
+    founding: (price, list) =>
+      `Offre équipes fondatrices : ${price} au lieu de ${list}, tant que l'abonnement reste sur cette offre.`,
+    offerEnded:
+      "L'offre équipes fondatrices vient de se terminer : l'offre est à son prix habituel, indiqué ci-dessus.",
+    offerUsed:
+      "Cette organisation a déjà bénéficié de l'offre équipes fondatrices (une fois par organisation) : l'offre est à son prix habituel, indiqué ci-dessus.",
     submit: "Continuer vers le paiement",
     cancel: "Annuler",
     newTab: "(s'ouvre dans un nouvel onglet)",
@@ -328,6 +344,8 @@ export interface BillingCopy {
     chargedNow: string;
     afterCancel: string;
     current: string;
+    /** The founding-team price shown on its plan. */
+    founding: string;
     forever: string;
     per: (interval: "month" | "year") => string;
     footer: string;
@@ -479,6 +497,7 @@ export const billingCopy: Record<Locale, BillingCopy> = {
       chargedNow: "Charged now, prorated.",
       afterCancel: "What the organization keeps after cancelling.",
       current: "Current plan",
+      founding: "Founding team price",
       forever: "forever",
       per: (interval) => `a ${interval}`,
       footer:
@@ -633,6 +652,7 @@ export const billingCopy: Record<Locale, BillingCopy> = {
       chargedNow: "Facturé maintenant, au prorata.",
       afterCancel: "Ce que garde l'organisation après résiliation.",
       current: "Offre actuelle",
+      founding: "Prix équipes fondatrices",
       forever: "pour toujours",
       per: (interval) => (interval === "month" ? "par mois" : "par an"),
       footer:

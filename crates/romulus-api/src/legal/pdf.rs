@@ -21,8 +21,9 @@ type Pdf = (
     &'static [u8],
 );
 
-/// (version, edition, locale, file name, bytes).
-const TERMS: [Pdf; 4] = [
+/// (version, edition, locale, file name, bytes). Every version people
+/// accepted stays: 1.1 added the founding-team offer (Section 7.11).
+const TERMS: [Pdf; 8] = [
     (
         "1.0",
         TermsEdition::Full,
@@ -50,6 +51,34 @@ const TERMS: [Pdf; 4] = [
         Locale::Fr,
         "romulus-conditions-generales-professionnels-1.0.pdf",
         include_bytes!("../../legal/terms-pro-1.0-fr.pdf"),
+    ),
+    (
+        "1.1",
+        TermsEdition::Full,
+        Locale::En,
+        "romulus-terms-of-service-1.1.pdf",
+        include_bytes!("../../legal/terms-1.1-en.pdf"),
+    ),
+    (
+        "1.1",
+        TermsEdition::Full,
+        Locale::Fr,
+        "romulus-conditions-generales-1.1.pdf",
+        include_bytes!("../../legal/terms-1.1-fr.pdf"),
+    ),
+    (
+        "1.1",
+        TermsEdition::Professional,
+        Locale::En,
+        "romulus-terms-of-service-professional-1.1.pdf",
+        include_bytes!("../../legal/terms-pro-1.1-en.pdf"),
+    ),
+    (
+        "1.1",
+        TermsEdition::Professional,
+        Locale::Fr,
+        "romulus-conditions-generales-professionnels-1.1.pdf",
+        include_bytes!("../../legal/terms-pro-1.1-fr.pdf"),
     ),
 ];
 

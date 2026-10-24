@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_billing SET checkout_offer_until = NULL,\n                founding_offer_used_at = CASE WHEN $2 THEN coalesce(founding_offer_used_at, now())\n                                              ELSE founding_offer_used_at END\n         WHERE org_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6aacd53bc796e1988f8fa742030efdd68806e8c92c35780e3cebc3259d52ee43"
+}

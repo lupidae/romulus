@@ -12,14 +12,25 @@
 //!   payment method, the invoice history, the customer's details;
 //! - with `--webhook-url`, the webhook endpoint and its events (its signing
 //!   secret written to `--secret-file`, mode 0600, never printed); without,
-//!   the URL and events to register.
+//!   the URL and events to register;
+//! - with `--founding-offer`, the founding-team offer (`plans::FOUNDING`):
+//!   a coupon per interval (`founding_team_monthly`: the plan's price less
+//!   the offer's off every period, forever, Team only, metadata
+//!   `romulus_offer: founding`, no cap of its own: a subscription moving to
+//!   the other interval is given its coupon, a redemption too) and its
+//!   promotion code (`FOUNDINGTEAM`, `FOUNDINGTEAMYEARLY`, at most 20
+//!   redemptions),
+//!   printing the ids to configure (`ROMULUS_FOUNDING_PROMO_MONTHLY`,
+//!   `_YEARLY`). A code that exists is never made again, even switched off
+//!   (that is how the offer ends early); a coupon with other terms is an
+//!   error (Stripe never changes a coupon's amount).
 //!
 //! It reads `STRIPE_SECRET_KEY` and refuses a live key unless `--live`.
 
 use std::{fmt::Write as _, io::Write};
 
 use super::{
-    plans::{PAID, YEARLY_MONTHS},
+    plans::{FOUNDING, Offer, PAID, YEARLY_MONTHS},
     stripe::{Form, Http, StripeError},
 };
 use crate::{
@@ -44,6 +55,8 @@ pub struct Setup {
     pub privacy_url: Option<String>,
     pub webhook_url: Option<String>,
     pub secret_file: Option<std::path::PathBuf>,
+    /// The founding-team offer's coupons and promotion codes too.
+    pub founding_offer: bool,
     pub live: bool,
 }
 
@@ -57,6 +70,8 @@ pub enum SetupError {
     Stripe(#[from] StripeError),
     #[error("writing the webhook secret")]
     Io(#[from] std::io::Error),
+    #[error("coupon {0} exists with other terms; delete it in the Dashboard, then run again")]
+    Coupon(String),
 }
 
 fn product_description(plan: Plan) -> String {
@@ -180,6 +195,130 @@ pub async fn run(
 
     portal(setup, &stripe, &prices, out).await?;
     webhook(setup, &stripe, out).await?;
+    if setup.founding_offer {
+        offer(&stripe, FOUNDING, out).await?;
+    }
+    Ok(())
+}
+
+/// The coupon an offer has for `interval`: what it takes off, forever, on
+/// its plan's product only.
+fn coupon_form(offer: Offer, interval: Interval) -> Form {
+    let name = match interval {
+        Interval::Month => "Founding team",
+        Interval::Year => "Founding team (yearly)",
+    };
+    Form::new()
+        .set("id", offer.coupon_id(interval))
+        .set("name", name)
+        .set("amount_off", offer.amount_off(interval).to_string())
+        .set("currency", "eur")
+        .set("duration", "forever")
+        .set(
+            "applies_to[products][0]",
+            offer.plan.product_id().unwrap_or_default(),
+        )
+        .set("metadata[romulus_offer]", offer.slug)
+}
+
+/// Whether coupon `found` (its `applies_to` expanded) is the one `offer`
+/// makes for `interval`: the amount, forever, on its plan only, no cap of
+/// its own, marked as the offer's.
+fn same_coupon(found: &serde_json::Value, offer: Offer, interval: Interval) -> bool {
+    let product = offer.plan.product_id().unwrap_or_default();
+    found["amount_off"].as_i64() == Some(i64::from(offer.amount_off(interval)))
+        && found["currency"] == "eur"
+        && found["duration"] == "forever"
+        && found["applies_to"]["products"] == serde_json::json!([product])
+        && found["max_redemptions"].is_null()
+        && found["metadata"]["romulus_offer"] == offer.slug
+}
+
+/// The offer's coupons and promotion codes, made when missing; the ids to
+/// configure printed.
+async fn offer(stripe: &Http, offer: Offer, out: &mut impl Write) -> Result<(), SetupError> {
+    let mut ids = Vec::new();
+    for interval in [Interval::Month, Interval::Year] {
+        let coupon = offer.coupon_id(interval);
+        match stripe
+            .get(
+                &format!("coupons/{coupon}"),
+                &[("expand[]".into(), "applies_to".into())],
+            )
+            .await
+        {
+            Ok(found) if same_coupon(&found, offer, interval) => {
+                writeln!(out, "coupon {coupon}: up to date")?;
+            }
+            Ok(_) => return Err(SetupError::Coupon(coupon)),
+            Err(err) if err.is_missing() => {
+                stripe
+                    .post("coupons", coupon_form(offer, interval).pairs())
+                    .await?;
+                writeln!(
+                    out,
+                    "coupon {coupon}: created ({} cents off a {}, forever)",
+                    offer.amount_off(interval),
+                    interval_word(interval)
+                )?;
+            }
+            Err(err) => return Err(err.into()),
+        }
+        let code = offer.code(interval);
+        let list = stripe
+            .get(
+                "promotion_codes",
+                &[
+                    ("coupon".into(), coupon.clone()),
+                    ("code".into(), code.clone()),
+                    ("limit".into(), "100".into()),
+                ],
+            )
+            .await?;
+        let found = list["data"].as_array().into_iter().flatten().find(|p| {
+            p["code"]
+                .as_str()
+                .is_some_and(|c| c.eq_ignore_ascii_case(&code))
+        });
+        let id = if let Some(found) = found {
+            let id = found["id"].as_str().unwrap_or_default().to_owned();
+            if found["active"] == true {
+                writeln!(
+                    out,
+                    "promotion code {code} ({id}): up to date, {} of {} redeemed",
+                    found["times_redeemed"].as_i64().unwrap_or(0),
+                    offer.teams
+                )?;
+            } else {
+                writeln!(
+                    out,
+                    "promotion code {code} ({id}): switched off, so the offer is off (not made again)"
+                )?;
+            }
+            id
+        } else {
+            let created = stripe
+                .post(
+                    "promotion_codes",
+                    Form::new()
+                        .set("coupon", &coupon)
+                        .set("code", &code)
+                        .set("max_redemptions", offer.teams.to_string())
+                        .set("metadata[romulus_offer]", offer.slug)
+                        .pairs(),
+                )
+                .await?;
+            let id = created["id"].as_str().unwrap_or_default().to_owned();
+            writeln!(out, "promotion code {code} ({id}): created")?;
+            id
+        };
+        ids.push(id);
+    }
+    writeln!(
+        out,
+        "founding offer: configure ROMULUS_FOUNDING_PROMO_MONTHLY={} ROMULUS_FOUNDING_PROMO_YEARLY={}",
+        ids[0], ids[1]
+    )?;
     Ok(())
 }
 
@@ -398,6 +537,38 @@ mod tests {
             run(&Setup::default(), None, &mut out).await.unwrap_err(),
             SetupError::NoKey
         ));
+    }
+
+    #[test]
+    fn the_founding_coupons_take_the_difference_off_team_forever() {
+        let pairs = |interval| -> std::collections::HashMap<String, String> {
+            coupon_form(FOUNDING, interval)
+                .pairs()
+                .iter()
+                .cloned()
+                .collect()
+        };
+        let monthly = pairs(Interval::Month);
+        assert_eq!(monthly["id"], "founding_team_monthly");
+        assert_eq!(monthly["amount_off"], "2000");
+        assert_eq!(monthly["duration"], "forever");
+        assert_eq!(monthly["currency"], "eur");
+        assert_eq!(monthly["applies_to[products][0]"], "romulus_team");
+        assert_eq!(monthly["metadata[romulus_offer]"], "founding");
+        // No cap of its own: the promotion codes hold the 20.
+        assert!(!monthly.contains_key("max_redemptions"));
+        assert_eq!(pairs(Interval::Year)["amount_off"], "20000");
+        let found = serde_json::json!({"amount_off": 2000, "currency": "eur", "duration": "forever",
+            "applies_to": {"products": ["romulus_team"]}, "max_redemptions": null,
+            "metadata": {"romulus_offer": "founding"}});
+        assert!(same_coupon(&found, FOUNDING, Interval::Month));
+        assert!(!same_coupon(&found, FOUNDING, Interval::Year));
+        let mut everything = found.clone();
+        everything["applies_to"] = serde_json::Value::Null;
+        assert!(!same_coupon(&everything, FOUNDING, Interval::Month));
+        let mut capped = found.clone();
+        capped["max_redemptions"] = serde_json::json!(20);
+        assert!(!same_coupon(&capped, FOUNDING, Interval::Month));
     }
 
     #[test]

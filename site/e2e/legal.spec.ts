@@ -80,8 +80,11 @@ const legalLinks = {
 // The hosted service's documents, rendered from site/legal/*.md by site/tools/legal.mjs:
 // the professional edition, in force, at the canonical addresses, and the full
 // edition (consumers included), published under /legal/full/ for later.
-const terms = { meta: ["Version: 1.0", "Effective date: 21 October 2026"] };
-const conditions = { meta: ["Version\u00a0: 1.0", "Date d'entrée en vigueur\u00a0: 21 octobre 2026"] };
+// The Terms' own version: 1.1 added the founding-team offer (Section 7.11).
+const terms = { meta: ["Version: 1.1", "Effective date: 24 October 2026"] };
+const conditions = { meta: ["Version\u00a0: 1.1", "Date d'entrée en vigueur\u00a0: 24 octobre 2026"] };
+// The DPA keeps its own version.
+const dpa = { meta: ["Version: 1.0", "Effective date: 21 October 2026"] };
 // The privacy policy's own version: 1.1 added the emails' retention, 1.2 the
 // audience measurement and the signup source.
 const privacy = { meta: ["Version: 1.2", "Effective date: 24 October 2026"] };
@@ -142,7 +145,7 @@ const documents = [
     inForce: true,
     h1: "romulus Data Processing Agreement",
     current: "DPA",
-    meta: terms.meta,
+    meta: dpa.meta,
     other: null,
     heading: { id: "annex-3-subprocessors", text: "Annex 3: Subprocessors" },
     table: "Table: Annex 3: Subprocessors",

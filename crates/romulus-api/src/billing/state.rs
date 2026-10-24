@@ -49,7 +49,12 @@ pub struct Stored {
     pub status: Option<String>,
     pub current_period_end: Option<DateTime<Utc>>,
     pub cancel_at_period_end: bool,
+    /// The price's amount a period (the plan table's, unless the price
+    /// moved since).
     pub amount_cents: Option<i64>,
+    /// Off every period for as long as it runs (the founding-team offer):
+    /// what a period costs is [`Stored::paid_cents`].
+    pub discount_cents: Option<i64>,
     pub currency: Option<String>,
     pub past_due_since: Option<DateTime<Utc>>,
     pub scheduled_plan: Option<Plan>,
@@ -67,6 +72,12 @@ pub struct Stored {
 }
 
 impl Stored {
+    /// What a period costs: the price's amount less a discount for as long as it runs.
+    pub fn paid_cents(&self) -> Option<i64> {
+        self.amount_cents
+            .map(|amount| (amount - self.discount_cents.unwrap_or(0)).max(0))
+    }
+
     /// The plan in force at `now`.
     pub fn effective(&self, now: DateTime<Utc>) -> Plan {
         let Some(status) = self.status.as_deref() else {
@@ -165,6 +176,18 @@ mod tests {
             status: Some(status.into()),
             ..Stored::default()
         }
+    }
+
+    #[test]
+    fn a_period_costs_the_price_less_its_discount_for_life() {
+        let mut stored = subscribed("active");
+        assert_eq!(stored.paid_cents(), None);
+        stored.amount_cents = Some(4_900);
+        assert_eq!(stored.paid_cents(), Some(4_900));
+        stored.discount_cents = Some(2_000);
+        assert_eq!(stored.paid_cents(), Some(2_900));
+        stored.discount_cents = Some(9_000);
+        assert_eq!(stored.paid_cents(), Some(0));
     }
 
     #[test]

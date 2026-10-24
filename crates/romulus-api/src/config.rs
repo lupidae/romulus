@@ -450,6 +450,26 @@ pub struct BillingConfig {
     /// seller's name, registration number, address), as
     /// `Name=value|Name=value`.
     pub invoice_fields: Vec<(String, String)>,
+    /// `ROMULUS_FOUNDING_PROMO_MONTHLY` and `_YEARLY`: the founding-team
+    /// offer's promotion codes (`billing::plans::FOUNDING`, made by
+    /// `romulus-api stripe-setup`); unset, the offer is off.
+    pub founding: Option<PromotionCodes>,
+}
+
+/// An offer's Stripe promotion code ids (`promo_…`), one per interval.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotionCodes {
+    pub monthly: String,
+    pub yearly: String,
+}
+
+impl PromotionCodes {
+    pub fn of(&self, interval: crate::domain::Interval) -> &str {
+        match interval {
+            crate::domain::Interval::Month => &self.monthly,
+            crate::domain::Interval::Year => &self.yearly,
+        }
+    }
 }
 
 /// How billing reaches Stripe (`ROMULUS_BILLING`).
@@ -485,7 +505,12 @@ impl BillingConfig {
     ) -> Result<Option<Self>, ConfigError> {
         let stripe = match get("ROMULUS_BILLING").as_deref() {
             None | Some("off") => {
-                for var in ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] {
+                for var in [
+                    "STRIPE_SECRET_KEY",
+                    "STRIPE_WEBHOOK_SECRET",
+                    "ROMULUS_FOUNDING_PROMO_MONTHLY",
+                    "ROMULUS_FOUNDING_PROMO_YEARLY",
+                ] {
                     if get(var).is_some() {
                         return Err(ConfigError::Invalid {
                             var,
@@ -549,11 +574,53 @@ impl BillingConfig {
                 reason: "Stripe takes at most 5000 characters".to_owned(),
             });
         }
+        let fake = matches!(stripe, StripeKeys::Fake { .. });
         Ok(Some(Self {
             stripe,
             invoice_footer,
             invoice_fields,
+            founding: promotion_codes(
+                get,
+                (
+                    "ROMULUS_FOUNDING_PROMO_MONTHLY",
+                    "ROMULUS_FOUNDING_PROMO_YEARLY",
+                ),
+                fake,
+            )?,
         }))
+    }
+}
+
+/// Both of an offer's promotion codes, or neither (the offer off). Stripe's
+/// ids are `promo_…`; the fake takes any id (it makes its codes itself).
+fn promotion_codes(
+    get: &impl Fn(&'static str) -> Option<String>,
+    (monthly, yearly): (&'static str, &'static str),
+    fake: bool,
+) -> Result<Option<PromotionCodes>, ConfigError> {
+    let read = |var: &'static str| -> Result<Option<String>, ConfigError> {
+        let Some(id) = get(var)
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
+        let shaped = id.len() <= 255
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && (fake || id.starts_with("promo_"));
+        if !shaped {
+            return Err(ConfigError::Invalid {
+                var,
+                reason: "expected a Stripe promotion code id (promo_…), as `romulus-api stripe-setup` prints it".to_owned(),
+            });
+        }
+        Ok(Some(id))
+    };
+    match (read(monthly)?, read(yearly)?) {
+        (Some(monthly), Some(yearly)) => Ok(Some(PromotionCodes { monthly, yearly })),
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(ConfigError::Missing(monthly)),
+        (Some(_), None) => Err(ConfigError::Missing(yearly)),
     }
 }
 
@@ -1279,6 +1346,73 @@ mod tests {
             with(&too_many),
             Err(ConfigError::Invalid {
                 var: "ROMULUS_INVOICE_FIELDS",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_founding_offer_is_on_with_both_promotion_codes_and_off_without() {
+        let with = |extra: &[(&'static str, &str)]| {
+            let mut vars = BASE.to_vec();
+            vars.extend([("ROMULUS_BILLING", "fake")]);
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        assert_eq!(with(&[]).unwrap().billing.unwrap().founding, None);
+        let codes = with(&[
+            ("ROMULUS_FOUNDING_PROMO_MONTHLY", "promo_month"),
+            ("ROMULUS_FOUNDING_PROMO_YEARLY", "promo_year"),
+        ])
+        .unwrap()
+        .billing
+        .unwrap()
+        .founding
+        .unwrap();
+        assert_eq!(codes.of(crate::domain::Interval::Month), "promo_month");
+        assert_eq!(codes.of(crate::domain::Interval::Year), "promo_year");
+        assert!(matches!(
+            with(&[("ROMULUS_FOUNDING_PROMO_MONTHLY", "promo_month")]),
+            Err(ConfigError::Missing("ROMULUS_FOUNDING_PROMO_YEARLY"))
+        ));
+        assert!(matches!(
+            with(&[
+                ("ROMULUS_FOUNDING_PROMO_MONTHLY", "promo month"),
+                ("ROMULUS_FOUNDING_PROMO_YEARLY", "promo_year"),
+            ]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_PROMO_MONTHLY",
+                ..
+            })
+        ));
+        // With Stripe itself, ids are Stripe's.
+        let mut stripe = BASE.to_vec();
+        stripe.extend([
+            ("ROMULUS_BILLING", "stripe"),
+            ("STRIPE_SECRET_KEY", "sk_test_abc"),
+            ("STRIPE_WEBHOOK_SECRET", "whsec_abc"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_LEGAL_URL", "https://romulus.example"),
+            ("ROMULUS_TERMS_VERSION", "1.0"),
+            ("ROMULUS_LEGAL_CONTACT", "legal@romulus.example"),
+            ("ROMULUS_FOUNDING_PROMO_MONTHLY", "founding"),
+            ("ROMULUS_FOUNDING_PROMO_YEARLY", "promo_year"),
+        ]);
+        assert!(matches!(
+            config(&stripe),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_PROMO_MONTHLY",
+                ..
+            })
+        ));
+        // Without billing, the codes are a mistake.
+        let mut off = BASE.to_vec();
+        off.push(("ROMULUS_FOUNDING_PROMO_MONTHLY", "promo_month"));
+        assert!(matches!(
+            config(&off),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_PROMO_MONTHLY",
                 ..
             })
         ));
