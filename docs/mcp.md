@@ -352,6 +352,10 @@ Cursor and other local clients do not.
   then carries it as `structuredContent` (and a refusal its `code`,
   `message`, `details` and HTTP `status`). Without it, only `whoami` has
   `structuredContent`.
+- `server.json`, at the repository's root, is romulus's entry in the
+  [MCP Registry](https://registry.modelcontextprotocol.io)
+  (`com.lupidae/romulus`): the hosted endpoint, and `https://{host}/api/mcp`
+  for a self-hosted install.
 - The endpoint is written in romulus itself (`crates/romulus-api/src/mcp`)
   rather than with an SDK: it needs no streams, sessions or server-initiated
   requests, and it has to sit inside the API's own authentication, error

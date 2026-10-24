@@ -447,4 +447,28 @@ mod tests {
             Some("cursor")
         );
     }
+
+    /// server.json is the MCP Registry's entry (RELEASING.md): its remotes
+    /// are this endpoint, and its version the release's, as the chart has it.
+    #[test]
+    fn the_registry_entry_points_at_this_endpoint_and_release() {
+        let entry: Value = serde_json::from_str(include_str!("../../../../server.json")).unwrap();
+        assert_eq!(entry["title"], server_info()["title"]);
+        assert!(entry["description"].as_str().unwrap().chars().count() <= 100);
+        let remotes = entry["remotes"].as_array().unwrap();
+        assert_eq!(remotes[0]["url"], "https://romulus.lupidae.com/api/mcp");
+        for remote in remotes {
+            assert_eq!(remote["type"], "streamable-http");
+            assert!(remote["url"].as_str().unwrap().ends_with(crate::mcp::PATH));
+        }
+        let chart = include_str!("../../../../deploy/helm/romulus/Chart.yaml");
+        let release = chart
+            .lines()
+            .find_map(|line| line.strip_prefix("version: "))
+            .unwrap();
+        assert_eq!(
+            entry["version"], release,
+            "server.json's version and the chart's differ: a release bumps both"
+        );
+    }
 }

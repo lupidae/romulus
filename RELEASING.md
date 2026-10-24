@@ -13,6 +13,8 @@ chart's version is the release's.
    `deploy/helm/romulus/Chart.yaml`, `version: X.Y.Z` and
    `appVersion: "X.Y.Z"`. They must agree (`deploy/helm/test/lint.sh`
    checks it), and the tag must match them (the publish job checks it).
+   Bump `server.json`'s `version` (the MCP Registry's entry) in the same
+   pull request: a unit test in `mcp::protocol` refuses them apart.
 3. **Tag main and push the tag**, once main's CI is green:
 
    ```bash
@@ -67,6 +69,13 @@ chart's version is the release's.
   tag's GitHub release; `romulus --version` says `X.Y.Z`. The action
   (`action.yml`, `uses: lupidae/romulus@vX.Y.Z`) downloads the CLI of the
   tag it is pinned to, so a release must carry them.
+
+- **The MCP Registry entry** is not published by the tag: once the
+  release is out, publish `server.json` from the tag's checkout with
+  [`mcp-publisher`](https://github.com/modelcontextprotocol/registry)
+  (`mcp-publisher validate`, then `login` for the `com.lupidae`
+  namespace and `publish`). A version is published once; the registry
+  refuses it again.
 
 Check (each lists linux/amd64 and linux/arm64):
 
