@@ -1184,7 +1184,7 @@ async fn a_migration_written_by_hand_runs_up_only_unless_a_down_is_asked_for(db:
 }
 
 /// An app compiling with `compiler`, with the fake host.
-fn app_with(
+pub(super) fn app_with(
     db: &PgPool,
     compiler: romulus_api::collab::compile::SqlCompiler,
 ) -> (TestApp, TestHost) {
@@ -1208,7 +1208,7 @@ async fn require_tests(app: &TestApp, team: &Team) {
 }
 
 /// A new draft of `shop` (in `mode`), its developer in it.
-async fn new_draft(app: &TestApp, team: &Team, mode: &str) -> (String, Client) {
+pub(super) async fn new_draft(app: &TestApp, team: &Team, mode: &str) -> (String, Client) {
     let draft = app
         .as_user(&team.developer)
         .post(
@@ -1230,7 +1230,7 @@ async fn new_draft(app: &TestApp, team: &Team, mode: &str) -> (String, Client) {
 
 /// Replaces the draft's source (its SQL, or its migration) and waits for
 /// the room to compile it.
-async fn write_source(editor: &mut Client, migration: bool, text: &str) {
+pub(super) async fn write_source(editor: &mut Client, migration: bool, text: &str) {
     use yrs::{GetString, Text};
     let text = text.to_owned();
     editor
@@ -1290,6 +1290,211 @@ async fn publish(
             &body,
         )
         .await
+}
+
+/// A migration written by hand: a table, a column backfilled before it
+/// becomes NOT NULL (in the author's own transaction), an index built
+/// concurrently, then a constraint using that index.
+pub(super) const WRITTEN: &str = "\
+CREATE TABLE public.coupons (id bigint PRIMARY KEY);
+BEGIN;
+ALTER TABLE public.customers ADD COLUMN email text;
+
+-- Backfill before NOT NULL.
+UPDATE public.customers SET email = 'unknown@example.com' WHERE email IS NULL;
+ALTER TABLE public.customers ALTER COLUMN email SET NOT NULL;
+COMMIT;
+CREATE UNIQUE INDEX CONCURRENTLY customers_email ON public.customers (email);
+ALTER TABLE public.customers ADD CONSTRAINT customers_email_key UNIQUE USING INDEX customers_email;
+";
+
+/// What the written statements say, in their order.
+pub(super) const WRITTEN_IN_ORDER: [&str; 6] = [
+    "CREATE TABLE public.coupons",
+    "ADD COLUMN email text",
+    "UPDATE public.customers SET email",
+    "ALTER COLUMN email SET NOT NULL",
+    "CREATE UNIQUE INDEX CONCURRENTLY customers_email",
+    "USING INDEX customers_email",
+];
+
+/// Where each of `needles` is in `text`, panicking when one is missing or
+/// out of order.
+pub(super) fn in_order(text: &str, needles: &[&str]) {
+    let mut from = 0;
+    for needle in needles {
+        let Some(at) = text[from..].find(needle) else {
+            panic!("{needle:?} is missing, or before what precedes it, in:\n{text}");
+        };
+        from += at + needle.len();
+    }
+}
+
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_written_migration_s_files_hold_its_statements_as_the_test_runs_them(db: PgPool) {
+    let (app, host) = app_with(&db, super::draft_modes::mode_compiler());
+    let team = Team::new(&db, "acme").await;
+    let shop = database(&db, team.org, "shop").await;
+    version(&db, shop, 1, V1, json!({})).await;
+    let (draft, mut editor) = new_draft(&app, &team, "migration").await;
+    write_source(&mut editor, true, WRITTEN).await;
+    let (_, sha) = preview_of(&app, &team, &draft).await;
+    let dev = app.as_user(&team.developer);
+    let migration_of = |format: &str| {
+        team.path(&format!(
+            "/databases/shop/drafts/{draft}/migration?format={format}&version=20261024090000&sha256={sha}"
+        ))
+    };
+    let files = |migration: &Value, role: &str| -> Vec<(String, String)> {
+        migration["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["role"] == role)
+            .map(|f| {
+                (
+                    f["path"].as_str().unwrap().to_owned(),
+                    f["content"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    for format in [
+        "plain",
+        "sqlx",
+        "flyway",
+        "prisma",
+        "dbmate",
+        "golang_migrate",
+    ] {
+        let migration = dev.get(&migration_of(format)).await;
+        assert_eq!(migration.status, StatusCode::OK, "{}", migration.json());
+        let migration = migration.json();
+        // The up files, in order, are the statements as written: the
+        // backfill between the column and its NOT NULL.
+        let up: String = files(&migration, "up")
+            .into_iter()
+            .map(|(_, content)| content)
+            .collect();
+        in_order(&up, &WRITTEN_IN_ORDER);
+        assert!(
+            up.contains("-- Backfill before NOT NULL."),
+            "{format}: {up}"
+        );
+        assert!(up.contains("written by hand"), "{format}: {up}");
+        // The author's BEGIN and COMMIT give way to the tool's own, one
+        // per part: before the BEGIN, inside, after the concurrent index.
+        let transactions = up.matches("BEGIN;").count();
+        let expected = if matches!(format, "plain" | "golang_migrate") {
+            3
+        } else {
+            0
+        };
+        assert_eq!(transactions, expected, "{format}: {up}");
+        assert_eq!(migration["written"], true, "{format}");
+        // Read from the statements: SET NOT NULL, the unique index and the
+        // constraint can fail on existing rows; the backfill of a column
+        // the migration added changes nothing that was there.
+        let hazards: Vec<&Value> = migration["statements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| &s["hazard"])
+            .collect();
+        assert_eq!(
+            hazards,
+            [
+                &Value::Null,
+                &Value::Null,
+                &Value::Null,
+                &json!("can_fail"),
+                &json!("can_fail"),
+                &json!("can_fail"),
+            ],
+            "{format}"
+        );
+        assert_eq!(migration["destructive"], 3, "{format}");
+        let statements: Vec<&str> = migration["statements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["sql"].as_str().unwrap())
+            .collect();
+        assert_eq!(statements.len(), 6, "{format}: {statements:?}");
+        // The down migration is still the generated one, back to v1.
+        if matches!(format, "dbmate" | "golang_migrate") {
+            let all: String = migration["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["content"].as_str().unwrap())
+                .collect();
+            assert!(all.contains("DROP TABLE public.coupons"), "{format}: {all}");
+        }
+    }
+    // Where the tool runs each file in one transaction: a part per
+    // transaction the author wrote, the concurrent index in a file of its
+    // own, in order.
+    let sqlx = dev.get(&migration_of("sqlx")).await.json();
+    let paths: Vec<String> = files(&sqlx, "up").into_iter().map(|(p, _)| p).collect();
+    assert_eq!(
+        paths,
+        [
+            "20261024090000_migration_from_v1.sql",
+            "20261024090001_migration_from_v1_part_2.sql",
+            "20261024090002_migration_from_v1_create_index_customers_email.sql",
+            "20261024090003_migration_from_v1_part_3.sql",
+        ],
+        "{sqlx}"
+    );
+    let concurrent = &files(&sqlx, "up")[2].1;
+    assert!(
+        concurrent.starts_with("-- no-transaction\n"),
+        "{concurrent}"
+    );
+
+    // A test of the draft runs exactly the statements the files hold.
+    let test = tested(
+        &app,
+        &team,
+        json!({ "draft_id": draft, "sha256": sha, "down": "generate" }),
+    )
+    .await;
+    assert_eq!(test["status"], "passed", "{test}");
+    let run = host.tested().pop().unwrap();
+    let plain = dev.get(&migration_of("plain")).await.json();
+    let plain = &files(&plain, "up")[0].1;
+    let ran: Vec<&str> = run
+        .iter()
+        .map(String::as_str)
+        .filter(|sql| !matches!(*sql, "BEGIN;" | "COMMIT;"))
+        .collect();
+    in_order(plain, &ran);
+    assert_eq!(ran.len(), 6, "{run:?}");
+
+    // A ROLLBACK has no place in files that run whole: refused, said why.
+    write_source(
+        &mut editor,
+        true,
+        "ALTER TABLE public.customers ADD COLUMN note text;\nROLLBACK;\n",
+    )
+    .await;
+    let (_, sha) = preview_of(&app, &team, &draft).await;
+    let refused = dev
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{draft}/migration?format=sqlx&sha256={sha}"
+        )))
+        .await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refused.code(), "migration_unreadable");
+    assert!(
+        refused.json()["message"]
+            .as_str()
+            .unwrap()
+            .contains("line 2: ROLLBACK cannot go in a migration tool's files"),
+        "{}",
+        refused.json()
+    );
 }
 
 #[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]

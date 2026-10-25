@@ -380,9 +380,9 @@ static GET_DRAFT: Tool = Tool {
     title: "Get a draft",
     description: "A draft: its text (`text`: false to leave it out), whether it compiles with \
                   each problem's line, its review state (approvals, review requested, who has \
-                  it open), and the migration it generates from its base version, with every \
-                  statement that can lose data, fail on existing rows or widen access flagged \
-                  (`migration`: false to leave it out). Its reviewed_sha256 is what \
+                  it open), and its migration from its base version (`migration`: false to leave it \
+                  out): generated, with every statement that can lose data, fail on existing rows \
+                  or widen access flagged; or, in migration mode, its statements as written, flagged from what each does. Its reviewed_sha256 is what \
                   publish_draft takes.",
     writes: false,
     destructive: false,
@@ -481,6 +481,10 @@ pub struct MigrationView {
     pub destructive: usize,
     pub files: Vec<File>,
     pub renames: Vec<Candidate>,
+    /// A draft's, written by hand: its statements as written, flagged from
+    /// what each does.
+    #[serde(default)]
+    pub written: bool,
 }
 
 /// A migration for an agent: its statements with what each can do, the
@@ -489,14 +493,30 @@ pub fn migration_text(m: &MigrationView, files: bool) -> String {
     let from = m
         .from
         .map_or_else(|| "nothing".to_owned(), |n| format!("v{n}"));
-    let mut out = format!(
-        "Migration {from} → v{}: {} statement{}, {} that can lose data or fail on existing rows.\n",
-        m.to,
-        m.statements.len(),
-        if m.statements.len() == 1 { "" } else { "s" },
-        m.destructive
-    );
-    if m.statements.is_empty() {
+    let mut out = if m.written {
+        format!(
+            "Migration {from} → v{}, written by hand in the draft: {} statement{} as written, in \
+             order, data statements included; {} that can lose data or fail on existing rows, \
+             read from what each statement does (romulus did not plan them: test_migration runs \
+             them on rows). The down migration, where the tool has one, is romulus's, planned \
+             from the schemas.\n",
+            m.to,
+            m.statements.len(),
+            if m.statements.len() == 1 { "" } else { "s" },
+            m.destructive
+        )
+    } else {
+        format!(
+            "Migration {from} → v{}: {} statement{}, {} that can lose data or fail on existing rows.\n",
+            m.to,
+            m.statements.len(),
+            if m.statements.len() == 1 { "" } else { "s" },
+            m.destructive
+        )
+    };
+    if m.statements.is_empty() && m.written {
+        out.push_str("Nothing to migrate: the migration holds no statement.\n");
+    } else if m.statements.is_empty() {
         out.push_str("Nothing to migrate: the schemas are the same.\n");
     }
     for (i, statement) in m.statements.iter().enumerate() {
@@ -568,7 +588,8 @@ static GENERATE_MIGRATION: Tool = Tool {
     name: "generate_migration",
     title: "Generate a migration",
     description: "The migration (ALTER … in dependency order) from a draft's base version to \
-                  the draft (`draft`), or between two versions (`database`, `from`, `to`; `to` \
+                  the draft (`draft`; in migration mode, the draft's own statements as written, \
+                  data statements included, with a planned down migration), or between two versions (`database`, `from`, `to`; `to` \
                   may be older: a rollback), as the files of a migration tool (`format`), with \
                   a down migration. Every statement that can lose data, fail on existing rows \
                   or widen access is flagged. Renames are detected (a rename keeps the data a \

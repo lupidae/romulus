@@ -1268,7 +1268,12 @@ client) through a remote MCP endpoint the API serves itself, at `/api/mcp`
   keeps the files: fix one, import again. Rails, Django and Alembic are imported from their
   exporters' SQL, served as MCP resources. `get_migration_files` is the web download (the
   same endpoints and options), paged at 50 KB of content, every page pinned by a cursor to
-  the first one's version and the draft's reviewed text. Code tools (Rails, Django, Alembic)
+  the first one's version and the draft's reviewed text. A draft in migration mode gets its
+  own statements as written, in order (an `UPDATE` backfill included), laid out for the tool:
+  exactly what a test of it runs, never a migration regenerated from its schema (which would
+  drop its data statements), split into a transaction per part where it commits (its own
+  `COMMIT`, an enum value added), its hazards read from what each statement does; its down
+  migration is planned. Code tools (Rails, Django, Alembic)
   get `plain` SQL to wrap in a migration of theirs: romulus generates no Ruby or Python.
   Review first: in an organization that requires approvals or a passing test, an agent's
   import only brings a history into a database without live versions (onboarding); past

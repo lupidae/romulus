@@ -137,6 +137,18 @@ pub struct Migration {
     /// was published with.
     #[serde(default)]
     pub applied: Vec<Rename>,
+    /// Written by hand (a draft's in migration mode), not planned: its
+    /// statements as written, in the author's order, their hazards read
+    /// from what each does (not planned). Its files say so ([`files`]) and
+    /// keep that order.
+    #[serde(default)]
+    pub written: bool,
+    /// A migration written by hand: the statements (by index) after which
+    /// it commits, its author's `BEGIN` and `COMMIT`, or an enum value
+    /// added (Postgres refuses to use one in the transaction that added
+    /// it). Its files start a new transaction after each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<usize>,
 }
 
 impl Migration {
@@ -218,6 +230,9 @@ pub enum Section {
     Comments,
     /// Columns, tables, types and extensions dropped: last, together.
     Removals,
+    /// A migration written by hand ([`Migration::written`]): one part, in
+    /// its own order, without headings.
+    Written,
 }
 
 impl Section {
@@ -234,6 +249,7 @@ impl Section {
             Self::Security => "Row level security",
             Self::Comments => "Comments",
             Self::Removals => "Removals",
+            Self::Written => "Written by hand",
         }
     }
 }
@@ -314,6 +330,10 @@ pub enum Kind {
     DropPolicy,
     RowLevelSecurity,
     Comment,
+    /// A statement written by hand ([`Migration::written`]), not planned
+    /// (an index built or dropped by hand keeps `CreateIndex`/`DropIndex`:
+    /// its file is named after it).
+    Written,
 }
 
 /// Something about the migration as a whole that a reviewer must know.

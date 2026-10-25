@@ -884,6 +884,75 @@ async fn migration_files_are_the_web_download(db: PgPool) {
     assert!(bad.contains("start again from the first page"), "{bad}");
 }
 
+#[sqlx::test(migrator = "romulus_api::db::MIGRATOR")]
+async fn a_written_migration_s_files_are_its_statements_as_written(db: PgPool) {
+    use super::migration_tests::{
+        WRITTEN, WRITTEN_IN_ORDER, app_with, in_order, new_draft, write_source,
+    };
+
+    let (app, _host) = app_with(&db, super::draft_modes::mode_compiler());
+    let team = Team::new(&db, "acme").await;
+    let shop = database(&db, team.org, "shop").await;
+    version(
+        &db,
+        shop,
+        1,
+        "CREATE TABLE public.customers (id bigint PRIMARY KEY);\n",
+        json!({}),
+    )
+    .await;
+    let (draft, mut editor) = new_draft(&app, &team, "migration").await;
+    write_source(&mut editor, true, WRITTEN).await;
+    let mcp = Mcp::new(
+        &app,
+        pat(&db, &team.developer, AccessTokenScope::Write).await,
+    );
+    let text = mcp
+        .ok(
+            "get_migration_files",
+            json!({ "draft": draft, "format": "golang_migrate", "version": "000042" }),
+        )
+        .await;
+    assert!(text.contains("Written by hand in the draft"), "{text}");
+    let files = files_in(std::slice::from_ref(&text));
+    let up: String = files
+        .iter()
+        .filter(|(path, _)| path.ends_with(".up.sql"))
+        .map(|(_, content)| content.as_str())
+        .collect();
+    in_order(&up, &WRITTEN_IN_ORDER);
+    let reviewed = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!("/databases/shop/drafts/{draft}/text?wait=true")))
+        .await
+        .json()["reviewed_sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let download = app
+        .as_user(&team.developer)
+        .get(&team.path(&format!(
+            "/databases/shop/drafts/{draft}/migration?format=golang_migrate&version=000042&sha256={reviewed}"
+        )))
+        .await
+        .json();
+    assert_eq!(files, web_files(&download), "{text}");
+
+    // generate_migration and get_draft list the statements as written.
+    let generated = mcp
+        .ok("generate_migration", json!({ "draft": draft }))
+        .await;
+    assert!(
+        generated.contains("written by hand in the draft: 6 statements"),
+        "{generated}"
+    );
+    assert!(
+        generated.contains("[CAN FAIL on existing rows]"),
+        "{generated}"
+    );
+    in_order(&generated, &WRITTEN_IN_ORDER);
+}
+
 /// The upload's status, as stored.
 async fn status(db: &PgPool, upload: Uuid) -> String {
     sqlx::query_scalar!(

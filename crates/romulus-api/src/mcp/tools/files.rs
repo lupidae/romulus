@@ -734,11 +734,14 @@ struct FilesArgs {
 static GET_MIGRATION_FILES: Tool = Tool {
     name: "get_migration_files",
     title: "Get a migration's files",
-    description: "The files of a migration, exactly as romulus's web app downloads them, to \
-                  write into your person's repository: a draft's (`draft`: from its base version \
-                  to its text) or between two versions (`database`, `from`, `to`), for a \
-                  migration tool (`format`). Answers each file's path, relative to the tool's \
-                  migrations folder, its exact content, and where that tool expects them. Look \
+    description: "The files of a migration, as romulus lays them out for a migration tool \
+                  (`format`), to write into your person's repository: a draft's (`draft`: from \
+                  its base version to its text; in migration mode, its own statements as \
+                  written, in order, data statements such as an UPDATE backfill included, \
+                  exactly what test_migration runs, with romulus's planned down migration), or \
+                  between two versions (`database`, `from`, `to`). Answers each file's path, \
+                  relative to the tool's migrations folder, its exact content, and where that \
+                  tool expects them. Look \
                   at the repository's migrations first: use its tool, and pass `version` when \
                   it numbers files its own way (Flyway's next V<n>, a golang-migrate sequence). \
                   Rails, Django and Alembic: take `plain` and put its SQL in a migration of \
@@ -831,6 +834,8 @@ struct FilesView {
     destructive: usize,
     files: Vec<File>,
     archive: String,
+    #[serde(default)]
+    written: bool,
 }
 
 /// File content in one page at most (bytes): a page reads well within
@@ -922,6 +927,16 @@ async fn get_migration_files(ctx: &Ctx, a: FilesArgs) -> Result<Output, ToolErro
             "Write each file at its path under that folder. Check the repository has no file of \
              that name already.\n",
         );
+        if view.written {
+            out.push_str(
+                "Written by hand in the draft (migration mode): the up files hold its statements \
+                 as written, in order, data statements included, exactly what test_migration \
+                 runs, split where it commits and around what cannot run in a transaction; what \
+                 each can do to existing rows is read from the statement. The down migration, \
+                 where the tool has one, is romulus's, planned from the schemas, in the first \
+                 part's files (the later ones have none of their own).\n",
+            );
+        }
         if view.destructive > 0 {
             let _ = writeln!(
                 out,

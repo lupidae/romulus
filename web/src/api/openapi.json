@@ -3974,7 +3974,7 @@
             }
           },
           "422": {
-            "description": "`compile_failed`: the SQL has errors (`details.diagnostics`)",
+            "description": "`compile_failed`: the SQL has errors (`details.diagnostics`); `migration_unreadable`: a migration written by hand that does not parse, or holds a `ROLLBACK` or a savepoint",
             "content": {
               "application/json": {
                 "schema": {
@@ -15442,7 +15442,8 @@
           "views",
           "security",
           "comments",
-          "removals"
+          "removals",
+          "written"
         ]
       },
       "MigrationStage": {
@@ -15548,7 +15549,8 @@
           "alter_policy",
           "drop_policy",
           "row_level_security",
-          "comment"
+          "comment",
+          "written"
         ]
       },
       "MigrationStatus": {
@@ -19262,7 +19264,8 @@
           "files",
           "archive",
           "pg_major",
-          "renames"
+          "renames",
+          "written"
         ],
         "properties": {
           "archive": {
@@ -19301,7 +19304,7 @@
             "items": {
               "$ref": "#/components/schemas/RenameCandidate"
             },
-            "description": "Every rename considered, known or detected, applied or not: what a\nperson turns on or off (`renames` in the request, by `key`)."
+            "description": "Every rename considered, known or detected, applied or not: what a\nperson turns on or off (`renames` in the request, by `key`). For a\nmigration written by hand, they shape its down migration only."
           },
           "statements": {
             "type": "array",
@@ -19321,6 +19324,10 @@
               "$ref": "#/components/schemas/MigrationWarning"
             },
             "description": "What to know before running it (a column that ends up elsewhere, a\npossible rename, a type recreated…)."
+          },
+          "written": {
+            "type": "boolean",
+            "description": "The up migration is a draft's, written by hand (migration mode):\n`statements` and the files' up migration are its statements as\nwritten, in its order (data statements included; its `BEGIN` and\n`COMMIT` left to the tool, the files split where it commits), each\none's hazard (and `destructive`) read from what it does to existing\nrows rather than planned; the down migration, where the tool has\none, is still planned from the schemas, in the first part's files."
           }
         }
       },

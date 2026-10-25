@@ -329,7 +329,13 @@ Made in the skeleton (S0):
   security, comments, then the removals), `files(up, down, format, meta)`
   lays them out per tool (`plain`, `sqlx`, `flyway`, `prisma`, `dbmate`,
   `golang_migrate`: the names migration import uses too) with a best-effort
-  down migration (`migration(new, old)`). Each statement carries a
+  down migration (`migration(new, old)`). A draft in migration mode lays out
+  its own text instead (`Sides::written`, `romulus_migration_check::statements::layout`:
+  the statements a test runs, byte for byte, comments kept, `BEGIN`/`COMMIT` dropped but
+  kept as `Migration::commits` (and after `ADD VALUE`), `ROLLBACK`/savepoints refused,
+  hazards from the effects walk (`hazard_of`); `Migration::written` files split in order
+  at commits and around `CONCURRENTLY`), the down still planned, in the first part;
+  `SchemaMigration::written` says so. Each statement carries a
   `hazard`: `deletes_data`, `can_fail` (on existing rows) or
   `widens_access` (RLS off or unforced, a restrictive policy dropped, a
   permissive one added or changed); `destructive` = the first two. A cast

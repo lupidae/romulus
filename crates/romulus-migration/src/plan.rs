@@ -3015,6 +3015,8 @@ impl<'a> Planner<'a> {
             major: self.options.major,
             renames: self.candidates,
             applied: self.applied,
+            written: false,
+            commits: Vec::new(),
         }
     }
 }

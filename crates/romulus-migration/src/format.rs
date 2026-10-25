@@ -24,10 +24,21 @@
 //! The down migration is the migration from the new schema back to the old
 //! one, in the main file: best effort, since what the up migration deleted
 //! does not come back.
+//!
+//! A migration written by hand ([`Migration::written`]: a draft's in
+//! migration mode) keeps its order and its transactions: its statements as
+//! written, byte for byte, under a header saying so. It is split where it
+//! commits ([`Migration::commits`]: its author's `BEGIN`/`COMMIT`, an enum
+//! value added) and around each statement that cannot run in a transaction
+//! (a file of its own where the tool runs a file in one), the statements
+//! between in parts of their own (`<name>_part_2`…). The down migration
+//! goes with the first part; the later parts and the concurrent files have
+//! none of their own. Plain SQL wraps each part in `BEGIN`/`COMMIT`, in the
+//! same order.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Hazard, Migration, Section, Stage, Statement};
+use crate::{Hazard, Kind, Migration, Section, Stage, Statement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = MigrationTool))]
@@ -192,6 +203,9 @@ enum UnitKind {
     /// Enum values the up migration uses, committed before it.
     UpCommit,
     Main,
+    /// A later part of a migration written by hand: what follows a
+    /// statement that cannot run in a transaction (its number, from 2).
+    Part(usize),
     /// Enum values the down migration uses: its own migration after the
     /// main one, so that its down runs (and commits) first.
     DownCommit,
@@ -215,15 +229,27 @@ pub fn files(up: &Migration, down: &Migration, format: Format, meta: &Meta) -> V
     if format == Format::Plain {
         let mut out = Writer::new();
         header(&mut out, up, meta, None);
-        body(&mut out, &up.statements.iter().collect::<Vec<_>>(), true);
+        if up.written {
+            for run in runs(up) {
+                body(&mut out, &run, true);
+                out.blank();
+            }
+        } else {
+            body(&mut out, &up.statements.iter().collect::<Vec<_>>(), true);
+        }
         return vec![out.file(format!("{}_{}.sql", meta.version, meta.name), FileRole::Up)];
     }
-    let units = split(up, down, format.has_down());
+    let units = if up.written {
+        split_written(up, down, format.has_down())
+    } else {
+        split(up, down, format.has_down())
+    };
     let parts = units.len();
     let mut files = Vec::new();
     for (i, unit) in units.iter().enumerate() {
         let name = match unit.kind {
             UnitKind::Main => meta.name.clone(),
+            UnitKind::Part(n) => format!("{}_part_{n}", meta.name),
             UnitKind::UpCommit => format!("{}_enum_values", meta.name),
             UnitKind::DownCommit => format!("{}_down_enum_values", meta.name),
             UnitKind::Concurrent => format!("{}_{}", meta.name, concurrent_name(unit)),
@@ -315,18 +341,123 @@ fn split<'m>(up: &'m Migration, down: &'m Migration, with_down: bool) -> Vec<Uni
     units
 }
 
-/// `create_index_users_email_idx`, from the statement itself.
-fn concurrent_name(unit: &Unit) -> String {
-    let sql = unit.up.first().map_or("", |s| s.sql.as_str());
-    let verb = if sql.starts_with("DROP") {
-        "drop"
-    } else {
-        "create"
+/// A written migration's statements in runs, in order: the ones that run
+/// in a transaction together (until it commits), and each one that cannot
+/// alone.
+fn runs(up: &Migration) -> Vec<Vec<&Statement>> {
+    let mut runs: Vec<Vec<&Statement>> = Vec::new();
+    let mut open = false;
+    for (i, s) in up.statements.iter().enumerate() {
+        let alone = s.stage == Stage::Concurrent;
+        match runs.last_mut() {
+            Some(run) if open && !alone => run.push(s),
+            _ => runs.push(vec![s]),
+        }
+        open = !alone && !up.commits.contains(&i);
+    }
+    runs
+}
+
+/// A written migration in the migrations a per-file-transaction tool
+/// needs, in its own order: each run in a transaction a part (the first
+/// one main, with the down migration), each statement that cannot run in
+/// one alone. Enum values the down migration uses get their migration
+/// right after the main one, as for a planned migration.
+fn split_written<'m>(up: &'m Migration, down: &'m Migration, with_down: bool) -> Vec<Unit<'m>> {
+    let mut units = Vec::new();
+    let mut parts = 0;
+    let mut main_down = Vec::new();
+    let mut down_commit = Vec::new();
+    if with_down {
+        for s in &down.statements {
+            if s.stage == Stage::Commit {
+                down_commit.push(s);
+            } else {
+                main_down.push(s);
+            }
+        }
+    }
+    let mut add_main = |units: &mut Vec<Unit<'m>>, up: Vec<&'m Statement>| {
+        units.push(Unit {
+            kind: UnitKind::Main,
+            up,
+            down: std::mem::take(&mut main_down),
+        });
+        if !down_commit.is_empty() {
+            units.push(Unit {
+                kind: UnitKind::DownCommit,
+                up: Vec::new(),
+                down: std::mem::take(&mut down_commit),
+            });
+        }
     };
-    let name = sql
-        .split_whitespace()
-        .skip_while(|w| *w != "CONCURRENTLY")
-        .nth(1)
+    let runs = runs(up);
+    if runs
+        .iter()
+        .all(|run| run.iter().all(|s| s.stage == Stage::Concurrent))
+    {
+        // Nothing runs in a transaction: the down migration still needs
+        // its file, first.
+        add_main(&mut units, Vec::new());
+        parts = 1;
+    }
+    for run in runs {
+        if run.iter().all(|s| s.stage == Stage::Concurrent) {
+            units.push(Unit {
+                kind: UnitKind::Concurrent,
+                up: run,
+                down: Vec::new(),
+            });
+        } else {
+            parts += 1;
+            if parts == 1 {
+                add_main(&mut units, run);
+            } else {
+                units.push(Unit {
+                    kind: UnitKind::Part(parts),
+                    up: run,
+                    down: Vec::new(),
+                });
+            }
+        }
+    }
+    units
+}
+
+/// `create_index_users_email_idx`: the verb from the statement's kind, the
+/// name from its text without comments (a written one's, whatever its case).
+fn concurrent_name(unit: &Unit) -> String {
+    let Some(statement) = unit.up.first() else {
+        return "index".to_owned();
+    };
+    let text = without_comments(&statement.sql);
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let verb = match statement.kind {
+        Kind::CreateIndex => "create",
+        Kind::DropIndex => "drop",
+        _ => {
+            // `REINDEX … CONCURRENTLY`, `VACUUM`: their first words.
+            let head: Vec<&str> = words
+                .iter()
+                .copied()
+                .take_while(|w| !w.eq_ignore_ascii_case("CONCURRENTLY"))
+                .take(2)
+                .collect();
+            return slug(&head.join(" "));
+        }
+    };
+    let at = words
+        .iter()
+        .position(|w| w.eq_ignore_ascii_case("CONCURRENTLY"))
+        .map_or(words.len(), |at| at + 1);
+    let name = words[at..]
+        .iter()
+        .copied()
+        .find(|w| {
+            !["IF", "NOT", "EXISTS"]
+                .iter()
+                .any(|k| w.eq_ignore_ascii_case(k))
+        })
         .unwrap_or("index");
     let name = name
         .rsplit('.')
@@ -334,6 +465,55 @@ fn concurrent_name(unit: &Unit) -> String {
         .unwrap_or(name)
         .trim_end_matches(';');
     slug(&format!("{verb}_index_{name}"))
+}
+
+/// `sql` without its `--` and `/* */` comments (each a space), strings and
+/// quoted names kept whole.
+fn without_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => {
+                out.push(c);
+                for d in chars.by_ref() {
+                    out.push(d);
+                    if d == c {
+                        break;
+                    }
+                }
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                for d in chars.by_ref() {
+                    if d == '\n' {
+                        break;
+                    }
+                }
+                out.push(' ');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut depth = 1;
+                while depth > 0 {
+                    match chars.next() {
+                        Some('*') if chars.peek() == Some(&'/') => {
+                            chars.next();
+                            depth -= 1;
+                        }
+                        Some('/') if chars.peek() == Some(&'*') => {
+                            chars.next();
+                            depth += 1;
+                        }
+                        Some(_) => {}
+                        None => break,
+                    }
+                }
+                out.push(' ');
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -357,7 +537,7 @@ fn unit_files(
         next_version(&meta.version, index)
     };
     let concurrent = unit.kind == UnitKind::Concurrent;
-    let main = unit.kind == UnitKind::Main;
+    let main = matches!(unit.kind, UnitKind::Main | UnitKind::Part(_));
     let mut out = Writer::new();
     match format {
         Format::Plain => unreachable!("plain is one file"),
@@ -453,6 +633,7 @@ fn down_body(out: &mut Writer, unit: &Unit, down: &Migration, transaction: bool)
             out.comment("Postgres cannot remove an enum value: the main migration's down recreates the type if it must.");
         }
         UnitKind::Concurrent => out.comment("Undone by the main migration's down."),
+        UnitKind::Part(_) => out.comment("Undone by the first part's down."),
     }
 }
 
@@ -460,6 +641,10 @@ fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usi
     let target = m
         .major
         .map_or_else(String::new, |major| format!(" for PostgreSQL {major}"));
+    if m.written {
+        written_header(out, m, meta, part, &target);
+        return;
+    }
     out.comment(&format!(
         "Migration of {} from {} to {}{target}, generated by romulus on {}.",
         meta.database, meta.from, meta.to, meta.date
@@ -470,50 +655,79 @@ fn header(out: &mut Writer, m: &Migration, meta: &Meta, part: Option<(usize, usi
             "Part {n} of {of}: the migration is split where it cannot run in one transaction."
         ));
     }
-    let count = m.statements.len();
-    if count == 0 {
+    if m.statements.is_empty() {
         out.comment("Nothing to migrate: the schemas are the same.");
     } else {
-        let flagged: Vec<String> = [
-            (
-                Hazard::DeletesData,
-                "delete data (DESTRUCTIVE)",
-                "deletes data (DESTRUCTIVE)",
-            ),
-            (
-                Hazard::CanFail,
-                "can fail on existing rows (CAN FAIL)",
-                "can fail on existing rows (CAN FAIL)",
-            ),
-            (
-                Hazard::WidensAccess,
-                "widen access (WIDENS ACCESS)",
-                "widens access (WIDENS ACCESS)",
-            ),
-        ]
-        .iter()
-        .filter_map(|(hazard, many, one)| match m.count(*hazard) {
-            0 => None,
-            1 => Some(format!("1 {one}")),
-            n => Some(format!("{n} {many}")),
-        })
-        .collect();
-        let line = if flagged.is_empty() {
-            format!(
-                "{count} statement{}, none flagged.",
-                if count == 1 { "" } else { "s" }
-            )
-        } else {
-            format!(
-                "{count} statement{}: {}, each marked.",
-                if count == 1 { "" } else { "s" },
-                flagged.join(", ")
-            )
-        };
-        out.comment(&line);
+        out.comment(&count_line(m));
     }
     warnings(out, m);
     out.blank();
+}
+
+/// The header of a migration written by hand: whose it is, where its
+/// hazards come from, the part, how many statements and what they risk.
+fn written_header(
+    out: &mut Writer,
+    m: &Migration,
+    meta: &Meta,
+    part: Option<(usize, usize)>,
+    target: &str,
+) {
+    out.comment(&format!(
+        "Migration of {} from {} to {}{target}, written by hand in romulus; laid out on {}.",
+        meta.database, meta.from, meta.to, meta.date
+    ));
+    out.comment("Its statements as written, in order; what each can do to existing rows is read from the statement itself. Test it on data before applying.");
+    if let Some((n, of)) = part {
+        out.comment(&format!(
+            "Part {n} of {of}: the migration is split where it commits, and where it cannot run in one transaction."
+        ));
+    }
+    if m.statements.is_empty() {
+        out.comment("Nothing to migrate: it holds no statement.");
+    } else {
+        out.comment(&count_line(m));
+    }
+    warnings(out, m);
+    out.blank();
+}
+
+/// `5 statements: 1 can fail on existing rows (CAN FAIL), each marked.`
+fn count_line(m: &Migration) -> String {
+    let count = m.statements.len();
+    let flagged: Vec<String> = [
+        (
+            Hazard::DeletesData,
+            "delete data (DESTRUCTIVE)",
+            "deletes data (DESTRUCTIVE)",
+        ),
+        (
+            Hazard::CanFail,
+            "can fail on existing rows (CAN FAIL)",
+            "can fail on existing rows (CAN FAIL)",
+        ),
+        (
+            Hazard::WidensAccess,
+            "widen access (WIDENS ACCESS)",
+            "widens access (WIDENS ACCESS)",
+        ),
+    ]
+    .iter()
+    .filter_map(|(hazard, many, one)| match m.count(*hazard) {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    })
+    .collect();
+    let plural = if count == 1 { "" } else { "s" };
+    if flagged.is_empty() {
+        format!("{count} statement{plural}, none flagged.")
+    } else {
+        format!(
+            "{count} statement{plural}: {}, each marked.",
+            flagged.join(", ")
+        )
+    }
 }
 
 fn warnings(out: &mut Writer, m: &Migration) {
@@ -557,7 +771,10 @@ fn body(out: &mut Writer, statements: &[&Statement], transaction: bool) {
         .iter()
         .any(|s| s.section == Section::Removals && s.hazard == Some(Hazard::DeletesData));
     for s in &main {
-        if section != Some(s.section) && s.stage != Stage::Concurrent {
+        if section != Some(s.section)
+            && s.stage != Stage::Concurrent
+            && s.section != Section::Written
+        {
             section = Some(s.section);
             heading(out, s.section, removals_destroy);
         }
@@ -625,7 +842,8 @@ fn statement(out: &mut Writer, s: &Statement) {
             out.line(&format!("--   {line}"));
         }
     }
-    for line in s.sql.lines() {
+    // On `\n` only: a `\r` written by hand (a CRLF in a string) stays.
+    for line in s.sql.split('\n') {
         out.line(line);
     }
     if let Some(hazard) = s.hazard {
