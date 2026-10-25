@@ -19,6 +19,7 @@ mod draft_modes;
 mod draft_text;
 mod drafts;
 mod export;
+mod founding_offer;
 mod harness;
 mod health;
 mod idp;

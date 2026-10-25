@@ -233,6 +233,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/billing/offers/founding": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The founding-team offer and how many of its places are left, for the
+     *     homepage (no session). `left` is 0 while the offer is off.
+     */
+    get: operations["get_founding_offer"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/billing/webhook": {
     parameters: {
       query?: never;
@@ -753,6 +773,28 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/orgs/{org}/billing/checkout/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Back from Stripe's payment page without paying (its back link lands on
+     *     the billing page, which calls this): the founding-team place the
+     *     checkout held is released, its session expired first so it can no longer
+     *     be paid. Nothing to do for a checkout holding no place. Admins only.
+     */
+    post: operations["cancel_checkout"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/orgs/{org}/billing/invoices": {
     parameters: {
       query?: never;
@@ -783,7 +825,8 @@ export interface paths {
      * A Customer Portal session: payment method, invoices, plan changes
      *     (upgrades now, prorated; downgrades at the period's end) and
      *     cancelling, straight on the cancel page with `{"flow": {"type":
-     *     "cancel"}}`. Admins only.
+     *     "cancel"}}`. A founding-team subscription gets its own configuration
+     *     (Team at the founding prices only, Terms 7.11). Admins only.
      */
     post: operations["open_billing_portal"];
     delete?: never;
@@ -2440,6 +2483,8 @@ export interface components {
       locale?: string | null;
       /** @description The month whose playground hours ran out (`2026-10`). */
       month?: string | null;
+      /** @description The offer a checkout applied (`founding`). */
+      offer?: string | null;
       plan?: components["schemas"]["Plan"] | null;
       /**
        * @description The professional edition: the buyer attested buying for their
@@ -3591,6 +3636,49 @@ export interface components {
     ForgotPassword: {
       email: string;
     };
+    /** @description The founding-team offer, as the homepage and the billing page show it. */
+    FoundingOffer: {
+      /** Format: int32 */
+      left: number;
+      /**
+       * Format: int32
+       * @description The plan's own prices.
+       */
+      list_monthly_cents: number;
+      /** Format: int32 */
+      list_yearly_cents: number;
+      /**
+       * Format: int32
+       * @description Euro cents with the offer, for as long as the subscription stays on
+       *     the plan.
+       */
+      monthly_cents: number;
+      /** @description The plan it is for (Team). */
+      plan: components["schemas"]["Plan"];
+      /**
+       * Format: int32
+       * @description How many teams get it in all, and how many places are left.
+       */
+      teams: number;
+      /**
+       * @description The organization asking had it already (once per organization):
+       *     its checkouts are at the plan's own price. Always false on the
+       *     homepage's count.
+       */
+      used?: boolean;
+      /** Format: int32 */
+      yearly_cents: number;
+    };
+    /**
+     * @description What a founding-team subscription costs, each period (its plan at these
+     *     prices, whatever the offer's places).
+     */
+    FoundingPrices: {
+      /** Format: int32 */
+      monthly_cents: number;
+      /** Format: int32 */
+      yearly_cents: number;
+    };
     /**
      * @description `pg_attribute.attgenerated`, as a word.
      * @enum {string}
@@ -4737,6 +4825,11 @@ export interface components {
        */
       value: Record<string, never>;
     };
+    /**
+     * @description An offer a checkout may ask for (`StartCheckout::offer`).
+     * @enum {string}
+     */
+    OfferChoice: "founding";
     OpenPortal: {
       flow?: components["schemas"]["PortalChoice"] | null;
     };
@@ -4773,6 +4866,7 @@ export interface components {
        *     English and in French.
        */
       documents: components["schemas"]["LegalLinks"];
+      founding_offer?: components["schemas"]["FoundingOffer"] | null;
       /** @description The plan in force now: the caps are its. */
       plan: components["schemas"]["Plan"];
       plans: components["schemas"]["PlanOffer"][];
@@ -6049,6 +6143,7 @@ export interface components {
       immediate_start?: boolean;
       interval: components["schemas"]["Interval"];
       locale?: components["schemas"]["Locale"] | null;
+      offer?: components["schemas"]["OfferChoice"] | null;
       /** @description A paid plan. */
       plan: components["schemas"]["Plan"];
       /**
@@ -6118,6 +6213,7 @@ export interface components {
        *     cancelled at the period's end).
        */
       current_period_end?: string | null;
+      founding?: components["schemas"]["FoundingPrices"] | null;
       /**
        * Format: date-time
        * @description While a payment is overdue: when the plan stops holding.
@@ -7302,6 +7398,43 @@ export interface operations {
         };
       };
       429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_founding_offer: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FoundingOffer"];
+        };
+      };
+      /** @description Billing is off on this server */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable`: the count did not read in time */
+      503: {
         headers: {
           [name: string]: unknown;
         };
@@ -8777,7 +8910,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description `already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload */
+      /** @description `already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload; `offer_ended`: the founding-team offer has no place left; `offer_used`: this organization had the founding-team offer already */
       409: {
         headers: {
           [name: string]: unknown;
@@ -8788,6 +8921,52 @@ export interface operations {
       };
       /** @description `validation` naming the field: no buyer chosen, the Terms or a box not ticked, a business's name or country missing, or Free */
       422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description `billing_unavailable`: Stripe did not answer */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  cancel_checkout: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The organization's slug */
+        org: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Released, or nothing was held */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      404: {
         headers: {
           [name: string]: unknown;
         };

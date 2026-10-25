@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO founding_offer_uses (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b831ec7f07f20a34bada1a09e0ae221e8392125845d1b61269474aec3a076d71"
+}

@@ -140,6 +140,52 @@ test("signed in with organizations: choose the one, then its checkout", async ({
   ).toHaveAttribute("aria-checked", "true");
 });
 
+test("the founding offer's link: Team at its price while subscribed, applied at checkout", async ({
+  page,
+}) => {
+  // The fake's 20 places last as long as its API: a reused one may have none.
+  const count = (await (await page.request.get("/api/billing/offers/founding")).json()) as {
+    left: number;
+  };
+  test.skip(count.left === 0, "the e2e API's founding places are used up: restart it");
+
+  const slug = await signedInOrg(page, "founder");
+  await page.goto("./signup?plan=team&interval=month&offer=founding");
+  await expect(page.getByRole("heading", { name: "Subscribe to Team", level: 1 })).toBeVisible();
+  await expect(page.getByText("€29 a month")).toBeVisible();
+  const choices = page.getByRole("navigation", { name: "Your organizations" });
+  await expect(choices.getByRole("link", { name: "Create a new organization" })).toHaveAttribute(
+    "href",
+    "/app/new?plan=team&interval=month&offer=founding",
+  );
+  await choices.getByRole("link", { name: /On Free/ }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/app/${slug}/settings/billing$`));
+  const checkout = page.getByRole("dialog", { name: "Upgrade to Team" });
+  await expect(checkout).toContainText("€29 a month");
+  await expect(checkout).toContainText(
+    "Founding team offer: €29 instead of €49, for as long as the subscription stays on this plan.",
+  );
+  await fillBusinessCheckout(checkout);
+  await checkout.getByRole("button", { name: "Continue to payment" }).click();
+  await paid(page, slug, "Team");
+  await expect(page.getByRole("region", { name: "Plan", exact: true })).toContainText(
+    "€29 a month",
+  );
+});
+
+test("the founding offer is Team's only: another plan's link drops it", async ({ page }) => {
+  await signedInOrg(page, "not-founder");
+  await page.goto("./signup?plan=starter&interval=month&offer=founding");
+  await expect(page.getByText("€19 a month")).toBeVisible();
+  // What is carried on (here to a new organization) has no offer.
+  await expect(
+    page
+      .getByRole("navigation", { name: "Your organizations" })
+      .getByRole("link", { name: "Create a new organization" }),
+  ).toHaveAttribute("href", "/app/new?plan=starter&interval=month");
+});
+
 test("an unknown plan is the usual way in", async ({ page }) => {
   for (const query of ["plan=gold&interval=year", "plan=free", ""]) {
     await page.goto(`./signup?${query}`);

@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use super::{
     Billing, Inner, copy, hours,
+    offer::{self, FoundingOffer, FoundingPrices, OfferChoice},
     plans::{self, Limits},
     state::Stored,
     stored,
@@ -38,10 +39,12 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(get_billing))
         .routes(routes!(checkout))
+        .routes(routes!(cancel_checkout))
         .routes(routes!(portal))
         .routes(routes!(invoices))
         .routes(routes!(withdrawal::withdraw))
         .routes(routes!(webhook::receive))
+        .routes(routes!(super::offer::get_founding_offer))
         // Undocumented: only with `ROMULUS_BILLING=fake` (the e2e suite).
         .route("/billing/fake/checkout/{session}", get(fake_checkout))
 }
@@ -116,6 +119,9 @@ pub struct ScheduledChange {
 pub struct SubscriptionInfo {
     pub plan: Plan,
     pub interval: Option<Interval>,
+    /// On a founding-team price (Terms 7.11): its plan's prices, monthly and
+    /// yearly (moving between them keeps it); `null` otherwise.
+    pub founding: Option<FoundingPrices>,
     /// Stripe's status: `active`, `past_due`, `canceled`…
     pub status: String,
     /// The end of the period paid for: the renewal date (or the end, when
@@ -164,6 +170,9 @@ pub struct OrgBilling {
     /// A consumer's right of withdrawal: until when, or the withdrawal
     /// made. `null` for a business.
     pub withdrawal: Option<WithdrawalInfo>,
+    /// The founding-team offer while it runs (`null`: off, or its count
+    /// did not read): what a checkout with `offer: founding` costs.
+    pub founding_offer: Option<FoundingOffer>,
 }
 
 /// What the buyer states before paying (Terms 3.4 c, 3.5 and 9.3): as whom,
@@ -210,6 +219,10 @@ pub struct StartCheckout {
     /// The language of the page: the payment page's and the contract's.
     #[serde(default)]
     pub locale: Option<Locale>,
+    /// An offer the buyer came with (the homepage's `?offer=founding`):
+    /// applied when the plan is its own (Team), ignored otherwise.
+    #[serde(default)]
+    pub offer: Option<OfferChoice>,
 }
 
 /// A checkout's statements, checked.
@@ -340,7 +353,7 @@ pub struct InvoiceSummary {
     pub pdf: Option<String>,
 }
 
-fn unavailable(err: &StripeError) -> ApiError {
+pub(super) fn unavailable(err: &StripeError) -> ApiError {
     tracing::warn!(error = %err, "billing: Stripe call failed");
     ApiError::Down {
         code: "billing_unavailable",
@@ -458,6 +471,7 @@ fn subscription_info(stored: &Stored) -> Option<SubscriptionInfo> {
         current_period_end: stored.current_period_end,
         cancel_at_period_end: stored.cancel_at_period_end,
         amount_cents: stored.amount_cents,
+        founding: stored.founding.then(FoundingPrices::of_offer),
         currency: stored.currency.clone(),
         grace_until: stored.grace_until(),
         scheduled: match (stored.scheduled_plan, stored.scheduled_at) {
@@ -511,6 +525,7 @@ async fn get_billing(member: Member, State(state): State<AppState>) -> ApiResult
         checkout_copy_version: copy::version(inner.legal.edition()).to_owned(),
         buyer: buyer.filter(|_| stored.subscription_id.is_some()),
         withdrawal,
+        founding_offer: offer::shown(inner, member.org.id).await?,
     }))
 }
 
@@ -544,6 +559,17 @@ struct Order<'a> {
     price: &'a str,
     statement: &'a Statement,
     copy_version: &'a str,
+    /// The offer the buyer came with (applied to Team only), and the
+    /// founding price it would be at.
+    offer: Option<OfferChoice>,
+    founding_price: Option<&'a str>,
+}
+
+/// A checkout opened: where to send the browser, and whether it applies the
+/// founding-team offer.
+struct Opened {
+    url: String,
+    offered: bool,
 }
 
 /// Opens one Checkout Session for the organization, under its billing lock
@@ -554,20 +580,26 @@ struct Order<'a> {
 ///    organization's), its invoice mentions brought up to date;
 /// 2. refused when Stripe already has a running subscription for it (a
 ///    checkout paid whose webhook has not arrived yet);
-/// 3. the session, with an idempotency key made of the organization, the
-///    price and a nonce kept until the session is known: the same request
-///    again after a timeout gets the same session, never a second one;
-/// 4. every other open session of the customer expired (after creating
+/// 3. with the founding-team offer asked for (Team), a place held for it
+///    before the session exists (`offer::reserve`: once per organization,
+///    one per person at a time, while places are left);
+/// 4. the session, with an idempotency key made of the organization, the
+///    price, the language and a nonce kept until the session is known: the
+///    same request again after a timeout gets the same session, never a
+///    second one. A founding session expires 31 minutes after it is made,
+///    and that expiry is in its key too: asked again, it is a new session
+///    (the one a lost answer made is expired at step 5);
+/// 5. every other open session of the customer expired (after creating
 ///    this one, so that a replayed request never expires its own answer):
 ///    one open checkout at a time, so two can never both be paid;
-/// 5. the record of what the buyer accepted and stated
+/// 6. the record of what the buyer accepted and stated
 ///    (`legal_acceptances`), with the session's id; the session and its
 ///    subscription carry the record's id (kept with the nonce, so a retry
 ///    sends Stripe the same request).
 ///
 /// What it learned (the customer, the pending nonce, the session) is
 /// committed even when Stripe fails midway, for the retry.
-async fn open_checkout(state: &AppState, inner: &Inner, order: &Order<'_>) -> ApiResult<String> {
+async fn open_checkout(state: &AppState, inner: &Inner, order: &Order<'_>) -> ApiResult<Opened> {
     let org = order.member.org.id;
     let mut tx = state.db.begin().await?;
     super::lock_org(&mut tx, org).await?;
@@ -604,7 +636,7 @@ async fn exchange(
     order: &Order<'_>,
     pending: Pending,
     tx: &mut sqlx::PgConnection,
-) -> ApiResult<String> {
+) -> ApiResult<Opened> {
     let member = order.member;
     let price = order.price;
     let org = member.org.id;
@@ -638,6 +670,24 @@ async fn exchange(
     if !running.is_empty() {
         return Err(already_subscribed());
     }
+    let founding = offer::reserve(
+        inner,
+        &mut *tx,
+        org,
+        member.user.id,
+        order.offer,
+        order.plan,
+    )
+    .await?;
+    let price = match (founding, order.founding_price) {
+        (true, Some(founding_price)) => founding_price,
+        (true, None) => {
+            return Err(ApiError::Internal(
+                "a founding checkout without its price".to_owned().into(),
+            ));
+        }
+        (false, _) => price,
+    };
     let (nonce, acceptance_id) = match (pending.nonce, pending.session_id, pending.acceptance_id) {
         (Some(nonce), None, Some(acceptance)) if pending.price.as_deref() == Some(price) => {
             (nonce, acceptance)
@@ -660,6 +710,13 @@ async fn exchange(
     )
     .execute(&mut *tx)
     .await?;
+    // A founding session expires from now (30 minutes at least when Stripe
+    // makes it); its place is held a day longer, unless released before.
+    let expires = founding.then(|| Utc::now() + offer::SESSION);
+    let held = expires.map(|at| (at + offer::HOLD_AFTER, member.user.id));
+    if held.is_some() {
+        offer::hold(&mut *tx, org, held).await?;
+    }
     let locale = order.statement.locale;
     let session = inner
         .stripe
@@ -669,11 +726,17 @@ async fn exchange(
             price: price.to_owned(),
             success_url: billing_url(inner, &member.org.slug, "checkout=success"),
             cancel_url: billing_url(inner, &member.org.slug, "checkout=cancelled"),
-            idempotency_key: super::stripe::checkout_key(org, price, locale, &nonce),
+            idempotency_key: super::stripe::checkout_key(
+                org,
+                price,
+                locale,
+                &expires.map_or_else(|| nonce.clone(), |at| format!("{nonce}-{}", at.timestamp())),
+            ),
             acceptance_id,
             locale,
             edition: inner.legal.edition(),
             business: order.statement.buyer == Buyer::Business,
+            expires_at: expires.map(|at| at.timestamp()),
         })
         .await
         .map_err(|err| unavailable(&err))?;
@@ -744,7 +807,30 @@ async fn exchange(
     )
     .execute(&mut *tx)
     .await?;
-    Ok(session.url)
+    // The offer's place held (a day past the session's expiry); any other checkout
+    // expired the organization's previous one, and its hold goes with it.
+    offer::hold(&mut *tx, org, held).await?;
+    Ok(Opened {
+        url: session.url,
+        offered: founding,
+    })
+}
+
+/// The founding price, when the buyer came with the offer for its plan
+/// (whether it applies is decided under the organization's lock).
+async fn founding_price(inner: &Inner, body: &StartCheckout) -> ApiResult<Option<String>> {
+    if body.offer != Some(OfferChoice::Founding)
+        || !inner.config.founding
+        || body.plan != super::plans::FOUNDING.plan
+    {
+        return Ok(None);
+    }
+    inner
+        .stripe
+        .price(super::plans::FOUNDING.lookup_key(body.interval))
+        .await
+        .map(Some)
+        .map_err(|err| unavailable(&err))
 }
 
 fn already_subscribed() -> ApiError {
@@ -772,7 +858,7 @@ fn already_subscribed() -> ApiError {
         (status = 200, body = BillingRedirect),
         (status = 403, body = ErrorBody),
         (status = 404, body = ErrorBody),
-        (status = 409, description = "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload", body = ErrorBody),
+        (status = 409, description = "`already_subscribed`: change plans in the portal; `checkout_completed`: another checkout was just paid; `checkout_copy_changed`: the boxes' wording changed, reload; `offer_ended`: the founding-team offer has no place left; `offer_used`: this organization had the founding-team offer already", body = ErrorBody),
         (status = 422, description = "`validation` naming the field: no buyer chosen, the Terms or a box not ticked, a business's name or country missing, or Free", body = ErrorBody),
         (status = 503, description = "`billing_unavailable`: Stripe did not answer", body = ErrorBody),
     )
@@ -813,7 +899,8 @@ async fn checkout(
         .price(lookup_key)
         .await
         .map_err(|err| unavailable(&err))?;
-    let url = open_checkout(
+    let founding_price = founding_price(inner, &body).await?;
+    let opened = open_checkout(
         &state,
         inner,
         &Order {
@@ -823,6 +910,8 @@ async fn checkout(
             price: &price,
             statement: &statement,
             copy_version: &body.copy_version,
+            offer: body.offer,
+            founding_price: founding_price.as_deref(),
         },
     )
     .await?;
@@ -856,6 +945,9 @@ async fn checkout(
                         .then_some(true),
                     copy_version: Some(body.copy_version.clone()),
                     locale: Some(statement.locale.tag().to_owned()),
+                    offer: opened
+                        .offered
+                        .then(|| super::plans::FOUNDING.slug.to_owned()),
                     ..BillingAudit::default()
                 }),
                 ..AuditDetails::default()
@@ -863,14 +955,62 @@ async fn checkout(
         },
     )
     .await?;
-    tracing::info!(org = %member.org.slug, plan = ?body.plan, interval = ?body.interval, "billing: checkout started");
-    Ok(Json(BillingRedirect { url }))
+    tracing::info!(org = %member.org.slug, plan = ?body.plan, interval = ?body.interval, offer = opened.offered, "billing: checkout started");
+    Ok(Json(BillingRedirect { url: opened.url }))
+}
+
+/// Back from Stripe's payment page without paying (its back link lands on
+/// the billing page, which calls this): the founding-team place the
+/// checkout held is released, its session expired first so it can no longer
+/// be paid. Nothing to do for a checkout holding no place. Admins only.
+#[utoipa::path(
+    post,
+    path = "/orgs/{org}/billing/checkout/cancel",
+    operation_id = "cancel_checkout",
+    tag = "billing",
+    params(("org" = String, Path, description = "The organization's slug")),
+    responses(
+        (status = 204, description = "Released, or nothing was held"),
+        (status = 403, body = ErrorBody),
+        (status = 404, body = ErrorBody),
+        (status = 503, description = "`billing_unavailable`: Stripe did not answer", body = ErrorBody),
+    )
+)]
+async fn cancel_checkout(
+    member: Member<min::Admin>,
+    State(state): State<AppState>,
+) -> ApiResult<axum::http::StatusCode> {
+    let inner = state.billing.require()?;
+    let org = member.org.id;
+    let mut tx = state.db.begin().await?;
+    super::lock_org(&mut tx, org).await?;
+    let held = sqlx::query!(
+        r#"SELECT checkout_session_id AS "session!" FROM org_billing
+           WHERE org_id = $1 AND checkout_offer_until IS NOT NULL
+             AND checkout_session_id IS NOT NULL"#,
+        org
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(held) = held {
+        match inner.stripe.expire_checkout(held.session.clone()).await {
+            Ok(()) => offer::release_session(&mut *tx, &held.session).await?,
+            // Paid meanwhile: its subscription, when stored, releases it.
+            Err(StripeError::Refused {
+                code: Some(code), ..
+            }) if code == "checkout_complete" => {}
+            Err(err) => return Err(unavailable(&err)),
+        }
+    }
+    tx.commit().await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// A Customer Portal session: payment method, invoices, plan changes
 /// (upgrades now, prorated; downgrades at the period's end) and
 /// cancelling, straight on the cancel page with `{"flow": {"type":
-/// "cancel"}}`. Admins only.
+/// "cancel"}}`. A founding-team subscription gets its own configuration
+/// (Team at the founding prices only, Terms 7.11). Admins only.
 #[utoipa::path(
     post,
     path = "/orgs/{org}/billing/portal",
@@ -900,11 +1040,31 @@ async fn portal(
             code: "no_customer",
             message: "This organization has never subscribed: choose a plan first.".into(),
         })?;
+    // The running subscription as Stripe has it now: whether it is on a
+    // founding price decides the portal and the prices it offers (never
+    // the stored flag, which a webhook still on its way would leave stale).
+    let read = match current
+        .has_live_subscription()
+        .then(|| current.subscription_id.clone())
+        .flatten()
+    {
+        Some(id) => Some(
+            inner
+                .stripe
+                .subscription(id)
+                .await
+                .map_err(|err| unavailable(&err))?,
+        ),
+        None => None,
+    };
+    let founding = read
+        .as_ref()
+        .and_then(|r| r.item.as_ref())
+        .and_then(|i| i.lookup_key.as_deref())
+        .is_some_and(|key| super::plans::Offer::from_lookup_key(key).is_some());
     let live = || {
-        current
-            .has_live_subscription()
-            .then(|| current.subscription_id.clone())
-            .flatten()
+        read.as_ref()
+            .map(|r| r.id.clone())
             .ok_or_else(|| ApiError::Conflict {
                 code: "no_subscription",
                 message: "This organization has no running subscription.".into(),
@@ -917,23 +1077,27 @@ async fn portal(
         }),
         Some(PortalChoice::ChangePlan { plan, interval }) => {
             let subscription = live()?;
-            match plan.zip(interval).and_then(|(p, i)| p.lookup_key(i)) {
+            // A founding subscription moves between its plan's founding
+            // prices (its portal offers no other price of that plan).
+            let key = plan.zip(interval).and_then(|(p, i)| {
+                if founding && p == super::plans::FOUNDING.plan {
+                    Some(super::plans::FOUNDING.lookup_key(i))
+                } else {
+                    p.lookup_key(i)
+                }
+            });
+            match key {
                 None => Some(PortalFlow::Update { subscription }),
                 Some(key) => {
-                    let read = inner
-                        .stripe
-                        .subscription(subscription.clone())
-                        .await
-                        .map_err(|err| unavailable(&err))?;
                     let price = inner
                         .stripe
                         .price(key)
                         .await
                         .map_err(|err| unavailable(&err))?;
-                    match read.item {
+                    match read.as_ref().and_then(|r| r.item.as_ref()) {
                         Some(item) if item.price != price => Some(PortalFlow::Confirm {
                             subscription,
-                            item: item.id,
+                            item: item.id.clone(),
                             price,
                         }),
                         _ => Some(PortalFlow::Update { subscription }),
@@ -948,6 +1112,7 @@ async fn portal(
             customer,
             return_url: billing_url(inner, &member.org.slug, ""),
             flow,
+            founding,
         })
         .await
         .map_err(|err| unavailable(&err))?;

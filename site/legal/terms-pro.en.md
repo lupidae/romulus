@@ -1,7 +1,7 @@
 # romulus Terms of Service
 
-**Version:** 1.0
-**Effective date:** 21 October 2026
+**Version:** 1.1
+**Effective date:** 24 October 2026
 
 These Terms of Service (the "**Terms**") govern access to and use of the hosted romulus service available at **https://romulus.lupidae.com** (the "**Service**"). They are also called general terms of use and sale (*conditions générales d'utilisation et de vente*).
 
@@ -176,6 +176,8 @@ c) **Monthly Plans** can be cancelled at any time, with effect at the end of the
 7.9. **Late payment.** Any amount not paid by its due date automatically bears, from the day after the due date and without a reminder being needed, late-payment interest at three times the French legal interest rate. A fixed indemnity of EUR 40 for recovery costs is also due for each unpaid invoice. If the recovery costs actually incurred are higher, additional compensation may be claimed on proof (Articles L441-10 and D441-5 of the French Commercial Code).
 
 7.10. **Invoices.** Invoices are issued electronically and are available by email and in the billing portal ("Manage billing"). They state that VAT is not applicable under Article 293 B of the French General Tax Code. When electronic invoicing becomes mandatory for us, invoices to businesses established in France will be issued in the required electronic form, and you agree to give us the information it requires, such as your SIREN number.
+
+7.11. **Founding-team offer.** The first 20 Organizations to subscribe to the Team Plan through the founding-team offer (the link on the pricing page, while it shows places left) pay EUR 29 per month or EUR 290 per year instead of the price of the Team Plan. This price is fixed: Section 7.6 does not apply to it, for as long as the subscription stays active on the Team Plan without interruption. Switching between the monthly and the yearly Billing Period keeps it. The offer ends for good when the subscription is cancelled (at the end of its Billing Period, Section 8.1), when the contract ends (Sections 9.1 and 15), or when the subscription moves to another Plan; a later subscription to the Team Plan is at its price in force. The offer can be used once per Organization. A place is held for you while the payment page is open, for about 30 minutes.
 
 ## 8. Cancellation and refunds
 

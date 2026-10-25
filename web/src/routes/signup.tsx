@@ -12,7 +12,13 @@ import { AuthPage, authLinkClass } from "@/features/auth/components/auth-page";
 import { billingCopy } from "@/features/billing/copy";
 import { isLive, planNames, priceLine } from "@/features/billing/format";
 import { billingQuery, type OrgBilling } from "@/features/billing/queries";
-import { readSubscribe, type Subscribe, subscribeSearch } from "@/features/billing/subscribe";
+import {
+  billingSearch,
+  offered,
+  readSubscribe,
+  type Subscribe,
+  subscribeSearch,
+} from "@/features/billing/subscribe";
 import { useLocale } from "@/features/legal/locale";
 import { type Org, orgsQuery } from "@/features/orgs/queries";
 import { canManageMembers } from "@/features/orgs/roles";
@@ -49,8 +55,11 @@ function ChooseOrganization() {
   // Each organization's plan, for those the person may subscribe.
   const billings = useQueries({ queries: admins.map((o) => billingQuery(o.slug)) });
   const billingOf = (slug: string) => billings[admins.findIndex((o) => o.slug === slug)];
-  const offer = billings.find((b) => b.data)?.data?.plans.find((p) => p.plan === choice.plan);
-  const price = offer ? priceLine(offer, choice.interval, locale) : null;
+  const loaded = billings.find((b) => b.data)?.data;
+  const offer = loaded?.plans.find((p) => p.plan === choice.plan);
+  const price = offer
+    ? priceLine(offered(offer, choice.offer, loaded?.founding_offer).plan, choice.interval, locale)
+    : null;
   const name = planNames[choice.plan];
   // The price says the period once the plans load; until then, in words.
 
@@ -130,7 +139,7 @@ function OrgChoice({
     <Link
       to="/$org/settings/billing"
       params={{ org: org.slug }}
-      search={{ subscribe: choice.plan, interval: choice.interval }}
+      search={billingSearch(choice)}
       className={cn(
         rowClass,
         "outline-none hover:border-border-strong hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",

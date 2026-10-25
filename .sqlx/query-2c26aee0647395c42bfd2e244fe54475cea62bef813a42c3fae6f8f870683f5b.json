@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT amount_cents, founding, checkout_offer_until,\n                  EXISTS (SELECT 1 FROM founding_offer_uses u WHERE u.org_id = b.org_id) AS \"used!\"\n           FROM org_billing b WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "amount_cents",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "amount_cents"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "founding",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "founding"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "checkout_offer_until",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "checkout_offer_until"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "used!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "2c26aee0647395c42bfd2e244fe54475cea62bef813a42c3fae6f8f870683f5b"
+}

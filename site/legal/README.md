@@ -56,7 +56,7 @@ in it, so new Terms PDFs, and the API's `ROMULUS_TERMS_VERSION` once it is in
 force. The previous PDFs stay: every version remains available on request.
 
 **When consumer sales open**:
-the full edition becomes a new version (1.1, say) of the documents at the
+the full edition becomes a new version (1.2, say) of the documents at the
 canonical addresses. Update `terms.en.md`, `conditions.fr.md`, `privacy.en.md`
 and `confidentialite.fr.md` as counsel says (carrying over what the
 professional edition improved), then in `documents` point `/legal/terms`,

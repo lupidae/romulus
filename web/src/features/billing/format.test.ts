@@ -91,6 +91,7 @@ describe("prices and plans", () => {
   it("word a subscription's status, cancellation first", () => {
     const sub = (status: string, cancel = false): SubscriptionInfo => ({
       plan: "team",
+      founding: null,
       status,
       cancel_at_period_end: cancel,
     });
@@ -114,7 +115,8 @@ describe("in French", () => {
     );
     expect(historyLabel(365, "fr")).toBe("1 an");
     expect(
-      statusOf({ plan: "team", status: "active", cancel_at_period_end: true }, "fr").label,
+      statusOf({ plan: "team", founding: null, status: "active", cancel_at_period_end: true }, "fr")
+        .label,
     ).toBe("Prend fin en fin de période");
   });
 });

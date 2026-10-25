@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
 import { ApiError } from "@/api/client";
@@ -20,15 +21,17 @@ import { documentsFor, type LegalLinks } from "@/features/legal/queries";
 
 import { type Buyer, checkoutCopy, checkoutProblems, copyVersions } from "../copy";
 import { countries, matchCountries } from "../countries";
-import { planNames, priceLine } from "../format";
+import { euros, planNames, priceLine } from "../format";
 import { goTo, useStartCheckout } from "../mutations";
-import type { Interval, PlanOffer } from "../queries";
+import { billingKeys, type FoundingOffer, type Interval, type PlanOffer } from "../queries";
 
 interface CheckoutDialogProps {
   org: string;
-  /** The plan being bought; the dialog is open while it is set. */
+  /** The plan being bought, at the price it is billed; the dialog is open while it is set. */
   offer: PlanOffer | null;
   interval: Interval;
+  /** The founding-team offer, when the checkout applies it (`offered`). */
+  founding?: FoundingOffer | null;
   /** The Terms in force and the other documents (the billing page's). */
   documents: LegalLinks;
   onOpenChange: (open: boolean) => void;
@@ -46,6 +49,7 @@ export function CheckoutDialog({
   org,
   offer,
   interval,
+  founding = null,
   documents,
   onOpenChange,
 }: CheckoutDialogProps) {
@@ -58,6 +62,7 @@ export function CheckoutDialog({
             org={org}
             offer={offer}
             interval={interval}
+            founding={founding}
             documents={documents}
             onCancel={() => onOpenChange(false)}
           />
@@ -71,12 +76,14 @@ function CheckoutForm({
   org,
   offer,
   interval,
+  founding,
   documents,
   onCancel,
 }: {
   org: string;
   offer: PlanOffer;
   interval: Interval;
+  founding: FoundingOffer | null;
   documents: LegalLinks;
   onCancel: () => void;
 }) {
@@ -87,6 +94,7 @@ function CheckoutForm({
   // Businesses only (the professional edition): its own box and words.
   const pro = !consumerSales;
   const start = useStartCheckout(org);
+  const queryClient = useQueryClient();
   const id = React.useId();
   const [chosen, setBuyer] = React.useState<Buyer | undefined>();
   // Businesses only: nothing to choose.
@@ -138,17 +146,33 @@ function CheckoutForm({
         withdrawal_acknowledged: !business && withdrawal,
         copy_version: copyVersions[documents.edition],
         locale,
+        offer: founding ? "founding" : null,
       },
       {
         onSuccess: ({ url }) => goTo(url),
-        onError: (error) =>
+        onError: (error) => {
+          // The offer's last place went meanwhile: the page shows the
+          // plan's own price again, and the next try is without it.
+          if (
+            error instanceof ApiError &&
+            (error.code === "offer_ended" || error.code === "offer_used")
+          ) {
+            void queryClient.invalidateQueries({ queryKey: billingKeys.one(org) });
+          }
           setFailure(
             error instanceof ApiError
               ? error.code === "checkout_copy_changed"
                 ? copy.copyChanged
-                : error.message
+                : error.code === "offer_ended"
+                  ? copy.offerEnded
+                  : error.code === "offer_used"
+                    ? copy.offerUsed
+                    : error.code === "offer_held"
+                      ? copy.offerHeld
+                      : error.message
               : copy.unreachable,
-          ),
+          );
+        },
       },
     );
   };
@@ -159,6 +183,21 @@ function CheckoutForm({
         <DialogTitle>{copy.title(name)}</DialogTitle>
         <DialogDescription>
           {priceLine(offer, interval, locale)}, {copy.commitment(interval)}
+          {founding && (
+            <>
+              {" "}
+              {copy.founding(
+                euros(
+                  interval === "month" ? founding.monthly_cents : founding.yearly_cents,
+                  locale,
+                ),
+                euros(
+                  interval === "month" ? founding.list_monthly_cents : founding.list_yearly_cents,
+                  locale,
+                ),
+              )}
+            </>
+          )}
         </DialogDescription>
       </DialogHeader>
 

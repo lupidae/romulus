@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE org_billing SET checkout_offer_until = NULL, checkout_offer_by = NULL\n         WHERE checkout_session_id = $1 AND checkout_offer_until IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "86ce4b1b9001e171485d5efb13c37d823c17ed48c8624dcfee57eb152aa1aa2a"
+}

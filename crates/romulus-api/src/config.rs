@@ -450,6 +450,10 @@ pub struct BillingConfig {
     /// seller's name, registration number, address), as
     /// `Name=value|Name=value`.
     pub invoice_fields: Vec<(String, String)>,
+    /// `ROMULUS_FOUNDING_OFFER`: the founding-team offer is on
+    /// (`billing::plans::FOUNDING`): its prices, found by their lookup keys,
+    /// are made by `romulus-api stripe-setup --founding-offer`.
+    pub founding: bool,
 }
 
 /// How billing reaches Stripe (`ROMULUS_BILLING`).
@@ -485,7 +489,11 @@ impl BillingConfig {
     ) -> Result<Option<Self>, ConfigError> {
         let stripe = match get("ROMULUS_BILLING").as_deref() {
             None | Some("off") => {
-                for var in ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"] {
+                for var in [
+                    "STRIPE_SECRET_KEY",
+                    "STRIPE_WEBHOOK_SECRET",
+                    "ROMULUS_FOUNDING_OFFER",
+                ] {
                     if get(var).is_some() {
                         return Err(ConfigError::Invalid {
                             var,
@@ -553,6 +561,7 @@ impl BillingConfig {
             stripe,
             invoice_footer,
             invoice_fields,
+            founding: flag(get, "ROMULUS_FOUNDING_OFFER")?,
         }))
     }
 }
@@ -986,6 +995,17 @@ impl Config {
         if billing.is_some() && legal.is_none() {
             return Err(ConfigError::Missing("ROMULUS_TERMS_VERSION"));
         }
+        // The founding-team offer is in the Terms from version 1.1 (7.11).
+        if billing.as_ref().is_some_and(|b| b.founding)
+            && legal
+                .as_ref()
+                .is_some_and(|l| terms_before(&l.terms_version, (1, 1)))
+        {
+            return Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_OFFER",
+                reason: "the founding-team offer is in the Terms from version 1.1 (Section 7.11): set ROMULUS_TERMS_VERSION=1.1 or later".to_owned(),
+            });
+        }
         // The hosted terms promise emails (renewal reminders, payment
         // notices): real billing does not run without mail.
         if billing
@@ -1116,6 +1136,18 @@ fn auth_methods(value: Option<&str>) -> Result<AuthConfig, ConfigError> {
         });
     }
     Ok(auth)
+}
+
+/// Whether Terms `version` (`1.0`, `1.1`…) is older than `than`; a version
+/// that is not two numbers (a test server's `test`) never is.
+fn terms_before(version: &str, than: (u32, u32)) -> bool {
+    let Some((major, minor)) = version.split_once('.') else {
+        return false;
+    };
+    match (major.parse::<u32>(), minor.parse::<u32>()) {
+        (Ok(major), Ok(minor)) => (major, minor) < than,
+        _ => false,
+    }
 }
 
 /// A `true`/`false` (or `1`/`0`) variable, false when unset.
@@ -1279,6 +1311,66 @@ mod tests {
             with(&too_many),
             Err(ConfigError::Invalid {
                 var: "ROMULUS_INVOICE_FIELDS",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn the_founding_offer_is_off_unless_said_and_needs_billing() {
+        let with = |extra: &[(&'static str, &str)]| {
+            let mut vars = BASE.to_vec();
+            vars.extend_from_slice(extra);
+            config(&vars)
+        };
+        let fake = ("ROMULUS_BILLING", "fake");
+        assert!(!with(&[fake]).unwrap().billing.unwrap().founding);
+        assert!(
+            with(&[fake, ("ROMULUS_FOUNDING_OFFER", "true")])
+                .unwrap()
+                .billing
+                .unwrap()
+                .founding
+        );
+        assert!(matches!(
+            with(&[fake, ("ROMULUS_FOUNDING_OFFER", "soon")]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_OFFER",
+                ..
+            })
+        ));
+        // Not with Terms older than the offer's (7.11, version 1.1).
+        let stripe = [
+            ("ROMULUS_BILLING", "stripe"),
+            ("STRIPE_SECRET_KEY", "sk_test_abc"),
+            ("STRIPE_WEBHOOK_SECRET", "whsec_abc"),
+            ("ROMULUS_SMTP_HOST", "smtp.example.com"),
+            ("ROMULUS_MAIL_FROM", "romulus <romulus@example.com>"),
+            ("ROMULUS_LEGAL_URL", "https://romulus.example"),
+            ("ROMULUS_LEGAL_CONTACT", "legal@romulus.example"),
+            ("ROMULUS_FOUNDING_OFFER", "true"),
+        ];
+        let terms = |version: &'static str| {
+            let mut vars = stripe.to_vec();
+            vars.push(("ROMULUS_TERMS_VERSION", version));
+            with(&vars)
+        };
+        assert!(matches!(
+            terms("1.0"),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_OFFER",
+                ..
+            })
+        ));
+        assert!(terms("1.1").unwrap().billing.unwrap().founding);
+        assert!(terms("2.0").is_ok());
+        assert!(terms_before("1.0", (1, 1)) && !terms_before("1.10", (1, 1)));
+        assert!(!terms_before("test", (1, 1)) && !terms_before("2.0-test", (1, 1)));
+        // Without billing, it is a mistake.
+        assert!(matches!(
+            with(&[("ROMULUS_FOUNDING_OFFER", "true")]),
+            Err(ConfigError::Invalid {
+                var: "ROMULUS_FOUNDING_OFFER",
                 ..
             })
         ));
