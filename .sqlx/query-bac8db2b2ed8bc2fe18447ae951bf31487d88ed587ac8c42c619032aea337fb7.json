@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT checkout_session_id AS \"session!\" FROM org_billing\n           WHERE org_id = $1 AND checkout_offer_until IS NOT NULL\n             AND checkout_session_id IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "checkout_session_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "bac8db2b2ed8bc2fe18447ae951bf31487d88ed587ac8c42c619032aea337fb7"
+}

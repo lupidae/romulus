@@ -137,8 +137,12 @@ impl Plan {
         Some(format!("{}_{}", self.slug(), interval_word(interval)))
     }
 
-    /// The plan and interval a price's `lookup_key` names.
+    /// The plan and interval a price's `lookup_key` names (an offer's price
+    /// is its plan's: `team_founding_yearly` is Team, yearly).
     pub fn from_lookup_key(key: &str) -> Option<(Self, Interval)> {
+        if let Some((offer, interval)) = Offer::from_lookup_key(key) {
+            return Some((offer.plan, interval));
+        }
         let (slug, interval) = key.rsplit_once('_')?;
         let interval = match interval {
             "monthly" => Interval::Month,
@@ -153,6 +157,72 @@ impl Plan {
     pub fn product_id(self) -> Option<String> {
         (self != Self::Free).then(|| format!("romulus_{}", self.slug()))
     }
+}
+
+/// A price below a plan's own, on the plan's product, for as long as the
+/// subscription stays on it, for the first [`Offer::teams`] organizations:
+/// its own Stripe prices (`team_founding_monthly`, `team_founding_yearly`,
+/// metadata `founding: 1`), which `romulus-api stripe-setup --founding-offer`
+/// makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offer {
+    /// `founding`: the `?offer=` the homepage's link carries, and the API's.
+    pub slug: &'static str,
+    pub plan: Plan,
+    /// Euro cents a month instead of the plan's; a year costs
+    /// [`YEARLY_MONTHS`] of them, as the plan's own yearly price.
+    pub monthly_cents: u32,
+    /// How many organizations get it, every interval together.
+    pub teams: u32,
+}
+
+/// The founding-team offer: Team at €29 a month (€290 a year) instead of
+/// €49 while the subscription stays on Team (Terms 7.11), for the first 20
+/// teams, once per organization. On only with `ROMULUS_FOUNDING_OFFER`.
+pub const FOUNDING: Offer = Offer {
+    slug: "founding",
+    plan: Plan::Team,
+    monthly_cents: 2_900,
+    teams: 20,
+};
+
+impl Offer {
+    /// Euro cents per `interval` with the offer.
+    pub const fn price_cents(self, interval: Interval) -> u32 {
+        match interval {
+            Interval::Month => self.monthly_cents,
+            Interval::Year => self.monthly_cents * YEARLY_MONTHS,
+        }
+    }
+
+    /// Its Stripe price's `lookup_key`: `team_founding_monthly`,
+    /// `team_founding_yearly`.
+    pub fn lookup_key(self, interval: Interval) -> String {
+        format!(
+            "{}_{}_{}",
+            self.plan.slug(),
+            self.slug,
+            interval_word(interval)
+        )
+    }
+
+    /// The offer and interval a price's `lookup_key` names.
+    pub fn from_lookup_key(key: &str) -> Option<(Self, Interval)> {
+        [Interval::Month, Interval::Year]
+            .into_iter()
+            .find(|interval| FOUNDING.lookup_key(*interval) == key)
+            .map(|interval| (FOUNDING, interval))
+    }
+}
+
+/// What a price's `lookup_key` costs, in euro cents per its interval: a
+/// plan's price or an offer's.
+pub fn lookup_cents(key: &str) -> Option<u32> {
+    if let Some((offer, interval)) = Offer::from_lookup_key(key) {
+        return Some(offer.price_cents(interval));
+    }
+    let (plan, interval) = Plan::from_lookup_key(key)?;
+    plan.price_cents(interval)
 }
 
 const fn interval_word(interval: Interval) -> &'static str {
@@ -186,6 +256,32 @@ pub fn size_allowed(largest: PlaygroundSize, size: PlaygroundSize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_founding_offer_is_team_at_29_a_month_for_20_teams() {
+        assert_eq!(FOUNDING.plan, Plan::Team);
+        assert_eq!(FOUNDING.teams, 20);
+        assert_eq!(FOUNDING.price_cents(Interval::Month), 2_900);
+        assert_eq!(FOUNDING.price_cents(Interval::Year), 29_000);
+        assert_eq!(
+            FOUNDING.lookup_key(Interval::Month),
+            "team_founding_monthly"
+        );
+        assert_eq!(FOUNDING.lookup_key(Interval::Year), "team_founding_yearly");
+        // Its prices are Team's, at its own amounts.
+        assert_eq!(
+            Plan::from_lookup_key("team_founding_yearly"),
+            Some((Plan::Team, Interval::Year))
+        );
+        assert_eq!(
+            Offer::from_lookup_key("team_founding_monthly"),
+            Some((FOUNDING, Interval::Month))
+        );
+        assert_eq!(Offer::from_lookup_key("team_monthly"), None);
+        assert_eq!(lookup_cents("team_founding_yearly"), Some(29_000));
+        assert_eq!(lookup_cents("team_yearly"), Some(49_000));
+        assert_eq!(lookup_cents("gold_founding_monthly"), None);
+    }
 
     #[test]
     fn plans_are_ordered_and_each_lifts_what_the_one_before_caps() {

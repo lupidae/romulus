@@ -1207,6 +1207,25 @@ docs/MVP.md "Billing" has the decisions.
   (`billing::webhook`, exempt from CSRF: `csrf::WEBHOOK`) re-read the
   subscription under `billing::lock_org` and store event ids; tests sign
   bodies with `billing::webhook::sign`.
+- **The founding-team offer** (`billing::offer`, `plans::FOUNDING`, Terms
+  7.11): Team on its own two prices (lookup keys `team_founding_monthly`,
+  `team_founding_yearly`, made by `stripe-setup --founding-offer` with a
+  second portal configuration, `romulus: portal_founding`, offering Team at
+  those prices only), on with `ROMULUS_FOUNDING_OFFER`. Checkout uses the
+  founding price for Team when the body says `offer: founding` (the
+  homepage's `?offer=founding`, carried by `features/billing/subscribe.ts`):
+  `offer::reserve` in the checkout's transaction (once per org:
+  `founding_offer_uses`, no FK, 409 `offer_used`; 20 less orgs that had it
+  less held places, `checkout_offer_until`, 409 `offer_ended`, one per
+  person, 409 `offer_held`), the hold written before the session and kept a
+  day past its expiry unless released (`checkout.session.expired`,
+  `POST …/billing/checkout/cancel`, a live subscription stored). The
+  webhook stores `founding` (the price's lookup key) and the use in the
+  subscription's transaction. A founding subscription's portal is its own
+  (`NewPortal::founding`, decided from the live Stripe subscription); off
+  Team it is the usual one; `stripe-setup` keeps it up to date once made.
+  Places left at `GET /api/billing/offers/founding` (no session, 3 s
+  timeout). Never a price change for `founding` rows.
 - **Background tasks** (billing on): `hours::meter` (every minute, playground
   time per organization and UTC month, 80 % email, stop at 100 % through
   `Backend::stop` with a reason) and `notices::run` (hourly: renewal

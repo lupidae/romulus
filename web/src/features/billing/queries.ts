@@ -16,6 +16,7 @@ export type InvoiceSummary = components["schemas"]["InvoiceSummary"];
 export type Buyer = components["schemas"]["Buyer"];
 export type PlanLimitDetails = components["schemas"]["PlanLimitDetails"];
 export type Cap = components["schemas"]["Cap"];
+export type FoundingOffer = components["schemas"]["FoundingOffer"];
 
 export const billingKeys = {
   one: (org: string) => ["orgs", org, "billing"] as const,

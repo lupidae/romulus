@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_billing (org_id, checkout_offer_until) VALUES ($1, now() - interval '1 minute')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "41d450b771dcf3922af0c7aee911b09545a47919eb5f2027ebeeee65cd0a90b8"
+}

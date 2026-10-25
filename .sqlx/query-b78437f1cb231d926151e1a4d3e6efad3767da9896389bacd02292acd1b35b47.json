@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT b.org_id, o.slug, b.plan AS \"plan: Plan\", b.interval AS \"interval!: Interval\",\n                  b.amount_cents AS \"amount!\", b.current_period_end AS \"period_end!\"\n           FROM org_billing b JOIN organizations o ON o.id = b.org_id\n           WHERE b.status IN ('active', 'trialing', 'past_due') AND b.withdrawn_at IS NULL\n             AND NOT b.cancel_at_period_end AND b.subscription_id IS NOT NULL\n             AND b.interval IS NOT NULL AND b.amount_cents IS NOT NULL\n             AND b.current_period_end IS NOT NULL AND b.plan <> 'free'\n           ORDER BY o.slug",
+  "query": "SELECT b.org_id, o.slug, b.plan AS \"plan: Plan\", b.interval AS \"interval!: Interval\",\n                  b.amount_cents AS \"amount!\", b.current_period_end AS \"period_end!\"\n           FROM org_billing b JOIN organizations o ON o.id = b.org_id\n           WHERE b.status IN ('active', 'trialing', 'past_due') AND b.withdrawn_at IS NULL\n             -- A founding-team price is fixed (Terms 7.11): never a price change.\n             AND NOT b.founding\n             AND NOT b.cancel_at_period_end AND b.subscription_id IS NOT NULL\n             AND b.interval IS NOT NULL AND b.amount_cents IS NOT NULL\n             AND b.current_period_end IS NOT NULL AND b.plan <> 'free'\n           ORDER BY o.slug",
   "describe": {
     "columns": [
       {
@@ -104,5 +104,5 @@
       true
     ]
   },
-  "hash": "48b103d138f669004e82b6bc070b23f535ee3cb61b8afee1a17694b39ad7c198"
+  "hash": "b78437f1cb231d926151e1a4d3e6efad3767da9896389bacd02292acd1b35b47"
 }

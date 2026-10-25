@@ -55,11 +55,13 @@ or the admins, are emailed when it is done):
 
 hosted billing (no database needed):
   stripe-setup [--public-url URL] [--terms-url URL] [--privacy-url URL]
-               [--webhook-url URL [--secret-file PATH]] [--live]
+               [--webhook-url URL [--secret-file PATH]] [--founding-offer] [--live]
               products, prices (from the plan table) and the Customer Portal
               in the account of STRIPE_SECRET_KEY, idempotently; a live key
               needs --live. The webhook's secret goes to PATH, never stdout.
-              The Terms and Privacy URLs default to ROMULUS_LEGAL_URL's pages
+              The Terms and Privacy URLs default to ROMULUS_LEGAL_URL's pages.
+              --founding-offer: the founding-team offer's prices (Team at
+              its founding prices) and a founding subscription's portal
 
 the hosted service's notices (ROMULUS_TERMS_VERSION; they need mail):
   legal-notice --document terms|privacy|dpa --version V --effective YYYY-MM-DD
@@ -246,9 +248,10 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
         }
         Some("stripe-setup") => {
             let live = rest.iter().any(|arg| arg == "--live");
+            let founding_offer = rest.iter().any(|arg| arg == "--founding-offer");
             let rest: Vec<String> = rest
                 .iter()
-                .filter(|arg| *arg != "--live")
+                .filter(|arg| *arg != "--live" && *arg != "--founding-offer")
                 .cloned()
                 .collect();
             let mut flags = flags(
@@ -276,6 +279,7 @@ fn parse(args: &[String]) -> Result<Command, MainError> {
                     .or_else(|| legal("/legal/privacy")),
                 webhook_url: flags.remove("webhook-url"),
                 secret_file: flags.remove("secret-file").map(Into::into),
+                founding_offer,
                 live,
             })
         }

@@ -221,6 +221,12 @@ pub(super) async fn receive(
     if event.kind == "checkout.session.completed" {
         note_business(&state, &event.data.object).await?;
     }
+    // Expired unpaid: the founding-team place it held is free again.
+    if event.kind == "checkout.session.expired"
+        && let Some(session) = event.data.object["id"].as_str()
+    {
+        super::offer::release_session(&state.db, session).await?;
+    }
     match subject(&event.kind, &event.data.object) {
         Some((subscription, invoice)) => {
             apply_subscription(&state, &event.id, &event.kind, &subscription, invoice).await?;
@@ -644,6 +650,10 @@ impl Applied<'_> {
     }
 
     /// Stores `next` and audits what changed from `before`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one row written, then what changed audited"
+    )]
     async fn store(
         &self,
         tx: &mut sqlx::PgConnection,
@@ -654,9 +664,9 @@ impl Applied<'_> {
             "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, interval, status,
                                       current_period_end, cancel_at_period_end, amount_cents, currency,
                                       past_due_since, scheduled_plan, scheduled_interval, scheduled_at,
-                                      acceptance_id, started_at, withdrawn_at)
+                                      acceptance_id, started_at, withdrawn_at, founding)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17)
+                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17, $18)
              ON CONFLICT (org_id) DO UPDATE SET
                  customer_id = coalesce(EXCLUDED.customer_id, org_billing.customer_id),
                  subscription_id = EXCLUDED.subscription_id, plan = EXCLUDED.plan,
@@ -667,7 +677,13 @@ impl Applied<'_> {
                  past_due_since = EXCLUDED.past_due_since, scheduled_plan = EXCLUDED.scheduled_plan,
                  scheduled_interval = EXCLUDED.scheduled_interval, scheduled_at = EXCLUDED.scheduled_at,
                  acceptance_id = EXCLUDED.acceptance_id, started_at = EXCLUDED.started_at,
-                 withdrawn_at = EXCLUDED.withdrawn_at,
+                 withdrawn_at = EXCLUDED.withdrawn_at, founding = EXCLUDED.founding,
+                 -- Any live subscription ends the founding place its
+                 -- checkout held (counted by its use from now on).
+                 checkout_offer_until = CASE WHEN $19 THEN NULL
+                     ELSE org_billing.checkout_offer_until END,
+                 checkout_offer_by = CASE WHEN $19 THEN NULL
+                     ELSE org_billing.checkout_offer_by END,
                  updated_at = clock_timestamp()",
             self.org,
             next.customer_id,
@@ -686,9 +702,16 @@ impl Applied<'_> {
             next.acceptance_id,
             next.started_at,
             next.withdrawn_at,
+            next.founding,
+            next.is_live(),
         )
         .execute(&mut *tx)
         .await?;
+        // A live subscription on a founding price is the organization's one
+        // use of the offer (Terms 7.11), kept for good.
+        if next.founding && next.is_live() {
+            super::offer::record_use(&mut *tx, self.org).await?;
+        }
         // The contract a checkout concluded ends with its subscription (over
         // for good, or replaced by another): its record is kept from then.
         let mut over = Vec::new();
@@ -821,6 +844,12 @@ fn from_subscription(
             .item
             .as_ref()
             .and_then(|i| i.unit_amount.map(|a| a * i.quantity.max(1))),
+        // On a founding-team price: the offer's (a price romulus did not
+        // make keeps what the same subscription had).
+        founding: match read.item.as_ref().and_then(|i| i.lookup_key.as_deref()) {
+            Some(key) if named.is_some() => super::plans::Offer::from_lookup_key(key).is_some(),
+            _ => same && before.founding,
+        },
         currency: read.item.as_ref().and_then(|i| i.currency.clone()),
         past_due_since: state::past_due_since(before.past_due_since, &read.status, due, now),
         scheduled_plan: scheduled.map(|s| s.0),

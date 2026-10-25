@@ -1,8 +1,9 @@
 // The site's only script (the homepage, the comparisons and the guides): the
 // header border on scroll, a launch post's welcome, the hero scene starting
-// when it is seen, the live hero, the copy buttons, the theme switch, the
-// visit's source on the links into the app, and what the visit count sends.
-// Everything works without it; it only adds behaviour.
+// when it is seen, the live hero, the copy buttons, the founding offer's
+// count, the theme switch, the visit's source on the links into the app, and
+// what the visit count sends. Everything works without it; it only adds
+// behaviour.
 
 // Header: a hairline once the page scrolls under it.
 const header = document.querySelector("[data-header]");
@@ -213,6 +214,21 @@ for (const button of document.querySelectorAll("[data-copy]")) {
       if (label) label.textContent = "Copy";
     }, 2000);
   });
+}
+
+// An offer's line on its plan (the founding teams', on Team): shown with how
+// many places are left once the API says some are (its count is a few
+// minutes old at most). Off, sold out, or no answer: it stays hidden.
+for (const offer of document.querySelectorAll("[data-offer]")) {
+  fetch(offer.dataset.offer, { headers: { Accept: "application/json" } })
+    .then((response) => (response.ok ? response.json() : null))
+    .then((found) => {
+      const left = found?.left;
+      if (!Number.isInteger(left) || left <= 0) return;
+      for (const count of offer.querySelectorAll("[data-offer-left]")) count.textContent = String(left);
+      offer.hidden = false;
+    })
+    .catch(() => {});
 }
 
 // Theme: the same key and values as the app (web/src/lib/theme.ts), so a

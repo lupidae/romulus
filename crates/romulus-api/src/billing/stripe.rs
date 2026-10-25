@@ -87,6 +87,9 @@ pub struct NewCheckout {
     /// A business buys: the payment page requires its name (the business
     /// named there is the Customer, Terms 3.5).
     pub business: bool,
+    /// When the session expires (Unix seconds): a founding-team one holds
+    /// its place until then, about 30 minutes; `None`, Stripe's default.
+    pub expires_at: Option<i64>,
 }
 
 /// A Checkout Session, as romulus keeps it.
@@ -174,6 +177,9 @@ pub struct NewPortal {
     pub customer: String,
     pub return_url: String,
     pub flow: Option<PortalFlow>,
+    /// The subscription is on a founding-team price: the portal's own
+    /// configuration offers Team at the founding prices only.
+    pub founding: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -563,6 +569,10 @@ fn checkout_form(checkout: &NewCheckout) -> Form {
         .set("automatic_tax[enabled]", "false")
         .set("success_url", &checkout.success_url)
         .set("cancel_url", &checkout.cancel_url);
+    let form = match checkout.expires_at {
+        Some(at) => form.set("expires_at", at.to_string()),
+        None => form,
+    };
     // A business's name, required on the page (Stripe refuses `optional`
     // without `enabled`, so a consumer's form names neither).
     if checkout.business {
@@ -968,7 +978,7 @@ impl StripeApi for Http {
     fn portal(&self, portal: NewPortal) -> BoxFuture<'_, Result<String, StripeError>> {
         Box::pin(async move {
             let mut form = portal_form(&portal);
-            if let Some(configuration) = self.portal_configuration().await? {
+            if let Some(configuration) = self.portal_configuration(portal.founding).await? {
                 form = form.set("configuration", configuration);
             }
             let session = self.post("billing_portal/sessions", form.pairs()).await?;
@@ -1012,8 +1022,10 @@ impl StripeApi for Http {
 
 impl Http {
     /// The portal configuration `stripe-setup` made (metadata `romulus:
-    /// portal`), or the account's default when there is none.
-    async fn portal_configuration(&self) -> Result<Option<String>, StripeError> {
+    /// portal`, or `portal_founding` for a founding-team subscription: Team
+    /// at the founding prices), or the account's default when there is none.
+    async fn portal_configuration(&self, founding: bool) -> Result<Option<String>, StripeError> {
+        let wanted = if founding { PORTAL_FOUNDING } else { PORTAL };
         let list = self
             .get(
                 "billing_portal/configurations",
@@ -1023,12 +1035,19 @@ impl Http {
                 ],
             )
             .await?;
-        Ok(list["data"]
+        let found = list["data"]
             .as_array()
             .into_iter()
             .flatten()
-            .find(|c| c["metadata"]["romulus"] == "portal")
-            .and_then(|c| text(&c["id"])))
+            .find(|c| c["metadata"]["romulus"] == wanted)
+            .and_then(|c| text(&c["id"]));
+        if found.is_none() && founding {
+            // Never the usual one: it would offer Team at its own price.
+            return Err(StripeError::Unexpected(
+                "no founding-team portal configuration: run `romulus-api stripe-setup --founding-offer`".into(),
+            ));
+        }
+        Ok(found)
     }
 }
 
@@ -1110,9 +1129,19 @@ impl Fake {
             return None;
         }
         let id = self.id("sub");
+        // An expired session cannot be paid.
+        if checkout
+            .expires_at
+            .is_some_and(|at| at <= Utc::now().timestamp())
+        {
+            self.state()
+                .session_status
+                .insert(session.to_owned(), "expired".into());
+            return None;
+        }
         let lookup_key = checkout.price.trim_start_matches("price_").to_owned();
         let year = lookup_key.ends_with("_yearly");
-        let (plan, interval) = crate::domain::Plan::from_lookup_key(&lookup_key)?;
+        let cents = super::plans::lookup_cents(&lookup_key)?;
         let subscription = Subscription {
             id: id.clone(),
             customer: checkout.customer.clone(),
@@ -1125,7 +1154,7 @@ impl Fake {
                 id: self.id("si"),
                 price: checkout.price.clone(),
                 lookup_key: Some(lookup_key),
-                unit_amount: plan.price_cents(interval).map(i64::from),
+                unit_amount: Some(i64::from(cents)),
                 currency: Some("eur".into()),
                 quantity: 1,
             }),
@@ -1198,6 +1227,11 @@ impl Fake {
         all.last().map(|(id, c)| ((*id).clone(), (*c).clone()))
     }
 }
+
+/// The `metadata.romulus` of the portal configurations `stripe-setup`
+/// makes: the usual one, and a founding-team subscription's.
+pub const PORTAL: &str = "portal";
+pub const PORTAL_FOUNDING: &str = "portal_founding";
 
 /// The fake's portal URLs: Stripe's host, so a test sees where the button
 /// goes (and the e2e suite intercepts it).
@@ -1603,6 +1637,7 @@ mod tests {
             flow: Some(PortalFlow::Cancel {
                 subscription: "sub_1".into(),
             }),
+            founding: false,
         });
         let pairs: HashMap<_, _> = form.pairs().iter().cloned().collect();
         assert_eq!(pairs["flow_data[type]"], "subscription_cancel");
@@ -1626,6 +1661,7 @@ mod tests {
             locale: Locale::Fr,
             edition: crate::domain::TermsEdition::Professional,
             business: true,
+            expires_at: None,
         });
         let pairs: HashMap<_, _> = form.pairs().iter().cloned().collect();
         assert_eq!(pairs["mode"], "subscription");
@@ -1665,6 +1701,7 @@ mod tests {
                 locale: Locale::En,
                 edition: crate::domain::TermsEdition::Full,
                 business: true,
+                expires_at: Some(1_800_001_800),
             }
         });
         assert!(
@@ -1673,6 +1710,10 @@ mod tests {
                 .iter()
                 .all(|(key, _)| !key.starts_with("name_collection"))
         );
+        // A founding-team session holds its place for a while only.
+        let consumer: HashMap<_, _> = consumer.pairs().iter().cloned().collect();
+        assert_eq!(consumer["expires_at"], "1800001800");
+        assert!(!pairs.contains_key("expires_at"));
     }
 
     #[test]

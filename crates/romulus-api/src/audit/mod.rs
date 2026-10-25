@@ -170,6 +170,9 @@ pub struct BillingAudit {
     pub amount_cents: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
+    /// The offer a checkout applied (`founding`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<String>,
     /// The month whose playground hours ran out (`2026-10`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub month: Option<String>,

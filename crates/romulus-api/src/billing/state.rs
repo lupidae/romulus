@@ -50,6 +50,9 @@ pub struct Stored {
     pub current_period_end: Option<DateTime<Utc>>,
     pub cancel_at_period_end: bool,
     pub amount_cents: Option<i64>,
+    /// On a founding-team price (`plans::FOUNDING`): `amount_cents` is the
+    /// offer's, which no price change of the plan table touches.
+    pub founding: bool,
     pub currency: Option<String>,
     pub past_due_since: Option<DateTime<Utc>>,
     pub scheduled_plan: Option<Plan>,

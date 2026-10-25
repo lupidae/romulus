@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM org_billing\n                          WHERE checkout_offer_by = $1 AND checkout_offer_until > now()\n                            AND org_id <> $2) AS \"held!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "18250eeaf544ec8a01eb6a89c33a2565e13932d65ea9c82e352b6b8622ba8a9a"
+}

@@ -1160,6 +1160,8 @@ pub async fn price_changes(
                   b.amount_cents AS "amount!", b.current_period_end AS "period_end!"
            FROM org_billing b JOIN organizations o ON o.id = b.org_id
            WHERE b.status IN ('active', 'trialing', 'past_due') AND b.withdrawn_at IS NULL
+             -- A founding-team price is fixed (Terms 7.11): never a price change.
+             AND NOT b.founding
              AND NOT b.cancel_at_period_end AND b.subscription_id IS NOT NULL
              AND b.interval IS NOT NULL AND b.amount_cents IS NOT NULL
              AND b.current_period_end IS NOT NULL AND b.plan <> 'free'

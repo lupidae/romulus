@@ -175,6 +175,10 @@ export default defineConfig({
             // Anyone may create a password account (e2e/billing/subscribe:
             // a plan chosen before signing up follows the emailed link).
             ROMULUS_SIGNUP: "open",
+            // The founding-team offer on (the fake prices its lookup keys),
+            // with the Terms that have it (7.11, version 1.1).
+            ROMULUS_FOUNDING_OFFER: "true",
+            ROMULUS_TERMS_VERSION: "1.1",
           }),
         ]
       : []),

@@ -12,6 +12,11 @@
 // are both periods' buttons of a paid plan: each leads to subscribing to it
 // (`subscribe`?plan=<id>&interval=month|year, the API's plan ids), the
 // period shown being the one the visitor chose; Free's to `signup`.
+//
+// A plan may carry an `offer` (the founding-team offer on Team): a line under
+// its button, hidden in the HTML, that app.js shows once the API's `count`
+// endpoint says places are left, with how many; its links add `&offer=<id>`.
+// Off, sold out or unreachable, the line stays hidden.
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -37,13 +42,31 @@ export function readPlans(html) {
     for (const { key } of data.limits)
       if (plan.limits?.[key] === undefined)
         throw new Error(`#plans-data: plan ${plan.id} has no limit "${key}"`);
+    if (plan.offer)
+      for (const key of ["id", "label", "monthly", "teams", "count"])
+        if (plan.offer[key] === undefined)
+          throw new Error(`#plans-data: plan ${plan.id}'s offer has no "${key}"`);
   }
   return data;
 }
 
-/** Where a paid plan's button leads for `interval` (`month` or `year`): the app's subscribe link. */
-export const subscribeHref = (data, plan, interval) =>
-  `${data.subscribe}?plan=${encodeURIComponent(plan.id)}&interval=${interval}`;
+/**
+ * Where a paid plan's button leads for `interval` (`month` or `year`): the app's
+ * subscribe link, with `offer` (an offer's id) when it is that offer's.
+ */
+export const subscribeHref = (data, plan, interval, offer) =>
+  `${data.subscribe}?plan=${encodeURIComponent(plan.id)}&interval=${interval}` +
+  (offer ? `&offer=${encodeURIComponent(offer)}` : "");
+
+/**
+ * An offer's line on `plan`, as each period shows it: "Founding teams: 29 € a month
+ * while you stay on Team, 20 of 20 left" (the Terms' 7.11 says what ends it).
+ */
+export const offerLine = (data, plan, interval, left = plan.offer.teams) => {
+  const { offer } = plan;
+  const amount = interval === "month" ? offer.monthly : offer.monthly * data.yearly_months;
+  return `${offer.label}: ${price(amount, data.currency)} a ${interval} while you stay on ${plan.name}, ${left} of ${offer.teams} left`;
+};
 
 /**
  * The analytics event a sign-up button sends (Umami reads `data-umami-event`
@@ -70,6 +93,19 @@ export function render(data) {
             `<a class="button ${look} per-${interval}" href="${escape(subscribeHref(data, plan, interval))}"${signupEvent(plan, interval)}>${escape(plan.action)}</a>`,
         )
       : [`<a class="button ${look}" href="${escape(data.signup)}"${signupEvent(plan)}>${escape(plan.action)}</a>`];
+    if (plan.offer) {
+      const { offer } = plan;
+      const links = ["month", "year"].map((interval) => {
+        const [label, rest] = offerLine(data, plan, interval).split(/: (.*)/s);
+        const words = escape(rest)
+          .replace(/\u00a0/g, "&nbsp;")
+          // "7 of 20 left" never breaks.
+          .replace(` ${offer.teams} of ${offer.teams} left`, ` <span data-offer-left>${offer.teams}</span>&nbsp;of&nbsp;${offer.teams}&nbsp;left`);
+        const event = `${signupEvent(plan, interval)} data-umami-event-offer="${escape(offer.id)}"`;
+        return `  <a class="per-${interval}" href="${escape(subscribeHref(data, plan, interval, offer.id))}"${event}><b>${escape(label)}:</b> ${words}</a>`;
+      });
+      actions.push(`<p class="plan-offer" data-offer="${escape(offer.count)}" hidden>`, ...links, `</p>`);
+    }
     if (plan.talk) actions.push(`<a class="plan-talk" href="${escape(data.talk)}">Talk to us</a>`);
     const lines = [
       `<article class="plan${plan.recommended ? " is-recommended" : ""}" aria-labelledby="${id}">`,

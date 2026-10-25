@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api, unwrap } from "@/api/client";
+import { api, succeed, unwrap } from "@/api/client";
 import type { components } from "@/api/schema.gen";
 
 import { billingKeys } from "./queries";
@@ -19,6 +19,17 @@ export function useStartCheckout(org: string) {
   return useMutation({
     mutationFn: (body: StartCheckout) =>
       unwrap(api.POST("/api/orgs/{org}/billing/checkout", { params: { path: { org } }, body })),
+  });
+}
+
+/**
+ * Back from Stripe's payment page unpaid: the founding-team place its
+ * checkout held goes back (its session expired first).
+ */
+export function useCancelCheckout(org: string) {
+  return useMutation({
+    mutationFn: () =>
+      succeed(api.POST("/api/orgs/{org}/billing/checkout/cancel", { params: { path: { org } } })),
   });
 }
 

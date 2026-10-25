@@ -1116,6 +1116,67 @@ cancelled. Nothing was charged."). An unknown or Free plan, or billing off
 An organization already subscribed is told so, the plan picker showing the
 period asked, and changes plan through the portal as usual.
 
+### The founding-team offer (decided 2026-10-24, built: task MKT-OFFER)
+
+Team at €29 a month (€290 a year) instead of €49, a fixed price for as long
+as the subscription stays active on Team without interruption, for the first
+20 teams, once per organization (`billing::plans::FOUNDING`, the plan
+table's; the Terms' 7.11 since version 1.1). On with `ROMULUS_FOUNDING_OFFER`.
+
+- **Dedicated prices, not coupons.** Team's product has two more prices,
+  `team_founding_monthly` (€29) and `team_founding_yearly` (€290), metadata
+  `founding: 1`, made by `romulus-api stripe-setup --founding-offer` (an
+  existing one with another amount, currency, interval or product is an
+  error: prices never change), found by their lookup keys. Every invoice,
+  proration and credit is then at the price actually paid: monthly to
+  yearly is charged €290 less the unused part of the month paid, an upgrade
+  to Business credits what was paid. A coupon could not do that (a
+  monthly €20 coupon still attached at the switch overcharges the year by
+  €180), so this replaced the first design's coupons and promotion codes.
+- **Moving between monthly and yearly** keeps the offer: a founding
+  subscription's Customer Portal is a second configuration (`romulus:
+  portal_founding`) that offers Team at its two founding prices only, and
+  Starter and Business at theirs; the billing page's "change plan" confirms
+  the founding price of the period asked. Moving off Team ends it for good:
+  the subscription is no longer on a founding price, so its portal is the
+  usual one, Team at €49. Cancelled or withdrawn, it ends with the
+  subscription.
+- **The link** is the subscribe link plus `&offer=founding`, carried like
+  `plan` and `interval` (sign-in, the Terms, `/new`, the billing page) and
+  dropped for any plan but Team. The checkout dialog and the plan picker
+  show the founding price against Team's own (a founding subscriber's
+  picker shows Team at its founding prices, from its subscription, whether
+  or not the offer is still open). Asked for with another plan, it is
+  ignored; asked for Team with the offer off, 409 `offer_ended`: never
+  charged at €49 unasked.
+- **Places**: 20 less the organizations that ever had a founding
+  subscription (`founding_offer_uses`, stored with the first one, no
+  foreign key: a deleted organization keeps its place taken; once per
+  organization, 409 `offer_used` after) less the places held by founding
+  checkouts. A founding session expires 31 minutes after it is made
+  (`expires_at`, part of its idempotency key; Stripe takes 30 at least); its
+  place is held from before the session is made until a day past that
+  (`org_billing.checkout_offer_until`: a last-minute payment whose webhook
+  is late still counts), released earlier when Stripe says it expired
+  (`checkout.session.expired`), when the buyer comes back cancelled (the
+  billing page calls `POST …/billing/checkout/cancel`, which expires the
+  session first), or when a live subscription is stored. One place held per
+  person at a time (`checkout_offer_by`, 409 `offer_held`). A checkout
+  decides under the offer's advisory lock: 409 `offer_ended` when none is
+  left (the dialog then shows Team's price). The homepage's
+  `GET /api/billing/offers/founding` (no session) counts the same, within
+  3 s. Stripe's `first_time_transaction` is not used: once per organization
+  is our own record, and it would refuse an organization that had paid for
+  any plan before. The founding portal and the price "change plan" confirms
+  are chosen from the subscription Stripe has now, not the stored flag.
+  `ROMULUS_FOUNDING_OFFER` is refused with Terms older than 1.1.
+- **What a subscription costs** is its price: `amount_cents` is €29 or
+  €290, `org_billing.founding` says it is a founding price, and the price
+  changes of the plan table never apply to it.
+- **The homepage**: the Team card's line "Founding teams: 29 € a month while
+  you stay on Team, N of 20 left", hidden in the HTML and shown
+  by `app.js` only while the count says places are left.
+
 ## Legal: terms, checkout, withdrawal (decided 2026-10-21, built: task COMPLY)
 
 The hosted service's contract, as its documents (published by the homepage,
@@ -1123,8 +1184,9 @@ The hosted service's contract, as its documents (published by the homepage,
 `ROMULUS_LEGAL_URL`, the site, and `ROMULUS_LEGAL_CONTACT`, the seller's
 address); billing needs it; a self-hosted install has no Terms at all. The
 hosted service runs `ROMULUS_TERMS_VERSION=1.0` (the documents' version
-1.0 of 21 October 2026); a new version of the documents is a new value, and
-its PDFs (`crates/romulus-api/legal`, `just site-legal`).
+1.0 of 21 October 2026; 1.1 of 24 October 2026 adds the founding-team offer,
+7.11); a new version of the documents is a new value, and its PDFs
+(`crates/romulus-api/legal`, `just site-legal`).
 
 - **Two editions of the Terms.** Launch: professionals only, on every plan
   (`ROMULUS_CONSUMER_SALES` off, the default): the professional edition at

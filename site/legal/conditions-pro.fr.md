@@ -1,7 +1,7 @@
 # Conditions générales d'utilisation et de vente de romulus
 
-**Version :** 1.0
-**Date d'entrée en vigueur :** 21 octobre 2026
+**Version :** 1.1
+**Date d'entrée en vigueur :** 24 octobre 2026
 
 Les présentes conditions générales d'utilisation et de vente (les « **Conditions** ») régissent l'accès au service hébergé romulus, disponible à l'adresse **https://romulus.lupidae.com** (le « **Service** »), et son utilisation.
 
@@ -176,6 +176,8 @@ c) **Les Offres mensuelles** peuvent être résiliées à tout moment, avec effe
 7.9. **Retard de paiement.** Toute somme non payée à l'échéance porte de plein droit, à compter du lendemain de l'échéance et sans qu'un rappel soit nécessaire, des pénalités de retard au taux de trois fois le taux d'intérêt légal. Une indemnité forfaitaire pour frais de recouvrement de 40 euros est en outre due pour chaque facture impayée. Lorsque les frais de recouvrement exposés sont supérieurs, une indemnisation complémentaire peut être demandée sur justification (articles L441-10 et D441-5 du Code de commerce).
 
 7.10. **Factures.** Les factures sont émises sous forme électronique et sont disponibles par e-mail et dans le portail de facturation (« Manage billing »). Elles portent la mention « TVA non applicable, art. 293 B du CGI ». Lorsque la facturation électronique deviendra obligatoire pour nous, les factures adressées aux entreprises établies en France seront émises sous la forme électronique requise, et vous vous engagez à nous communiquer les informations nécessaires, telles que votre numéro SIREN.
+
+7.11. **Offre équipes fondatrices.** Les 20 premières Organisations qui souscrivent l'Offre Team au moyen de l'offre équipes fondatrices (le lien de la page tarifs, tant qu'elle affiche des places restantes) paient 29 euros par mois ou 290 euros par an au lieu du prix de l'Offre Team. Ce prix est fixe : l'article 7.6 ne s'y applique pas, tant que l'abonnement reste actif sur l'Offre Team sans interruption. Le passage d'une Période de facturation mensuelle à une Période annuelle, ou l'inverse, le conserve. L'offre prend fin définitivement en cas de résiliation de l'abonnement (à la fin de sa Période de facturation, article 8.1), de fin du contrat (articles 9.1 et 15) ou de passage de l'abonnement à une autre Offre ; une souscription ultérieure à l'Offre Team se fait à son prix en vigueur. L'offre ne peut être utilisée qu'une fois par Organisation. Une place vous est réservée tant que la page de paiement est ouverte, pendant 30 minutes environ.
 
 ## 8. Résiliation et remboursement
 

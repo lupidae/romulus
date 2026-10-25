@@ -12,15 +12,24 @@
 //!   payment method, the invoice history, the customer's details;
 //! - with `--webhook-url`, the webhook endpoint and its events (its signing
 //!   secret written to `--secret-file`, mode 0600, never printed); without,
-//!   the URL and events to register.
+//!   the URL and events to register;
+//! - with `--founding-offer`, the founding-team offer (`plans::FOUNDING`):
+//!   Team's two founding prices (`team_founding_monthly`,
+//!   `team_founding_yearly`, metadata `founding: 1`), made once and checked
+//!   after (a price is never changed: one with another amount, currency,
+//!   interval or product is an error), and the Customer Portal configuration
+//!   of a founding subscription (metadata `romulus: portal_founding`): the
+//!   same as the usual one, but Team at its founding prices, so moving
+//!   between monthly and yearly keeps the offer and every proration is at
+//!   the price paid.
 //!
 //! It reads `STRIPE_SECRET_KEY` and refuses a live key unless `--live`.
 
 use std::{fmt::Write as _, io::Write};
 
 use super::{
-    plans::{PAID, YEARLY_MONTHS},
-    stripe::{Form, Http, StripeError},
+    plans::{FOUNDING, Offer, PAID, YEARLY_MONTHS},
+    stripe::{Form, Http, PORTAL, PORTAL_FOUNDING, StripeError},
 };
 use crate::{
     config::Secret,
@@ -28,8 +37,9 @@ use crate::{
 };
 
 /// The events romulus handles (`billing::webhook`).
-pub const EVENTS: [&str; 6] = [
+pub const EVENTS: [&str; 7] = [
     "checkout.session.completed",
+    "checkout.session.expired",
     "customer.subscription.created",
     "customer.subscription.updated",
     "customer.subscription.deleted",
@@ -44,6 +54,8 @@ pub struct Setup {
     pub privacy_url: Option<String>,
     pub webhook_url: Option<String>,
     pub secret_file: Option<std::path::PathBuf>,
+    /// The founding-team offer's prices and portal configuration too.
+    pub founding_offer: bool,
     pub live: bool,
 }
 
@@ -57,6 +69,10 @@ pub enum SetupError {
     Stripe(#[from] StripeError),
     #[error("writing the webhook secret")]
     Io(#[from] std::io::Error),
+    #[error(
+        "price {0} exists with other terms ({1}); prices never change: archive it and remove its lookup key in the Dashboard, then run again"
+    )]
+    FoundingPrice(String, String),
 }
 
 fn product_description(plan: Plan) -> String {
@@ -178,13 +194,159 @@ pub async fn run(
     }
     writeln!(out, "yearly prices are {YEARLY_MONTHS} months")?;
 
-    portal(setup, &stripe, &prices, out).await?;
+    portal(setup, &stripe, &prices, PORTAL, out).await?;
+    // The founding portal follows the other plans' prices too, made once
+    // with --founding-offer.
+    if setup.founding_offer || portal_id(&stripe, PORTAL_FOUNDING).await?.is_some() {
+        founding_offer(setup, &stripe, prices, setup.founding_offer, out).await?;
+    }
     webhook(setup, &stripe, out).await?;
     Ok(())
 }
 
+/// The founding-team offer's prices (made when `create`), and a founding
+/// subscription's portal: Team at the founding prices, the other plans at
+/// theirs.
+async fn founding_offer(
+    setup: &Setup,
+    stripe: &Http,
+    prices: Vec<(Plan, Vec<String>)>,
+    create: bool,
+    out: &mut impl Write,
+) -> Result<(), SetupError> {
+    let Some(founding) = founding_prices(stripe, FOUNDING, create, out).await? else {
+        writeln!(
+            out,
+            "portal configuration {PORTAL_FOUNDING}: left as it is, the founding prices are missing (run with --founding-offer)"
+        )?;
+        return Ok(());
+    };
+    let prices: Vec<(Plan, Vec<String>)> = prices
+        .into_iter()
+        .map(|(plan, ids)| {
+            if plan == FOUNDING.plan {
+                (plan, founding.clone())
+            } else {
+                (plan, ids)
+            }
+        })
+        .collect();
+    portal(setup, stripe, &prices, PORTAL_FOUNDING, out).await
+}
+
+/// What is wrong with an existing price for `offer` and `interval`, if
+/// anything: its amount, currency, interval or product.
+fn price_mismatch(found: &serde_json::Value, offer: Offer, interval: Interval) -> Option<String> {
+    let cents = i64::from(offer.price_cents(interval));
+    let product = offer.plan.product_id().unwrap_or_default();
+    let mut wrong = Vec::new();
+    if found["unit_amount"].as_i64() != Some(cents) {
+        wrong.push(format!(
+            "amount {} instead of {cents}",
+            found["unit_amount"]
+        ));
+    }
+    if found["currency"] != "eur" {
+        wrong.push(format!("currency {} instead of eur", found["currency"]));
+    }
+    if found["recurring"]["interval"] != interval_word(interval) {
+        wrong.push(format!(
+            "interval {} instead of {}",
+            found["recurring"]["interval"],
+            interval_word(interval)
+        ));
+    }
+    if found["product"] != product.as_str() {
+        wrong.push(format!("product {} instead of {product}", found["product"]));
+    }
+    (!wrong.is_empty()).then(|| wrong.join(", "))
+}
+
+/// The offer's prices on its plan's product, monthly then yearly, made when
+/// missing and `create` (else `None`); an existing one with other terms is
+/// an error.
+async fn founding_prices(
+    stripe: &Http,
+    offer: Offer,
+    create: bool,
+    out: &mut impl Write,
+) -> Result<Option<Vec<String>>, SetupError> {
+    let mut ids = Vec::new();
+    for interval in [Interval::Month, Interval::Year] {
+        let lookup_key = offer.lookup_key(interval);
+        let cents = offer.price_cents(interval);
+        let found = stripe
+            .get(
+                "prices",
+                &[
+                    ("lookup_keys[]".into(), lookup_key.clone()),
+                    ("active".into(), "true".into()),
+                ],
+            )
+            .await?;
+        let current = &found["data"][0];
+        let id = if current.is_object() {
+            if let Some(wrong) = price_mismatch(current, offer, interval) {
+                return Err(SetupError::FoundingPrice(lookup_key, wrong));
+            }
+            writeln!(out, "price {lookup_key}: up to date ({cents} cents)")?;
+            current["id"].as_str().unwrap_or_default().to_owned()
+        } else if !create {
+            return Ok(None);
+        } else {
+            let created = stripe
+                .post(
+                    "prices",
+                    Form::new()
+                        .set("product", offer.plan.product_id().unwrap_or_default())
+                        .set("currency", "eur")
+                        .set("unit_amount", cents.to_string())
+                        .set("recurring[interval]", interval_word(interval))
+                        .set("lookup_key", &lookup_key)
+                        .set(
+                            "nickname",
+                            format!(
+                                "{} {}ly, founding team",
+                                offer.plan.name(),
+                                interval_word(interval)
+                            ),
+                        )
+                        .set("metadata[romulus_plan]", offer.plan.slug())
+                        .set("metadata[romulus_offer]", offer.slug)
+                        .set("metadata[founding]", "1")
+                        .set("tax_behavior", "unspecified")
+                        .pairs(),
+                )
+                .await?;
+            writeln!(out, "price {lookup_key}: created ({cents} cents)")?;
+            created["id"].as_str().unwrap_or_default().to_owned()
+        };
+        ids.push(id);
+    }
+    Ok(Some(ids))
+}
+
+/// The id of the portal configuration `stripe-setup` made of `kind`.
+async fn portal_id(stripe: &Http, kind: &str) -> Result<Option<String>, SetupError> {
+    let list = stripe
+        .get(
+            "billing_portal/configurations",
+            &[
+                ("active".into(), "true".into()),
+                ("limit".into(), "100".into()),
+            ],
+        )
+        .await?;
+    Ok(list["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c["metadata"]["romulus"] == kind)
+        .and_then(|c| c["id"].as_str().map(str::to_owned)))
+}
+
 /// The portal's settings, apart from the plans it may switch between.
-fn portal_form() -> Form {
+fn portal_form(kind: &str) -> Form {
     let mut form = Form::new()
         .set("business_profile[headline]", "romulus: plans and invoices")
         .set("features[customer_update][enabled]", "true")
@@ -220,7 +382,7 @@ fn portal_form() -> Form {
             "features[subscription_update][schedule_at_period_end][conditions][1][type]",
             "shortening_interval",
         )
-        .set("metadata[romulus]", "portal");
+        .set("metadata[romulus]", kind);
     // Stripe requires the reasons even with the survey off (a create without
     // them is refused); they are never shown.
     for (n, reason) in CANCELLATION_REASONS.iter().enumerate() {
@@ -238,9 +400,10 @@ async fn portal(
     setup: &Setup,
     stripe: &Http,
     prices: &[(Plan, Vec<String>)],
+    kind: &str,
     out: &mut impl Write,
 ) -> Result<(), SetupError> {
-    let mut form = portal_form();
+    let mut form = portal_form(kind);
     for (n, (plan, ids)) in prices.iter().enumerate() {
         form = form
             .set(
@@ -273,33 +436,19 @@ async fn portal(
             format!("{}/app/", public.trim_end_matches('/')),
         );
     }
-    let list = stripe
-        .get(
-            "billing_portal/configurations",
-            &[
-                ("active".into(), "true".into()),
-                ("limit".into(), "100".into()),
-            ],
-        )
-        .await?;
-    let existing = list["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|c| c["metadata"]["romulus"] == "portal")
-        .and_then(|c| c["id"].as_str().map(str::to_owned));
+    let existing = portal_id(stripe, kind).await?;
     if let Some(id) = existing {
         stripe
             .post(&format!("billing_portal/configurations/{id}"), form.pairs())
             .await?;
-        writeln!(out, "portal configuration {id}: up to date")?;
+        writeln!(out, "portal configuration {kind} {id}: up to date")?;
     } else {
         let created = stripe
             .post("billing_portal/configurations", form.pairs())
             .await?;
         writeln!(
             out,
-            "portal configuration {}: created",
+            "portal configuration {kind} {}: created",
             created["id"].as_str().unwrap_or("?")
         )?;
     }
@@ -398,6 +547,24 @@ mod tests {
             run(&Setup::default(), None, &mut out).await.unwrap_err(),
             SetupError::NoKey
         ));
+    }
+
+    #[test]
+    fn an_existing_founding_price_with_other_terms_is_refused() {
+        let right = serde_json::json!({"unit_amount": 2900, "currency": "eur",
+            "recurring": {"interval": "month"}, "product": "romulus_team"});
+        assert_eq!(price_mismatch(&right, FOUNDING, Interval::Month), None);
+        let wrong = price_mismatch(&right, FOUNDING, Interval::Year).unwrap();
+        assert!(wrong.contains("amount 2900 instead of 29000"), "{wrong}");
+        assert!(wrong.contains("interval"), "{wrong}");
+        let mut usd = right.clone();
+        usd["currency"] = "usd".into();
+        usd["product"] = "romulus_business".into();
+        let wrong = price_mismatch(&usd, FOUNDING, Interval::Month).unwrap();
+        assert!(
+            wrong.contains("currency") && wrong.contains("product"),
+            "{wrong}"
+        );
     }
 
     #[test]

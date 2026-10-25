@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT customer_id, subscription_id, plan AS \"plan: Plan\",\n                  interval AS \"interval: Interval\", status, current_period_end,\n                  cancel_at_period_end, amount_cents, currency, past_due_since,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at, updated_at,\n                  acceptance_id, started_at, withdrawn_at\n           FROM org_billing WHERE org_id = $1",
+  "query": "SELECT customer_id, subscription_id, plan AS \"plan: Plan\",\n                  interval AS \"interval: Interval\", status, current_period_end,\n                  cancel_at_period_end, amount_cents, founding, currency, past_due_since,\n                  scheduled_plan AS \"scheduled_plan: Plan\",\n                  scheduled_interval AS \"scheduled_interval: Interval\", scheduled_at, updated_at,\n                  acceptance_id, started_at, withdrawn_at\n           FROM org_billing WHERE org_id = $1",
   "describe": {
     "columns": [
       {
@@ -115,6 +115,17 @@
       },
       {
         "ordinal": 8,
+        "name": "founding",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "org_billing",
+            "name": "founding"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
         "name": "currency",
         "type_info": "Text",
         "origin": {
@@ -125,7 +136,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "past_due_since",
         "type_info": "Timestamptz",
         "origin": {
@@ -136,7 +147,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "scheduled_plan: Plan",
         "type_info": {
           "Custom": {
@@ -159,7 +170,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "scheduled_interval: Interval",
         "type_info": {
           "Custom": {
@@ -180,7 +191,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "scheduled_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -191,7 +202,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -202,7 +213,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "acceptance_id",
         "type_info": "Uuid",
         "origin": {
@@ -213,7 +224,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 16,
         "name": "started_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -224,7 +235,7 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 17,
         "name": "withdrawn_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -249,6 +260,7 @@
       true,
       false,
       true,
+      false,
       true,
       true,
       true,
@@ -260,5 +272,5 @@
       true
     ]
   },
-  "hash": "c9396c00eeb1d1ecd4496146ac3a16bb6e5f84d0f8294fd3f7dcf6c3e26913f9"
+  "hash": "294dba48e6c38cbe7f1df569fcaabf63495ebfec56a57cb5d019cfda4d39a0d7"
 }

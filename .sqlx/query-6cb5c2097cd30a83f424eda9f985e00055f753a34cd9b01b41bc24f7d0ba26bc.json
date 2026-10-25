@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_billing (org_id, customer_id, subscription_id, plan, interval, status,\n                                      current_period_end, cancel_at_period_end, amount_cents, currency,\n                                      past_due_since, scheduled_plan, scheduled_interval, scheduled_at,\n                                      acceptance_id, started_at, withdrawn_at, founding)\n             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,\n                     (SELECT id FROM legal_acceptances WHERE id = $15), $16, $17, $18)\n             ON CONFLICT (org_id) DO UPDATE SET\n                 customer_id = coalesce(EXCLUDED.customer_id, org_billing.customer_id),\n                 subscription_id = EXCLUDED.subscription_id, plan = EXCLUDED.plan,\n                 interval = EXCLUDED.interval, status = EXCLUDED.status,\n                 current_period_end = EXCLUDED.current_period_end,\n                 cancel_at_period_end = EXCLUDED.cancel_at_period_end,\n                 amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency,\n                 past_due_since = EXCLUDED.past_due_since, scheduled_plan = EXCLUDED.scheduled_plan,\n                 scheduled_interval = EXCLUDED.scheduled_interval, scheduled_at = EXCLUDED.scheduled_at,\n                 acceptance_id = EXCLUDED.acceptance_id, started_at = EXCLUDED.started_at,\n                 withdrawn_at = EXCLUDED.withdrawn_at, founding = EXCLUDED.founding,\n                 -- Any live subscription ends the founding place its\n                 -- checkout held (counted by its use from now on).\n                 checkout_offer_until = CASE WHEN $19 THEN NULL\n                     ELSE org_billing.checkout_offer_until END,\n                 checkout_offer_by = CASE WHEN $19 THEN NULL\n                     ELSE org_billing.checkout_offer_by END,\n                 updated_at = clock_timestamp()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Timestamptz",
+        "Bool",
+        "Int8",
+        "Text",
+        "Timestamptz",
+        {
+          "Custom": {
+            "name": "billing_plan",
+            "kind": {
+              "Enum": [
+                "free",
+                "starter",
+                "team",
+                "business"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "billing_interval",
+            "kind": {
+              "Enum": [
+                "month",
+                "year"
+              ]
+            }
+          }
+        },
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6cb5c2097cd30a83f424eda9f985e00055f753a34cd9b01b41bc24f7d0ba26bc"
+}

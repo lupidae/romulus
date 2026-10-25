@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT (SELECT count(*) FROM founding_offer_uses)\n                + (SELECT count(*) FROM org_billing b\n                   WHERE b.checkout_offer_until > now() AND b.org_id IS DISTINCT FROM $1\n                     AND NOT EXISTS (SELECT 1 FROM founding_offer_uses u WHERE u.org_id = b.org_id))\n                AS \"taken!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "taken!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b64af3ea8cf8541c03cf0c89cc00f85ca84e52f62acace18fa6699c724d34ccc"
+}

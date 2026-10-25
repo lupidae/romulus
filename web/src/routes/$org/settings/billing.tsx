@@ -17,8 +17,9 @@ import { PlanSummary } from "@/features/billing/components/plan-summary";
 import { UsageCard } from "@/features/billing/components/usage-card";
 import { billingCopy } from "@/features/billing/copy";
 import { isLive, planNames } from "@/features/billing/format";
+import { useCancelCheckout } from "@/features/billing/mutations";
 import { billingKeys, billingQuery } from "@/features/billing/queries";
-import { readSubscribe, type Subscribe } from "@/features/billing/subscribe";
+import { type Offer, readSubscribe, type Subscribe } from "@/features/billing/subscribe";
 import { useLocale } from "@/features/legal/locale";
 import { orgQuery } from "@/features/orgs/queries";
 
@@ -30,13 +31,19 @@ interface BillingSearch {
   /** A paid plan chosen on the homepage (/app/signup): its checkout opens here. */
   subscribe?: Subscribe["plan"];
   interval?: Subscribe["interval"];
+  /** The founding-team offer's link (Team only). */
+  offer?: Offer;
 }
 
 // The plan, usage against every cap, the plans, invoices. Every member reads
 // it; admins pay, change plans and cancel (Stripe's pages).
 export const Route = createFileRoute("/$org/settings/billing")({
   validateSearch: (search: Record<string, unknown>): BillingSearch => {
-    const asked = readSubscribe({ plan: search.subscribe, interval: search.interval });
+    const asked = readSubscribe({
+      plan: search.subscribe,
+      interval: search.interval,
+      offer: search.offer,
+    });
     return {
       checkout:
         search.checkout === "success" || search.checkout === "cancelled"
@@ -45,6 +52,7 @@ export const Route = createFileRoute("/$org/settings/billing")({
       action: search.action === "cancel" ? "cancel" : undefined,
       subscribe: asked?.plan,
       interval: asked?.interval,
+      offer: asked?.offer,
     };
   },
   head: () => ({ meta: [{ title: "Billing – romulus" }] }),
@@ -69,13 +77,14 @@ function Billing() {
   const locale = useLocale();
   const words = billingCopy[locale];
   const t = words.page;
-  const { checkout, action, subscribe, interval } = Route.useSearch();
+  const { checkout, action, subscribe, interval, offer } = Route.useSearch();
   // The plan chosen on the homepage, kept once the URL forgets it (below).
   const [asked] = React.useState<Subscribe | undefined>(
-    subscribe && interval ? { plan: subscribe, interval } : undefined,
+    subscribe && interval ? { plan: subscribe, interval, offer } : undefined,
   );
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const cancelCheckout = useCancelCheckout(org);
   // Back from checkout, the webhook may land a moment after: look again for a while.
   const [waiting, setWaiting] = React.useState(checkout === "success");
   const billing = useQuery({
@@ -93,9 +102,12 @@ function Billing() {
       toast.success(t.paid, { description: t.paidBody });
     } else {
       toast.info(t.checkoutCancelled, { description: t.nothingCharged });
+      // A founding-team place the checkout held goes back (best effort:
+      // otherwise it is released when Stripe expires the session).
+      cancelCheckout.mutate();
     }
     void navigate({ to: ".", search: { action }, replace: true });
-  }, [checkout, action, navigate, t]);
+  }, [checkout, action, navigate, t, cancelCheckout]);
 
   // The choice is the dialog's from now on: a reload does not open it again.
   React.useEffect(() => {
